@@ -42,13 +42,20 @@ class ReferenceHandler(BaseHTTPRequestHandler):
         path = urlsplit(self.path).path
         if path in {"/readyz", "/healthz"}:
             self._send(HTTPStatus.OK, b"ready\n" if path == "/readyz" else b"healthy\n", "text/plain")
-        elif path in {"/reference", "/reference/", "/reference/index.html"}:
+        elif path in {
+            "/reference",
+            "/reference/",
+            "/reference/index.html",
+            "/gateway/reference",
+            "/gateway/reference/",
+            "/gateway/reference/index.html",
+        }:
             self._send_file("index.html", "text/html; charset=utf-8")
-        elif path == f"/reference/{CSS_NAME}":
+        elif path in {f"/reference/{CSS_NAME}", f"/gateway/reference/{CSS_NAME}"}:
             self._send_file(CSS_NAME, "text/css; charset=utf-8")
-        elif path == f"/reference/{JS_NAME}":
+        elif path in {f"/reference/{JS_NAME}", f"/gateway/reference/{JS_NAME}"}:
             self._send_file(JS_NAME, "text/javascript; charset=utf-8")
-        elif path == "/reference/identity":
+        elif path in {"/reference/identity", "/gateway/reference/identity"}:
             body = json.dumps(self.server.startup_identity, sort_keys=True).encode() + b"\n"
             self._send(HTTPStatus.OK, body, "application/json")
         else:

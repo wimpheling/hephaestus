@@ -8,8 +8,11 @@ authority APIs, credentials, workspace mount, or state volume.
 The service listens on `127.0.0.1:8080` and exposes `/readyz`, `/healthz`,
 `/reference`, `/reference/`, `/reference/index.html`,
 `/reference/heph-ui-kit-v1.0.0.css`, `/reference/heph-ui-kit-v1.0.0.js`, and a
-bounded `/reference/identity` startup probe. The relative stylesheet and
-helper links in the HTML therefore stay inside the managed UI route.
+bounded `/reference/identity` startup probe. The same declared documents,
+assets, and identity probe are also available under the exact private gateway
+paths `/gateway/reference/...`; these are explicit aliases for the gateway
+transport and do not enable arbitrary prefix rewriting. The relative stylesheet
+and helper links in the HTML therefore stay inside the managed UI route.
 The executable uses the pinned image's `/usr/local/bin/python3` path because
 isolated guest commands start with a cleared environment and no inherited
 `PATH`.
@@ -40,8 +43,15 @@ HEPHAESTUS_REFERENCE_SERVICE_UI_OUTPUT="$managed_output" \
 service_pid=$!
 trap 'kill "$service_pid" 2>/dev/null || true; rm -rf "$managed_output"' EXIT
 curl --fail http://127.0.0.1:8080/readyz
+curl --fail http://127.0.0.1:8080/healthz
 curl --fail http://127.0.0.1:8080/reference/index.html
 curl --fail http://127.0.0.1:8080/reference/heph-ui-kit-v1.0.0.js
+curl --fail http://127.0.0.1:8080/gateway/reference/index.html
+curl --fail http://127.0.0.1:8080/gateway/reference/heph-ui-kit-v1.0.0.css
+curl --fail http://127.0.0.1:8080/gateway/reference/heph-ui-kit-v1.0.0.js
+curl --fail http://127.0.0.1:8080/gateway/reference/identity
+test "$(curl -s -o /dev/null -w '%{http_code}' \
+  http://127.0.0.1:8080/gateway/reference/unknown)" = 404
 ```
 
 The service uses only files beside its executable and never reflects request
