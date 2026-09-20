@@ -38,6 +38,25 @@ proofs, and the final integrated quality gate remain incomplete. The user approv
 global installations and organization isolation. Historical checkpoints record the state
 at their time; later integration checkpoints supersede earlier pending notes.
 
+## Installed browser image and first runtime attempt (2026-09-20)
+
+The pinned Playwright 1.62.0 amd64 image with `certutil` is available as
+`localhost/hephestus-playwright:1.62.0-certutil`. Its reproducible build recipe
+is retained in `scripts/installed-ui-browser-image/`; base and observed derived
+digests and prerequisites are documented in `docs/release-ui.md`.
+A disposable Chromium/Caddy preflight passed HTTPS requests to both platform
+and generation hosts using a fresh NSS database containing only the fixture CA.
+No TLS bypass or host trust changes were used. This supersedes the image-transfer
+blocker recorded below, but does not establish installed application acceptance.
+
+The first installed runtime attempts stopped before browser execution: the
+initial invocation missed the service-build proof flag; the corrected invocation
+reached static descriptor validation and exposed an expected-file ordering
+mismatch with the resolver's lexicographic route order. The fixture correction
+and rerun are in progress. No installed audit success marker was emitted.
+Logs: `/home/a/heph-installed-ui-first-runtime-20260920.log` and
+`/home/a/heph-installed-ui-first-runtime-20260920-rerun.log`.
+
 ## Installed harness deterministic-gate integration (2026-09-20)
 
 CI and `cargo dev quality` now run the installed bridge protocol script and

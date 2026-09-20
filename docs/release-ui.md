@@ -157,6 +157,37 @@ permissions, artifact integrity, MIME, range/conditional behavior, and guest
 response policy on the serving path. The kit and reference fixtures do not
 replace those checks and must not be used as an authority boundary.
 
+## Installed browser image
+
+The installed-UI browser smoke uses the local tag
+`localhost/hephestus-playwright:1.62.0-certutil`. Build it from the pinned
+linux/amd64 Playwright 1.62.0 Noble base with:
+
+```sh
+scripts/installed-ui-browser-image/build.sh
+```
+
+The build requires Podman, a linux/amd64 host (or an amd64 emulation setup),
+and registry access to `mcr.microsoft.com`; the script pulls the exact pinned
+base before building so a fresh host does not depend on a preloaded image.
+
+The Dockerfile pins base digest
+`sha256:02bbb2155cd7109e3e9c741941097ed1608cf8b6fa44ee2595896da2bdc1f471`
+and adds only `ca-certificates` and Ubuntu `libnss3-tools`. The successful
+preflight image currently has digest
+`sha256:9508609d5fe84e226585b7924928eff9afdbd1e0d06a4ca87cb62a0a3487e194`,
+Chromium 151.0.7922.34, Node v24.18.0, and `certutil` available. Rebuilding
+can produce a different derived digest when the package repository changes;
+the base digest and image tag remain fixed by this recipe.
+
+The browser runner creates a fresh NSS database for each disposable run and
+imports only the Caddy fixture CA. Chromium then connects to the platform and
+generation HTTPS origins without a certificate bypass or host trust-store
+change. A disposable Caddy 2.10.2 preflight passed both origins with that
+image. This proves the image and local TLS trust path; the full installed
+release smoke still requires the Cooking fixture, daemon, gateway, RPC, and
+browser environment and remains a separate acceptance run.
+
 ## Verification status
 
 The repository has package checks, fixture build checks, local service checks,
