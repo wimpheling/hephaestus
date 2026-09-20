@@ -1,0 +1,17 @@
+version = 1
+
+[[uis]]
+key = "managed-reference"
+scope = "project"
+label = "Managed Reference"
+icon = "book"
+presentation = "iframe"
+route_base = "managed-reference"
+ui_kit_version = 1
+cache = "no_store"
+
+[uis.content]
+kind = "managed_service"
+gateway_name = "cooking-reference-service-ui"
+route = "/reference"
+entrypoint = "index.html"

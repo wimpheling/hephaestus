@@ -1,0 +1,16 @@
+version = 1
+
+[[gateways]]
+name = "cooking-reference-service-ui"
+agent_name = "cooking-reference-service-ui"
+handler_contract = "http.service.v1"
+exposure = "heph_authenticated"
+
+[gateways.service]
+loopback_port = 8080
+readiness_path = "/readyz"
+health_path = "/healthz"
+
+[[gateways.routes]]
+path = "/reference"
+methods = ["GET"]

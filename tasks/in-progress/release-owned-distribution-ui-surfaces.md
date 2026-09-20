@@ -24,6 +24,27 @@ integrated quality gate remain incomplete. Global installation ownership is an
 open question sent to the user. Historical checkpoints below record the state
 at their time; later integration checkpoints supersede earlier pending notes.
 
+## Managed reference fixture checkpoint (2026-09-20)
+
+`examples/cooking/cooking-reference-service-ui` declares an authenticated
+`http.service.v1` managed UI at `/reference` with `index.html` as its entrypoint.
+The self-contained build materializes the Python executable, HTML, and canonical
+kit CSS together. The service uses fixed local files, a single request worker,
+bounded header checks/timeouts, health/readiness endpoints, and a stable startup
+identity probe. Build/guest network and workspace/state mounts are disabled.
+Kit drift checks now cover both reference fixtures.
+
+The actual agent/gateway/UI parser test passes, as do scoped Clippy/docs,
+workspace formatting, and Node kit checks. Local build/tampered-CSS rejection and
+HTTP checks pass for the exact HTML/CSS entrypoint, readiness/health, stable
+identity, missing-path rejection, and header non-reflection. The declared
+python-ubuntu image was inspected to verify the executable's Python launcher.
+Logs: `/home/a/heph-cooking-managed-ui-agent-config-test-20260920-v4.log`,
+`/home/a/heph-cooking-managed-ui-build-http-20260920-v4.log`, and
+`/home/a/heph-cooking-managed-ui-python-image-20260920.log`.
+No VM publication, installed Caddy serving, browser authorization, automatic
+theme behavior, or restart acceptance is claimed by this local fixture checkpoint.
+
 ## Browser-session self-revocation adapter checkpoint (2026-09-20)
 
 The PostgreSQL adapter now implements the complete browser-session port.
@@ -174,7 +195,47 @@ Project/repository installation decisions for the next implementation slice:
   pending the user's personal-versus-organization decision.
 
 These are reviewed design directions, not implemented installation behavior.
-The source-to-target ownership contract still needs its explicit adapter review.
+Source-to-target adapter review: `ReleaseService::import_agent` permits a published
+release agent in another consuming project after target management and source-agent
+use checks; repository attachments follow that consuming project. In contrast,
+`GatewayInstallApplication` and `require_repository_boundary`, together with
+migration 35's gateway revision constraint, bind a gateway to the release's source
+repository/project. Static UI installation can use the cross-owner model under
+explicit release-use authorization. Managed/API bindings must respect the existing
+gateway boundary; supporting a new consuming gateway in another owner requires
+an explicit gateway import/reference capability, not silent retargeting. Requiring
+release-level CanUse for UI installation is an explicit policy (needed for static
+UIs), not a claim that existing agent imports already enforce that permission.
+Removed installation identities remain terminal; a new installation may reuse the
+key, while enabled/disabled installations may receive fresh activation generations.
+
+Browser handoff implementation direction (still unimplemented):
+
+- Give each immutable generation a distinct platform-owned hostname. A revoked
+  or replaced generation's origin is never reassigned to a new generation.
+- The trusted web mediator generates a random handoff value and submits it only
+  as sensitive request material. Persist its digest bound to the authenticated
+  parent session, exact generation, intended route, short expiry, and single use.
+  Do not add a raw credential response merely to move a server-generated value
+  back through RPC.
+- A platform-owned bootstrap page on the UI origin consumes a fragment-carried
+  handoff through a same-origin POST, removes the fragment, and then navigates to
+  the declared entrypoint. No release script or external asset runs before that
+  exchange. Reserve the bootstrap path namespace so release routes cannot shadow
+  it. Unknown generation hosts fail closed before rendering the bootstrap page.
+- Exchange the handoff for a separate host-only secure HttpOnly UI cookie. Store
+  only its digest, with a parent-session reference and exact generation binding.
+  The platform SID never enters release content or a guest request. Recheck parent
+  session, current user/owner/release authority, generation state, and exact gateway
+  revisions on subsequent UI/API access; cookie possession alone is insufficient.
+- Strip browser credentials before guest forwarding and reject guest cookie
+  writes. UI API calls require exact origin/method/route checks; SameSite alone
+  is not a CSRF boundary between sibling origins. Browser TLS and adversarial
+  replay/cookie/origin tests must prove this flow before the task is complete.
+
+The fixtures currently force light mode. Their manually selected dark rendering
+checks demonstrate kit styling only; automatic or host-selected theme behavior
+remains part of browser integration acceptance.
 
 The retained-cleanup fixture isolation follow-up is implemented below. Production
 lease semantics and cleanup behavior remain unchanged.
