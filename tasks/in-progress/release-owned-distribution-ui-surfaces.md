@@ -20,9 +20,10 @@ now passes its application-role and historical compatibility matrix. Receive
 application-role insertion and reuse also pass. Deterministic receive/manual
 ordering is verified for valid and invalid captures. Build completion now writes
 resolved UI bindings in the release transaction, with worker-role static and
-legacy compatibility evidence. Managed/API publication and rollback coverage,
-authorized inspection, serving, browser integration, and aggregate acceptance
-remain incomplete.
+legacy compatibility evidence. Managed/API exact bindings, replay, invalid-input
+rejections, and rollback after a release insert also pass real worker-role
+coverage. Authorized inspection, serving, browser integration, and aggregate
+acceptance remain incomplete.
 Earlier helper-only checkpoints below describe their state at the time;
 the receive and manual integration checkpoints supersede pending-wiring notes.
 
@@ -48,6 +49,32 @@ in `/home/a/heph-release-complete-build-clippy-20260920-v3.log`,
 `/home/a/heph-release-complete-build-architecture-20260920.log`.
 Managed/API persistence, transactional failure/replay cases, and authorized
 inspection are the next bounded slices; this is not hosting or browser evidence.
+
+## Managed/API publication and rollback checkpoint (2026-09-20)
+
+The focused real PostgreSQL matrix now exercises managed-service and API exact
+release-agent IDs, gateway routes/methods, and successful command replay without
+duplicate publication rows. It rejects missing artifacts, wrong MIME, oversized
+referenced files, unexported agents, mismatched UI/gateway/build hashes, and a
+linked capture without a build declaration. Rejections leave no candidate
+release/artifact/agent/UI/inbox rows and preserve the `importing` build state.
+
+A valid candidate then deliberately collides with an existing artifact primary
+key. The resulting `23505` occurs after the candidate release insert; the test
+verifies rollback of the release/family and all candidate child/inbox rows while
+preserving the original artifact and build state. No test-only production fault
+seam was added. The role is explicitly `hephaestus_worker`, not superuser; its
+existing trusted-worker `BYPASSRLS` attribute from migration 0004 is intentional.
+
+Final focused run: 1 matrix test passed, 5 other integration tests filtered, in
+`/home/a/heph-release-managed-matrix-collision-ready-20260920.log`.
+The disposable database passed readiness and a query before test launch and was
+cleaned up. The earlier connection-reset attempt failed before setup and is not
+counted as acceptance evidence. Scoped Clippy, format, and docs passed in
+`/home/a/heph-release-managed-matrix-collision-clippy-20260920.log`,
+`/home/a/heph-release-managed-matrix-collision-fmt-20260920.log`, and
+`/home/a/heph-release-managed-matrix-doc-final-20260920.log`.
+This is publication evidence only; inspection and hosting remain separate work.
 
 ## Current CI context (2026-09-20)
 
@@ -468,6 +495,27 @@ This is a deployment constraint and implementation direction, not evidence of
 working UI routing or browser authentication. Audience-bound handoff, exact
 host-to-binding resolution, cookie/CSP policy, revocation, and real browser/TLS
 acceptance tests remain outstanding.
+
+### Installation and static-serving prerequisites (2026-09-20)
+
+Existing project installations already have stable agent-instance and gateway
+identities, immutable release-agent/revision links, and lifecycle/revocation
+checks. Repository attachment remains explicit. UI installation should reuse
+these boundaries rather than introduce a parallel runtime installation model.
+A durable UI binding still needs an exact immutable release/UI key and target
+scope. Global declarations currently have no installation owner; personal versus
+organization ownership is an open product decision sent to the user. Do not
+represent global authority merely by null project/repository IDs.
+
+`LocalArtifactStore` already handles bounded imports, content hashing, and safe
+opaque-key lookup. `ArtifactApplication` supplies actor-authorized artifact-ID
+lookup and bounded preview/stream paths. Existing read validation checks regular
+file type and stored length, but does not recompute content hashes on each read.
+The UI serving path must verify content integrity before emitting bytes and
+reject files beyond the 16 MiB UI bound; its 64 MiB aggregate counts unique
+referenced artifact IDs. Existing generic streaming can truncate at a caller
+limit, so it is not sufficient unchanged. Reuse storage and authorization
+boundaries; these findings do not constitute implemented UI serving.
 
 - Gateway routing and invocation authority from MVP-03.
 - Runtime authority and release-artifact materialization from MVP-01 through

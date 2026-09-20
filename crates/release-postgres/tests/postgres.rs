@@ -1,6 +1,6 @@
 //! Opt-in real-PostgreSQL reusable release and isolated instance coverage.
 
-use agent_config::{AgentConfig, parse, parse_repository_uis};
+use agent_config::{AgentConfig, parse, parse_repository_gateways, parse_repository_uis};
 use authz_postgres::PostgresMelangeAuthorizer;
 use brokered_egress_domain::{
     BrokeredSecretRule, BrokeredSecretRuleId, ExactHttpsOrigin, HeaderName, HttpInjectionLocation,
@@ -806,6 +806,721 @@ media_type = "text/html"
     .await
     .expect("legacy UI row count");
     assert_eq!(legacy_ui_rows, 0);
+}
+
+#[tokio::test]
+#[serial]
+// Keep this matrix together because every case exercises the same worker-role
+// CompleteBuild boundary and asserts the same atomic absence invariant.
+#[allow(clippy::too_many_lines)]
+async fn complete_build_managed_api_and_invalid_ui_matrix_is_atomic() {
+    let Some(admin_pool) = pool().await else {
+        return;
+    };
+    sqlx::migrate!("../../migrations")
+        .run(&admin_pool)
+        .await
+        .expect("apply application migrations");
+    let Some(worker_pool) = worker_pool().await else {
+        return;
+    };
+    let worker_user: String = sqlx::query_scalar("SELECT current_user")
+        .fetch_one(&worker_pool)
+        .await
+        .expect("worker role identity");
+    assert_eq!(worker_user, "hephaestus_worker");
+    let worker_is_superuser: bool =
+        sqlx::query_scalar("SELECT rolsuper FROM pg_roles WHERE rolname = current_user")
+            .fetch_one(&worker_pool)
+            .await
+            .expect("worker role superuser attribute");
+    assert!(!worker_is_superuser);
+    let service = ReleaseService::new(worker_pool, Arc::new(PostgresMelangeAuthorizer));
+
+    let success_fixture = seed(&admin_pool).await;
+    let success_gateway = managed_gateway_manifest("reviewer");
+    attach_ui_capture(
+        &admin_pool,
+        success_fixture.build,
+        managed_api_manifest(),
+        Some(success_gateway.as_bytes()),
+        None,
+    )
+    .await;
+    let success_release = ReleaseId::new();
+    let success_agent = ReleaseAgentId::new();
+    let success_artifact = release_test_artifact(
+        "bin/reviewer",
+        ArtifactKind::Executable,
+        "application/octet-stream",
+        20,
+    );
+    let success_key = key("complete-managed-api", success_release.as_uuid());
+    service
+        .complete_build(CompleteBuild {
+            command_key: success_key,
+            build_request_id: success_fixture.build,
+            release_id: success_release,
+            version: ReleaseVersion::parse("managed-api-v1").expect("release version"),
+            release_agent_id: success_agent,
+            artifacts: vec![success_artifact.clone()],
+        })
+        .await
+        .expect("complete managed/API release");
+    let stored_bindings: (Uuid, String, Uuid, String, String) = sqlx::query_as(
+        "SELECT managed.release_agent_id, managed.route,
+                api.release_agent_id, api.method, api.route
+         FROM release_ui_managed_services AS managed
+         JOIN release_ui_api_bindings AS api
+           ON api.release_id = managed.release_id
+          AND api.ui_key = managed.ui_key
+         WHERE managed.release_id = $1 AND managed.ui_key = 'assistant'
+           AND api.api_key = 'service-api'",
+    )
+    .bind(success_release.as_uuid())
+    .fetch_one(&admin_pool)
+    .await
+    .expect("managed/API bindings");
+    assert_eq!(
+        stored_bindings,
+        (
+            success_agent.as_uuid(),
+            String::from("/service/ui"),
+            success_agent.as_uuid(),
+            String::from("GET"),
+            String::from("/service/api"),
+        )
+    );
+    let replay = service
+        .complete_build(CompleteBuild {
+            command_key: success_key,
+            build_request_id: success_fixture.build,
+            release_id: ReleaseId::new(),
+            version: ReleaseVersion::parse("ignored-replay").expect("release version"),
+            release_agent_id: ReleaseAgentId::new(),
+            artifacts: vec![release_test_artifact(
+                "ignored-replay",
+                ArtifactKind::File,
+                "text/plain",
+                1,
+            )],
+        })
+        .await
+        .expect("managed/API replay");
+    assert_eq!(replay, success_release);
+    let replay_rows: (i64, i64, i64) = sqlx::query_as(
+        "SELECT
+             (SELECT count(*) FROM release_ui_source_snapshots WHERE release_id = $1),
+             (SELECT count(*) FROM release_ui_managed_services WHERE release_id = $1),
+             (SELECT count(*) FROM release_ui_api_bindings WHERE release_id = $1)",
+    )
+    .bind(success_release.as_uuid())
+    .fetch_one(&admin_pool)
+    .await
+    .expect("replay row counts");
+    assert_eq!(replay_rows, (1, 1, 1));
+
+    // Force the failure after release/family resolution and the release row
+    // insert: a colliding artifact primary key must roll back that whole
+    // publication transaction while preserving the original artifact.
+    let collision_fixture = seed(&admin_pool).await;
+    let collision_release = ReleaseId::new();
+    let collision_artifact =
+        release_test_artifact("dist/index.html", ArtifactKind::File, "text/html", 10);
+    service
+        .complete_build(CompleteBuild {
+            command_key: key("seed-artifact-collision", collision_release.as_uuid()),
+            build_request_id: collision_fixture.build,
+            release_id: collision_release,
+            version: ReleaseVersion::parse("collision-v1").expect("release version"),
+            release_agent_id: ReleaseAgentId::new(),
+            artifacts: vec![collision_artifact.clone()],
+        })
+        .await
+        .expect("seed colliding artifact");
+    let original_artifact: (Uuid, Uuid, String, String, i64, Uuid) = sqlx::query_as(
+        "SELECT id, release_id, path, media_type, size_bytes, storage_key
+         FROM release_artifacts WHERE id = $1",
+    )
+    .bind(collision_artifact.id.as_uuid())
+    .fetch_one(&admin_pool)
+    .await
+    .expect("original colliding artifact");
+
+    let post_write_failure = seed(&admin_pool).await;
+    attach_ui_capture(
+        &admin_pool,
+        post_write_failure.build,
+        static_ui_manifest("text/html"),
+        None,
+        None,
+    )
+    .await;
+    let post_write_release = ReleaseId::new();
+    let post_write_command = key(
+        "post-write-artifact-collision",
+        post_write_release.as_uuid(),
+    );
+    let mut colliding_artifact =
+        release_test_artifact("dist/index.html", ArtifactKind::File, "text/html", 10);
+    colliding_artifact.id = collision_artifact.id;
+    let family_count_before: i64 = sqlx::query_scalar(
+        "SELECT count(*) FROM agent_families
+         WHERE repository_id = (SELECT repository_id FROM build_requests WHERE id = $1)",
+    )
+    .bind(post_write_failure.build.as_uuid())
+    .fetch_one(&admin_pool)
+    .await
+    .expect("candidate family count before collision");
+    let collision_error = service
+        .complete_build(CompleteBuild {
+            command_key: post_write_command,
+            build_request_id: post_write_failure.build,
+            release_id: post_write_release,
+            version: ReleaseVersion::parse("post-write-collision-v1").expect("release version"),
+            release_agent_id: ReleaseAgentId::new(),
+            artifacts: vec![colliding_artifact],
+        })
+        .await
+        .expect_err("artifact primary-key collision must fail");
+    match collision_error {
+        release_postgres::ReleaseServiceError::Database(error) => {
+            assert_eq!(
+                error
+                    .as_database_error()
+                    .and_then(sqlx::error::DatabaseError::code),
+                Some("23505".into())
+            );
+        }
+        other => panic!("expected artifact collision database failure, got {other:?}"),
+    }
+    let rolled_back_counts: (i64, i64, i64, i64, i64, i64, i64, i64, i64, i64) = sqlx::query_as(
+        "SELECT
+                 (SELECT count(*) FROM releases WHERE id = $1),
+                 (SELECT count(*) FROM release_artifacts WHERE release_id = $1),
+                 (SELECT count(*) FROM release_agents WHERE release_id = $1),
+                 (SELECT count(*) FROM release_ui_source_snapshots WHERE release_id = $1),
+                 (SELECT count(*) FROM release_ui_descriptors WHERE release_id = $1),
+                 (SELECT count(*) FROM release_ui_static_files WHERE release_id = $1),
+                 (SELECT count(*) FROM release_ui_managed_services WHERE release_id = $1),
+                 (SELECT count(*) FROM release_ui_api_bindings WHERE release_id = $1),
+                 (SELECT count(*) FROM release_command_inbox WHERE command_key = $2),
+                 (SELECT count(*) FROM agent_families
+                    WHERE repository_id = (
+                        SELECT repository_id FROM build_requests WHERE id = $3
+                    ))",
+    )
+    .bind(post_write_release.as_uuid())
+    .bind(post_write_command.as_bytes().as_slice())
+    .bind(post_write_failure.build.as_uuid())
+    .fetch_one(&admin_pool)
+    .await
+    .expect("rolled-back publication counts");
+    assert_eq!(
+        rolled_back_counts,
+        (0, 0, 0, 0, 0, 0, 0, 0, 0, family_count_before)
+    );
+    let candidate_state: String =
+        sqlx::query_scalar("SELECT state FROM build_requests WHERE id = $1")
+            .bind(post_write_failure.build.as_uuid())
+            .fetch_one(&admin_pool)
+            .await
+            .expect("candidate build state after collision");
+    assert_eq!(candidate_state, "importing");
+    let preserved_artifact: (Uuid, Uuid, String, String, i64, Uuid) = sqlx::query_as(
+        "SELECT id, release_id, path, media_type, size_bytes, storage_key
+         FROM release_artifacts WHERE id = $1",
+    )
+    .bind(collision_artifact.id.as_uuid())
+    .fetch_one(&admin_pool)
+    .await
+    .expect("preserved original artifact");
+    assert_eq!(preserved_artifact, original_artifact);
+
+    let missing_artifact = seed(&admin_pool).await;
+    attach_ui_capture(
+        &admin_pool,
+        missing_artifact.build,
+        static_ui_manifest("text/html"),
+        None,
+        None,
+    )
+    .await;
+    assert_rejected_ui_build(
+        &service,
+        &admin_pool,
+        missing_artifact.build,
+        ReleaseId::new(),
+        vec![release_test_artifact(
+            "other.html",
+            ArtifactKind::File,
+            "text/html",
+            10,
+        )],
+    )
+    .await;
+
+    let wrong_media_type = seed(&admin_pool).await;
+    attach_ui_capture(
+        &admin_pool,
+        wrong_media_type.build,
+        static_ui_manifest("text/html"),
+        None,
+        None,
+    )
+    .await;
+    assert_rejected_ui_build(
+        &service,
+        &admin_pool,
+        wrong_media_type.build,
+        ReleaseId::new(),
+        vec![release_test_artifact(
+            "dist/index.html",
+            ArtifactKind::File,
+            "text/plain",
+            10,
+        )],
+    )
+    .await;
+
+    let oversized = seed(&admin_pool).await;
+    attach_ui_capture(
+        &admin_pool,
+        oversized.build,
+        static_ui_manifest("text/html"),
+        None,
+        None,
+    )
+    .await;
+    assert_rejected_ui_build(
+        &service,
+        &admin_pool,
+        oversized.build,
+        ReleaseId::new(),
+        vec![release_test_artifact(
+            "dist/index.html",
+            ArtifactKind::File,
+            "text/html",
+            16 * 1024 * 1024 + 1,
+        )],
+    )
+    .await;
+
+    let foreign_agent = seed(&admin_pool).await;
+    let foreign_gateway = managed_gateway_manifest("unexported-agent");
+    attach_ui_capture(
+        &admin_pool,
+        foreign_agent.build,
+        managed_api_manifest(),
+        Some(foreign_gateway.as_bytes()),
+        None,
+    )
+    .await;
+    assert_rejected_ui_build(
+        &service,
+        &admin_pool,
+        foreign_agent.build,
+        ReleaseId::new(),
+        vec![release_test_artifact(
+            "bin/reviewer",
+            ArtifactKind::Executable,
+            "application/octet-stream",
+            20,
+        )],
+    )
+    .await;
+
+    let wrong_build_hash = seed(&admin_pool).await;
+    attach_ui_capture(
+        &admin_pool,
+        wrong_build_hash.build,
+        managed_api_manifest(),
+        Some(success_gateway.as_bytes()),
+        Some([7; 32]),
+    )
+    .await;
+    assert_rejected_ui_build(
+        &service,
+        &admin_pool,
+        wrong_build_hash.build,
+        ReleaseId::new(),
+        vec![release_test_artifact(
+            "bin/reviewer",
+            ArtifactKind::Executable,
+            "application/octet-stream",
+            20,
+        )],
+    )
+    .await;
+
+    let wrong_gateway_hash = seed(&admin_pool).await;
+    attach_ui_capture_with_hashes(
+        &admin_pool,
+        wrong_gateway_hash.build,
+        managed_api_manifest(),
+        Some(success_gateway.as_bytes()),
+        None,
+        None,
+        Some([8; 32]),
+    )
+    .await;
+    assert_rejected_ui_build(
+        &service,
+        &admin_pool,
+        wrong_gateway_hash.build,
+        ReleaseId::new(),
+        vec![release_test_artifact(
+            "bin/reviewer",
+            ArtifactKind::Executable,
+            "application/octet-stream",
+            20,
+        )],
+    )
+    .await;
+
+    let wrong_ui_hash = seed(&admin_pool).await;
+    attach_ui_capture_with_hashes(
+        &admin_pool,
+        wrong_ui_hash.build,
+        static_ui_manifest("text/html"),
+        None,
+        None,
+        Some([8; 32]),
+        None,
+    )
+    .await;
+    assert_rejected_ui_build(
+        &service,
+        &admin_pool,
+        wrong_ui_hash.build,
+        ReleaseId::new(),
+        vec![release_test_artifact(
+            "dist/index.html",
+            ArtifactKind::File,
+            "text/html",
+            10,
+        )],
+    )
+    .await;
+
+    let no_build = seed(&admin_pool).await;
+    attach_ui_capture(
+        &admin_pool,
+        no_build.build,
+        static_ui_manifest("text/html"),
+        None,
+        None,
+    )
+    .await;
+    sqlx::query(
+        "UPDATE agent_config_revisions
+            SET config = config - 'build'
+          WHERE repository_id = (
+                    SELECT repository_id FROM build_requests WHERE id = $1
+                )
+            AND commit_sha = repeat('a', 40)",
+    )
+    .bind(no_build.build.as_uuid())
+    .execute(&admin_pool)
+    .await
+    .expect("remove legacy build declaration");
+    assert_rejected_ui_build(
+        &service,
+        &admin_pool,
+        no_build.build,
+        ReleaseId::new(),
+        vec![release_test_artifact(
+            "dist/index.html",
+            ArtifactKind::File,
+            "text/html",
+            10,
+        )],
+    )
+    .await;
+}
+
+const MANAGED_API_UI: &str = r#"
+version = 1
+
+[[uis]]
+key = "assistant"
+scope = "project"
+label = "Assistant"
+icon = "chat"
+presentation = "iframe"
+route_base = "assistant"
+ui_kit_version = 1
+cache = "no_store"
+
+[[uis.apis]]
+key = "service-api"
+gateway_name = "ui-service"
+method = "GET"
+route = "/service/api"
+
+[uis.content]
+kind = "managed_service"
+gateway_name = "ui-service"
+route = "/service/ui"
+entrypoint = "index.html"
+"#;
+
+const fn managed_api_manifest() -> &'static [u8] {
+    MANAGED_API_UI.as_bytes()
+}
+
+fn static_ui_manifest(media_type: &str) -> String {
+    format!(
+        r#"
+version = 1
+
+[[uis]]
+key = "docs"
+scope = "repository"
+label = "Docs"
+icon = "book"
+presentation = "iframe"
+route_base = "docs"
+ui_kit_version = 1
+cache = "no_store"
+
+[uis.content]
+kind = "static"
+entrypoint = "index.html"
+
+[[uis.content.files]]
+route = "index.html"
+artifact = "dist/index.html"
+media_type = "{media_type}"
+"#
+    )
+}
+
+fn managed_gateway_manifest(agent_name: &str) -> String {
+    format!(
+        r#"
+version = 1
+
+[[gateways]]
+name = "ui-service"
+agent_name = "{agent_name}"
+handler_contract = "http.service.v1"
+exposure = "heph_authenticated"
+
+[gateways.service]
+loopback_port = 8080
+readiness_path = "/ready"
+health_path = "/health"
+
+[[gateways.routes]]
+path = "/service"
+methods = ["GET"]
+"#
+    )
+}
+
+fn release_test_artifact(
+    path: &str,
+    kind: ArtifactKind,
+    media_type: &str,
+    size_bytes: u64,
+) -> ReleaseArtifactInput {
+    ReleaseArtifactInput {
+        id: ReleaseArtifactId::new(),
+        path: ArtifactPath::parse(path).expect("artifact path"),
+        kind,
+        mode: 0o444,
+        content_hash: ContentHash::digest(path.as_bytes()),
+        size_bytes,
+        media_type: media_type.to_owned(),
+        storage_key: Uuid::new_v4(),
+    }
+}
+
+async fn attach_ui_capture(
+    pool: &PgPool,
+    build: BuildRequestId,
+    ui_source: impl AsRef<[u8]>,
+    gateway_source: Option<&[u8]>,
+    build_hash_override: Option<[u8; 32]>,
+) {
+    attach_ui_capture_with_hashes(
+        pool,
+        build,
+        ui_source,
+        gateway_source,
+        build_hash_override,
+        None,
+        None,
+    )
+    .await;
+}
+
+// Keep capture construction linear so every immutable source field is visible.
+#[allow(clippy::too_many_arguments, clippy::too_many_lines)]
+async fn attach_ui_capture_with_hashes(
+    pool: &PgPool,
+    build: BuildRequestId,
+    ui_source: impl AsRef<[u8]>,
+    gateway_source: Option<&[u8]>,
+    build_hash_override: Option<[u8; 32]>,
+    stored_ui_hash_override: Option<[u8; 32]>,
+    stored_gateway_hash_override: Option<[u8; 32]>,
+) {
+    let ui_source = ui_source.as_ref();
+    let parsed_ui = parse_repository_uis(ui_source);
+    let ui_config = parsed_ui.config.expect("valid UI fixture");
+    let ui_hash = decode_test_hash(
+        parsed_ui
+            .normalized_hash
+            .expect("normalized UI hash")
+            .as_str(),
+    );
+    let (repository_id, receive_id, source_commit, config_json): (Uuid, Uuid, String, Value) =
+        sqlx::query_as(
+            "SELECT request.repository_id, request.origin_receive_id,
+                    request.source_commit, revision.config
+             FROM build_requests AS request
+             JOIN agent_config_revisions AS revision
+               ON revision.repository_id = request.repository_id
+              AND revision.commit_sha = request.source_commit
+             WHERE request.id = $1",
+        )
+        .bind(build.as_uuid())
+        .fetch_one(pool)
+        .await
+        .expect("load UI fixture identity");
+    let config: AgentConfig = serde_json::from_value(config_json).expect("fixture config");
+    let base_hash = agent_config::build_identity::base_build_definition_hash(
+        config.build.as_ref().expect("build fixture"),
+    )
+    .expect("base build hash");
+    let (gateway_json, gateway_hash) = gateway_source.map_or((None, None), |source| {
+        let parsed = parse_repository_gateways(source);
+        let config = parsed.config.expect("valid gateway fixture");
+        let canonical = agent_config::canonical_repository_gateways(&config);
+        let bytes = toml::to_string(&canonical).expect("gateway TOML");
+        let hash: [u8; 32] = Sha256::digest(bytes.as_bytes()).into();
+        (
+            Some(serde_json::to_value(config).expect("gateway JSON")),
+            Some(hash.to_vec()),
+        )
+    });
+    let requires_gateways = gateway_json.is_some();
+    let build_definition_hash = build_hash_override.unwrap_or_else(|| {
+        agent_config::build_identity::ui_build_definition_hash(
+            base_hash,
+            ui_hash,
+            gateway_hash
+                .as_deref()
+                .map(|value| value.try_into().expect("gateway hash")),
+        )
+    });
+    let stored_ui_hash = stored_ui_hash_override.unwrap_or(ui_hash);
+    let stored_gateway_hash = gateway_hash
+        .as_deref()
+        .map(|value| value.try_into().expect("gateway hash"))
+        .map(|value: [u8; 32]| stored_gateway_hash_override.unwrap_or(value))
+        .map(|value| value.to_vec());
+    let source_manifest_revision_id = Uuid::new_v4();
+    sqlx::query(
+        "INSERT INTO ui_source_manifest_revisions
+         (id, repository_id, receive_id, source_commit, entry_kind, manifest_oid,
+          actual_size_bytes, source_sha256, status, requires_gateways,
+          normalized_ui_config, normalized_ui_hash, gateway_manifest_oid,
+          gateway_actual_size_bytes, gateway_source_sha256,
+          normalized_gateway_config, normalized_gateway_hash, diagnostics)
+         VALUES ($1, $2, $3, $4, 'blob', $5, $6, $7, 'valid', $8, $9, $10,
+                 $11, $12, $13, $14, $15, '[]')",
+    )
+    .bind(source_manifest_revision_id)
+    .bind(repository_id)
+    .bind(receive_id)
+    .bind(&source_commit)
+    .bind("b".repeat(40))
+    .bind(i64::try_from(ui_source.len()).expect("bounded UI fixture"))
+    .bind([1_u8; 32].as_slice())
+    .bind(requires_gateways)
+    .bind(serde_json::to_value(&ui_config).expect("UI JSON"))
+    .bind(stored_ui_hash.as_slice())
+    .bind(gateway_json.as_ref().map(|_| "c".repeat(40)))
+    .bind(gateway_json.as_ref().map(|_| 128_i64))
+    .bind(gateway_json.as_ref().map(|_| vec![2_u8; 32]))
+    .bind(gateway_json)
+    .bind(stored_gateway_hash)
+    .execute(pool)
+    .await
+    .expect("insert UI source capture");
+    sqlx::query(
+        "INSERT INTO build_request_ui_source_manifests
+         (build_request_id, repository_id, source_commit,
+          source_manifest_revision_id, source_status)
+         VALUES ($1, $2, $3, $4, 'valid')",
+    )
+    .bind(build.as_uuid())
+    .bind(repository_id)
+    .bind(&source_commit)
+    .bind(source_manifest_revision_id)
+    .execute(pool)
+    .await
+    .expect("link UI source capture");
+    sqlx::query("UPDATE build_requests SET build_definition_hash = $2 WHERE id = $1")
+        .bind(build.as_uuid())
+        .bind(build_definition_hash.as_slice())
+        .execute(pool)
+        .await
+        .expect("store UI build identity");
+}
+
+async fn assert_rejected_ui_build(
+    service: &ReleaseService,
+    admin_pool: &PgPool,
+    build: BuildRequestId,
+    release_id: ReleaseId,
+    artifacts: Vec<ReleaseArtifactInput>,
+) {
+    let command_key = key("complete-invalid-ui", release_id.as_uuid());
+    let result = service
+        .complete_build(CompleteBuild {
+            command_key,
+            build_request_id: build,
+            release_id,
+            version: ReleaseVersion::parse("invalid-ui-v1").expect("release version"),
+            release_agent_id: ReleaseAgentId::new(),
+            artifacts,
+        })
+        .await;
+    assert!(
+        matches!(
+            result,
+            Err(release_postgres::ReleaseServiceError::InvalidStoredData)
+        ),
+        "expected redacted stored-data rejection, got {result:?}"
+    );
+    let counts: (i64, i64, i64, i64, i64, i64, i64, i64, i64) = sqlx::query_as(
+        "SELECT
+             (SELECT count(*) FROM releases WHERE id = $1),
+             (SELECT count(*) FROM release_artifacts WHERE release_id = $1),
+             (SELECT count(*) FROM release_agents WHERE release_id = $1),
+             (SELECT count(*) FROM release_ui_source_snapshots WHERE release_id = $1),
+             (SELECT count(*) FROM release_ui_descriptors WHERE release_id = $1),
+             (SELECT count(*) FROM release_ui_static_files WHERE release_id = $1),
+             (SELECT count(*) FROM release_ui_managed_services WHERE release_id = $1),
+             (SELECT count(*) FROM release_ui_api_bindings WHERE release_id = $1),
+             (SELECT count(*) FROM release_command_inbox WHERE command_key = $2)",
+    )
+    .bind(release_id.as_uuid())
+    .bind(command_key.as_bytes().as_slice())
+    .fetch_one(admin_pool)
+    .await
+    .expect("rejected publication counts");
+    assert_eq!(counts, (0, 0, 0, 0, 0, 0, 0, 0, 0));
+    let (state,): (String,) = sqlx::query_as("SELECT state FROM build_requests WHERE id = $1")
+        .bind(build.as_uuid())
+        .fetch_one(admin_pool)
+        .await
+        .expect("rejected build state");
+    assert_eq!(state, "importing");
 }
 
 #[tokio::test]
