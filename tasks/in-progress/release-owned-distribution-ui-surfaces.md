@@ -481,8 +481,17 @@ legacy absence, and wrong-hash rejection. Production bootstrap passed (1/1,
 control-plane/forge/app Clippy, rustdoc, formatting, and architecture checks
 passed; logs use `/home/a/heph-manual-ui-build-` with `realpg-20260920.log`
 and `{control-clippy,forge-clippy,app-clippy,doc,fmt,architecture}-v2-20260920.log`.
-The receive writer's application-role reusable-build path, manual/receive
-ordering, and historical no-retrofit regression remain to be verified.
+The receive writer's application-role reusable-build path and manual/receive
+ordering remain separate verification work.
+
+The expanded manual matrix now also passes historical compatibility: a build
+created without capture retains its ID, legacy hash, and lack of UI link after
+capture is added; the next request creates a separate derived build, and retries
+reuse only that new identity. Each build has one outbox event. The matrix checks
+the derived event hash and that wrong-hash rejection does not add events. The
+real PostgreSQL matrix passed (1/1) in
+`/home/a/heph-manual-ui-build-realpg-20260920.log`; scoped Clippy passed in
+`/home/a/heph-manual-ui-build-control-clippy-v4-20260920.log`.
 
 ### UI-kit package checkpoint (2026-09-20)
 

@@ -5,6 +5,7 @@ use control_plane_postgres::connect_app;
 use identity_domain::{AuthenticatedIdentity, RequestId, UserId};
 use serde_json::json;
 use sqlx::{PgPool, postgres::PgPoolOptions};
+use std::fmt::Write as _;
 use uuid::Uuid;
 
 const CONFIG: &str = r#"
@@ -155,6 +156,28 @@ async fn manual_build_ui_basic_matrix_uses_application_role() {
             "valid".to_owned()
         )
     );
+    let valid_event: serde_json::Value = sqlx::query_scalar(
+        "SELECT payload
+         FROM outbox
+         WHERE payload->>'source_commit' = $1
+         ORDER BY occurred_at, id
+         LIMIT 1",
+    )
+    .bind(&valid_commit)
+    .fetch_one(&bootstrap)
+    .await
+    .expect("valid build event");
+    assert_eq!(outbox_count(&bootstrap, &valid_commit).await, 1);
+    let first_id = first.id.to_string();
+    let expected_hash = hex_hash(derived_hash);
+    assert_eq!(
+        valid_event["build_request_id"].as_str(),
+        Some(first_id.as_str())
+    );
+    assert_eq!(
+        valid_event["build_definition_hash"].as_str(),
+        Some(expected_hash.as_str())
+    );
 
     let invalid_commit = "b".repeat(40);
     let invalid_receive = Uuid::new_v4();
@@ -218,6 +241,88 @@ async fn manual_build_ui_basic_matrix_uses_application_role() {
             .await
             .expect("legacy build hash");
     assert_eq!(absent_hash, base_hash);
+    assert_eq!(outbox_count(&bootstrap, &absent_commit).await, 1);
+
+    seed_valid_ui(
+        &bootstrap,
+        repository,
+        absent_receive,
+        &absent_commit,
+        ui_hash,
+    )
+    .await;
+    let absent_derived = application
+        .request_build(
+            &identity,
+            request(
+                repository,
+                &absent_commit,
+                base_hash,
+                &normalized_config_hash,
+            ),
+        )
+        .await
+        .expect("legacy build accepts newly captured UI as a new identity");
+    assert_ne!(absent_derived.id, absent.id);
+    let absent_derived_hash: Vec<u8> = sqlx::query_scalar(
+        "SELECT build_definition_hash
+         FROM build_requests
+         WHERE id = $1",
+    )
+    .bind(absent_derived.id)
+    .fetch_one(&bootstrap)
+    .await
+    .expect("derived legacy build hash");
+    assert_eq!(absent_derived_hash, derived_hash);
+    let old_identity: (Uuid, Vec<u8>) = sqlx::query_as(
+        "SELECT id, build_definition_hash
+         FROM build_requests
+         WHERE id = $1",
+    )
+    .bind(absent.id)
+    .fetch_one(&bootstrap)
+    .await
+    .expect("legacy build identity remains stable");
+    assert_eq!(old_identity, (absent.id, base_hash.to_vec()));
+    let old_link_count: i64 = sqlx::query_scalar(
+        "SELECT count(*)
+         FROM build_request_ui_source_manifests
+         WHERE build_request_id = $1",
+    )
+    .bind(absent.id)
+    .fetch_one(&bootstrap)
+    .await
+    .expect("legacy build remains unlinked");
+    assert_eq!(old_link_count, 0);
+    let new_link_count: i64 = sqlx::query_scalar(
+        "SELECT count(*)
+         FROM build_request_ui_source_manifests
+         WHERE build_request_id = $1 AND source_status = 'valid'",
+    )
+    .bind(absent_derived.id)
+    .fetch_one(&bootstrap)
+    .await
+    .expect("derived legacy build UI link");
+    assert_eq!(new_link_count, 1);
+    let absent_deduplicated = application
+        .request_build(
+            &identity,
+            request(
+                repository,
+                &absent_commit,
+                derived_hash,
+                &normalized_config_hash,
+            ),
+        )
+        .await
+        .expect("derived legacy build deduplicates");
+    assert_eq!(absent_deduplicated.id, absent_derived.id);
+    assert_eq!(outbox_count(&bootstrap, &absent_commit).await, 2);
+    assert_eq!(outbox_count_for_build(&bootstrap, absent.id).await, 1);
+    assert_eq!(
+        outbox_count_for_build(&bootstrap, absent_derived.id).await,
+        1
+    );
 
     let wrong = application
         .request_build(
@@ -227,6 +332,8 @@ async fn manual_build_ui_basic_matrix_uses_application_role() {
         .await;
     assert!(matches!(wrong, Err(BuildError::FailedPrecondition)));
     assert_eq!(build_count(&bootstrap, repository, &valid_commit).await, 1);
+    assert_eq!(outbox_count(&bootstrap, &valid_commit).await, 1);
+    assert_eq!(outbox_count_for_build(&bootstrap, first.id).await, 1);
 }
 
 fn request(
@@ -257,6 +364,14 @@ const fn nibble(value: u8) -> u8 {
         b'a'..=b'f' => value - b'a' + 10,
         _ => 0,
     }
+}
+
+fn hex_hash(value: [u8; 32]) -> String {
+    let mut output = String::with_capacity(64);
+    for byte in value {
+        write!(&mut output, "{byte:02x}").expect("writing to a String cannot fail");
+    }
+    output
 }
 
 fn identity(user_id: UserId) -> AuthenticatedIdentity {
@@ -451,4 +566,16 @@ async fn outbox_count(pool: &PgPool, commit: &str) -> i64 {
         .fetch_one(pool)
         .await
         .expect("outbox count")
+}
+
+async fn outbox_count_for_build(pool: &PgPool, build_id: Uuid) -> i64 {
+    sqlx::query_scalar(
+        "SELECT count(*)
+         FROM outbox
+         WHERE payload->>'build_request_id' = $1",
+    )
+    .bind(build_id.to_string())
+    .fetch_one(pool)
+    .await
+    .expect("outbox count for build")
 }
