@@ -543,6 +543,33 @@ rustdoc, workspace formatting, and architecture passed in
 Immutable capture rows are retained for disposable-database teardown; the
 test does not weaken deletion guards or use sleeps as ordering evidence.
 
+### Release binding schema checkpoint (2026-09-20)
+
+Migration 84 adds immutable release UI source links, descriptors, static file
+bindings, managed-service bindings, and API bindings. Natural keys and composite
+foreign keys enforce exact build/capture identity and same-release artifact or
+agent ownership; static rows require file kind and matching allowed MIME.
+Source links reuse immutable capture evidence without duplicating configuration
+JSON. Bounded routes, declaration enums, and append-only guards are enforced.
+
+Every insert checks and locks its parent release in draft state. The concurrency
+test relies on the trigger's own lock: insert-first blocks publication, while
+publish-first causes the blocked insert to fail after publication commits.
+Both opposing blocker PIDs are observed. Published and revoked releases reject
+new rows in all five tables. Forced RLS gives authorized owners visibility and
+filters outsiders across all five tables; unauthorized insertion fails closed.
+
+Both real PostgreSQL schema tests passed in
+`/home/a/heph-release-ui-schema84-20260920.log`. Production bearer-push bootstrap
+passed (1/1) with the application expecting migration 84 in
+`/home/a/heph-schema84-bootstrap-production-20260920.log`. Scoped release/app
+Clippy, rustdoc, formatting, and architecture passed; final test-review checks
+are `/home/a/heph-release-ui-schema84-final-{fmt,clippy}-20260920.log`.
+Cross-row entrypoint matching, aggregate declaration limits, and canonical
+hash validation remain responsibilities of the typed publication validator.
+The schema is not yet populated by `complete_build`; publication wiring and
+authorized UI inspection remain pending.
+
 ### UI-kit package checkpoint (2026-09-20)
 
 `web/assets/release_ui_kit` now provides the standalone CSS package

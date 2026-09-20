@@ -4745,6 +4745,9 @@ pub enum ReleaseServiceError {
 }
 
 #[cfg(test)]
+mod ui_schema_tests;
+
+#[cfg(test)]
 mod tests {
     use super::{
         BrokeredRuleCopy, capability_grant_permission, deterministic_requirement_id,
