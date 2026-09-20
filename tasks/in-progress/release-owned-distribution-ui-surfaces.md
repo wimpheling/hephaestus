@@ -9,8 +9,8 @@ Work resumed on 2026-09-20 from the
 CI execution, organization-owned static installations, disable/remove lifecycle,
 browser credential storage, handoff issuance/exchange, managed/API installation,
 and application-role request authentication have passed focused verification.
-Current work validates activation/rollback and navigation and prepares RPC and
-hosting integration.
+Activation/rollback also passes focused verification. Current work validates
+navigation and prepares RPC and hosting integration.
 The handoff remains the record of the stopped session; new evidence is recorded
 below as each resumed slice passes review and verification.
 
@@ -34,6 +34,28 @@ navigation/authorization/isolation, real Caddy/VM/browser proofs, and the final
 integrated quality gate remain incomplete. The user approved organization-owned
 global installations and organization isolation. Historical checkpoints record the state
 at their time; later integration checkpoints supersede earlier pending notes.
+
+## Activation and rollback checkpoint (2026-09-20)
+
+Activation and rollback both append a new immutable generation with incremented
+generation number and newly resolved current bindings. Neither repoints a
+historical generation. Current owner authorization precedes exact receipt
+replay; fresh commands enforce generation CAS, stable UI key/scope, same-tenant
+source authority, and terminal removal. Generation/bindings, pointer/lifecycle,
+command outcome, event, and outbox commit together.
+
+The real PostgreSQL generation matrix passes project, repository, and global
+owners, fresh IDs/history, repeated source with a new caller key, exact replay,
+source-revocation replay, input/CAS conflicts, and invalid-binding row absence in
+`/home/a/heph-ui-installation-generation-matrix-20260920.log`. Six affected
+installation/lifecycle/concurrency regressions pass in
+`/home/a/heph-ui-installation-regressions-20260920.log`, including the nine-case
+binding/permission denial matrix. Release and app-floor Clippy/docs, formatting,
+architecture, and diff whitespace checks pass in
+`/home/a/heph-ui-installation-*-final-20260920.log`. The accompanying migration-90
+change removes one trailing space only; its runtime behavior is unchanged.
+No disposable databases or test processes remain. External RPC CAS enforcement
+and generation-origin browser behavior still require their own integration.
 
 ## Application-role UI verifier checkpoint (2026-09-20)
 

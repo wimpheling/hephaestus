@@ -241,7 +241,7 @@ WITH auth_instant AS MATERIALIZED (
                )
            ) AS complete
     FROM candidate AS c
-) 
+)
 SELECT c.session_id,
        c.parent_session_id,
        c.actor_id,

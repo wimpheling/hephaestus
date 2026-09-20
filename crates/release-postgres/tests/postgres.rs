@@ -33,11 +33,12 @@ use release_domain::{
     UiInstallationTarget,
 };
 use release_postgres::{
-    BeginUpdateHook, BrokeredRuleCopy, CompleteBuild, CreateAttachment, CreateInstanceUpdate,
-    DisableUiInstallation, ImportAgent, InstallStaticUi, InstallUi, RecoverInstanceUpdate,
-    ReleaseArtifactInput, ReleaseService, RemoveAttachment, RemoveUiInstallation, ReviseInstance,
-    ReviseInstanceCapabilities, SetAttachmentEnabled, UiInstallationError, UpdateDecision,
-    UpdateHookResult, UpdateRecoveryAction, UpdateRecoveryDecision,
+    ActivateUiInstallation, BeginUpdateHook, BrokeredRuleCopy, CompleteBuild, CreateAttachment,
+    CreateInstanceUpdate, DisableUiInstallation, ImportAgent, InstallStaticUi, InstallUi,
+    RecoverInstanceUpdate, ReleaseArtifactInput, ReleaseService, RemoveAttachment,
+    RemoveUiInstallation, ReviseInstance, ReviseInstanceCapabilities, RollbackUiInstallation,
+    SetAttachmentEnabled, UiInstallationError, UpdateDecision, UpdateHookResult,
+    UpdateRecoveryAction, UpdateRecoveryDecision,
 };
 use runtime_types::RunId;
 use secret_application::{
@@ -1701,6 +1702,56 @@ async fn install_ui_pins_active_gateway_revision_and_exact_published_routes() {
     .await
     .expect("restore gateway serving authority");
 
+    let managed_activation = service
+        .activate_ui_installation(
+            &identity(fixture.actor),
+            ActivateUiInstallation {
+                caller_key: UiInstallationCallerKey::parse("general-managed-activate")
+                    .expect("caller key"),
+                installation_id: result.installation_id,
+                expected_generation_id: Some(result.generation_id),
+                release_id,
+                ui_key: release_domain::ui::UiKey::parse("assistant").expect("UI key"),
+            },
+        )
+        .await
+        .expect("managed/API activation");
+    assert_ne!(managed_activation.generation_id, result.generation_id);
+    let managed_activation_bindings: i64 = sqlx::query_scalar(
+        "SELECT count(*) FROM ui_installation_bindings WHERE generation_id = $1",
+    )
+    .bind(managed_activation.generation_id.as_uuid())
+    .fetch_one(&admin_pool)
+    .await
+    .expect("managed activation bindings");
+    assert_eq!(managed_activation_bindings, 2);
+    let managed_rollback = service
+        .rollback_ui_installation(
+            &identity(fixture.actor),
+            RollbackUiInstallation {
+                caller_key: UiInstallationCallerKey::parse("general-managed-rollback")
+                    .expect("caller key"),
+                installation_id: result.installation_id,
+                expected_generation_id: Some(managed_activation.generation_id),
+                release_id,
+                ui_key: release_domain::ui::UiKey::parse("assistant").expect("UI key"),
+            },
+        )
+        .await
+        .expect("managed/API rollback");
+    assert_ne!(
+        managed_rollback.generation_id,
+        managed_activation.generation_id
+    );
+    let managed_rollback_bindings: i64 = sqlx::query_scalar(
+        "SELECT count(*) FROM ui_installation_bindings WHERE generation_id = $1",
+    )
+    .bind(managed_rollback.generation_id.as_uuid())
+    .fetch_one(&admin_pool)
+    .await
+    .expect("managed rollback bindings");
+    assert_eq!(managed_rollback_bindings, 2);
+
     let cross_project = service
         .install_ui(
             &identity(fixture.actor),
@@ -2828,6 +2879,422 @@ async fn install_static_ui_global_organization_matrix() {
 
 #[tokio::test]
 #[serial]
+// Every activation and rollback pins a fresh generation. This matrix also
+// checks receipt replay after source revocation and rollback rollback safety.
+#[allow(clippy::too_many_lines)]
+async fn ui_installation_activation_rollback_generation_matrix() {
+    let Some(admin_pool) = pool().await else {
+        return;
+    };
+    sqlx::migrate!("../../migrations")
+        .run(&admin_pool)
+        .await
+        .expect("apply application migrations");
+    let Some(worker_pool) = worker_pool_named("heph-ui-generation-matrix").await else {
+        return;
+    };
+    let fixture = seed(&admin_pool).await;
+    let release_v1 = publish_static_release(
+        &admin_pool,
+        &worker_pool,
+        &fixture,
+        "project",
+        "generation-v1",
+    )
+    .await;
+    let service = ReleaseService::new(worker_pool.clone(), Arc::new(PostgresMelangeAuthorizer));
+    let installation = service
+        .install_static_ui(
+            &identity(fixture.actor),
+            install_command(
+                "generation-install",
+                UiInstallationTarget::project(fixture.first_project),
+                release_v1,
+                "docs",
+            ),
+        )
+        .await
+        .expect("install first generation");
+    let generation_one_no: i64 =
+        sqlx::query_scalar("SELECT generation_no FROM ui_installation_generations WHERE id = $1")
+            .bind(installation.generation_id.as_uuid())
+            .fetch_one(&admin_pool)
+            .await
+            .expect("first generation number");
+    assert_eq!(generation_one_no, 1);
+
+    let activation = service
+        .activate_ui_installation(
+            &identity(fixture.actor),
+            ActivateUiInstallation {
+                caller_key: UiInstallationCallerKey::parse("generation-activate").expect("key"),
+                installation_id: installation.installation_id,
+                expected_generation_id: Some(installation.generation_id),
+                release_id: release_v1,
+                ui_key: release_domain::ui::UiKey::parse("docs").expect("UI key"),
+            },
+        )
+        .await
+        .expect("activate fresh generation");
+    assert_ne!(activation.generation_id, installation.generation_id);
+    assert_eq!(
+        activation.state,
+        release_domain::UiInstallationState::Enabled
+    );
+    let retained_generations: i64 = sqlx::query_scalar(
+        "SELECT count(*) FROM ui_installation_generations WHERE installation_id = $1",
+    )
+    .bind(installation.installation_id.as_uuid())
+    .fetch_one(&admin_pool)
+    .await
+    .expect("retained generations after activation");
+    assert_eq!(retained_generations, 2);
+    let current_generation: Uuid =
+        sqlx::query_scalar("SELECT current_generation_id FROM ui_installations WHERE id = $1")
+            .bind(installation.installation_id.as_uuid())
+            .fetch_one(&admin_pool)
+            .await
+            .expect("current generation pointer");
+    assert_eq!(current_generation, activation.generation_id.as_uuid());
+
+    sqlx::query(
+        "INSERT INTO repository_managers (repository_id, user_id)
+         VALUES ($1, $2) ON CONFLICT DO NOTHING",
+    )
+    .bind(fixture.first_repository.as_uuid())
+    .bind(fixture.actor.as_uuid())
+    .execute(&admin_pool)
+    .await
+    .expect("seed repository owner for generation scope");
+    let repository_release = publish_static_release(
+        &admin_pool,
+        &worker_pool,
+        &fixture,
+        "repository",
+        "generation-repository",
+    )
+    .await;
+    let repository_installation = service
+        .install_static_ui(
+            &identity(fixture.actor),
+            install_command(
+                "generation-repository-install",
+                UiInstallationTarget::repository(fixture.first_repository),
+                repository_release,
+                "docs",
+            ),
+        )
+        .await
+        .expect("install repository generation scope");
+    let repository_activation = service
+        .activate_ui_installation(
+            &identity(fixture.actor),
+            ActivateUiInstallation {
+                caller_key: UiInstallationCallerKey::parse("generation-repository-activate")
+                    .expect("repository activation key"),
+                installation_id: repository_installation.installation_id,
+                expected_generation_id: Some(repository_installation.generation_id),
+                release_id: repository_release,
+                ui_key: release_domain::ui::UiKey::parse("docs").expect("UI key"),
+            },
+        )
+        .await
+        .expect("activate repository generation scope");
+    assert_ne!(
+        repository_activation.generation_id,
+        repository_installation.generation_id
+    );
+    let repository_rollback = service
+        .rollback_ui_installation(
+            &identity(fixture.actor),
+            RollbackUiInstallation {
+                caller_key: UiInstallationCallerKey::parse("generation-repository-rollback")
+                    .expect("repository rollback key"),
+                installation_id: repository_installation.installation_id,
+                expected_generation_id: Some(repository_activation.generation_id),
+                release_id: repository_release,
+                ui_key: release_domain::ui::UiKey::parse("docs").expect("UI key"),
+            },
+        )
+        .await
+        .expect("rollback repository generation scope");
+    assert_ne!(
+        repository_rollback.generation_id,
+        repository_activation.generation_id
+    );
+
+    sqlx::query(
+        "UPDATE organization_members SET role = 'owner'
+         WHERE organization_id = $1 AND user_id = $2",
+    )
+    .bind(fixture.organization.as_uuid())
+    .bind(fixture.actor.as_uuid())
+    .execute(&admin_pool)
+    .await
+    .expect("promote global owner for generation scope");
+    let global_release = publish_static_release(
+        &admin_pool,
+        &worker_pool,
+        &fixture,
+        "global",
+        "generation-global",
+    )
+    .await;
+    let global_installation = service
+        .install_static_ui(
+            &identity(fixture.actor),
+            install_command(
+                "generation-global-install",
+                UiInstallationTarget::organization(fixture.organization),
+                global_release,
+                "docs",
+            ),
+        )
+        .await
+        .expect("install global generation scope");
+    let global_activation = service
+        .activate_ui_installation(
+            &identity(fixture.actor),
+            ActivateUiInstallation {
+                caller_key: UiInstallationCallerKey::parse("generation-global-activate")
+                    .expect("global activation key"),
+                installation_id: global_installation.installation_id,
+                expected_generation_id: Some(global_installation.generation_id),
+                release_id: global_release,
+                ui_key: release_domain::ui::UiKey::parse("docs").expect("UI key"),
+            },
+        )
+        .await
+        .expect("activate global generation scope");
+    assert_ne!(
+        global_activation.generation_id,
+        global_installation.generation_id
+    );
+    let global_rollback = service
+        .rollback_ui_installation(
+            &identity(fixture.actor),
+            RollbackUiInstallation {
+                caller_key: UiInstallationCallerKey::parse("generation-global-rollback")
+                    .expect("global rollback key"),
+                installation_id: global_installation.installation_id,
+                expected_generation_id: Some(global_activation.generation_id),
+                release_id: global_release,
+                ui_key: release_domain::ui::UiKey::parse("docs").expect("UI key"),
+            },
+        )
+        .await
+        .expect("rollback global generation scope");
+    assert_ne!(
+        global_rollback.generation_id,
+        global_activation.generation_id
+    );
+
+    let activation_replay = service
+        .activate_ui_installation(
+            &identity(fixture.actor),
+            ActivateUiInstallation {
+                caller_key: UiInstallationCallerKey::parse("generation-activate").expect("key"),
+                installation_id: installation.installation_id,
+                expected_generation_id: Some(installation.generation_id),
+                release_id: release_v1,
+                ui_key: release_domain::ui::UiKey::parse("docs").expect("UI key"),
+            },
+        )
+        .await
+        .expect("exact activation replay");
+    assert_eq!(activation_replay, activation);
+    let release_v2 = publish_static_release(
+        &admin_pool,
+        &worker_pool,
+        &fixture,
+        "project",
+        "generation-v2",
+    )
+    .await;
+    let changed_input = service
+        .activate_ui_installation(
+            &identity(fixture.actor),
+            ActivateUiInstallation {
+                caller_key: UiInstallationCallerKey::parse("generation-activate").expect("key"),
+                installation_id: installation.installation_id,
+                expected_generation_id: Some(installation.generation_id),
+                release_id: release_v2,
+                ui_key: release_domain::ui::UiKey::parse("docs").expect("UI key"),
+            },
+        )
+        .await;
+    assert!(matches!(
+        changed_input,
+        Err(UiInstallationError::IdempotencyConflict)
+    ));
+    let stale_cas = service
+        .activate_ui_installation(
+            &identity(fixture.actor),
+            ActivateUiInstallation {
+                caller_key: UiInstallationCallerKey::parse("generation-stale-cas").expect("key"),
+                installation_id: installation.installation_id,
+                expected_generation_id: Some(installation.generation_id),
+                release_id: release_v1,
+                ui_key: release_domain::ui::UiKey::parse("docs").expect("UI key"),
+            },
+        )
+        .await;
+    assert!(matches!(
+        stale_cas,
+        Err(UiInstallationError::GenerationConflict)
+    ));
+
+    let source_project: Uuid = sqlx::query_scalar(
+        "SELECT repository.project_id
+         FROM releases AS release
+         JOIN repositories AS repository ON repository.id = release.repository_id
+         WHERE release.id = $1",
+    )
+    .bind(release_v1.as_uuid())
+    .fetch_one(&admin_pool)
+    .await
+    .expect("load source project for release revocation");
+    sqlx::query("DELETE FROM project_maintainers WHERE project_id = $1 AND user_id = $2")
+        .bind(source_project)
+        .bind(fixture.actor.as_uuid())
+        .execute(&admin_pool)
+        .await
+        .expect("revoke source release use");
+    sqlx::query("DELETE FROM organization_members WHERE organization_id = $1 AND user_id = $2")
+        .bind(fixture.organization.as_uuid())
+        .bind(fixture.actor.as_uuid())
+        .execute(&admin_pool)
+        .await
+        .expect("revoke source organization use");
+    let revoked_replay = service
+        .activate_ui_installation(
+            &identity(fixture.actor),
+            ActivateUiInstallation {
+                caller_key: UiInstallationCallerKey::parse("generation-activate").expect("key"),
+                installation_id: installation.installation_id,
+                expected_generation_id: Some(installation.generation_id),
+                release_id: release_v1,
+                ui_key: release_domain::ui::UiKey::parse("docs").expect("UI key"),
+            },
+        )
+        .await
+        .expect("activation replay after source revocation");
+    assert_eq!(revoked_replay, activation);
+    sqlx::query(
+        "INSERT INTO project_maintainers (project_id, user_id) VALUES ($1, $2) ON CONFLICT DO NOTHING",
+    )
+    .bind(source_project)
+    .bind(fixture.actor.as_uuid())
+    .execute(&admin_pool)
+    .await
+    .expect("restore source release use");
+    sqlx::query(
+        "INSERT INTO organization_members (organization_id, user_id, role)
+         VALUES ($1, $2, 'member') ON CONFLICT DO NOTHING",
+    )
+    .bind(fixture.organization.as_uuid())
+    .bind(fixture.actor.as_uuid())
+    .execute(&admin_pool)
+    .await
+    .expect("restore source organization use");
+
+    let same_input_new_caller = service
+        .activate_ui_installation(
+            &identity(fixture.actor),
+            ActivateUiInstallation {
+                caller_key: UiInstallationCallerKey::parse("generation-activate-again")
+                    .expect("key"),
+                installation_id: installation.installation_id,
+                expected_generation_id: Some(activation.generation_id),
+                release_id: release_v1,
+                ui_key: release_domain::ui::UiKey::parse("docs").expect("UI key"),
+            },
+        )
+        .await
+        .expect("fresh same-input activation");
+    assert_ne!(
+        same_input_new_caller.generation_id,
+        activation.generation_id
+    );
+
+    let rollback = service
+        .rollback_ui_installation(
+            &identity(fixture.actor),
+            RollbackUiInstallation {
+                caller_key: UiInstallationCallerKey::parse("generation-rollback").expect("key"),
+                installation_id: installation.installation_id,
+                expected_generation_id: Some(same_input_new_caller.generation_id),
+                release_id: release_v2,
+                ui_key: release_domain::ui::UiKey::parse("docs").expect("UI key"),
+            },
+        )
+        .await
+        .expect("rollback to second release");
+    assert_ne!(rollback.generation_id, same_input_new_caller.generation_id);
+    assert_eq!(rollback.state, release_domain::UiInstallationState::Enabled);
+    let generation_rows: (i64, i64) = sqlx::query_as(
+        "SELECT count(*), count(*) FILTER (WHERE id = $2)
+         FROM ui_installation_generations WHERE installation_id = $1",
+    )
+    .bind(installation.installation_id.as_uuid())
+    .bind(installation.generation_id.as_uuid())
+    .fetch_one(&admin_pool)
+    .await
+    .expect("all immutable generations retained");
+    assert_eq!(generation_rows, (4, 1));
+
+    let invalid_release = publish_static_api_release(&admin_pool, &worker_pool, &fixture).await;
+    let invalid_caller = UiInstallationCallerKey::parse("generation-invalid-binding").expect("key");
+    let invalid_operation = UiInstallationCommandIdentity::new(
+        fixture.actor.as_uuid(),
+        UiInstallationOperation::Rollback,
+        invalid_caller.clone(),
+    );
+    let invalid_occurrence = actor_idempotency_id(
+        fixture.actor.as_uuid().as_bytes(),
+        invalid_operation.command_key().as_bytes(),
+    )
+    .as_uuid();
+    let before_invalid: (i64, i64, i64, i64) = sqlx::query_as(
+        "SELECT\n             (SELECT count(*) FROM ui_installation_generations WHERE installation_id = $1),\n             (SELECT count(*) FROM ui_installation_commands WHERE installation_id = $1),\n             (SELECT count(*) FROM application_events WHERE occurrence_id = $2),\n             (SELECT count(outbox.event_id) FROM application_events AS event\n              LEFT JOIN product_event_outbox AS outbox ON outbox.event_id = event.id\n              WHERE event.occurrence_id = $2)",
+    )
+    .bind(installation.installation_id.as_uuid())
+    .bind(invalid_occurrence)
+    .fetch_one(&admin_pool)
+    .await
+    .expect("invalid rollback baseline");
+    let invalid = service
+        .rollback_ui_installation(
+            &identity(fixture.actor),
+            RollbackUiInstallation {
+                caller_key: invalid_caller,
+                installation_id: installation.installation_id,
+                expected_generation_id: Some(rollback.generation_id),
+                release_id: invalid_release,
+                ui_key: release_domain::ui::UiKey::parse("docs").expect("UI key"),
+            },
+        )
+        .await;
+    assert!(matches!(
+        invalid,
+        Err(UiInstallationError::InvalidOrUnsupported)
+    ));
+    let after_invalid: (i64, i64, i64, i64) = sqlx::query_as(
+        "SELECT\n             (SELECT count(*) FROM ui_installation_generations WHERE installation_id = $1),\n             (SELECT count(*) FROM ui_installation_commands WHERE installation_id = $1),\n             (SELECT count(*) FROM application_events WHERE occurrence_id = $2),\n             (SELECT count(outbox.event_id) FROM application_events AS event\n              LEFT JOIN product_event_outbox AS outbox ON outbox.event_id = event.id\n              WHERE event.occurrence_id = $2)",
+    )
+    .bind(installation.installation_id.as_uuid())
+    .bind(invalid_occurrence)
+    .fetch_one(&admin_pool)
+    .await
+    .expect("invalid rollback absence");
+    assert_eq!(after_invalid, before_invalid);
+    println!(
+        "REAL_UI_INSTALLATION_GENERATION_MATRIX=1 generations=4 owner_scopes=project_repository_global replay=1 source_revocation=1 same_input_new_caller=1 stale_cas=1 invalid_binding_no_rows=1"
+    );
+}
+
+#[tokio::test]
+#[serial]
 // Disable/remove use only current target management. The matrix deliberately
 // revokes source-release use before replaying an exact disable command.
 // This exception keeps all owner shapes and post-commit assertions in one
@@ -3806,12 +4273,13 @@ async fn publish_static_release(
     label: &str,
 ) -> ReleaseId {
     let release_id = ReleaseId::new();
+    let build = clone_build_for_ui_capture(admin_pool, fixture).await;
     let manifest = static_ui_manifest_for_scope(scope);
-    attach_ui_capture(admin_pool, fixture.build, manifest, None, None).await;
+    attach_ui_capture(admin_pool, build, manifest, None, None).await;
     ReleaseService::new(worker_pool.clone(), Arc::new(PostgresMelangeAuthorizer))
         .complete_build(CompleteBuild {
             command_key: key(label, release_id.as_uuid()),
-            build_request_id: fixture.build,
+            build_request_id: build,
             release_id,
             version: ReleaseVersion::parse(format!("{label}-v1")).expect("release version"),
             release_agent_id: ReleaseAgentId::new(),
@@ -3841,10 +4309,11 @@ async fn publish_static_api_release(
     fixture: &Fixture,
 ) -> ReleaseId {
     let release_id = ReleaseId::new();
+    let build = clone_build_for_ui_capture(admin_pool, fixture).await;
     let manifest = static_ui_api_manifest();
     attach_ui_capture(
         admin_pool,
-        fixture.build,
+        build,
         manifest,
         Some(managed_gateway_manifest("reviewer").as_bytes()),
         None,
@@ -3853,7 +4322,7 @@ async fn publish_static_api_release(
     ReleaseService::new(worker_pool.clone(), Arc::new(PostgresMelangeAuthorizer))
         .complete_build(CompleteBuild {
             command_key: key("complete-static-api", release_id.as_uuid()),
-            build_request_id: fixture.build,
+            build_request_id: build,
             release_id,
             version: ReleaseVersion::parse("static-api-v1").expect("release version"),
             release_agent_id: ReleaseAgentId::new(),
@@ -3883,9 +4352,10 @@ async fn publish_managed_release(
     fixture: &Fixture,
 ) -> ReleaseId {
     let release_id = ReleaseId::new();
+    let build = clone_build_for_ui_capture(admin_pool, fixture).await;
     attach_ui_capture(
         admin_pool,
-        fixture.build,
+        build,
         managed_api_manifest(),
         Some(managed_gateway_manifest("reviewer").as_bytes()),
         None,
@@ -3894,7 +4364,7 @@ async fn publish_managed_release(
     ReleaseService::new(worker_pool.clone(), Arc::new(PostgresMelangeAuthorizer))
         .complete_build(CompleteBuild {
             command_key: key("complete-managed-installation", release_id.as_uuid()),
-            build_request_id: fixture.build,
+            build_request_id: build,
             release_id,
             version: ReleaseVersion::parse("managed-install-v1").expect("release version"),
             release_agent_id: ReleaseAgentId::new(),
@@ -3926,10 +4396,11 @@ async fn publish_managed_release_for_scope(
 ) -> ReleaseId {
     assert!(matches!(scope, "global" | "project" | "repository"));
     let release_id = ReleaseId::new();
+    let build = clone_build_for_ui_capture(admin_pool, fixture).await;
     let manifest = MANAGED_API_UI.replace("scope = \"project\"", &format!("scope = \"{scope}\""));
     attach_ui_capture(
         admin_pool,
-        fixture.build,
+        build,
         manifest,
         Some(managed_gateway_manifest("reviewer").as_bytes()),
         None,
@@ -3938,7 +4409,7 @@ async fn publish_managed_release_for_scope(
     ReleaseService::new(worker_pool.clone(), Arc::new(PostgresMelangeAuthorizer))
         .complete_build(CompleteBuild {
             command_key: key("complete-managed-installation-scope", release_id.as_uuid()),
-            build_request_id: fixture.build,
+            build_request_id: build,
             release_id,
             version: ReleaseVersion::parse("managed-install-scope-v1").expect("release version"),
             release_agent_id: ReleaseAgentId::new(),
@@ -3960,6 +4431,74 @@ async fn publish_managed_release_for_scope(
         .await
         .expect("publish scoped managed installation release");
     release_id
+}
+
+// Each published release needs its own immutable source capture. Cloning the
+// reusable build keeps release fixtures independent while preserving the same
+// repository, actor, and validated configuration.
+async fn clone_build_for_ui_capture(admin_pool: &PgPool, fixture: &Fixture) -> BuildRequestId {
+    let build = BuildRequestId::new();
+    let commit = format!("{}00000000", Uuid::new_v4().simple());
+    let (repository_id, receive_id, source_ref, build_definition_hash, created_by): (
+        Uuid,
+        Uuid,
+        String,
+        Vec<u8>,
+        Uuid,
+    ) = sqlx::query_as(
+        "SELECT repository_id, origin_receive_id, source_ref,
+                    build_definition_hash, created_by
+             FROM build_requests WHERE id = $1",
+    )
+    .bind(fixture.build.as_uuid())
+    .fetch_one(admin_pool)
+    .await
+    .expect("load reusable build for UI capture");
+    sqlx::query(
+        "INSERT INTO agent_config_revisions
+         (id, repository_id, receive_id, commit_sha, config_hash,
+          normalized_config_hash, schema_version, status, config, diagnostics)
+         SELECT $1, repository_id, receive_id, $2, config_hash,
+                normalized_config_hash, schema_version, status, config, diagnostics
+         FROM agent_config_revisions
+         WHERE repository_id = $3
+           AND commit_sha = (SELECT source_commit FROM build_requests WHERE id = $4)",
+    )
+    .bind(Uuid::new_v4())
+    .bind(&commit)
+    .bind(repository_id)
+    .bind(fixture.build.as_uuid())
+    .execute(admin_pool)
+    .await
+    .expect("clone reusable configuration revision");
+    sqlx::query(
+        "INSERT INTO build_requests
+         (id, repository_id, source_commit, source_ref, origin_receive_id,
+          build_definition_hash, state, created_by)
+         VALUES ($1, $2, $3, $4, $5, $6, 'importing', $7)",
+    )
+    .bind(build.as_uuid())
+    .bind(repository_id)
+    .bind(&commit)
+    .bind(source_ref)
+    .bind(receive_id)
+    .bind(build_definition_hash)
+    .bind(created_by)
+    .execute(admin_pool)
+    .await
+    .expect("clone reusable build request");
+    sqlx::query(
+        "INSERT INTO build_request_images
+         (build_request_id, execution_context, image_id, image_key, image_reference)
+         SELECT $1, execution_context, image_id, image_key, image_reference
+         FROM build_request_images WHERE build_request_id = $2",
+    )
+    .bind(build.as_uuid())
+    .bind(fixture.build.as_uuid())
+    .execute(admin_pool)
+    .await
+    .expect("clone reusable build images");
+    build
 }
 
 async fn seed_foreign_project(pool: &PgPool, actor: UserId) -> ProjectId {

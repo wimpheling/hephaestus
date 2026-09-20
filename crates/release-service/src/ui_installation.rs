@@ -33,6 +33,50 @@ pub struct InstallUiResult {
     pub idempotency_id: Uuid,
 }
 
+/// A command that activates a new immutable generation for an installation.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ActivateUiInstallation {
+    /// Actor-bound caller idempotency key.
+    pub caller_key: UiInstallationCallerKey,
+    /// Stable installation identity.
+    pub installation_id: UiInstallationId,
+    /// Optional compare-and-swap expectation for the current generation.
+    pub expected_generation_id: Option<UiInstallationGenerationId>,
+    /// Published release containing the replacement UI declaration and artifacts.
+    pub release_id: ReleaseId,
+    /// Exact published UI declaration key; must match the installation identity.
+    pub ui_key: UiKey,
+}
+
+/// A command that rolls an installation back to a selected release as a new
+/// immutable generation.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RollbackUiInstallation {
+    /// Actor-bound caller idempotency key.
+    pub caller_key: UiInstallationCallerKey,
+    /// Stable installation identity.
+    pub installation_id: UiInstallationId,
+    /// Optional compare-and-swap expectation for the current generation.
+    pub expected_generation_id: Option<UiInstallationGenerationId>,
+    /// Published release to pin in the new generation.
+    pub release_id: ReleaseId,
+    /// Exact published UI declaration key; must match the installation identity.
+    pub ui_key: UiKey,
+}
+
+/// Result of a committed activation or rollback generation.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct UiInstallationGenerationResult {
+    /// Stable installation identity.
+    pub installation_id: UiInstallationId,
+    /// Newly created immutable generation identity.
+    pub generation_id: UiInstallationGenerationId,
+    /// Committed lifecycle state.
+    pub state: UiInstallationState,
+    /// Actor-bound occurrence/idempotency identity used by the event ledger.
+    pub idempotency_id: Uuid,
+}
+
 /// A compatibility command for one published static UI with no API bindings.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct InstallStaticUi {

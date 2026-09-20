@@ -24,8 +24,9 @@ pub use ui_browser::{
     UiBrowserRequestRoute, UiBrowserSessionContext, UiBrowserSessionError, UiBrowserSessionStore,
 };
 pub use ui_installation::{
-    DisableUiInstallation, InstallStaticUi, InstallStaticUiResult, InstallUi, InstallUiResult,
-    RemoveUiInstallation, UiInstallationError, UiInstallationLifecycleResult,
+    ActivateUiInstallation, DisableUiInstallation, InstallStaticUi, InstallStaticUiResult,
+    InstallUi, InstallUiResult, RemoveUiInstallation, RollbackUiInstallation, UiInstallationError,
+    UiInstallationGenerationResult, UiInstallationLifecycleResult,
 };
 
 /// One already safely imported immutable artifact.
