@@ -10,6 +10,8 @@ const STAGE_IDS = new Map([
   ["managed-cookie", "managed_cookie"],
   ["managed-identity", "managed_identity"],
   ["theme", "theme"],
+  ["accessibility", "accessibility"],
+  ["close", "close"],
 ]);
 
 const SAFE_STATUSES = new Set(["passed", "failed", "skipped", "interrupted", "timedOut"]);

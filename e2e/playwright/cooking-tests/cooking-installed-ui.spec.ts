@@ -1,4 +1,5 @@
 import {expect, test} from "@playwright/test";
+import {AxeBuilder} from "@axe-core/playwright";
 import {readFileSync} from "node:fs";
 import {join} from "node:path";
 
@@ -66,8 +67,20 @@ test("cooking installed UI TLS full-page and managed iframe smoke", async ({page
   const managedCardAfterReturn = page.locator(`#installed-ui-${installed.managed_installation_id}`);
   await expect(managedCardAfterReturn).toBeVisible();
   const frame = page.locator("#installed-ui-frame-project");
+  const embed = page.locator("#installed-ui-embed-project");
   const frameContent = frame.contentFrame();
   await test.step("managed-launch", async () => {
+    const managedDocument = page.waitForResponse(response => {
+      try {
+        const url = new URL(response.url());
+        return url.hostname.startsWith("g-") &&
+          url.pathname === "/managed-reference/index.html" &&
+          response.request().resourceType() === "document" &&
+          response.status() === 200;
+      } catch {
+        return false;
+      }
+    }, {timeout: 30_000});
     await managedCardAfterReturn.getByRole("button", {name: /Launch/}).click();
     await expect(frame).toBeVisible();
     await expect.poll(async () => {
@@ -80,6 +93,16 @@ test("cooking installed UI TLS full-page and managed iframe smoke", async ({page
     await expect(frameContent.getByText("Managed service UI")).toBeVisible();
     await expect(frameContent.getByRole("heading", {name: "Managed release reference"})).toBeVisible();
     await expect(frameContent.locator('link[rel="stylesheet"]')).toHaveCount(1);
+    const response = await managedDocument;
+    const headers = response.headers();
+    const platformOrigin = new URL(process.env.HEPHAESTUS_WEB_URL ?? "https://invalid.example/").origin;
+    const contentSecurityPolicy = headers["content-security-policy"] ?? "";
+    expect(contentSecurityPolicy.includes("default-src 'none'")).toBe(true);
+    expect(contentSecurityPolicy.includes("connect-src 'self'")).toBe(true);
+    expect(contentSecurityPolicy.includes("form-action 'none'")).toBe(true);
+    expect(contentSecurityPolicy.includes("frame-src 'none'")).toBe(true);
+    expect(contentSecurityPolicy.includes(`frame-ancestors ${platformOrigin}`)).toBe(true);
+    expect(headers["x-content-type-options"] === "nosniff").toBe(true);
   });
   await test.step("managed-cookie", async () => {
     const frameHandle = await frame.elementHandle();
@@ -94,6 +117,83 @@ test("cooking installed UI TLS full-page and managed iframe smoke", async ({page
     expect(managedUiCookie?.sameSite).toBe("Strict");
     expect(managedUiCookie?.path).toBe("/");
     expect(managedUiCookie?.domain).toBe(managedFrameUrl.hostname);
+  });
+  await test.step("theme", async () => {
+    await page.getByRole("button", {name: "Use dark theme"}).click();
+    await expect(page.locator("html")).toHaveAttribute("data-theme", "dark");
+    await expect.poll(
+      () => frameContent.locator("html").getAttribute("data-theme"),
+      {timeout: 10_000},
+    ).toBe("dark");
+
+    await page.getByRole("button", {name: "Use light theme"}).click();
+    await expect(page.locator("html")).toHaveAttribute("data-theme", "light");
+    await expect.poll(
+      () => frameContent.locator("html").getAttribute("data-theme"),
+      {timeout: 10_000},
+    ).toBe("light");
+
+    await page.getByRole("button", {name: "Use system theme"}).click();
+    await expect(page.locator("html")).toHaveAttribute("data-theme-source", "system");
+    await page.emulateMedia({colorScheme: "dark"});
+    await expect(page.locator("html")).toHaveAttribute("data-theme", "dark");
+    await expect.poll(
+      () => frameContent.locator("html").getAttribute("data-theme"),
+      {timeout: 10_000},
+    ).toBe("dark");
+  });
+  await test.step("accessibility", async () => {
+    await expect(embed.locator("[data-ui-status]")).toHaveAttribute("role", "status");
+    await expect(embed.locator("[data-ui-status]")).toHaveAttribute("aria-live", "polite");
+    await expect(embed.getByRole("button", {name: "Close"})).toBeVisible();
+    await expect(frame).toHaveAttribute("title", "Installed UI");
+    await expect(frame).toHaveAttribute("sandbox", "allow-scripts allow-same-origin");
+    await expect(frame).toHaveAttribute("referrerpolicy", "no-referrer");
+
+    const platformPolicy = await page.locator(
+      'meta[http-equiv="Content-Security-Policy"]',
+    ).getAttribute("content");
+    const uiNamespace = process.env.HEPHAESTUS_UI_NAMESPACE ?? "invalid.example";
+    expect(platformPolicy?.includes("frame-src 'self'") ?? false).toBe(true);
+    expect(platformPolicy?.includes(`https://*.${uiNamespace}`) ?? false).toBe(true);
+
+    const undeclaredFetchBlocked = await frameContent.locator("body").evaluate(() => new Promise(resolve => {
+      const blockedUrl = "https://example.invalid/heph-ui-csp-probe";
+      const timeout = window.setTimeout(() => {
+        window.removeEventListener("securitypolicyviolation", onViolation);
+        resolve(false);
+      }, 1_000);
+      const onViolation = (event: SecurityPolicyViolationEvent) => {
+        const blockedOrigin = new URL(blockedUrl).origin;
+        const matchesTarget = event.blockedURI === blockedOrigin || event.blockedURI.startsWith(blockedUrl);
+        if (event.effectiveDirective !== "connect-src" || !matchesTarget) return;
+        window.clearTimeout(timeout);
+        window.removeEventListener("securitypolicyviolation", onViolation);
+        resolve(true);
+      };
+      window.addEventListener("securitypolicyviolation", onViolation);
+      void fetch(blockedUrl, {cache: "no-store"}).catch(() => undefined);
+    }));
+    expect(undeclaredFetchBlocked).toBe(true);
+
+    const platformUrlBeforeParentNavigation = page.url();
+    const parentNavigationBlocked = await frameContent.locator("body").evaluate(() => {
+      try {
+        const topWindow = window.top;
+        if (!topWindow) return false;
+        topWindow.location.href = "https://example.invalid/heph-ui-parent-probe";
+        return false;
+      } catch (error) {
+        return error instanceof DOMException && error.name === "SecurityError";
+      }
+    });
+    expect(parentNavigationBlocked).toBe(true);
+    expect(page.url()).toBe(platformUrlBeforeParentNavigation);
+
+    const axe = await new AxeBuilder({page}).include("#installed-ui-navigation-project").analyze();
+    expect(axe.violations.length).toBe(0);
+    const frameAxe = await new AxeBuilder({page}).include("#installed-ui-frame-project").analyze();
+    expect(frameAxe.violations.length).toBe(0);
   });
   await test.step("managed-identity", async () => {
     const identityIsValid = await frameContent.locator("body").evaluate(async () => {
@@ -114,6 +214,16 @@ test("cooking installed UI TLS full-page and managed iframe smoke", async ({page
   });
   await expect(page.locator("#installed-ui-terminal-status-project")).toBeHidden();
   await page.screenshot({path: screenshotPath("installed-ui-managed-iframe.png"), fullPage: true});
+  await test.step("close", async () => {
+    await embed.getByRole("button", {name: "Close"}).click();
+    await expect(embed).toBeHidden();
+    await expect(frame).not.toHaveAttribute("src");
+    await expect(embed.locator("[data-ui-status]")).toHaveText("Closed");
+    await expect(page.locator("#installed-ui-terminal-status-project")).toBeHidden();
+    const launchButton = managedCardAfterReturn.getByRole("button", {name: /Launch/});
+    const launchButtonFocused = await launchButton.evaluate(element => document.activeElement === element);
+    expect(launchButtonFocused).toBe(true);
+  });
 });
 
 function screenshotPath(name: string): string {
