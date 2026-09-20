@@ -21,9 +21,32 @@ Verified static-byte loading and read-only release-page metadata display are
 implemented. Durable browser sessions are integrated through RPC and Phoenix.
 UI installation is the current slice; static/managed hosting, browser
 navigation/authorization/isolation, real Caddy/VM/browser proofs, and the final
-integrated quality gate remain incomplete. Global installation ownership is an
-open question sent to the user. Historical checkpoints below record the state
+integrated quality gate remain incomplete. The user approved organization-owned
+global installations and organization isolation. Historical checkpoints record the state
 at their time; later integration checkpoints supersede earlier pending notes.
+
+## Approved organization ownership model (2026-09-20)
+
+The organization is the tenant and permission boundary. A user account may belong
+to several organizations, but membership in both does not authorize implicit
+resource sharing between them. Project/repository scopes are subordinate to that
+boundary. Global UI declarations mean organization-wide installations, managed
+through organization permissions and shared through that organization's navigation.
+Personal pins, ordering, and hidden entries are presentation preferences within
+an organization; there is no separate user-owned resource universe in this work.
+
+UI installation must verify that source release and target owner belong to the
+same organization, in addition to the existing target-management and source-use
+permissions. Cross-project reuse within that organization remains supported;
+cross-organization imports/sharing require a separately designed explicit mechanism.
+Serving, handoff, child sessions, cache identity, and guest/API admission must
+preserve the same organization boundary. Navigation context alone is not authority.
+
+Migration 87 and the initial domain types cover project/repository owners only.
+A subsequent migration will add an explicit organization owner for global entries,
+with strict owner-shape constraints, scoped uniqueness, and organization read
+policies. Historical migrations will not be rewritten. These are approved
+requirements; organization-wide installation and serving remain unimplemented.
 
 ## UI installation identity primitives checkpoint (2026-09-20)
 
@@ -65,7 +88,8 @@ under `/home/a`, dated 20260920.
 
 This is storage enforcement only. Authorized installation commands, generation
 lifecycle adapters, transactional owner events, navigation, and serving are not
-implemented by this migration. Global ownership remains unresolved.
+implemented by this migration. Global ownership was resolved in the later approved
+organization model above; its storage extension remains pending.
 
 ## Reference UI automatic-theme checkpoint (2026-09-20)
 
@@ -278,8 +302,8 @@ Project tabs currently repeat across six page components; repository tabs use
 under current owner authorization and appended through shared tab construction,
 with namespaced opaque identity so declarations cannot replace core routes.
 Installation generations must change on fresh activation, including reactivation
-of the same release; command replay alone reuses the prior result. Global entry
-ownership remains awaiting the user's answer.
+of the same release; command replay alone reuses the prior result. Global entries
+belong to an explicit organization under the approved model above.
 
 Project/repository installation decisions for the next implementation slice:
 
@@ -288,9 +312,9 @@ Project/repository installation decisions for the next implementation slice:
   repository-scoped entries name an exact repository in that project. The source
   repository belongs to the immutable release generation, not the project tab's
   navigation owner. Source-release use authority is separate from target ownership;
-  verify the existing release/gateway installation contract before choosing any
-  restriction on cross-repository or cross-project installation. Do not silently
-  narrow a distribution surface to its source repository.
+  permit cross-project/repository reuse only within the same organization and
+  after the required source-use checks. Do not silently narrow a distribution
+  surface to its source repository or implicitly share across organizations.
 - Require current project management and release use authority, plus use authority
   for every bound release agent. Each fresh activation, reactivation, or rollback
   creates a new generation even for the same release; only exact command replay
@@ -307,8 +331,8 @@ Project/repository installation decisions for the next implementation slice:
   related IDs in project/repository events; UI enabled/disabled state is not owner
   lifecycle state. Navigation consumers must refresh installed-entry projections.
 - Shell routes use opaque platform-owned identities. Declarations cannot replace
-  core routes. Global installations need an explicit ownership model and remain
-  pending the user's personal-versus-organization decision.
+  core routes. Global installations require an explicit organization owner;
+  personal navigation preferences do not alter installation authority.
 
 These are reviewed design directions, not implemented installation behavior.
 Source-to-target adapter review: `ReleaseService::import_agent` permits a published
@@ -316,8 +340,8 @@ release agent in another consuming project after target management and source-ag
 use checks; repository attachments follow that consuming project. In contrast,
 `GatewayInstallApplication` and `require_repository_boundary`, together with
 migration 35's gateway revision constraint, bind a gateway to the release's source
-repository/project. Static UI installation can use the cross-owner model under
-explicit release-use authorization. Managed/API bindings must respect the existing
+repository/project. Static UI installation can use the cross-owner model within
+one organization under explicit release-use authorization. Managed/API bindings must respect the existing
 gateway boundary; supporting a new consuming gateway in another owner requires
 an explicit gateway import/reference capability, not silent retargeting. Requiring
 release-level CanUse for UI installation is an explicit policy (needed for static
@@ -1086,8 +1110,7 @@ identities, immutable release-agent/revision links, and lifecycle/revocation
 checks. Repository attachment remains explicit. UI installation should reuse
 these boundaries rather than introduce a parallel runtime installation model.
 A durable UI binding still needs an exact immutable release/UI key and target
-scope. Global declarations currently have no installation owner; personal versus
-organization ownership is an open product decision sent to the user. Do not
+scope. Global declarations will use the user-approved organization owner. Do not
 represent global authority merely by null project/repository IDs.
 
 `LocalArtifactStore` already handles bounded imports, content hashing, and safe
