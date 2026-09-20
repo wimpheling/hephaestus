@@ -200,8 +200,11 @@ chmod 600 "${fixture_root}/fixture.json" "${fixture_root}/caddy-ca.pem"
 # container user's normal NSS store. No host trust store or certificate bypass
 # is used, and the container is removed by the trap.
 if podman run --rm --name "${browser_container}" \
+    --userns=keep-id \
+    --user "$(id -u):$(id -g)" \
     --network host \
     --volume "${fixture_root}:/run/heph-fixture:Z" \
+    --env HOME=/tmp \
     --env HEPHAESTUS_WEB_URL="${web_url}" \
     --env HEPHAESTUS_OIDC_URL="${oidc_issuer}" \
     --env HEPHAESTUS_COOKING_BROWSER_FIXTURE=/run/heph-fixture/fixture.json \
