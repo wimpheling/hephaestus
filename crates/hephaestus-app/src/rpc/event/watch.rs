@@ -444,7 +444,10 @@ mod tests {
         };
         use async_nats::jetstream;
         use event_postgres::PostgresProductEventOutbox;
-        use identity_domain::{AuthenticatedIdentity, RequestId, UserId};
+        use identity_domain::{
+            AuthenticatedIdentity, BrowserSessionSid, RequestId, UserId,
+            browser_session_identity_binding_digest, browser_session_sid_digest,
+        };
         use serde_json::json;
         use sqlx::postgres::PgPoolOptions;
         use std::{sync::Arc, time::Duration};
@@ -460,6 +463,32 @@ mod tests {
             .connect(&database_url)
             .await
             .expect("connect watch PostgreSQL");
+        let worker_pool = PgPoolOptions::new()
+            .max_connections(2)
+            .after_connect(|connection, _metadata| {
+                Box::pin(async move {
+                    sqlx::query("SET ROLE hephaestus_worker")
+                        .execute(connection)
+                        .await
+                        .map(|_| ())
+                })
+            })
+            .connect(&database_url)
+            .await
+            .expect("connect watch worker PostgreSQL");
+        let application_pool = PgPoolOptions::new()
+            .max_connections(2)
+            .after_connect(|connection, _metadata| {
+                Box::pin(async move {
+                    sqlx::query("SET ROLE hephaestus_app")
+                        .execute(connection)
+                        .await
+                        .map(|_| ())
+                })
+            })
+            .connect(&database_url)
+            .await
+            .expect("connect watch application PostgreSQL");
         let nats = async_nats::connect(nats_url)
             .await
             .expect("connect watch NATS");
@@ -505,6 +534,26 @@ mod tests {
             json!({}),
             RequestId::new(),
         );
+        let sid = BrowserSessionSid::new();
+        sqlx::query(
+            "INSERT INTO human_browser_sessions
+                (id, sid_digest, creation_idempotency_id, creation_request_id,
+                 identity_binding_digest, user_id, issued_at, expires_at)
+             VALUES ($1, $2, $3, $4, $5, $6, now(), now() + interval '12 hours')",
+        )
+        .bind(Uuid::new_v4())
+        .bind(browser_session_sid_digest(sid).as_bytes().to_vec())
+        .bind(Uuid::new_v4())
+        .bind(Uuid::new_v4())
+        .bind(
+            browser_session_identity_binding_digest(&identity)
+                .as_bytes()
+                .to_vec(),
+        )
+        .bind(user_id)
+        .execute(&worker_pool)
+        .await
+        .expect("seed active watch browser session");
         let scope = EventScope {
             kind: ScopeKind::Organization,
             id: organization_id,
@@ -629,9 +678,15 @@ mod tests {
             &publisher,
             user_id,
             organization_id,
+            &application_pool,
+            &worker_pool,
             [11; 32],
+            sid,
         )
         .await;
+
+        worker_pool.close().await;
+        application_pool.close().await;
 
         sqlx::query(
             "UPDATE application_events SET retained_until = now() - interval '1 second'
@@ -825,25 +880,35 @@ mod tests {
         request
     }
 
-    #[allow(clippy::too_many_lines)]
+    // Keep the transport proof's real event, worker-session, and application
+    // pool handles explicit so it cannot silently fall back to a fake auth path.
+    #[allow(clippy::too_many_arguments, clippy::too_many_lines)]
     async fn assert_connect_transport_resume(
         pool: &sqlx::PgPool,
         nats: &async_nats::Client,
         publisher: &crate::event_adapter::EventPublisher,
         user_id: Uuid,
         organization_id: Uuid,
+        application_pool: &sqlx::PgPool,
+        worker_pool: &sqlx::PgPool,
         signing_key: [u8; 32],
+        sid: identity_domain::BrowserSessionSid,
     ) {
         use crate::{
             event_adapter::NatsEventWakeups,
-            rpc::{MediatorAuthenticator, event::EventRpc},
+            rpc::{
+                MediatorAuthenticationState, MediatorAuthenticator, event::EventRpc,
+                mediator_identity_middleware,
+            },
         };
+        use axum::middleware::from_fn_with_state;
         use buffa::Message as _;
         use connectrpc::{
             Protocol, Router,
             client::{CallOptions, ClientConfig, HttpClient},
         };
         use futures_util::StreamExt as _;
+        use identity_postgres::PostgresBrowserSessionStore;
         use rpc_proto::{
             connect::hephaestus::event::v1::{ProductEventServiceClient, ProductEventServiceExt},
             messages::hephaestus::{
@@ -856,19 +921,30 @@ mod tests {
         };
         use std::{sync::Arc, time::Duration};
 
+        let browser_sessions = Arc::new(PostgresBrowserSessionStore::new(
+            worker_pool.clone(),
+            application_pool.clone(),
+        ));
         let service = Arc::new(EventRpc::new(
             pool.clone(),
             MediatorAuthenticator::new(&signing_key),
             Arc::new(NatsEventWakeups::new(nats.clone())),
             signing_key,
         ));
-        let router = service.register(Router::new());
+        let auth_state = MediatorAuthenticationState::new(
+            MediatorAuthenticator::new(&signing_key),
+            browser_sessions,
+        );
+        let router = service
+            .register(Router::new())
+            .into_axum_router()
+            .layer(from_fn_with_state(auth_state, mediator_identity_middleware));
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
             .await
             .expect("bind Connect watch listener");
         let address = listener.local_addr().expect("Connect watch address");
         let server = tokio::spawn(async move {
-            axum::serve(listener, router.into_axum_router())
+            axum::serve(listener, router)
                 .await
                 .expect("serve Connect watch");
         });
@@ -879,7 +955,7 @@ mod tests {
             HttpClient::plaintext(),
             ClientConfig::new(uri).with_protocol(Protocol::Connect),
         );
-        let token = mediator_assertion(&signing_key, user_id);
+        let token = mediator_assertion(&signing_key, user_id, sid);
         let options = || {
             CallOptions::default()
                 .with_header("authorization", format!("Bearer {token}"))
@@ -1000,7 +1076,11 @@ mod tests {
         let _result = server.await;
     }
 
-    fn mediator_assertion(signing_key: &[u8], user_id: Uuid) -> String {
+    fn mediator_assertion(
+        signing_key: &[u8],
+        user_id: Uuid,
+        sid: identity_domain::BrowserSessionSid,
+    ) -> String {
         use jsonwebtoken::{Algorithm, EncodingKey, Header, encode};
         use serde::Serialize;
         use time::OffsetDateTime;
@@ -1014,6 +1094,7 @@ mod tests {
             iat: i64,
             nbf: i64,
             exp: i64,
+            sid: String,
         }
 
         let now = OffsetDateTime::now_utc().unix_timestamp();
@@ -1027,6 +1108,7 @@ mod tests {
                 iat: now,
                 nbf: now,
                 exp: now + 30,
+                sid: sid.to_protocol_string(),
             },
             &EncodingKey::from_secret(signing_key),
         )

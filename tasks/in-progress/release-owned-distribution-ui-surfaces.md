@@ -48,6 +48,22 @@ with strict owner-shape constraints, scoped uniqueness, and organization read
 policies. Historical migrations will not be rewritten. These are approved
 requirements; organization-wide installation and serving remain unimplemented.
 
+## Durable-session event-watch fixture checkpoint (2026-09-20)
+
+CI exposed a standalone Connect event-watch test router that still omitted the
+production authentication middleware and sent a SID-less assertion. The fixture
+now seeds a durable session through a worker pool, verifies it through a separate
+restricted application pool, and uses the production middleware and SID-bearing
+JWT. Its existing event pool and resume/duplicate-wake/permission-revocation
+assertions remain intact; no authentication fallback was restored.
+
+Disposable PostgreSQL/NATS checks pass all ten event-durability tests and the
+watch transport test without skips in `/home/a/heph-event-watch-20260920-v3.log`.
+Final workspace formatting, app all-target/all-feature Clippy, architecture, and
+diff checks pass in `/home/a/heph-event-watch-checks-20260920-v3.log`; app docs
+pass in `/home/a/heph-event-watch-checks-20260920.log`. CI confirmation remains
+pending; the earlier failed runs did not reach the browser-session lifecycle step.
+
 ## UI installation identity primitives checkpoint (2026-09-20)
 
 The release domain now provides typed installation/generation IDs, structurally
