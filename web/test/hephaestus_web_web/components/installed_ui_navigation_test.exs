@@ -7,7 +7,7 @@ defmodule HephaestusWebWeb.InstalledUiNavigationTest do
 
   alias HephaestusWeb.RPC.Error
   alias HephaestusWebWeb.DesignSystem.Composites.InstalledUiNavigation
-  alias HephaestusWebWeb.InstalledUiNavigationState
+  alias HephaestusWebWeb.InstalledUiNavigationEffects
 
   @installation %{
     "installation_id" => "installation-1",
@@ -32,10 +32,15 @@ defmodule HephaestusWebWeb.InstalledUiNavigationTest do
     document = LazyHTML.from_fragment(html)
 
     assert count(document, "#installed-ui-navigation-project") == 1
+    assert count(document, "section[aria-label='Installed UIs']") == 1
+    assert count(document, "button[aria-label='Launch Assistant']") == 1
     assert count(document, "[data-ui-installation]") == 1
     assert count(document, "button[phx-value-id=installation-1]") == 1
+    assert count(document, "section[phx-hook='InstalledUiNavigation'][phx-update='ignore']") == 1
+    assert count(document, "p[data-ui-status][role='status'][aria-live='polite']") == 1
     assert count(document, "iframe[sandbox='allow-scripts allow-same-origin']") == 1
     assert count(document, "iframe[referrerpolicy='no-referrer']") == 1
+    assert count(document, "iframe[data-ui-frame][title='Installed UI']") == 1
     refute html =~ "generation-1"
     refute html =~ "docs"
     refute html =~ "secret"
@@ -83,72 +88,79 @@ defmodule HephaestusWebWeb.InstalledUiNavigationTest do
   end
 
   test "filters removed entries and requires a complete current launch projection" do
-    state = InstalledUiNavigationState.new("org-1", :global)
+    state = InstalledUiNavigationEffects.new(%{organization_id: "org-1", target: :global})
 
     state =
-      InstalledUiNavigationState.complete(state, {
+      InstalledUiNavigationEffects.complete(state, {
         :ok,
         %{"installations" => [@installation, %{@installation | "lifecycle" => "removed"}]}
       })
 
     assert state.status == :ready
-    assert state.installations == [@installation]
-    assert {:ok, @installation} = InstalledUiNavigationState.launch_entry(state, "installation-1")
-    assert {:error, :unavailable} = InstalledUiNavigationState.launch_entry(state, "missing")
+    assert state.data.installations == [@installation]
+
+    assert {:ok, @installation} =
+             InstalledUiNavigationEffects.launch_entry(state, "installation-1")
+
+    assert {:error, :unavailable} = InstalledUiNavigationEffects.launch_entry(state, "missing")
   end
 
   test "revoked authority clears the projection and prevents launch" do
-    state = InstalledUiNavigationState.new("org-1", {:project, "project-1"})
+    state =
+      InstalledUiNavigationEffects.new(%{
+        organization_id: "org-1",
+        target: {:project, "project-1"}
+      })
 
     state =
-      InstalledUiNavigationState.complete(
+      InstalledUiNavigationEffects.complete(
         state,
         {:error, %Error{kind: :permission_denied, retryable: false}}
       )
 
     assert state.status == :access_revoked
-    assert state.installations == []
+    assert state.data.installations == []
 
     assert {:error, :access_revoked} =
-             InstalledUiNavigationState.launch_entry(state, "installation-1")
+             InstalledUiNavigationEffects.launch_entry(state, "installation-1")
   end
 
   test "clears the active browser entry when refresh changes or disables its generation" do
-    state = InstalledUiNavigationState.new("org-1", :global)
+    state = InstalledUiNavigationEffects.new(%{organization_id: "org-1", target: :global})
 
     state =
-      InstalledUiNavigationState.complete(state, {:ok, %{"installations" => [@installation]}})
+      InstalledUiNavigationEffects.complete(state, {:ok, %{"installations" => [@installation]}})
 
-    state = InstalledUiNavigationState.activate(state, @installation)
+    state = InstalledUiNavigationEffects.activate(state, @installation)
 
     changed_generation = %{@installation | "generation_id" => "generation-2"}
 
     refreshed =
-      InstalledUiNavigationState.complete(
+      InstalledUiNavigationEffects.complete(
         state,
         {:ok, %{"installations" => [changed_generation]}}
       )
 
     assert refreshed.status == :ready
-    assert refreshed.installations == [changed_generation]
-    assert refreshed.active_installation_id == nil
-    assert refreshed.active_generation_id == nil
+    assert refreshed.data.installations == [changed_generation]
+    assert refreshed.data.active_installation_id == nil
+    assert refreshed.data.active_generation_id == nil
 
     disabled = %{@installation | "lifecycle" => "disabled", "launchable" => false}
 
     disabled_state =
-      InstalledUiNavigationState.complete(state, {:ok, %{"installations" => [disabled]}})
+      InstalledUiNavigationEffects.complete(state, {:ok, %{"installations" => [disabled]}})
 
-    assert disabled_state.active_installation_id == nil
-    assert disabled_state.active_generation_id == nil
+    assert disabled_state.data.active_installation_id == nil
+    assert disabled_state.data.active_generation_id == nil
   end
 
   test "retains loaded pages while refreshing the first page and avoids false revocation" do
     second = %{@installation | "installation_id" => "installation-2"}
-    state = InstalledUiNavigationState.new("org-1", :global)
+    state = InstalledUiNavigationEffects.new(%{organization_id: "org-1", target: :global})
 
     state =
-      InstalledUiNavigationState.complete(state, {
+      InstalledUiNavigationEffects.complete(state, {
         :ok,
         %{
           "installations" => [@installation],
@@ -156,62 +168,62 @@ defmodule HephaestusWebWeb.InstalledUiNavigationTest do
         }
       })
 
-    assert InstalledUiNavigationState.present(state).has_more
+    assert InstalledUiNavigationEffects.present(state).has_more
 
     state =
       state
-      |> InstalledUiNavigationState.load_more()
+      |> InstalledUiNavigationEffects.load_more()
       |> then(fn state ->
-        InstalledUiNavigationState.complete(state, {
+        InstalledUiNavigationEffects.complete(state, {
           :ok,
           %{"installations" => [second], "page" => %{"next_page_token" => ""}}
         })
       end)
 
-    assert Enum.map(state.installations, & &1["installation_id"]) == [
+    assert Enum.map(state.data.installations, & &1["installation_id"]) == [
              "installation-1",
              "installation-2"
            ]
 
     refreshed =
       state
-      |> InstalledUiNavigationState.refresh()
-      |> InstalledUiNavigationState.complete({
+      |> InstalledUiNavigationEffects.refresh()
+      |> InstalledUiNavigationEffects.complete({
         :ok,
         %{"installations" => [@installation], "page" => %{"next_page_token" => "page-2"}}
       })
 
-    assert Enum.map(refreshed.installations, & &1["installation_id"]) == [
+    assert Enum.map(refreshed.data.installations, & &1["installation_id"]) == [
              "installation-1",
              "installation-2"
            ]
 
-    refreshed = InstalledUiNavigationState.activate(refreshed, second)
-    assert refreshed.active_installation_id == "installation-2"
-    assert refreshed.active_generation_id == "generation-1"
+    refreshed = InstalledUiNavigationEffects.activate(refreshed, second)
+    assert refreshed.data.active_installation_id == "installation-2"
+    assert refreshed.data.active_generation_id == "generation-1"
   end
 
   test "refreshes the active second page and closes removed or replaced entries" do
     second = %{@installation | "installation_id" => "installation-2"}
-    state = InstalledUiNavigationState.new("org-1", :global)
+    state = InstalledUiNavigationEffects.new(%{organization_id: "org-1", target: :global})
 
     state =
       state
-      |> InstalledUiNavigationState.complete({
+      |> InstalledUiNavigationEffects.complete({
         :ok,
         %{"installations" => [@installation], "page" => %{"next_page_token" => "page-2"}}
       })
-      |> InstalledUiNavigationState.load_more()
-      |> InstalledUiNavigationState.complete({
+      |> InstalledUiNavigationEffects.load_more()
+      |> InstalledUiNavigationEffects.complete({
         :ok,
         %{"installations" => [second], "page" => %{"next_page_token" => "page-3"}}
       })
-      |> InstalledUiNavigationState.activate(second)
+      |> InstalledUiNavigationEffects.activate(second)
 
     refreshed =
       state
-      |> InstalledUiNavigationState.refresh()
-      |> InstalledUiNavigationState.complete({
+      |> InstalledUiNavigationEffects.refresh()
+      |> InstalledUiNavigationEffects.complete({
         :ok,
         %{
           "installations" => [%{second | "generation_id" => "generation-2"}],
@@ -219,68 +231,68 @@ defmodule HephaestusWebWeb.InstalledUiNavigationTest do
         }
       })
 
-    assert refreshed.active_installation_id == nil
-    assert refreshed.active_generation_id == nil
+    assert refreshed.data.active_installation_id == nil
+    assert refreshed.data.active_generation_id == nil
 
-    assert Enum.find(refreshed.installations, &(&1["installation_id"] == "installation-2"))[
+    assert Enum.find(refreshed.data.installations, &(&1["installation_id"] == "installation-2"))[
              "generation_id"
            ] ==
              "generation-2"
 
     refreshed =
-      InstalledUiNavigationState.activate(
+      InstalledUiNavigationEffects.activate(
         refreshed,
         %{second | "generation_id" => "generation-2"}
       )
 
     removed =
       refreshed
-      |> InstalledUiNavigationState.refresh()
-      |> InstalledUiNavigationState.complete({
+      |> InstalledUiNavigationEffects.refresh()
+      |> InstalledUiNavigationEffects.complete({
         :ok,
         %{"installations" => [], "page" => %{"next_page_token" => "page-3"}}
       })
 
-    assert removed.active_installation_id == nil
-    refute Enum.any?(removed.installations, &(&1["installation_id"] == "installation-2"))
+    assert removed.data.active_installation_id == nil
+    refute Enum.any?(removed.data.installations, &(&1["installation_id"] == "installation-2"))
   end
 
   test "continues from the last loaded cursor after refreshing the first page" do
     second = %{@installation | "installation_id" => "installation-2"}
     third = %{@installation | "installation_id" => "installation-3"}
-    state = InstalledUiNavigationState.new("org-1", :global)
+    state = InstalledUiNavigationEffects.new(%{organization_id: "org-1", target: :global})
 
     state =
       state
-      |> InstalledUiNavigationState.complete({
+      |> InstalledUiNavigationEffects.complete({
         :ok,
         %{"installations" => [@installation], "page" => %{"next_page_token" => "page-2"}}
       })
-      |> InstalledUiNavigationState.load_more()
-      |> InstalledUiNavigationState.complete({
+      |> InstalledUiNavigationEffects.load_more()
+      |> InstalledUiNavigationEffects.complete({
         :ok,
         %{"installations" => [second], "page" => %{"next_page_token" => "page-3"}}
       })
 
     state =
       state
-      |> InstalledUiNavigationState.refresh()
-      |> InstalledUiNavigationState.complete({
+      |> InstalledUiNavigationEffects.refresh()
+      |> InstalledUiNavigationEffects.complete({
         :ok,
         %{"installations" => [@installation], "page" => %{"next_page_token" => "page-2"}}
       })
 
-    assert state.next_page_token == "page-3"
+    assert state.data.next_page_token == "page-3"
 
     state =
       state
-      |> InstalledUiNavigationState.load_more()
-      |> InstalledUiNavigationState.complete({
+      |> InstalledUiNavigationEffects.load_more()
+      |> InstalledUiNavigationEffects.complete({
         :ok,
         %{"installations" => [third], "page" => %{"next_page_token" => ""}}
       })
 
-    assert Enum.map(state.installations, & &1["installation_id"]) == [
+    assert Enum.map(state.data.installations, & &1["installation_id"]) == [
              "installation-1",
              "installation-2",
              "installation-3"
@@ -288,32 +300,32 @@ defmodule HephaestusWebWeb.InstalledUiNavigationTest do
   end
 
   test "terminating clears retained pagination state" do
-    state = InstalledUiNavigationState.new("org-1", :global)
+    state = InstalledUiNavigationEffects.new(%{organization_id: "org-1", target: :global})
 
     state =
-      InstalledUiNavigationState.complete(state, {
+      InstalledUiNavigationEffects.complete(state, {
         :ok,
         %{"installations" => [@installation], "page" => %{"next_page_token" => "page-2"}}
       })
 
-    terminated = InstalledUiNavigationState.terminate(state)
-    assert terminated.pages == %{}
-    assert terminated.page_order == []
-    assert terminated.next_page_token == nil
-    assert terminated.request_page_token == ""
+    terminated = InstalledUiNavigationEffects.terminate(state)
+    assert terminated.data.pages == %{}
+    assert terminated.data.page_order == []
+    assert terminated.data.next_page_token == nil
+    assert terminated.data.request_page_token == ""
   end
 
   test "resets pagination and active authority when a retained cursor is invalidated" do
-    state = InstalledUiNavigationState.new("org-1", :global)
+    state = InstalledUiNavigationEffects.new(%{organization_id: "org-1", target: :global})
 
     state =
       state
-      |> InstalledUiNavigationState.complete({
+      |> InstalledUiNavigationEffects.complete({
         :ok,
         %{"installations" => [@installation], "page" => %{"next_page_token" => "page-2"}}
       })
-      |> InstalledUiNavigationState.load_more()
-      |> InstalledUiNavigationState.complete({
+      |> InstalledUiNavigationEffects.load_more()
+      |> InstalledUiNavigationEffects.complete({
         :ok,
         %{
           "installations" => [%{@installation | "installation_id" => "installation-2"}],
@@ -324,25 +336,25 @@ defmodule HephaestusWebWeb.InstalledUiNavigationTest do
     state =
       state
       |> then(fn state ->
-        InstalledUiNavigationState.activate(
+        InstalledUiNavigationEffects.activate(
           state,
-          Enum.find(state.installations, &(&1["installation_id"] == "installation-2"))
+          Enum.find(state.data.installations, &(&1["installation_id"] == "installation-2"))
         )
       end)
 
     reset =
       state
-      |> InstalledUiNavigationState.refresh()
-      |> InstalledUiNavigationState.complete({
+      |> InstalledUiNavigationEffects.refresh()
+      |> InstalledUiNavigationEffects.complete({
         :error,
         %Error{kind: :invalid, retryable: false}
       })
 
     assert reset.status == :error
-    assert reset.installations == []
-    assert reset.pages == %{}
-    assert reset.active_installation_id == nil
-    assert reset.next_page_token == nil
+    assert reset.data.installations == []
+    assert reset.data.pages == %{}
+    assert reset.data.active_installation_id == nil
+    assert reset.data.next_page_token == nil
   end
 
   defp count(document, selector) do

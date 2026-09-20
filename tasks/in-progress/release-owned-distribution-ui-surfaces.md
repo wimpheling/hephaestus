@@ -44,6 +44,26 @@ approved organization-owned
 global installations and organization isolation. Historical checkpoints record the state
 at their time; later integration checkpoints supersede earlier pending notes.
 
+## Final quality gate attempts (2026-09-21)
+
+The final repository-wide gate remains pending. The first attempt at the
+current integration state was stopped by stale embedded runtime-authority SQLx
+migrations; `4c2dd81` rebuilds those migrations when the schema changes. The
+scoped architecture exception for migration build-fingerprint reads is recorded
+at `c14cf6d`, with its documentation checkpoint at `5ddc940`.
+
+Rerun2 reached the isolated browser-session phase after the Rust checks but
+stopped because the host-PostgreSQL/container-mode guard was not enabled. Rerun3
+kept the shared existing target, corrected the private runner modes, and passed
+the repository Rust formatting, Clippy, tests, documentation, Cooking service,
+and both isolated RPC phases before the Phoenix phase. The retained logs are
+`/home/a/heph-quality-release-ui-final-rerun2-20260921.log` and
+`/home/a/heph-quality-release-ui-final-rerun3-20260921.log`. The latest rerun
+then stopped in Phoenix architecture with 70 violations, concentrated in the
+in-progress installed UI navigation/live/state structural migration. Phoenix
+structural fixes and a fresh full gate remain required; checklist section 7
+stays unchecked.
+
 ## Final installed UI runtime proof (2026-09-20)
 
 Run 31 at `d413364` completed the installed UI acceptance path. The retained execution log

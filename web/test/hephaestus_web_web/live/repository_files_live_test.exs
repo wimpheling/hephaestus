@@ -34,8 +34,8 @@ defmodule HephaestusWebWeb.RepositoryFilesLiveTest do
              )
 
     assert completed.assigns.page_state.status == :ready
-    assert completed.assigns.installed_ui_state.organization_id == "organization-1"
-    assert completed.assigns.installed_ui_state.target == {:repository, "repository-1"}
+    assert completed.assigns.installed_ui_state.data.organization_id == "organization-1"
+    assert completed.assigns.installed_ui_state.data.target == {:repository, "repository-1"}
     assert completed.assigns.installed_ui.state == :loading
   end
 

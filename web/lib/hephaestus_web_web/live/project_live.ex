@@ -2,7 +2,7 @@ defmodule HephaestusWebWeb.ProjectLive do
   use HephaestusWebWeb, :live_view
 
   alias HephaestusWebWeb.DesignSystem.Pages.ProjectPage
-  alias HephaestusWebWeb.{InstalledUiNavigationLive, ProjectState}
+  alias HephaestusWebWeb.{InstalledUiNavigation, ProjectState}
 
   @stream_mode :none
 
@@ -63,16 +63,16 @@ defmodule HephaestusWebWeb.ProjectLive do
 
     {:noreply,
      socket
-     |> InstalledUiNavigationLive.complete(event)
-     |> InstalledUiNavigationLive.schedule_refresh()}
+     |> InstalledUiNavigation.complete(event)
+     |> InstalledUiNavigation.schedule_refresh()}
   end
 
   def handle_info(:refresh_installed_ui, socket),
     do:
       {:noreply,
        socket
-       |> InstalledUiNavigationLive.refresh()
-       |> InstalledUiNavigationLive.schedule_refresh()}
+       |> InstalledUiNavigation.refresh()
+       |> InstalledUiNavigation.schedule_refresh()}
 
   def handle_info(
         {:DOWN, ref, :process, _pid, _reason},
@@ -85,23 +85,23 @@ defmodule HephaestusWebWeb.ProjectLive do
 
   @impl true
   def handle_event("launch-installed-ui", %{"id" => installation_id}, socket),
-    do: {:noreply, InstalledUiNavigationLive.launch(socket, installation_id)}
+    do: {:noreply, InstalledUiNavigation.launch(socket, installation_id)}
 
   def handle_event("refresh-installed-ui", _params, socket),
-    do: {:noreply, InstalledUiNavigationLive.refresh(socket)}
+    do: {:noreply, InstalledUiNavigation.refresh(socket)}
 
   def handle_event("load-more-installed-ui", _params, socket),
-    do: {:noreply, InstalledUiNavigationLive.load_more(socket)}
+    do: {:noreply, InstalledUiNavigation.load_more(socket)}
 
   def handle_event("close-installed-ui", _params, socket),
-    do: {:noreply, InstalledUiNavigationLive.close(socket)}
+    do: {:noreply, InstalledUiNavigation.close(socket)}
 
   @impl true
   def terminate(_reason, socket),
     do:
       (
         cancel_task(socket.assigns[:snapshot_task])
-        InstalledUiNavigationLive.cancel_refresh_timer(socket)
+        InstalledUiNavigation.cancel_refresh_timer(socket)
         cancel_installed_ui(socket.assigns[:installed_ui_task])
         :ok
       )
@@ -158,7 +158,7 @@ defmodule HephaestusWebWeb.ProjectLive do
   defp maybe_start_installed_ui(%{assigns: %{installed_ui_state: nil}} = socket) do
     case socket.assigns.page_state.data.project do
       %{"organization_id" => organization_id, "id" => project_id} ->
-        InstalledUiNavigationLive.initialize(socket, organization_id, {:project, project_id})
+        InstalledUiNavigation.initialize(socket, organization_id, {:project, project_id})
 
       _project ->
         socket

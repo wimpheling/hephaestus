@@ -3,19 +3,24 @@ defmodule HephaestusWebWeb.DesignSystem.Composites.InstalledUiNavigation do
 
   use Phoenix.Component
 
-  import HephaestusWebWeb.DesignSystem, only: [frame: 1, glyph: 1, page_state: 1, tag: 1, text: 1]
+  import HephaestusWebWeb.DesignSystem,
+    only: [action: 1, frame: 1, glyph: 1, page_state: 1, tag: 1, text: 1]
 
   @states [:loading, :ready, :error, :access_revoked, :terminated]
   @scopes [:organization, :project, :repository]
 
-  attr :scope, :atom, required: true, values: @scopes
-  attr :state, :atom, required: true, values: @states
-  attr :installations, :list, default: []
-  attr :error, :string, default: nil
-  attr :event, :string, default: "launch-installed-ui"
-  attr :has_more, :boolean, default: false
-  attr :loading_more, :boolean, default: false
-  attr :load_event, :string, default: "load-more-installed-ui"
+  attr(:scope, :atom, required: true, values: @scopes)
+  attr(:state, :atom, required: true, values: @states)
+  attr(:installations, :list, default: [])
+  attr(:error, :string, default: nil)
+  attr(:event, :string, default: "launch-installed-ui", values: ["launch-installed-ui"])
+  attr(:has_more, :boolean, default: false)
+  attr(:loading_more, :boolean, default: false)
+
+  attr(:load_event, :string,
+    default: "load-more-installed-ui",
+    values: ["load-more-installed-ui"]
+  )
 
   @doc "Renders safe installed UI cards and an isolated one-shot launch host."
   def installed_ui_navigation(assigns) do
@@ -27,12 +32,13 @@ defmodule HephaestusWebWeb.DesignSystem.Composites.InstalledUiNavigation do
       |> assign(:frame_src, frame_src())
 
     ~H"""
-    <section
+    <.frame
+      as="section"
+      variant={:installed_ui_navigation}
       id={"installed-ui-navigation-#{@scope}"}
-      class="mt-8 space-y-4"
-      aria-label="Installed UIs"
-      data-ui-frame-src={@frame_src}
-      data-ui-port={@frame_port}
+      aria_label="Installed UIs"
+      data_ui_frame_src={@frame_src}
+      data_ui_port={@frame_port}
     >
       <.frame variant={:section_heading}>
         <.frame variant={:section_heading}>
@@ -53,95 +59,114 @@ defmodule HephaestusWebWeb.DesignSystem.Composites.InstalledUiNavigation do
         message={@error || state_message(@state)}
       />
 
-      <div
+      <.frame
         :if={@state == :ready}
+        as="div"
+        variant={:installed_ui_list}
         id={"installed-ui-list-#{@scope}"}
-        class="grid gap-3 md:grid-cols-2"
       >
-        <article
+        <.frame
           :for={installation <- @installations}
+          as="article"
+          variant={:installed_ui_card}
           id={"installed-ui-#{installation["installation_id"]}"}
-          class="card border border-base-300 bg-base-100 p-4 shadow-sm"
-          data-ui-installation
+          data_ui_installation
         >
-          <div class="flex items-start justify-between gap-3">
-            <div class="flex min-w-0 items-start gap-3">
+          <.frame as="div" variant={:installed_ui_card_header}>
+            <.frame as="div" variant={:installed_ui_card_identity}>
               <.glyph name={icon_name(installation["icon"])} />
-              <div class="min-w-0">
+              <.frame as="div" variant={:installed_ui_card_copy}>
                 <.text as="strong">{installation["label"] || installation["ui_key"]}</.text>
                 <.text as="small" variant={:muted}>{installation["ui_key"]}</.text>
-              </div>
-            </div>
+              </.frame>
+            </.frame>
             <.tag tone={lifecycle_tone(installation["lifecycle"])}>
               {lifecycle_label(installation["lifecycle"])}
             </.tag>
-          </div>
-          <div class="mt-4 flex items-center justify-between gap-3">
+          </.frame>
+          <.frame as="div" variant={:installed_ui_card_actions}>
             <.text as="small" variant={:muted}>
               {presentation_label(installation["presentation"])}
             </.text>
-            <button
+            <.action
               :if={launchable?(installation)}
-              type="button"
-              class="btn btn-primary btn-sm"
-              phx-click={@event}
-              phx-value-id={installation["installation_id"]}
-              aria-label={"Launch #{installation["label"] || installation["ui_key"]}"}
+              interaction={:event}
+              variant={:installed_launch}
+              event={@event}
+              event_payload={%{id: installation["installation_id"]}}
+              aria_label={"Launch #{installation["label"] || installation["ui_key"]}"}
             >
               Launch
-            </button>
+            </.action>
             <.text :if={!launchable?(installation)} as="small" variant={:muted}>
               Unavailable
             </.text>
-          </div>
-        </article>
+          </.frame>
+        </.frame>
         <.frame :if={@installations == []} id={"installed-ui-empty-#{@scope}"} variant={:panel}>
           <.text as="p" variant={:muted}>No installed UIs are available in this scope.</.text>
         </.frame>
-      </div>
+      </.frame>
 
-      <button
+      <.action
         :if={@state == :ready && @has_more}
-        type="button"
-        class="btn btn-outline btn-sm"
-        phx-click={@load_event}
+        interaction={:event}
+        variant={:installed_load_more}
+        event={@load_event}
         disabled={@loading_more}
       >
         {if @loading_more, do: "Loading…", else: "Load more"}
-      </button>
+      </.action>
 
-      <section
+      <.frame
+        as="section"
+        variant={:installed_ui_embed}
         id={"installed-ui-embed-#{@scope}"}
-        class="hidden overflow-hidden rounded-xl border border-base-300 bg-base-100 shadow-lg"
-        phx-hook="InstalledUiNavigation"
-        phx-update="ignore"
-        data-ui-namespace={@namespace}
-        data-ui-platform-origin={@platform_origin}
-        data-ui-frame-src={@frame_src}
-        data-ui-port={@frame_port}
+        phx_hook="InstalledUiNavigation"
+        phx_update="ignore"
+        data_ui_namespace={@namespace}
+        data_ui_platform_origin={@platform_origin}
+        data_ui_frame_src={@frame_src}
+        data_ui_port={@frame_port}
       >
-        <div class="flex items-center justify-between border-b border-base-300 px-4 py-3">
-          <p data-ui-status role="status" aria-live="polite">Loading installed UI…</p>
-          <button type="button" class="btn btn-ghost btn-sm" data-ui-close>Close</button>
-        </div>
-        <iframe
+        <.frame as="div" variant={:installed_ui_embed_header}>
+          <.frame
+            as="p"
+            variant={:installed_ui_status}
+            data_ui_status
+            role="status"
+            aria_live="polite"
+          >
+            Loading installed UI…
+          </.frame>
+          <.action
+            interaction={:event}
+            variant={:installed_close}
+            data_ui_close
+          >
+            Close
+          </.action>
+        </.frame>
+        <.frame
+          as="iframe"
+          variant={:installed_ui_iframe}
           id={"installed-ui-frame-#{@scope}"}
-          class="h-[min(70vh,48rem)] w-full"
           title="Installed UI"
           sandbox="allow-scripts allow-same-origin"
           referrerpolicy="no-referrer"
-          data-ui-frame
+          data_ui_frame
         />
-      </section>
+      </.frame>
 
-      <p
+      <.frame
+        as="p"
+        variant={:installed_ui_terminal_status}
         id={"installed-ui-terminal-status-#{@scope}"}
-        class="hidden rounded-lg border border-warning/40 bg-warning/10 px-4 py-3 text-sm"
-        data-ui-terminal-status
+        data_ui_terminal_status
         role="status"
-        aria-live="polite"
+        aria_live="polite"
       />
-    </section>
+    </.frame>
     """
   end
 
