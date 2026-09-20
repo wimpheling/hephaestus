@@ -20,6 +20,21 @@ result is claimed.
 
 ## Current CI context (2026-09-20)
 
+CI at `e052a2c` (`35482989628`) exposed an application bootstrap version
+mismatch: the database reached migration 82 while `EXPECTED_DATABASE_MIGRATION`
+still required 81. Both Rust golden bootstrap and the browser golden path
+failed on this mismatch; Cooking applications passed. The application gate
+now requires 82, and retention's minimum schema requirement remains 81.
+The targeted production bearer-push bootstrap and real application retention
+tests each passed against disposable PostgreSQL/NATS in
+`/home/a/heph-schema82-bootstrap-retention-20260920.log`, including
+`REAL_APP_SERVICE_LOG_MAINTENANCE=1 max_migration=82`. Scoped app formatting,
+strict Clippy, and rustdoc passed in
+`/home/a/heph-schema82-app-fmt-20260920-v2.log`,
+`/home/a/heph-schema82-app-clippy-20260920-v3.log`, and
+`/home/a/heph-schema82-app-doc-20260920.log`. This corrects the startup schema
+gate; it is not a new complete UI or full-quality result.
+
 Subsequent CI passed at `d0def95`, `7ccb01d`, and `44fe0c3`; the latest
 successful run is `35481880564`. This does not establish the cause of the
 earlier intermittent teardown failure. The separate Cooking E2E workflow for
@@ -138,8 +153,6 @@ rustdoc, formatting, and architecture passed in the corresponding
 `architecture-20260920` logs. Production receive wiring and persistence adapter
 integration remain pending; this checkpoint does not yet capture pushed UI
 manifests.
-
-### Publication design
 
 ### Capture persistence helper checkpoint (2026-09-20)
 

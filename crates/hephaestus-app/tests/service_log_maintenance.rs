@@ -543,6 +543,10 @@ fn require_disposable_nats(nats_url: &str) {
     );
 }
 
+const fn retention_supports_migration(version: i64) -> bool {
+    version >= 81
+}
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 #[serial]
 async fn application_retention_runs_without_gateway_edge_and_closes_worker_pool() {
@@ -552,7 +556,10 @@ async fn application_retention_runs_without_gateway_edge_and_closes_worker_pool(
         );
         return;
     }
-    assert_eq!(EXPECTED_DATABASE_MIGRATION, 81);
+    assert!(
+        retention_supports_migration(EXPECTED_DATABASE_MIGRATION),
+        "retention requires migration 81 or newer"
+    );
     let parent_database_url = std::env::var("HEPHAESTUS_POSTGRES_TEST_URL")
         .expect("HEPHAESTUS_POSTGRES_TEST_URL is required for real retention validation");
     let nats_url = std::env::var("HEPHAESTUS_NATS_TEST_URL")
