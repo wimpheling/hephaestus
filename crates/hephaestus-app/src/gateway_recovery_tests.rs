@@ -3904,6 +3904,7 @@ impl fmt::Debug for PoolTeardownState {
     }
 }
 
+#[derive(Clone, Copy)]
 struct IsolatedPoolTeardownState {
     control: PoolTeardownState,
     worker: PoolTeardownState,
@@ -4023,20 +4024,34 @@ async fn drop_isolated_startup_database(database: IsolatedStartupDatabase) {
         worker: pool_teardown_state(&database.worker),
         admin: pool_teardown_state(&database.admin),
     };
-    database.control.close().await;
-    database.worker.close().await;
-    let after_close = IsolatedPoolTeardownState {
-        control: pool_teardown_state(&database.control),
-        worker: pool_teardown_state(&database.worker),
-        admin: pool_teardown_state(&database.admin),
-    };
+    // SQLx 0.8.6 may have detached successful connection-return tasks that
+    // began before close marked the pool closed. Drain both known pools on
+    // every diagnostic iteration so a return completing after one pass is
+    // handled by the next pass; this does not terminate a backend or relax
+    // the session-free assertion below.
+    let deadline = tokio::time::Instant::now() + StdDuration::from_secs(10);
+    let mut after_close: Option<IsolatedPoolTeardownState> = None;
     // Pool::close completes client-side shutdown, but PostgreSQL can report a
     // terminated backend as idle briefly while it processes termination. Keep
     // this bounded timing-sensitive grace and the session diagnostic so the
     // fixture still asserts that the database becomes session-free.
-    let deadline = tokio::time::Instant::now() + StdDuration::from_secs(10);
     let mut last_sessions: Vec<IsolatedSessionDiagnostic> = Vec::new();
     loop {
+        let close_result = tokio::time::timeout_at(deadline, async {
+            database.control.close().await;
+            database.worker.close().await;
+        })
+        .await;
+        let current_pool_state = IsolatedPoolTeardownState {
+            control: pool_teardown_state(&database.control),
+            worker: pool_teardown_state(&database.worker),
+            admin: pool_teardown_state(&database.admin),
+        };
+        after_close.get_or_insert(current_pool_state);
+        assert!(
+            close_result.is_ok(),
+            "isolated startup pool close timed out; pools before close: {before_close:?}; pools after close: {current_pool_state:?}"
+        );
         let sessions: Vec<IsolatedSessionDiagnostic> = match tokio::time::timeout_at(
             deadline,
             sqlx::query_as(
@@ -4056,10 +4071,10 @@ async fn drop_isolated_startup_database(database: IsolatedStartupDatabase) {
         {
             Ok(Ok(sessions)) => sessions,
             Ok(Err(error)) => panic!(
-                "inspect isolated startup database sessions failed before teardown deadline: {error}; pools before close: {before_close:?}; pools after close: {after_close:?}; last sessions: {last_sessions:?}"
+                "inspect isolated startup database sessions failed before teardown deadline: {error}; pools before close: {before_close:?}; pools after close: {after_close:?}; current pool state: {current_pool_state:?}; last sessions: {last_sessions:?}"
             ),
             Err(error) => panic!(
-                "isolated startup database session inspection timed out: {error}; pools before close: {before_close:?}; pools after close: {after_close:?}; last sessions: {last_sessions:?}"
+                "isolated startup database session inspection timed out: {error}; pools before close: {before_close:?}; pools after close: {after_close:?}; current pool state: {current_pool_state:?}; last sessions: {last_sessions:?}"
             ),
         };
         if sessions.is_empty() {
@@ -4068,11 +4083,11 @@ async fn drop_isolated_startup_database(database: IsolatedStartupDatabase) {
         last_sessions = sessions;
         assert!(
             tokio::time::Instant::now() < deadline,
-            "isolated startup database still has sessions after pool shutdown: {last_sessions:?}; pools before close: {before_close:?}; pools after close: {after_close:?}"
+            "isolated startup database still has sessions after pool shutdown: {last_sessions:?}; pools before close: {before_close:?}; pools after close: {after_close:?}; current pool state: {current_pool_state:?}"
         );
         tokio::select! {
             () = tokio::time::sleep_until(deadline) => {
-                panic!("isolated startup database still has sessions after pool shutdown: {last_sessions:?}; pools before close: {before_close:?}; pools after close: {after_close:?}");
+                panic!("isolated startup database still has sessions after pool shutdown: {last_sessions:?}; pools before close: {before_close:?}; pools after close: {after_close:?}; current pool state: {current_pool_state:?}");
             }
             () = tokio::time::sleep(StdDuration::from_millis(25)) => {}
         }

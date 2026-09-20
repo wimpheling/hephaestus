@@ -815,7 +815,12 @@ impl PostgresGatewayEdgeAuthority {
         .fetch_all(&mut **connection.connection_mut())
         .await
         .map_err(|_| GatewayEdgeError::Unavailable)?;
-        drop(connection.take());
+        // SQLx 0.8.6 normally returns `PoolConnection` from `Drop` through a
+        // detached task. Await the successful path so a later pool close
+        // cannot race this adapter's connection return; the cancellation and
+        // error path still uses `close_on_drop` from `ActiveRoutesConnection`.
+        let mut connection = connection.take();
+        connection.return_to_pool().await;
         rows.into_iter()
             .map(|row| active_route(row, self.limits))
             .collect()

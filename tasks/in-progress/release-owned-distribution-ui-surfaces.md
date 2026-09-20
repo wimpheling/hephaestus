@@ -37,6 +37,24 @@ integrated quality gate remain incomplete. The user approved organization-owned
 global installations and organization isolation. Historical checkpoints record the state
 at their time; later integration checkpoints supersede earlier pending notes.
 
+## Recovery teardown follow-up (2026-09-20)
+
+The successful active-route read now awaits SQLx connection return. The isolated
+recovery fixture repeatedly drains its known pools within the existing ten-second
+deadline, retaining the actual session-free database assertion and diagnostics.
+It does not terminate backends or force database deletion. A detached SQLx return
+can race pool shutdown; the precise owner of the original CI backend remains
+unestablished.
+
+The failing test passed once and then five fresh repetitions; the full sequential
+recovery group passed all 17 tests. The active-route cancellation/reuse regression
+also passed with zero retained sessions. Strict scoped Clippy, documentation,
+formatting, architecture, and diff checks passed. Evidence:
+`/home/a/heph-ci-teardown-exact-v1-20260920.log`,
+`/home/a/heph-ci-teardown-exact-repeat-v2-20260920.log`,
+`/home/a/heph-ci-teardown-group-v6-20260920.log`, and
+`/home/a/heph-gateway-active-routes-reuse-v1-20260920.log`.
+
 ## UI host/resource projection checkpoint (2026-09-20)
 
 Migration 92 adds narrowly granted application-role functions for active
