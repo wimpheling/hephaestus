@@ -10,6 +10,12 @@ route_base = "managed-reference"
 ui_kit_version = 1
 cache = "no_store"
 
+[[uis.apis]]
+key = "identity"
+gateway_name = "cooking-reference-service-ui"
+method = "GET"
+route = "/reference/identity"
+
 [uis.content]
 kind = "managed_service"
 gateway_name = "cooking-reference-service-ui"

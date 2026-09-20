@@ -19,7 +19,10 @@ both the static and managed reference fixtures.
 The `heph.gateways.toml` declaration uses the authenticated `http.service.v1`
 contract. The `heph.ui.toml` declaration binds the managed service to the
 exact gateway name, `/reference` route, `index.html` entrypoint, iframe
-presentation, and `ui_kit_version = 1`. Its `no_store` policy is explicit.
+presentation, and `ui_kit_version = 1`. It also declares the `identity` GET
+API at `/reference/identity` on that gateway. An authorized managed UI request
+receives only the service's JSON `pid` and `startup_id` fields; `startup_id`
+changes when the service restarts. Its `no_store` policy is explicit.
 Publication and installed browser acceptance remain separate pipeline work.
 
 For a local source smoke, build into a disposable absolute output directory,

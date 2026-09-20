@@ -38,6 +38,23 @@ proofs, and the final integrated quality gate remain incomplete. The user approv
 global installations and organization isolation. Historical checkpoints record the state
 at their time; later integration checkpoints supersede earlier pending notes.
 
+## Reference identity API declaration checkpoint (2026-09-20)
+
+The managed reference now explicitly declares `GET /reference/identity` through
+its existing authenticated service gateway. Its response remains the existing
+`pid` and `startup_id` pair; the source service behavior is unchanged. This
+provides a declared API route for installed serving and restart acceptance,
+separate from the managed document route base.
+
+The focused agent-config reference test passes and directly checks the gateway
+cross-manifest contract. Strict scoped Clippy/docs, workspace formatting, and
+kit tests/checks pass. Logs: `/tmp/heph-ui-agent-config-reference-fixture.log`,
+`/tmp/heph-ui-agent-config-quality-*.log`, and `/tmp/heph-ui-kit-npm-{test,check}.log`.
+Actual child-session API dispatch through Caddy/VM/browser remains pending.
+
+CI passed request-audit checkpoint `2327a2e` in
+[run 35526504782](https://github.com/wimpheling/hephaestus/actions/runs/35526504782).
+
 ## HTTP and RPC request-audit checkpoint (2026-09-20)
 
 The production UI listener now shares a worker-backed audit sink across

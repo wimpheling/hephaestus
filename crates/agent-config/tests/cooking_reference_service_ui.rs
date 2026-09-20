@@ -108,6 +108,15 @@ fn assert_ui_manifest(gateway_config: &RepositoryGatewaysConfig) {
     assert_eq!(ui.uis.len(), 1);
     let declaration = &ui.uis[0];
     assert_eq!(declaration.key.as_str(), "managed-reference");
+    assert_eq!(declaration.apis.len(), 1);
+    let identity_api = &declaration.apis[0];
+    assert_eq!(identity_api.key.as_str(), "identity");
+    assert_eq!(
+        identity_api.gateway_name.as_str(),
+        "cooking-reference-service-ui"
+    );
+    assert_eq!(identity_api.method, HttpMethod::Get);
+    assert_eq!(identity_api.route.as_str(), "/reference/identity");
     match &declaration.content {
         UiContent::ManagedService {
             gateway_name,
