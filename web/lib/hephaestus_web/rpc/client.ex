@@ -106,11 +106,15 @@ defmodule HephaestusWeb.RPC.Client do
   }
 
   alias Hephaestus.Release.V1.{
+    CreateUiBrowserHandoffRequest,
     GetReleaseRequest,
+    GlobalUiInstallationTarget,
     ListRepositoryReleasesRequest,
+    ListUiInstallationsRequest,
     PublishReleaseRequest,
     ReleaseService,
-    SetDraftVersionRequest
+    SetDraftVersionRequest,
+    UiInstallationTarget
   }
 
   alias Hephaestus.Repository.V1.{
@@ -161,6 +165,7 @@ defmodule HephaestusWeb.RPC.Client do
 
   alias HephaestusWeb.Identity
   alias HephaestusWeb.RPC.{Error, Invoke, Projection, UUID}
+  alias HephaestusWeb.UIBrowser
 
   @page_size 100
   @list_organizations "/hephaestus.organization.v1.OrganizationService/ListOrganizations"
@@ -486,6 +491,96 @@ defmodule HephaestusWeb.RPC.Client do
         &ProjectService.Stub.list_project_instances/3,
         :instances
       )
+
+  @doc "Lists safe installed UI metadata under one explicit organization and target."
+  def list_ui_installations(identity, organization_id, target, page_token \\ "", options \\ []) do
+    with {:ok, target_message} <- ui_installation_target(target) do
+      request = %ListUiInstallationsRequest{
+        organization_id: id(organization_id),
+        target: target_message,
+        page: %PageRequest{page_size: @page_size, page_token: page_token}
+      }
+
+      stub_call =
+        Keyword.get(options, :stub_call, &ReleaseService.Stub.list_ui_installations/3)
+
+      invoke_options =
+        Keyword.take(options, [
+          :channel_provider,
+          :channel_reset,
+          :timeout,
+          :maximum_response_bytes
+        ])
+
+      case Invoke.unary(
+             identity,
+             "/hephaestus.release.v1.ReleaseService/ListUiInstallations",
+             request,
+             stub_call,
+             Keyword.put(invoke_options, :retry, :safe_query)
+           ) do
+        {:ok, response} ->
+          {:ok,
+           %{
+             "installations" => Enum.map(response.installations, &project_ui_installation/1),
+             "page" => Projection.to_value(response.page)
+           }}
+
+        {:error, error} ->
+          {:error, error}
+      end
+    end
+  end
+
+  @doc "Issues one non-replayable browser handoff with a scoped transient bearer."
+  def create_ui_browser_handoff(
+        identity,
+        installation_id,
+        generation_id,
+        route,
+        options \\ []
+      ) do
+    secret = UIBrowser.new_handoff_secret()
+    request_id = UUID.generate()
+
+    request = %CreateUiBrowserHandoffRequest{
+      context: %RequestContext{request_id: id(request_id), idempotency_key: ""},
+      installation_id: id(installation_id),
+      generation_id: id(generation_id),
+      route: route,
+      handoff_secret: secret
+    }
+
+    stub_call =
+      Keyword.get(options, :stub_call, &ReleaseService.Stub.create_ui_browser_handoff/3)
+
+    on_success =
+      Keyword.get(options, :on_success, fn safe_response, _secret ->
+        {:ok, safe_response}
+      end)
+
+    invoke_options =
+      options
+      |> Keyword.take([:channel_provider, :channel_reset, :timeout, :maximum_response_bytes])
+      |> Keyword.put(:request_id, request_id)
+      |> Keyword.put(:retry, :none)
+
+    case Invoke.unary(
+           identity,
+           "/hephaestus.release.v1.ReleaseService/CreateUiBrowserHandoff",
+           request,
+           stub_call,
+           invoke_options
+         ) do
+      {:ok, response} ->
+        # The callback is the one-shot launch boundary. The default result
+        # contains only safe handoff metadata; it never returns the bearer.
+        on_success.(project_handoff_response(response), secret)
+
+      {:error, error} ->
+        {:error, error}
+    end
+  end
 
   @doc "Lists redacted gateway management metadata for one authorized project."
   def list_project_gateways(identity, project_id),
@@ -1348,6 +1443,64 @@ defmodule HephaestusWeb.RPC.Client do
   defp git_operation("fetch"), do: GitOperation.value(:GIT_OPERATION_FETCH)
   defp git_operation("receive"), do: GitOperation.value(:GIT_OPERATION_RECEIVE)
   defp git_operation(_operation), do: nil
+
+  defp ui_installation_target(:global),
+    do: {:ok, %UiInstallationTarget{target: {:global, %GlobalUiInstallationTarget{}}}}
+
+  defp ui_installation_target({:project, project_id}),
+    do: {:ok, %UiInstallationTarget{target: {:project_id, id(project_id)}}}
+
+  defp ui_installation_target({:repository, repository_id}),
+    do: {:ok, %UiInstallationTarget{target: {:repository_id, id(repository_id)}}}
+
+  defp ui_installation_target(_invalid), do: {:error, Error.local(:invalid)}
+
+  defp project_ui_installation(message) do
+    projected = Projection.to_value(message)
+
+    projected
+    |> Map.update("target", nil, &project_ui_target/1)
+    |> Map.update("lifecycle", "unspecified", &ui_lifecycle/1)
+    |> Map.update("icon", "unspecified", &ui_icon/1)
+    |> Map.update("presentation", "unspecified", &ui_presentation/1)
+    |> Map.update("content_kind", "unspecified", &ui_content_kind/1)
+  end
+
+  defp project_ui_target(%{"target" => target}), do: project_ui_target(target)
+
+  defp project_ui_target({:global, _target}),
+    do: %{"target_kind" => "global", "target_id" => nil}
+
+  defp project_ui_target({:project_id, %OpaqueId{} = target}),
+    do: %{"target_kind" => "project", "target_id" => Projection.to_value(target)}
+
+  defp project_ui_target({:repository_id, %OpaqueId{} = target}),
+    do: %{"target_kind" => "repository", "target_id" => Projection.to_value(target)}
+
+  defp project_ui_target(nil), do: %{"target_kind" => nil, "target_id" => nil}
+  defp project_ui_target(_invalid), do: %{"target_kind" => nil, "target_id" => nil}
+
+  defp ui_lifecycle(value),
+    do: enum_label(value, %{1 => "enabled", 2 => "disabled", 3 => "removed"})
+
+  defp ui_icon(value),
+    do: enum_label(value, %{1 => "app", 2 => "chat", 3 => "code", 4 => "book", 5 => "chart"})
+
+  defp ui_presentation(value),
+    do: enum_label(value, %{1 => "iframe", 2 => "full_page"})
+
+  defp ui_content_kind(value),
+    do: enum_label(value, %{1 => "static", 2 => "managed_service"})
+
+  defp enum_label(value, labels) when is_integer(value), do: Map.get(labels, value, "unspecified")
+  defp enum_label(value, _labels) when is_binary(value), do: value
+  defp enum_label(_value, _labels), do: "unspecified"
+
+  defp project_handoff_response(response) do
+    response
+    |> Projection.to_value()
+    |> Map.take(["handoff_id", "installation_id", "generation_id", "route", "expires_at"])
+  end
 
   defp gateway_lifecycle("enabled"),
     do: GatewayLifecycle.value(:GATEWAY_LIFECYCLE_ENABLED)

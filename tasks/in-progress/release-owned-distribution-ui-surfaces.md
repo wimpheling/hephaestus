@@ -37,6 +37,23 @@ integrated quality gate remain incomplete. The user approved organization-owned
 global installations and organization isolation. Historical checkpoints record the state
 at their time; later integration checkpoints supersede earlier pending notes.
 
+## Bootstrap script checkpoint (2026-09-20)
+
+The unregistered bootstrap handler now includes its production JavaScript from
+a separate file. The actual script clears the bearer fragment before any
+query/theme rejection, sends exactly the one-time fragment as the POST body,
+and forwards only the canonical theme. It rejects unknown/duplicate query
+parameters, foreign platform origins, and unsafe response paths, including
+terminal dot segments before URL normalization. The final document receives
+only appearance metadata and the exact configured platform origin.
+
+Eleven named Node tests pass in
+`/home/a/heph-ui-bootstrap-script-20260920.log`, using
+`node --test --test-isolation=none --test-reporter=tap
+crates/hephaestus-app/tests/ui_bootstrap_script.mjs`. File-wrapper-only test
+output is not counted as named execution evidence. The Rust handler remains
+unregistered and its HTTP tests and real browser flow are still pending.
+
 ## UI request audit design (2026-09-20)
 
 Request-level UI audit will use a dedicated append-only stream, following the
@@ -411,6 +428,13 @@ in authority matching. Static reads verify the full artifact before conditional
 or range responses and retain the published cache policy. These contracts still
 require runtime and browser proof.
 
+The gateway bridge converts managed HTTP paths to the edge's platform-relative
+path contract by removing exactly one leading slash from both the safe
+authority and request envelope. API paths remain absolute. Queries, including
+an empty trailing `?`, remain opaque. The same verifier request ID reaches
+gateway invocation accounting. The external wiring draft still needs these
+conversions and the request-ID DTO field before integration.
+
 Authenticated document-base requests redirect to the descriptor's canonical
 `/{route_base}/{entrypoint}` for both static and managed content. This preserves
 relative CSS/JS resolution in the reference releases without rewriting artifact
@@ -426,6 +450,13 @@ appearance-only and require the expected parent window, exact origin, and a
 light/dark value. Content CSP permits published same-origin scripts, styles,
 images, and fonts while denying workers, objects, and nested frames. The
 shared public UI port setting is `HEPHAESTUS_UI_PORT`.
+
+Before HTTP wiring, consolidate exact platform-origin validation and canonical
+serialization across bootstrap and content configuration: lowercase DNS and
+omit default `:443` so browser `MessageEvent.origin` comparisons agree. The
+platform and UI HTTPS ports are independent; the content draft's asymmetric
+port-equality check must be removed. Paths, userinfo, queries, fragments, and
+noncanonical explicit ports remain invalid configuration.
 
 Managed/API installation will resolve preexisting, currently active gateway
 revisions and pin them in the generation. It will not silently create or retarget

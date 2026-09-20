@@ -63,6 +63,8 @@ defmodule HephaestusWeb.RPC.Projection do
     RELEASE_UI_ICON_
     RELEASE_UI_PRESENTATION_
     RELEASE_UI_CACHE_POLICY_
+    UI_INSTALLATION_LIFECYCLE_
+    UI_INSTALLATION_CONTENT_KIND_
   )
 
   @spec to_value(term()) :: term()
