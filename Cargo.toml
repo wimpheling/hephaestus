@@ -31,6 +31,7 @@ hyper = { version = "1.11", default-features = false, features = ["client", "htt
 hyper-util = { version = "0.1", default-features = false, features = ["tokio"] }
 jsonwebtoken = "9"
 proptest = "1"
+proc-macro2 = { version = "1", features = ["span-locations"] }
 # HTTPS broker transports must have a certificate-verifying TLS backend.  Keep
 # the platform's native trust-store integration explicit instead of relying on
 # reqwest defaults.

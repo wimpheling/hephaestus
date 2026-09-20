@@ -2483,6 +2483,7 @@ version = "0.1.0"
 dependencies = [
  "clap",
  "ctrlc",
+ "proc-macro2",
  "registry-token",
  "serde",
  "serde_json",

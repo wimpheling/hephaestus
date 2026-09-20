@@ -1,6 +1,6 @@
 //! Migration-gated `PostgreSQL` capability and SQL ownership checks.
 
-use super::{CargoMetadata, CargoPackage, Diagnostic};
+use super::{ArchitectureException, CargoMetadata, CargoPackage, Diagnostic};
 use std::{
     collections::{BTreeMap, BTreeSet},
     ffi::OsStr,
@@ -8,8 +8,8 @@ use std::{
     path::{Path, PathBuf},
 };
 use syn::{
-    Expr, ExprCall, ExprMacro, File, ItemUse, Lit, UseTree, punctuated::Punctuated, token::Comma,
-    visit::Visit,
+    Expr, ExprCall, ExprMacro, File, ItemUse, Lit, UseTree, punctuated::Punctuated,
+    spanned::Spanned, token::Comma, visit::Visit,
 };
 
 const SQLX_RULE: &str = "DB-SQLX-ONLY-IN-POSTGRES-ADAPTERS";
@@ -17,10 +17,34 @@ const MIGRATION_RULE: &str = "DB-MIGRATIONS-ONLY-IN-MIGRATIONS";
 const STATIC_RULE: &str = "DB-STATIC-SQL";
 const RULES: [&str; 3] = [SQLX_RULE, MIGRATION_RULE, STATIC_RULE];
 
+/// Validates a `DB-STATIC-SQL` item selector against Rust's parsed item tree.
+///
+/// The general architecture exception parser validates file and line shape;
+/// this rule additionally requires a unique canonical Rust item path.  That
+/// prevents a short selector from accidentally covering same-named items in
+/// separate modules or types.
+pub(super) fn validate_exception_scope(root: &Path, scope: &str) -> Result<(), &'static str> {
+    let Some((path, selector)) = scope.split_once('#') else {
+        return Ok(());
+    };
+    if selector.trim().is_empty() {
+        return Err("the item selector is empty");
+    }
+    let source = fs::read_to_string(root.join(path)).map_err(|_| "scoped file is not readable")?;
+    let file = syn::parse_file(&source).map_err(|_| "scoped file is not valid Rust")?;
+    let identities = RustItemIdentities::collect(&file);
+    if identities.items.get(selector) == Some(&1) {
+        Ok(())
+    } else {
+        Err("item selector is not an exact Rust item path")
+    }
+}
+
 pub(super) fn validate(
     root: &Path,
     enabled_rules: &[String],
     metadata: &CargoMetadata,
+    exceptions: &[&ArchitectureException],
     diagnostics: &mut Vec<Diagnostic>,
 ) {
     let active = RULES
@@ -31,14 +55,18 @@ pub(super) fn validate(
         return;
     }
     validate_metadata(metadata, &active, diagnostics);
-    visit_sources(root, root, &active, diagnostics);
+    visit_sources(root, root, &active, exceptions, diagnostics);
 }
 
-pub(super) fn audit(root: &Path, metadata: &CargoMetadata) -> BTreeMap<&'static str, usize> {
+pub(super) fn audit(
+    root: &Path,
+    metadata: &CargoMetadata,
+    exceptions: &[&ArchitectureException],
+) -> BTreeMap<&'static str, usize> {
     let active = RULES.into_iter().collect::<BTreeSet<_>>();
     let mut diagnostics = Vec::new();
     validate_metadata(metadata, &active, &mut diagnostics);
-    visit_sources(root, root, &active, &mut diagnostics);
+    visit_sources(root, root, &active, exceptions, &mut diagnostics);
     let mut counts = BTreeMap::new();
     for diagnostic in diagnostics {
         *counts.entry(diagnostic.rule_id).or_insert(0) += 1;
@@ -204,6 +232,7 @@ fn visit_sources(
     root: &Path,
     directory: &Path,
     active: &BTreeSet<&str>,
+    exceptions: &[&ArchitectureException],
     diagnostics: &mut Vec<Diagnostic>,
 ) {
     let Ok(entries) = fs::read_dir(directory) else {
@@ -216,9 +245,9 @@ fn visit_sources(
             if should_skip_directory(relative) {
                 continue;
             }
-            visit_sources(root, &path, active, diagnostics);
+            visit_sources(root, &path, active, exceptions, diagnostics);
         } else if path.extension() == Some(OsStr::new("rs")) {
-            validate_rust_source(root, relative, &path, active, diagnostics);
+            validate_rust_source(root, relative, &path, active, exceptions, diagnostics);
         } else if path.extension() == Some(OsStr::new("sql"))
             && active.contains(MIGRATION_RULE)
             && !relative.starts_with("migrations")
@@ -249,6 +278,7 @@ fn validate_rust_source(
     relative: &Path,
     path: &Path,
     active: &BTreeSet<&str>,
+    exceptions: &[&ArchitectureException],
     diagnostics: &mut Vec<Diagnostic>,
 ) {
     let Ok(source) = fs::read_to_string(path) else {
@@ -267,8 +297,13 @@ fn validate_rust_source(
         source_path: path,
         path: relative,
         active,
+        exceptions,
         diagnostics,
         imports,
+        current_item: None,
+        module_path: Vec::new(),
+        function_path: Vec::new(),
+        impl_type: None,
     };
     visitor.visit_file(&file);
 }
@@ -336,14 +371,88 @@ enum QueryKind {
     Builder,
 }
 
+#[derive(Default)]
+struct RustItemIdentities {
+    module_path: Vec<String>,
+    function_path: Vec<String>,
+    impl_type: Option<String>,
+    items: BTreeMap<String, usize>,
+}
+
+impl RustItemIdentities {
+    fn collect(file: &File) -> Self {
+        let mut identities = Self::default();
+        identities.visit_file(file);
+        identities
+    }
+
+    fn insert(&mut self, name: String) {
+        *self.items.entry(name).or_default() += 1;
+    }
+}
+
+impl<'ast> Visit<'ast> for RustItemIdentities {
+    fn visit_item_mod(&mut self, item: &'ast syn::ItemMod) {
+        let Some((_, items)) = &item.content else {
+            return;
+        };
+        self.module_path.push(item.ident.to_string());
+        for item in items {
+            self.visit_item(item);
+        }
+        self.module_path.pop();
+    }
+
+    fn visit_item_fn(&mut self, item: &'ast syn::ItemFn) {
+        let mut path = self.module_path.clone();
+        path.extend(self.function_path.iter().cloned());
+        path.push(item.sig.ident.to_string());
+        self.insert(path.join("::"));
+
+        let previous = self.function_path.clone();
+        self.function_path.push(item.sig.ident.to_string());
+        syn::visit::visit_item_fn(self, item);
+        self.function_path = previous;
+    }
+
+    fn visit_item_impl(&mut self, item: &'ast syn::ItemImpl) {
+        let previous = self.impl_type.take();
+        self.impl_type = impl_type_name(&item.self_ty);
+        syn::visit::visit_item_impl(self, item);
+        self.impl_type = previous;
+    }
+
+    fn visit_impl_item_fn(&mut self, item: &'ast syn::ImplItemFn) {
+        let Some(impl_type) = self.impl_type.clone() else {
+            return;
+        };
+        let mut path = self.module_path.clone();
+        path.extend(self.function_path.iter().cloned());
+        path.push(impl_type.clone());
+        path.push(item.sig.ident.to_string());
+        self.insert(path.join("::"));
+
+        let previous = self.function_path.clone();
+        self.function_path.push(impl_type);
+        self.function_path.push(item.sig.ident.to_string());
+        syn::visit::visit_impl_item_fn(self, item);
+        self.function_path = previous;
+    }
+}
+
 struct SqlVisitor<'a> {
     repository_root: &'a Path,
     package_root: &'a Path,
     source_path: &'a Path,
     path: &'a Path,
     active: &'a BTreeSet<&'a str>,
+    exceptions: &'a [&'a ArchitectureException],
     diagnostics: &'a mut Vec<Diagnostic>,
     imports: SqlImports,
+    current_item: Option<String>,
+    module_path: Vec<String>,
+    function_path: Vec<String>,
+    impl_type: Option<String>,
 }
 
 impl SqlVisitor<'_> {
@@ -370,15 +479,33 @@ impl SqlVisitor<'_> {
                     self.validate_sql_file(&path.value(), source_root);
                 }
             }
-            _ if self.active.contains(STATIC_RULE) => self.diagnostics.push(Diagnostic::new(
-                STATIC_RULE,
-                format!(
-                    "SQLx query in {} must receive a static string literal or include_str! source",
-                    self.path.display()
-                ),
-            )),
+            _ if self.active.contains(STATIC_RULE) && !self.is_static_sql_exception(argument) => {
+                self.diagnostics.push(Diagnostic::new(
+                    STATIC_RULE,
+                    format!(
+                        "SQLx query in {} must receive a static string literal or include_str! source",
+                        self.path.display()
+                    ),
+                ));
+            }
             _ => {}
         }
+    }
+
+    fn is_static_sql_exception(&self, argument: &Expr) -> bool {
+        let line = argument.span().start().line;
+        self.exceptions.iter().any(|exception| {
+            if exception.rule_id != STATIC_RULE {
+                return false;
+            }
+            if let Some((path, item)) = exception.scope.split_once('#') {
+                return Path::new(path) == self.path && self.current_item.as_deref() == Some(item);
+            }
+            let Some((path, line_text)) = exception.scope.rsplit_once(':') else {
+                return false;
+            };
+            Path::new(path) == self.path && line_text.parse::<usize>().ok() == Some(line)
+        })
     }
 
     fn validate_sql_file(&mut self, path: &str, base: &Path) {
@@ -406,6 +533,47 @@ impl SqlVisitor<'_> {
 }
 
 impl<'ast> Visit<'ast> for SqlVisitor<'_> {
+    fn visit_item_mod(&mut self, item: &'ast syn::ItemMod) {
+        let Some((_, items)) = &item.content else {
+            return;
+        };
+        self.module_path.push(item.ident.to_string());
+        for item in items {
+            self.visit_item(item);
+        }
+        self.module_path.pop();
+    }
+
+    fn visit_item_fn(&mut self, item: &'ast syn::ItemFn) {
+        let previous_item = self.current_item.take();
+        let previous_path = self.function_path.clone();
+        self.function_path.push(item.sig.ident.to_string());
+        self.current_item = Some(join_item_path(&self.module_path, &self.function_path));
+        syn::visit::visit_item_fn(self, item);
+        self.function_path = previous_path;
+        self.current_item = previous_item;
+    }
+
+    fn visit_item_impl(&mut self, item: &'ast syn::ItemImpl) {
+        let previous = self.impl_type.take();
+        self.impl_type = impl_type_name(&item.self_ty);
+        syn::visit::visit_item_impl(self, item);
+        self.impl_type = previous;
+    }
+
+    fn visit_impl_item_fn(&mut self, item: &'ast syn::ImplItemFn) {
+        let previous_item = self.current_item.take();
+        let previous_path = self.function_path.clone();
+        if let Some(impl_type) = self.impl_type.clone() {
+            self.function_path.push(impl_type);
+        }
+        self.function_path.push(item.sig.ident.to_string());
+        self.current_item = Some(join_item_path(&self.module_path, &self.function_path));
+        syn::visit::visit_impl_item_fn(self, item);
+        self.function_path = previous_path;
+        self.current_item = previous_item;
+    }
+
     fn visit_expr_call(&mut self, call: &'ast ExprCall) {
         if let Some(kind) = sqlx_query_call(call, &self.imports) {
             self.validate_argument(call.args.first(), kind);
@@ -427,6 +595,26 @@ impl<'ast> Visit<'ast> for SqlVisitor<'_> {
     fn visit_file(&mut self, file: &'ast File) {
         syn::visit::visit_file(self, file);
     }
+}
+
+fn impl_type_name(self_ty: &syn::Type) -> Option<String> {
+    let syn::Type::Path(type_path) = self_ty else {
+        return None;
+    };
+    type_path
+        .path
+        .segments
+        .last()
+        .map(|segment| segment.ident.to_string())
+}
+
+fn join_item_path(module_path: &[String], function_path: &[String]) -> String {
+    module_path
+        .iter()
+        .chain(function_path)
+        .map(String::as_str)
+        .collect::<Vec<_>>()
+        .join("::")
 }
 
 fn sqlx_query_call(call: &ExprCall, imports: &SqlImports) -> Option<QueryKind> {
@@ -487,10 +675,20 @@ fn contains_schema_sql(sql: &str) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use super::{RULES, audit, contains_schema_sql};
-    use crate::checks::architecture::{CargoDependency, CargoMetadata, CargoPackage};
+    use super::{
+        RULES, STATIC_RULE, audit, contains_schema_sql, validate_exception_scope,
+        validate_rust_source,
+    };
+    use crate::checks::architecture::{
+        ArchitectureException, CargoDependency, CargoMetadata, CargoPackage, Diagnostic,
+    };
     use serde_json::json;
-    use std::path::{Path, PathBuf};
+    use std::{
+        collections::BTreeSet,
+        fs,
+        path::{Path, PathBuf},
+    };
+    use tempfile::tempdir;
 
     fn fixture(name: &str) -> PathBuf {
         Path::new(env!("CARGO_MANIFEST_DIR"))
@@ -537,6 +735,46 @@ mod tests {
         }
     }
 
+    fn static_exception(scope: &str, rule_id: &str) -> ArchitectureException {
+        ArchitectureException {
+            rule_id: rule_id.to_owned(),
+            scope: scope.to_owned(),
+            rationale: String::from("fixture exception"),
+            owner: String::from("architecture-test"),
+            expires: Some(String::from("2099-01-01")),
+            tracking_task: None,
+        }
+    }
+
+    fn scan_dynamic_queries(source: &str, exceptions: &[ArchitectureException]) -> Vec<Diagnostic> {
+        let root = tempdir().expect("temporary scanner root");
+        let source_path = root.path().join("src/lib.rs");
+        fs::create_dir_all(source_path.parent().expect("source parent"))
+            .expect("create source parent");
+        fs::write(&source_path, source).expect("write source");
+        let active = BTreeSet::from([STATIC_RULE]);
+        let exception_refs = exceptions.iter().collect::<Vec<_>>();
+        let mut diagnostics = Vec::new();
+        validate_rust_source(
+            root.path(),
+            Path::new("src/lib.rs"),
+            &source_path,
+            &active,
+            &exception_refs,
+            &mut diagnostics,
+        );
+        diagnostics
+    }
+
+    fn scope_result(source: &str, scope: &str) -> Result<(), &'static str> {
+        let root = tempdir().expect("temporary scope root");
+        let source_path = root.path().join("src/lib.rs");
+        fs::create_dir_all(source_path.parent().expect("source parent"))
+            .expect("create source parent");
+        fs::write(&source_path, source).expect("write source");
+        validate_exception_scope(root.path(), scope)
+    }
+
     #[test]
     fn explicitly_marked_dev_sqlx_harness_is_allowed() {
         let root = fixture("valid");
@@ -551,7 +789,7 @@ mod tests {
             packages: vec![harness],
             workspace_root: root.clone(),
         };
-        assert!(audit(&root, &metadata).is_empty());
+        assert!(audit(&root, &metadata, &[]).is_empty());
     }
 
     #[test]
@@ -574,7 +812,7 @@ mod tests {
             packages: vec![adapter, application],
             workspace_root: root.clone(),
         };
-        assert!(audit(&root, &metadata).is_empty());
+        assert!(audit(&root, &metadata, &[]).is_empty());
     }
 
     #[test]
@@ -607,7 +845,7 @@ mod tests {
             packages: vec![direct, consumer, invalid_adapter],
             workspace_root: root.clone(),
         };
-        let counts = audit(&root, &metadata);
+        let counts = audit(&root, &metadata, &[]);
         assert_eq!(counts.get(RULES[0]), Some(&4));
         assert_eq!(counts.get(RULES[1]), Some(&4));
         assert_eq!(counts.get(RULES[2]), Some(&3));
@@ -618,5 +856,132 @@ mod tests {
         assert!(contains_schema_sql("create\n table example(id int)"));
         assert!(contains_schema_sql("ALTER TYPE status ADD VALUE 'done'"));
         assert!(!contains_schema_sql("SELECT * FROM example"));
+    }
+
+    #[test]
+    fn item_exception_is_exact_and_does_not_cover_neighbor_or_other_rule() {
+        let source = r"
+use sqlx::query;
+fn allowed(value: String) { query(&value); }
+fn neighbor(value: String) { query(&value); }
+";
+        let diagnostics = scan_dynamic_queries(
+            source,
+            &[
+                static_exception("src/lib.rs#allowed", STATIC_RULE),
+                static_exception("src/lib.rs#neighbor", "DB-SQLX-ONLY-IN-POSTGRES-ADAPTERS"),
+                static_exception("other.rs#allowed", STATIC_RULE),
+            ],
+        );
+        assert_eq!(
+            diagnostics.len(),
+            1,
+            "neighboring dynamic query must remain reported"
+        );
+        assert_eq!(diagnostics[0].rule_id, STATIC_RULE);
+    }
+
+    #[test]
+    fn line_exception_matches_only_the_exact_query_line() {
+        let source = "use sqlx::query;\nfn first(value: String) { query(&value); }\nfn second(value: String) { query(&value); }\n";
+        let diagnostics =
+            scan_dynamic_queries(source, &[static_exception("src/lib.rs:2", STATIC_RULE)]);
+        assert_eq!(
+            diagnostics.len(),
+            1,
+            "the query on the other line remains reported"
+        );
+    }
+
+    #[test]
+    fn impl_method_exception_uses_the_qualified_item_name() {
+        let source = r"
+use sqlx::query;
+struct Database;
+impl Database {
+    fn create(value: String) { query(&value); }
+    fn neighbor(value: String) { query(&value); }
+}
+";
+        let diagnostics = scan_dynamic_queries(
+            source,
+            &[static_exception("src/lib.rs#Database::create", STATIC_RULE)],
+        );
+        assert_eq!(
+            diagnostics.len(),
+            1,
+            "the neighboring method remains reported"
+        );
+    }
+
+    #[test]
+    fn same_named_functions_require_module_qualified_selectors() {
+        let source = r"
+use sqlx::query;
+mod one { pub fn allowed(value: String) { query(&value); } }
+mod two { pub fn allowed(value: String) { query(&value); } }
+";
+        assert!(scope_result(source, "src/lib.rs#allowed").is_err());
+        let diagnostics = scan_dynamic_queries(
+            source,
+            &[static_exception("src/lib.rs#allowed", STATIC_RULE)],
+        );
+        assert_eq!(diagnostics.len(), 2);
+        let diagnostics = scan_dynamic_queries(
+            source,
+            &[static_exception("src/lib.rs#one::allowed", STATIC_RULE)],
+        );
+        assert_eq!(
+            diagnostics.len(),
+            1,
+            "module-qualified selector suppresses one item"
+        );
+    }
+
+    #[test]
+    fn same_named_methods_require_module_and_type_qualified_selectors() {
+        let source = r"
+use sqlx::query;
+mod one { struct Thing; impl Thing { fn run(value: String) { query(&value); } } }
+mod two { struct Thing; impl Thing { fn run(value: String) { query(&value); } } }
+";
+        assert!(scope_result(source, "src/lib.rs#Thing::run").is_err());
+        let diagnostics = scan_dynamic_queries(
+            source,
+            &[static_exception("src/lib.rs#Thing::run", STATIC_RULE)],
+        );
+        assert_eq!(diagnostics.len(), 2);
+        let diagnostics = scan_dynamic_queries(
+            source,
+            &[static_exception("src/lib.rs#one::Thing::run", STATIC_RULE)],
+        );
+        assert_eq!(
+            diagnostics.len(),
+            1,
+            "fully qualified method suppresses one item"
+        );
+    }
+
+    #[test]
+    fn outer_function_exception_does_not_cover_nested_function() {
+        let source = r"
+use sqlx::query;
+fn outer(value: String) { query(&value); fn nested(value: String) { query(&value); } }
+";
+        let diagnostics =
+            scan_dynamic_queries(source, &[static_exception("src/lib.rs#outer", STATIC_RULE)]);
+        assert_eq!(diagnostics.len(), 1);
+        assert!(scope_result(source, "src/lib.rs#outer::nested").is_ok());
+    }
+
+    #[test]
+    fn nonexistent_qualified_method_is_rejected_without_cross_type_matching() {
+        let source = r"
+struct A;
+impl A { fn run(value: String) { let _ = value; } }
+struct B;
+impl B { fn other(value: String) { let _ = value; } }
+";
+        assert!(scope_result(source, "src/lib.rs#A::other").is_err());
     }
 }

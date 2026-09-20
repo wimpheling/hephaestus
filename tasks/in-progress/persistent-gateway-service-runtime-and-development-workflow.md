@@ -61,11 +61,30 @@ run for `431127d` is `35476825988`; its three jobs passed.
 The initial quality-gate run (2026-09-20, session `28746`) stopped at the
 architecture diagnostics recorded in `/home/a/heph-quality-20260920.log`,
 before the Rust, Phoenix, and UI stages. Quality retry v2 (session `69347`)
-also stopped in architecture on the golden `CREATE DATABASE` and `DROP
-DATABASE` SQL despite the exact declarations; its log is
-`/home/a/heph-quality-20260920-v2.log`. Its disposable PostgreSQL and NATS
-fixtures were cleaned. The architecture checker investigation remains in
-progress; Rust, Phoenix, and UI were not reached.
+also stopped in architecture; the declared `CREATE DATABASE` and `DROP
+DATABASE` exceptions matched, while
+`read_gateway_service_recovery_snapshot` still passed the named
+`GATEWAY_SERVICE_RECOVERY_SNAPSHOT_QUERY` constant to SQLx under the static-SQL
+rule. Its preserved log is `/home/a/heph-quality-20260920-v2.log`. Its
+disposable PostgreSQL and NATS fixtures were cleaned. The checker investigation
+remains in progress; Rust, Phoenix, and UI were not reached.
+
+Checker and golden SQL checkpoint (2026-09-20): the DB-STATIC-SQL checker now
+passes only validated, canonical exact Rust item scopes; ambiguous selectors,
+wrong paths/rules, nested-function inheritance, duplicate identities, and
+invalid records remain rejected. The checker intentionally does not infer SQL
+from named constants. The restored golden recovery snapshot query was inlined
+at its sole `sqlx::query` call with unchanged SQL text, and its unused
+constant was removed. Checker architecture tests passed 52/52, strict focused
+Clippy passed, and the architecture check passed with a clean database
+structural dry-run. Evidence is in
+`/home/a/heph-architecture-exception-tests-v4-20260920.log`,
+`/home/a/heph-architecture-exception-clippy-v4-20260920.log`, and
+`/home/a/heph-architecture-exception-check-v4-20260920.log`. The golden test
+compile and strict Clippy also passed; evidence is in
+`/home/a/heph-golden-compile-v4-20260920.log` and
+`/home/a/heph-golden-clippy-v4-20260920.log`. Full quality remains pending;
+no full-quality result is claimed here.
 
 ## Outcome
 
@@ -2523,8 +2542,12 @@ is `/home/a/heph-rpc-extraction-log-rpc-20260920.log`, with diagnostics in
 `/home/a/heph-rpc-extraction-log-rpc-20260920-phase.json`. The seeded rows in
 this mode remain fixture data; the guest-output proof is the separate
 checkpoint above. Repository-wide `cargo dev quality` retry v2 (session
-`69347`) then stopped in architecture on the golden `CREATE DATABASE` and
-`DROP DATABASE` SQL despite the exact declarations; evidence is
+`69347`) then stopped in architecture because
+`read_gateway_service_recovery_snapshot` passed the named
+`GATEWAY_SERVICE_RECOVERY_SNAPSHOT_QUERY` constant to SQLx; the exact DDL
+exceptions matched. Evidence is preserved at
 `/home/a/heph-quality-20260920-v2.log`. Its disposable PostgreSQL and NATS
 fixtures were cleaned, and Rust, Phoenix, and UI were not reached. Checker
-investigation remains ongoing; no passing full-quality result is claimed.
+investigation remains ongoing; no passing full-quality result is claimed. The
+remaining acceptance gate is this full quality run; the service-specific
+acceptance evidence is otherwise complete before release UI work begins.
