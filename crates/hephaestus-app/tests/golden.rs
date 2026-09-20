@@ -645,6 +645,65 @@ struct InstalledUiBrowserContext<'a> {
     workload_phase_timing: bool,
 }
 
+/// Emits only bounded, closed-vocabulary evidence when the browser process
+/// fails. The browser reporter intentionally exposes only an HTTP status
+/// class, so this joins the managed installation's audit rows to durable
+/// gateway outcomes without reading request or response data.
+async fn diagnose_installed_ui_browser_failure(context: &InstalledUiBrowserContext<'_>) {
+    type AuditGroup = (String, String, String, String, i64);
+    type InvocationGroup = (String, String, i64);
+    let installation_id = context.installed_uis.managed_ui.installation_id;
+    let generation_id = context.installed_uis.managed_ui.generation_id;
+    let query = async {
+        let audits: Vec<AuditGroup> = sqlx::query_as(
+            "SELECT surface, decision, outcome, reason_code, count(*)
+               FROM ui_request_audit_events
+              WHERE installation_id = $1 AND generation_id = $2
+              GROUP BY surface, decision, outcome, reason_code
+              ORDER BY surface, decision, outcome, reason_code",
+        )
+        .bind(installation_id)
+        .bind(generation_id)
+        .fetch_all(context.pool)
+        .await?;
+        let invocations: Vec<InvocationGroup> = sqlx::query_as(
+            "SELECT audit.surface, invocation.outcome, count(DISTINCT invocation.id)
+               FROM ui_request_audit_events AS audit
+               JOIN gateway_invocations AS invocation
+                 ON invocation.request_id = audit.request_id
+              WHERE audit.installation_id = $1 AND audit.generation_id = $2
+              GROUP BY audit.surface, invocation.outcome
+              ORDER BY audit.surface, invocation.outcome",
+        )
+        .bind(installation_id)
+        .bind(generation_id)
+        .fetch_all(context.pool)
+        .await?;
+        Ok::<_, sqlx::Error>((audits, invocations))
+    };
+    match tokio::time::timeout(Duration::from_secs(5), query).await {
+        Ok(Ok((audits, invocations))) => {
+            println!(
+                "INSTALLED_UI_BROWSER_FAILURE_DIAGNOSTIC=1 audit_groups={} invocation_groups={}",
+                audits.len(),
+                invocations.len()
+            );
+            for (surface, decision, outcome, reason, count) in audits {
+                println!(
+                    "INSTALLED_UI_AUDIT_GROUP surface={surface} decision={decision} outcome={outcome} reason={reason} count={count}"
+                );
+            }
+            for (surface, outcome, count) in invocations {
+                println!(
+                    "INSTALLED_UI_GATEWAY_OUTCOME surface={surface} outcome={outcome} count={count}"
+                );
+            }
+        }
+        Ok(Err(_)) => println!("INSTALLED_UI_BROWSER_FAILURE_DIAGNOSTIC=1 status=unavailable"),
+        Err(_) => println!("INSTALLED_UI_BROWSER_FAILURE_DIAGNOSTIC=1 status=timeout"),
+    }
+}
+
 /// Runs the installed-reference-UI browser phase while the service-proof
 /// daemon, Caddy, database, and managed gateway are still alive.  The
 /// service-proof branch otherwise tears those resources down before reaching
@@ -697,6 +756,9 @@ async fn run_installed_ui_browser_phase(context: InstalledUiBrowserContext<'_>) 
         .await;
     browser_timer.finish(status.as_ref().is_ok_and(std::process::ExitStatus::success));
     let status = status.expect("run installed UI browser E2E");
+    if !status.success() {
+        diagnose_installed_ui_browser_failure(&context).await;
+    }
     assert!(
         status.success(),
         "installed UI browser E2E failed: {status}"

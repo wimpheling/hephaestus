@@ -140,6 +140,7 @@ test("cooking installed UI TLS full-page and managed iframe smoke", async ({page
   let managedDocumentSentUiCookie = false;
   let managedDocumentSentPlatformCookie = false;
   let managedDocumentStatusClass = 0;
+  let managedDocumentStatusCode = 0;
   let managedDocumentHeaders: Record<string, string> = {};
   let managedFrameCspViolation = false;
   await page.evaluate(() => {
@@ -190,6 +191,7 @@ test("cooking installed UI TLS full-page and managed iframe smoke", async ({page
       const response = await managedDocument;
       expect(response).not.toBeNull();
       if (response === null) return;
+      managedDocumentStatusCode = response.status();
       managedDocumentStatusClass = Math.floor(response.status() / 100);
       managedDocumentHeaders = response.headers();
       const requestHeaders = await response.request().allHeaders();
@@ -199,7 +201,11 @@ test("cooking installed UI TLS full-page and managed iframe smoke", async ({page
     const statusStage = managedDocumentStatusClass === 2 ? "managed-document-2xx" :
       managedDocumentStatusClass === 3 ? "managed-document-3xx" :
         managedDocumentStatusClass === 4 ? "managed-document-4xx" :
-          managedDocumentStatusClass === 5 ? "managed-document-5xx" : "managed-document-other";
+          managedDocumentStatusCode === 500 ? "managed-document-500" :
+            managedDocumentStatusCode === 502 ? "managed-document-502" :
+              managedDocumentStatusCode === 503 ? "managed-document-503" :
+                managedDocumentStatusCode === 504 ? "managed-document-504" :
+                  managedDocumentStatusClass === 5 ? "managed-document-5xx-other" : "managed-document-other";
     await test.step(statusStage, async () => {
       expect(managedDocumentStatusClass).toBe(2);
     });
