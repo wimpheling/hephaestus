@@ -3072,6 +3072,7 @@ async fn bearer_push_starts_run_through_production_bootstrap() {
         "golden-subject",
     )
     .await;
+    #[cfg(feature = "test-fixtures")]
     let outsider_browser_session =
         seed_golden_browser_session(&pool, outsider_id, &browser_oidc_issuer, "outsider").await;
     let project = fixture_repository

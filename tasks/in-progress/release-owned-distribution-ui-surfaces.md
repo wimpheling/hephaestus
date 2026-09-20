@@ -53,6 +53,20 @@ release-domain/release-service/dev tests, strict release-domain/release-service/
 release-postgres/dev Clippy, and docs passed with Rust 1.88.0. This is focused
 local evidence; updated CI and final integrated quality remain pending.
 
+## Feature-specific CI fixture checkpoint (2026-09-20)
+
+CI run `35507675859` passes workspace tests, the isolated browser-session
+lifecycle proof, Cooking applications, and Phoenix/browser checks. Its later
+update-admission step exposed a durable outsider-session fixture declared even
+when its `test-fixtures` consumers were excluded. The declaration now uses the
+same feature condition; no authentication fallback or lint allowance was added.
+
+The exact PostgreSQL/NATS update-admission script passes all branches, including
+the no-feature guard, in
+`/home/a/heph-update-admission-feature-fix-final-20260920.log`. Scoped app
+formatting, Clippy, and docs pass in `/home/a/heph-golden-fixture-*-final-20260920.log`.
+Updated CI and final integrated quality remain pending.
+
 ## Disable/remove lifecycle checkpoint (2026-09-20)
 
 The release service now disables and terminally removes project, repository,
