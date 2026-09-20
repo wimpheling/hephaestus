@@ -13,10 +13,10 @@ use uuid::Uuid;
 use identity_domain::{BrowserSessionId, RequestId, UserId};
 use release_domain::{
     UiInstallationGenerationId, UiInstallationId,
-    ui_browser::{UiBrowserHandoffSecret, UiBrowserRoute},
+    ui_browser::{UiBrowserHandoffSecret, UiBrowserRoute, UiBrowserSessionSecret},
 };
 use release_postgres::PgUiBrowserSessionStore;
-use release_service::{CreateUiBrowserHandoff, UiBrowserHandoffError};
+use release_service::{CreateUiBrowserHandoff, ExchangeUiBrowserHandoff, UiBrowserHandoffError};
 
 const EXPECTED_MIGRATION: i64 = 89;
 
@@ -1210,6 +1210,43 @@ async fn wait_for_named_lock_waiter(admin: &PgPool, application_name: &str, bloc
     panic!("timed out waiting for issuance lock waiter {application_name}");
 }
 
+async fn wait_for_named_exchange_lock_waiter(
+    admin: &PgPool,
+    application_name: &str,
+    blocker_pid: i32,
+) {
+    for _ in 0..1000 {
+        let waiting: i64 = sqlx::query_scalar(
+            "WITH RECURSIVE blocker_chain(pid, blocking_pid, depth) AS (
+                 SELECT activity.pid, unnest(pg_blocking_pids(activity.pid)), 0
+                 FROM pg_stat_activity AS activity
+                 WHERE activity.application_name = $1
+                   AND activity.wait_event_type = 'Lock'
+                 UNION ALL
+                 SELECT blocker_chain.pid,
+                        unnest(pg_blocking_pids(blocker_chain.blocking_pid)),
+                        blocker_chain.depth + 1
+                 FROM blocker_chain
+                 WHERE blocker_chain.depth < 4
+             )
+             SELECT count(*) FROM blocker_chain WHERE blocking_pid = $2",
+        )
+        .bind(application_name)
+        .bind(blocker_pid)
+        .fetch_one(admin)
+        .await
+        .expect("inspect exchange lock waiter");
+        if waiting > 0 {
+            println!(
+                "REAL_UI_BROWSER_EXCHANGE_LOCK_BARRIER=1 application_name={application_name} blocker_pid={blocker_pid}"
+            );
+            return;
+        }
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }
+    panic!("timed out waiting for exchange lock waiter {application_name}");
+}
+
 async fn assert_role(pool: &PgPool, expected: &str, superuser: bool, bypass_rls: bool) {
     let row: (String, bool, bool) = sqlx::query_as(
         "SELECT current_user, rolsuper, rolbypassrls
@@ -1754,4 +1791,474 @@ async fn ui_browser_issue_binds_current_authority_and_fresh_expiry() {
         .await
         .expect("count final denied attempts");
     assert_eq!(final_count, baseline + 1);
+}
+
+#[tokio::test]
+#[serial]
+#[allow(clippy::too_many_lines)]
+async fn ui_browser_exchange_is_atomic_generation_bound_and_parent_capped() {
+    let Some(database_url) = env::var("HEPHAESTUS_POSTGRES_TEST_URL").ok() else {
+        eprintln!("skipping UI browser exchange: test URL is unset");
+        return;
+    };
+    let bootstrap = PgPoolOptions::new()
+        .max_connections(2)
+        .connect(&database_url)
+        .await
+        .expect("connect bootstrap PostgreSQL role");
+    sqlx::migrate!("../../migrations")
+        .run(&bootstrap)
+        .await
+        .expect("apply migrations through 0089");
+    let worker = role_pool(&database_url, "hephaestus_worker").await;
+    let app = role_pool(&database_url, "hephaestus_app").await;
+    let fixture = seed_fixture_reusing_installation_helpers(&worker).await;
+    let store = PgUiBrowserSessionStore::new(worker.clone(), app);
+    let actor = UserId::from_uuid(fixture.actor);
+    let parent = BrowserSessionId::from_uuid(fixture.parent_session);
+    let installation = UiInstallationId::from_uuid(fixture.installation);
+    let generation = UiInstallationGenerationId::from_uuid(fixture.generation);
+    let route = UiBrowserRoute::parse("schema-ui").expect("published route base");
+
+    // A host resolved to another generation cannot exchange the locked handoff.
+    let wrong_host_secret = UiBrowserHandoffSecret::from_bytes([41; 32]);
+    issue_handoff(
+        &store,
+        actor,
+        parent,
+        installation,
+        generation,
+        route.clone(),
+        wrong_host_secret,
+    )
+    .await;
+    let wrong_host = store
+        .exchange_ui_browser_handoff(ExchangeUiBrowserHandoff {
+            request_id: RequestId::new(),
+            handoff_secret: UiBrowserHandoffSecret::from_bytes([41; 32]),
+            expected_generation_id: UiInstallationGenerationId::from_uuid(fixture.other_generation),
+            child_secret: UiBrowserSessionSecret::from_bytes([42; 32]),
+        })
+        .await;
+    assert_eq!(wrong_host, Err(UiBrowserHandoffError::InvalidOrExpired));
+    assert_exchange_denial_unchanged(&worker, UiBrowserHandoffSecret::from_bytes([41; 32])).await;
+
+    let success_secret = UiBrowserHandoffSecret::from_bytes([43; 32]);
+    issue_handoff(
+        &store,
+        actor,
+        parent,
+        installation,
+        generation,
+        route.clone(),
+        success_secret,
+    )
+    .await;
+    let success = store
+        .exchange_ui_browser_handoff(ExchangeUiBrowserHandoff {
+            request_id: RequestId::new(),
+            handoff_secret: UiBrowserHandoffSecret::from_bytes([43; 32]),
+            expected_generation_id: generation,
+            child_secret: UiBrowserSessionSecret::from_bytes([44; 32]),
+        })
+        .await
+        .expect("valid handoff exchanges once");
+    let child_row: (
+        Vec<u8>,
+        time::OffsetDateTime,
+        time::OffsetDateTime,
+        Uuid,
+        Uuid,
+    ) = sqlx::query_as(
+        "SELECT session_digest, issued_at, expires_at, parent_session_id, generation_id
+         FROM ui_browser_sessions WHERE id = $1",
+    )
+    .bind(success.context.session_id.as_uuid())
+    .fetch_one(&worker)
+    .await
+    .expect("read child safe metadata");
+    assert_eq!(
+        child_row.0,
+        UiBrowserSessionSecret::from_bytes([44; 32])
+            .digest()
+            .as_bytes()
+    );
+    assert_eq!(child_row.3, fixture.parent_session);
+    assert_eq!(child_row.4, fixture.generation);
+    assert_eq!(child_row.2 - child_row.1, time::Duration::hours(12));
+    let replay = store
+        .exchange_ui_browser_handoff(ExchangeUiBrowserHandoff {
+            request_id: RequestId::new(),
+            handoff_secret: UiBrowserHandoffSecret::from_bytes([43; 32]),
+            expected_generation_id: generation,
+            child_secret: UiBrowserSessionSecret::from_bytes([45; 32]),
+        })
+        .await;
+    assert_eq!(replay, Err(UiBrowserHandoffError::InvalidOrExpired));
+    let replay_children: i64 = sqlx::query_scalar(
+        "SELECT count(*) FROM ui_browser_sessions WHERE handoff_id =
+         (SELECT id FROM ui_browser_handoffs WHERE handoff_digest = $1)",
+    )
+    .bind(
+        UiBrowserHandoffSecret::from_bytes([43; 32])
+            .digest()
+            .as_bytes()
+            .as_slice(),
+    )
+    .fetch_one(&worker)
+    .await
+    .expect("count replay children");
+    assert_eq!(replay_children, 1);
+
+    // Two named worker connections contend on one handoff row. An external
+    // blocker makes both waits observable before release; after release only
+    // one can insert a child and consume the handoff.
+    let parallel_worker_a =
+        parallel_role_pool(&database_url, "hephaestus_worker", "ui-browser-exchange-a").await;
+    let parallel_worker_b =
+        parallel_role_pool(&database_url, "hephaestus_worker", "ui-browser-exchange-b").await;
+    let parallel_app_a = role_pool(&database_url, "hephaestus_app").await;
+    let parallel_app_b = role_pool(&database_url, "hephaestus_app").await;
+    let parallel_store_a = PgUiBrowserSessionStore::new(parallel_worker_a, parallel_app_a);
+    let parallel_store_b = PgUiBrowserSessionStore::new(parallel_worker_b, parallel_app_b);
+    let concurrent_secret = UiBrowserHandoffSecret::from_bytes([46; 32]);
+    let concurrent_digest = concurrent_secret.digest().as_bytes().to_vec();
+    issue_handoff(
+        &store,
+        actor,
+        parent,
+        installation,
+        generation,
+        route.clone(),
+        concurrent_secret,
+    )
+    .await;
+    let mut exchange_blocker = bootstrap
+        .begin()
+        .await
+        .expect("begin exchange lock barrier");
+    let blocker_pid: i32 = sqlx::query_scalar("SELECT pg_backend_pid()")
+        .fetch_one(&mut *exchange_blocker)
+        .await
+        .expect("read exchange lock barrier PID");
+    sqlx::query("SELECT set_config('application_name', 'ui-browser-exchange-blocker', false)")
+        .execute(&mut *exchange_blocker)
+        .await
+        .expect("name exchange lock barrier");
+    println!("REAL_UI_BROWSER_EXCHANGE_BLOCKER=1 blocker_pid={blocker_pid}");
+    sqlx::query("SELECT id FROM ui_browser_handoffs WHERE handoff_digest = $1 FOR UPDATE")
+        .bind(&concurrent_digest)
+        .fetch_one(&mut *exchange_blocker)
+        .await
+        .expect("hold exchange handoff lock barrier");
+    let first_task = tokio::spawn(async move {
+        parallel_store_a
+            .exchange_ui_browser_handoff(ExchangeUiBrowserHandoff {
+                request_id: RequestId::new(),
+                handoff_secret: UiBrowserHandoffSecret::from_bytes([46; 32]),
+                expected_generation_id: generation,
+                child_secret: UiBrowserSessionSecret::from_bytes([47; 32]),
+            })
+            .await
+    });
+    let second_task = tokio::spawn(async move {
+        parallel_store_b
+            .exchange_ui_browser_handoff(ExchangeUiBrowserHandoff {
+                request_id: RequestId::new(),
+                handoff_secret: UiBrowserHandoffSecret::from_bytes([46; 32]),
+                expected_generation_id: generation,
+                child_secret: UiBrowserSessionSecret::from_bytes([48; 32]),
+            })
+            .await
+    });
+    wait_for_named_exchange_lock_waiter(&bootstrap, "ui-browser-exchange-a", blocker_pid).await;
+    wait_for_named_exchange_lock_waiter(&bootstrap, "ui-browser-exchange-b", blocker_pid).await;
+    exchange_blocker
+        .commit()
+        .await
+        .expect("release exchange lock barrier");
+    let first = first_task.await.expect("first exchange task");
+    let second = second_task.await.expect("second exchange task");
+    assert_eq!(usize::from(first.is_ok()) + usize::from(second.is_ok()), 1);
+    assert_eq!(
+        usize::from(first == Err(UiBrowserHandoffError::InvalidOrExpired))
+            + usize::from(second == Err(UiBrowserHandoffError::InvalidOrExpired)),
+        1
+    );
+    let concurrent_children: i64 = sqlx::query_scalar(
+        "SELECT count(*) FROM ui_browser_sessions WHERE handoff_id =
+         (SELECT id FROM ui_browser_handoffs WHERE handoff_digest = $1)",
+    )
+    .bind(
+        UiBrowserHandoffSecret::from_bytes([46; 32])
+            .digest()
+            .as_bytes()
+            .as_slice(),
+    )
+    .fetch_one(&worker)
+    .await
+    .expect("count concurrent children");
+    assert_eq!(concurrent_children, 1);
+
+    // A handoff outside its fixed window is rejected after current authority
+    // checks and leaves no child.
+    let expired_handoff = Uuid::new_v4();
+    sqlx::query(
+        "INSERT INTO ui_browser_handoffs
+         (id, handoff_digest, request_id, actor_id, parent_session_id,
+          installation_id, generation_id, organization_id, route,
+          issued_at, expires_at)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9,
+                 statement_timestamp() - interval '61 seconds',
+                 statement_timestamp() - interval '1 second')",
+    )
+    .bind(expired_handoff)
+    .bind(
+        UiBrowserHandoffSecret::from_bytes([49; 32])
+            .digest()
+            .as_bytes()
+            .as_slice(),
+    )
+    .bind(Uuid::new_v4())
+    .bind(fixture.actor)
+    .bind(fixture.parent_session)
+    .bind(fixture.installation)
+    .bind(fixture.generation)
+    .bind(fixture.organization)
+    .bind("schema-ui")
+    .execute(&worker)
+    .await
+    .expect("seed expired handoff");
+    let expired = store
+        .exchange_ui_browser_handoff(ExchangeUiBrowserHandoff {
+            request_id: RequestId::new(),
+            handoff_secret: UiBrowserHandoffSecret::from_bytes([49; 32]),
+            expected_generation_id: generation,
+            child_secret: UiBrowserSessionSecret::from_bytes([50; 32]),
+        })
+        .await;
+    assert_eq!(expired, Err(UiBrowserHandoffError::InvalidOrExpired));
+    assert_exchange_denial_unchanged(&worker, UiBrowserHandoffSecret::from_bytes([49; 32])).await;
+
+    // Current generation and source publication are rechecked at exchange.
+    let stale_secret = UiBrowserHandoffSecret::from_bytes([51; 32]);
+    issue_handoff(
+        &store,
+        actor,
+        parent,
+        installation,
+        generation,
+        route,
+        stale_secret,
+    )
+    .await;
+    let stale_generation = Uuid::new_v4();
+    sqlx::query(
+        "INSERT INTO ui_installation_generations
+         (id, installation_id, generation_no, release_id, ui_key, ui_scope)
+         SELECT $1, installation_id, generation_no + 1, release_id, ui_key, ui_scope
+         FROM ui_installation_generations WHERE id = $2",
+    )
+    .bind(stale_generation)
+    .bind(fixture.generation)
+    .execute(&worker)
+    .await
+    .expect("seed current generation replacement");
+    sqlx::query("UPDATE ui_installations SET current_generation_id = $2 WHERE id = $1")
+        .bind(fixture.installation)
+        .bind(stale_generation)
+        .execute(&worker)
+        .await
+        .expect("activate current generation replacement");
+    let stale = store
+        .exchange_ui_browser_handoff(ExchangeUiBrowserHandoff {
+            request_id: RequestId::new(),
+            handoff_secret: UiBrowserHandoffSecret::from_bytes([51; 32]),
+            expected_generation_id: generation,
+            child_secret: UiBrowserSessionSecret::from_bytes([52; 32]),
+        })
+        .await;
+    assert_eq!(stale, Err(UiBrowserHandoffError::InvalidOrExpired));
+    assert_exchange_denial_unchanged(&worker, UiBrowserHandoffSecret::from_bytes([51; 32])).await;
+
+    // Parent revocation/account state is checked before child creation.
+    let revoked_secret = UiBrowserHandoffSecret::from_bytes([53; 32]);
+    issue_handoff(
+        &store,
+        actor,
+        parent,
+        UiInstallationId::from_uuid(fixture.other_installation),
+        UiInstallationGenerationId::from_uuid(fixture.other_generation),
+        UiBrowserRoute::parse("schema-ui-two").expect("second published route base"),
+        revoked_secret,
+    )
+    .await;
+    sqlx::query(
+        "UPDATE human_browser_sessions
+         SET revoked_at = statement_timestamp(), revocation_reason = 'logout'
+         WHERE id = $1",
+    )
+    .bind(fixture.parent_session)
+    .execute(&worker)
+    .await
+    .expect("revoke parent session");
+    let revoked = store
+        .exchange_ui_browser_handoff(ExchangeUiBrowserHandoff {
+            request_id: RequestId::new(),
+            handoff_secret: UiBrowserHandoffSecret::from_bytes([53; 32]),
+            expected_generation_id: UiInstallationGenerationId::from_uuid(fixture.other_generation),
+            child_secret: UiBrowserSessionSecret::from_bytes([54; 32]),
+        })
+        .await;
+    assert_eq!(revoked, Err(UiBrowserHandoffError::InvalidOrExpired));
+    assert_exchange_denial_unchanged(&worker, UiBrowserHandoffSecret::from_bytes([53; 32])).await;
+
+    let account_parent = Uuid::new_v4();
+    insert_canonical_session(&worker, account_parent, fixture.actor, Uuid::new_v4(), 20).await;
+    issue_handoff(
+        &store,
+        actor,
+        BrowserSessionId::from_uuid(account_parent),
+        UiInstallationId::from_uuid(fixture.other_installation),
+        UiInstallationGenerationId::from_uuid(fixture.other_generation),
+        UiBrowserRoute::parse("schema-ui-two").expect("second published route base"),
+        UiBrowserHandoffSecret::from_bytes([57; 32]),
+    )
+    .await;
+    sqlx::query("UPDATE users SET status = 'suspended' WHERE id = $1")
+        .bind(fixture.actor)
+        .execute(&worker)
+        .await
+        .expect("suspend account");
+    let account_suspended = store
+        .exchange_ui_browser_handoff(ExchangeUiBrowserHandoff {
+            request_id: RequestId::new(),
+            handoff_secret: UiBrowserHandoffSecret::from_bytes([57; 32]),
+            expected_generation_id: UiInstallationGenerationId::from_uuid(fixture.other_generation),
+            child_secret: UiBrowserSessionSecret::from_bytes([58; 32]),
+        })
+        .await;
+    assert_eq!(
+        account_suspended,
+        Err(UiBrowserHandoffError::InvalidOrExpired)
+    );
+    assert_exchange_denial_unchanged(&worker, UiBrowserHandoffSecret::from_bytes([57; 32])).await;
+    sqlx::query("UPDATE users SET status = 'active' WHERE id = $1")
+        .bind(fixture.actor)
+        .execute(&worker)
+        .await
+        .expect("restore account");
+
+    let source_parent = Uuid::new_v4();
+    insert_canonical_session(&worker, source_parent, fixture.actor, Uuid::new_v4(), 20).await;
+    issue_handoff(
+        &store,
+        actor,
+        BrowserSessionId::from_uuid(source_parent),
+        UiInstallationId::from_uuid(fixture.other_installation),
+        UiInstallationGenerationId::from_uuid(fixture.other_generation),
+        UiBrowserRoute::parse("schema-ui-two").expect("second published route base"),
+        UiBrowserHandoffSecret::from_bytes([55; 32]),
+    )
+    .await;
+    sqlx::query(
+        "UPDATE releases SET state = 'revoked', revoked_at = statement_timestamp()
+         WHERE id = (SELECT release_id FROM ui_installation_generations WHERE id = $1)",
+    )
+    .bind(fixture.other_generation)
+    .execute(&worker)
+    .await
+    .expect("revoke source release");
+    let source_revoked = store
+        .exchange_ui_browser_handoff(ExchangeUiBrowserHandoff {
+            request_id: RequestId::new(),
+            handoff_secret: UiBrowserHandoffSecret::from_bytes([55; 32]),
+            expected_generation_id: UiInstallationGenerationId::from_uuid(fixture.other_generation),
+            child_secret: UiBrowserSessionSecret::from_bytes([56; 32]),
+        })
+        .await;
+    assert_eq!(source_revoked, Err(UiBrowserHandoffError::InvalidOrExpired));
+    assert_exchange_denial_unchanged(&worker, UiBrowserHandoffSecret::from_bytes([55; 32])).await;
+}
+
+async fn assert_exchange_denial_unchanged(pool: &PgPool, secret: UiBrowserHandoffSecret) {
+    let digest = secret.digest().as_bytes().to_vec();
+    let handoff_id: Uuid =
+        sqlx::query_scalar("SELECT id FROM ui_browser_handoffs WHERE handoff_digest = $1")
+            .bind(&digest)
+            .fetch_one(pool)
+            .await
+            .expect("find denied exchange handoff");
+    let consumed_at: Option<time::OffsetDateTime> =
+        sqlx::query_scalar("SELECT consumed_at FROM ui_browser_handoffs WHERE id = $1")
+            .bind(handoff_id)
+            .fetch_one(pool)
+            .await
+            .expect("read denied exchange consumption");
+    let children: i64 =
+        sqlx::query_scalar("SELECT count(*) FROM ui_browser_sessions WHERE handoff_id = $1")
+            .bind(handoff_id)
+            .fetch_one(pool)
+            .await
+            .expect("count denied exchange children");
+    assert!(
+        consumed_at.is_none(),
+        "denied exchange consumed its handoff"
+    );
+    assert_eq!(children, 0, "denied exchange created a child");
+}
+
+async fn issue_handoff(
+    store: &PgUiBrowserSessionStore,
+    actor: UserId,
+    parent: BrowserSessionId,
+    installation: UiInstallationId,
+    generation: UiInstallationGenerationId,
+    route: UiBrowserRoute,
+    secret: UiBrowserHandoffSecret,
+) {
+    store
+        .create_ui_browser_handoff(CreateUiBrowserHandoff {
+            request_id: RequestId::new(),
+            actor_id: actor,
+            parent_session_id: parent,
+            installation_id: installation,
+            generation_id: generation,
+            route,
+            secret,
+        })
+        .await
+        .expect("issue exchange fixture handoff");
+}
+
+async fn parallel_role_pool(database_url: &str, role: &str, application_name: &str) -> PgPool {
+    PgPoolOptions::new()
+        .max_connections(1)
+        .acquire_timeout(Duration::from_secs(10))
+        .after_connect({
+            let role = role.to_owned();
+            let application_name = application_name.to_owned();
+            move |connection, _metadata| {
+                let role = role.clone();
+                let application_name = application_name.clone();
+                Box::pin(async move {
+                    sqlx::query("SELECT set_config('role', $1, false)")
+                        .bind(role)
+                        .execute(&mut *connection)
+                        .await?;
+                    sqlx::query("SELECT set_config('application_name', $1, false)")
+                        .bind(application_name)
+                        .execute(&mut *connection)
+                        .await?;
+                    sqlx::query("SELECT set_config('hephaestus.actor_id', $1, false)")
+                        .bind(Uuid::nil().to_string())
+                        .execute(&mut *connection)
+                        .await
+                        .map(|_| ())
+                })
+            }
+        })
+        .connect(database_url)
+        .await
+        .expect("connect parallel restricted PostgreSQL role")
 }

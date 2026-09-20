@@ -1,20 +1,26 @@
 //! Worker-side UI browser handoff issuance adapter.
 //!
-//! This slice creates one-time handoffs. Exchange, child-session validation,
-//! and event APIs remain separate boundaries.
+//! This file contains the worker-side issuance and exchange methods only.
+//! Authentication and the application-role verifier remain separate slices.
 
 use authz_domain::{AuthorizationDecision, ObjectRef, ObjectType, Permission, Subject};
 use authz_postgres::PostgresMelangeAuthorizer;
 use forge_domain::OrganizationId;
 use identity_domain::{RequestId, UserId};
-use release_domain::ui_browser::UiBrowserHandoffId;
-use release_service::{CreateUiBrowserHandoff, CreatedUiBrowserHandoff, UiBrowserHandoffError};
+use release_domain::{
+    UiInstallationId,
+    ui_browser::{UiBrowserHandoffId, UiBrowserRoute, UiBrowserSessionId, child_session_expiry},
+};
+use release_service::{
+    CreateUiBrowserHandoff, CreatedUiBrowserHandoff, CreatedUiBrowserSession,
+    ExchangeUiBrowserHandoff, UiBrowserHandoffError, UiBrowserSessionContext,
+};
 use sqlx::{FromRow, PgPool, Postgres, Transaction};
 use std::collections::{BTreeMap, BTreeSet};
 use time::{Duration, OffsetDateTime};
 use uuid::Uuid;
 
-/// `PostgreSQL` store for trusted UI browser handoff issuance.
+/// `PostgreSQL` store for trusted UI browser handoff issuance and exchange.
 pub struct PgUiBrowserSessionStore {
     worker_pool: PgPool,
     _app_pool: PgPool,
@@ -36,10 +42,12 @@ impl PgUiBrowserSessionStore {
     ///
     /// # Errors
     ///
-    /// Returns a redacted failure when the actor is not authorized, the
-    /// installation or generation is unavailable, or persistence fails.
-    // Keep the full lock, publication, binding, and authorization transaction
-    // together so its ordering remains auditable at this boundary.
+    /// Returns [`UiBrowserHandoffError::PermissionDenied`] when the actor,
+    /// parent, installation, or published release is no longer eligible.
+    /// Returns [`UiBrowserHandoffError::InvalidRoute`] for an undeclared route
+    /// and [`UiBrowserHandoffError::Unavailable`] for persistence failures.
+    // Keep the complete issuance transaction together so its lock order and
+    // post-lock authority checks remain auditable.
     #[allow(clippy::too_many_lines)]
     pub async fn create_ui_browser_handoff(
         &self,
@@ -49,7 +57,18 @@ impl PgUiBrowserSessionStore {
             begin_actor_transaction(&self.worker_pool, command.actor_id, command.request_id)
                 .await
                 .map_err(|_| UiBrowserHandoffError::Unavailable)?;
-        let eligible = self.lock_and_check_eligibility(&mut tx, &command).await?;
+        let eligible = self
+            .lock_and_check_eligibility(
+                &mut tx,
+                &EligibilityInput {
+                    actor_id: command.actor_id,
+                    parent_session_id: command.parent_session_id,
+                    installation_id: command.installation_id,
+                    generation_id: command.generation_id,
+                    route: command.route.clone(),
+                },
+            )
+            .await?;
         let handoff_id = UiBrowserHandoffId::new();
         let digest = command.secret.digest().as_bytes();
         let issued = sqlx::query_as::<_, IssuedRow>(
@@ -96,19 +115,19 @@ impl PgUiBrowserSessionStore {
 
     /// Checks mutable authority in canonical lock order and immutable
     /// publication/binding evidence with ordinary worker-readable queries.
-    // The ordered checks are intentionally kept in one transaction to prove
-    // the post-lock expiry and authority revalidation boundary.
+    // Keep the shared authority path together so issuance and exchange cannot
+    // drift in lock ordering or mutable-state checks.
     #[allow(clippy::too_many_lines)]
     async fn lock_and_check_eligibility(
         &self,
         tx: &mut Transaction<'_, Postgres>,
-        command: &CreateUiBrowserHandoff,
+        input: &EligibilityInput,
     ) -> Result<IssueEligibility, UiBrowserHandoffError> {
         // Match identity-postgres revocation: user first, then that user's
         // session. The session ID never substitutes for actor identity.
         let user_status: Option<String> =
             sqlx::query_scalar(r"SELECT status FROM users WHERE id = $1 FOR UPDATE")
-                .bind(command.actor_id.as_uuid())
+                .bind(input.actor_id.as_uuid())
                 .fetch_optional(&mut **tx)
                 .await
                 .map_err(|_| UiBrowserHandoffError::Unavailable)?;
@@ -123,8 +142,8 @@ impl PgUiBrowserSessionStore {
             FOR UPDATE
             ",
         )
-        .bind(command.parent_session_id.as_uuid())
-        .bind(command.actor_id.as_uuid())
+        .bind(input.parent_session_id.as_uuid())
+        .bind(input.actor_id.as_uuid())
         .fetch_optional(&mut **tx)
         .await
         .map_err(|_| UiBrowserHandoffError::Unavailable)?
@@ -138,7 +157,7 @@ impl PgUiBrowserSessionStore {
             FROM ui_installations WHERE id = $1
             ",
         )
-        .bind(command.installation_id.as_uuid())
+        .bind(input.installation_id.as_uuid())
         .fetch_optional(&mut **tx)
         .await
         .map_err(|_| UiBrowserHandoffError::Unavailable)?
@@ -162,8 +181,8 @@ impl PgUiBrowserSessionStore {
             FOR UPDATE OF installation
             ",
         )
-        .bind(command.installation_id.as_uuid())
-        .bind(command.generation_id.as_uuid())
+        .bind(input.installation_id.as_uuid())
+        .bind(input.generation_id.as_uuid())
         .fetch_optional(&mut **tx)
         .await
         .map_err(|_| UiBrowserHandoffError::Unavailable)?
@@ -181,7 +200,9 @@ impl PgUiBrowserSessionStore {
         let source = sqlx::query_as::<_, SourceRow>(
             r"
             SELECT release_record.state, descriptor.scope, descriptor.route_base,
-                   descriptor.content_kind, source_project.organization_id AS source_org
+                   descriptor.content_kind, source_project.id AS source_project_id,
+                   source_repository.id AS source_repository_id,
+                   source_project.organization_id AS source_org
             FROM releases AS release_record
             JOIN repositories AS source_repository
               ON source_repository.id = release_record.repository_id
@@ -200,26 +221,13 @@ impl PgUiBrowserSessionStore {
         .await
         .map_err(|_| UiBrowserHandoffError::Unavailable)?
         .ok_or(UiBrowserHandoffError::PermissionDenied)?;
-        // Capture the database instant only after every potentially waiting
-        // lock, including the mutable release state lock above.
-        let now: OffsetDateTime = sqlx::query_scalar(r"SELECT statement_timestamp()")
-            .fetch_one(&mut **tx)
-            .await
-            .map_err(|_| UiBrowserHandoffError::Unavailable)?;
-        if parent.user_id != command.actor_id.as_uuid()
-            || parent.revoked_at.is_some()
-            || parent.issued_at > now
-            || parent.expires_at <= now
-        {
-            return Err(UiBrowserHandoffError::PermissionDenied);
-        }
         if source.state != "published"
             || source.scope != installation.ui_scope
             || source.source_org != organization_id
         {
             return Err(UiBrowserHandoffError::PermissionDenied);
         }
-        if command.route.as_str() != source.route_base {
+        if input.route.as_str() != source.route_base {
             return Err(UiBrowserHandoffError::InvalidRoute);
         }
         if !matches!(source.content_kind.as_str(), "static" | "managed_service") {
@@ -245,7 +253,7 @@ impl PgUiBrowserSessionStore {
         require_permission(
             &self.authorizer,
             tx,
-            command.actor_id,
+            input.actor_id,
             Permission::CanRead,
             target,
         )
@@ -254,7 +262,7 @@ impl PgUiBrowserSessionStore {
             require_permission(
                 &self.authorizer,
                 tx,
-                command.actor_id,
+                input.actor_id,
                 Permission::CanRead,
                 ObjectRef::new(
                     ObjectType::Project,
@@ -268,21 +276,30 @@ impl PgUiBrowserSessionStore {
         require_permission(
             &self.authorizer,
             tx,
-            command.actor_id,
+            input.actor_id,
             Permission::CanUse,
             ObjectRef::new(ObjectType::Release, installation.release_id),
         )
         .await?;
-        check_bindings(
-            tx,
-            &installation,
-            &source.content_kind,
-            command.actor_id,
-            &self.authorizer,
-        )
-        .await?;
+        check_bindings(tx, &installation, &source, input.actor_id, &self.authorizer).await?;
+        // This final timestamp follows gateway and release-agent locks, so an
+        // issuer that waited cannot mint against an expired parent session.
+        let now: OffsetDateTime = sqlx::query_scalar(r"SELECT statement_timestamp()")
+            .fetch_one(&mut **tx)
+            .await
+            .map_err(|_| UiBrowserHandoffError::Unavailable)?;
+        if parent.user_id != input.actor_id.as_uuid()
+            || parent.revoked_at.is_some()
+            || parent.issued_at > now
+            || parent.expires_at <= now
+        {
+            return Err(UiBrowserHandoffError::PermissionDenied);
+        }
 
-        Ok(IssueEligibility { organization_id })
+        Ok(IssueEligibility {
+            organization_id,
+            parent_expires_at: parent.expires_at,
+        })
     }
 }
 
@@ -373,15 +390,19 @@ async fn lock_owner(
     }
 }
 
+// Keep gateway binding validation together so each release declaration and
+// its persisted binding are checked under one auditable lock sequence.
+#[allow(clippy::too_many_lines)]
 async fn check_bindings(
     tx: &mut Transaction<'_, Postgres>,
     installation: &InstallationRow,
-    content_kind: &str,
+    source: &SourceRow,
     actor: UserId,
     authorizer: &PostgresMelangeAuthorizer,
 ) -> Result<(), UiBrowserHandoffError> {
     let managed = sqlx::query_as::<_, ManagedRow>(
-        r"SELECT route, release_agent_id FROM release_ui_managed_services
+        r"SELECT gateway_name, route, release_agent_id
+           FROM release_ui_managed_services
            WHERE release_id = $1 AND ui_key = $2",
     )
     .bind(installation.release_id)
@@ -390,7 +411,7 @@ async fn check_bindings(
     .await
     .map_err(|_| UiBrowserHandoffError::Unavailable)?;
     let api = sqlx::query_as::<_, ApiRow>(
-        r"SELECT api_key, method, route, release_agent_id
+        r"SELECT api_key, gateway_name, method, route, release_agent_id
            FROM release_ui_api_bindings WHERE release_id = $1 AND ui_key = $2",
     )
     .bind(installation.release_id)
@@ -401,7 +422,8 @@ async fn check_bindings(
     let declared_api: BTreeMap<_, _> = api.iter().map(|row| (row.api_key.clone(), row)).collect();
     let bindings = sqlx::query_as::<_, BindingRow>(
         r"SELECT binding_kind, binding_key, release_id, ui_key, method, route,
-                  release_agent_id
+                  release_agent_id, gateway_id, gateway_revision_id,
+                  gateway_name, exposure
            FROM ui_installation_bindings
            WHERE installation_id = $1 AND generation_id = $2",
     )
@@ -410,18 +432,87 @@ async fn check_bindings(
     .fetch_all(&mut **tx)
     .await
     .map_err(|_| UiBrowserHandoffError::Unavailable)?;
+    if managed.is_some() || !api.is_empty() || !bindings.is_empty() {
+        require_permission(
+            authorizer,
+            tx,
+            actor,
+            Permission::CanRead,
+            ObjectRef::new(ObjectType::Project, source.source_project_id),
+        )
+        .await?;
+    }
     let mut seen_api = BTreeSet::new();
     let mut seen_managed = false;
     for binding in bindings {
         if binding.release_id != installation.release_id || binding.ui_key != installation.ui_key {
             return Err(UiBrowserHandoffError::PermissionDenied);
         }
+        let gateway = sqlx::query_as::<_, GatewayRow>(
+            r"
+            SELECT gateway.name AS gateway_name, gateway.lifecycle,
+                   gateway.active_revision_id, revision.id AS revision_id,
+                   revision.release_id, revision.release_agent_id,
+                   revision.handler_contract,
+                   revision.project_id, revision.repository_id,
+                   revision.exposure, route.path, route.enabled, route.methods
+            FROM gateways AS gateway
+            JOIN gateway_revisions AS revision
+              ON revision.id = $1 AND revision.gateway_id = gateway.id
+            JOIN gateway_routes AS route
+              ON route.gateway_revision_id = revision.id
+             AND route.gateway_id = gateway.id
+            WHERE gateway.id = $2
+            FOR SHARE OF gateway
+            ",
+        )
+        .bind(binding.gateway_revision_id)
+        .bind(binding.gateway_id)
+        .fetch_all(&mut **tx)
+        .await
+        .map_err(|_| UiBrowserHandoffError::Unavailable)?
+        .into_iter()
+        .find(|candidate| {
+            candidate.enabled
+                && route_covers(&candidate.path, &binding.route)
+                && candidate
+                    .methods
+                    .iter()
+                    .any(|method| method == &binding.method)
+        })
+        .ok_or(UiBrowserHandoffError::PermissionDenied)?;
+        if gateway.lifecycle != "enabled"
+            || gateway.active_revision_id != Some(gateway.revision_id)
+            || gateway.revision_id != binding.gateway_revision_id
+            || gateway.release_id != installation.release_id
+            || gateway.release_agent_id != binding.release_agent_id
+            || gateway.project_id != source.source_project_id
+            || gateway.repository_id != source.source_repository_id
+            || gateway.exposure != binding.exposure
+            || gateway.gateway_name != binding.gateway_name
+        {
+            return Err(UiBrowserHandoffError::PermissionDenied);
+        }
+        require_permission(
+            authorizer,
+            tx,
+            actor,
+            Permission::CanRead,
+            ObjectRef::new(ObjectType::Gateway, binding.gateway_id),
+        )
+        .await?;
         match binding.binding_kind.as_str() {
             "managed_service" if binding.binding_key == "service" && binding.method == "GET" => {
+                if gateway.handler_contract != "http.service.v1" {
+                    return Err(UiBrowserHandoffError::PermissionDenied);
+                }
                 let Some(row) = managed.as_ref() else {
                     return Err(UiBrowserHandoffError::PermissionDenied);
                 };
-                if row.route != binding.route || row.release_agent_id != binding.release_agent_id {
+                if row.gateway_name != binding.gateway_name
+                    || row.route != binding.route
+                    || row.release_agent_id != binding.release_agent_id
+                {
                     return Err(UiBrowserHandoffError::PermissionDenied);
                 }
                 seen_managed = true;
@@ -438,7 +529,8 @@ async fn check_bindings(
                 let Some(row) = declared_api.get(&binding.binding_key) else {
                     return Err(UiBrowserHandoffError::PermissionDenied);
                 };
-                if row.method != binding.method
+                if row.gateway_name != binding.gateway_name
+                    || row.method != binding.method
                     || row.route != binding.route
                     || row.release_agent_id != binding.release_agent_id
                 {
@@ -457,7 +549,7 @@ async fn check_bindings(
             _ => return Err(UiBrowserHandoffError::PermissionDenied),
         }
     }
-    if (content_kind == "managed_service") != seen_managed
+    if (source.content_kind == "managed_service") != seen_managed
         || managed.is_some() != seen_managed
         || seen_api.len() != declared_api.len()
     {
@@ -466,9 +558,26 @@ async fn check_bindings(
     Ok(())
 }
 
+fn route_covers(declared: &str, selected: &str) -> bool {
+    selected == declared
+        || selected
+            .strip_prefix(declared)
+            .is_some_and(|suffix| suffix.starts_with('/'))
+}
+
+#[derive(Debug)]
+struct EligibilityInput {
+    actor_id: UserId,
+    parent_session_id: identity_domain::BrowserSessionId,
+    installation_id: UiInstallationId,
+    generation_id: release_domain::UiInstallationGenerationId,
+    route: UiBrowserRoute,
+}
+
 #[derive(Debug)]
 struct IssueEligibility {
     organization_id: Uuid,
+    parent_expires_at: OffsetDateTime,
 }
 
 #[derive(Debug, FromRow)]
@@ -508,6 +617,8 @@ struct SourceRow {
     scope: String,
     route_base: String,
     content_kind: String,
+    source_project_id: Uuid,
+    source_repository_id: Uuid,
     source_org: Uuid,
 }
 
@@ -520,10 +631,32 @@ struct BindingRow {
     method: String,
     route: String,
     release_agent_id: Uuid,
+    gateway_id: Uuid,
+    gateway_revision_id: Uuid,
+    gateway_name: String,
+    exposure: String,
+}
+
+#[derive(Debug, FromRow)]
+struct GatewayRow {
+    gateway_name: String,
+    lifecycle: String,
+    active_revision_id: Option<Uuid>,
+    revision_id: Uuid,
+    release_id: Uuid,
+    release_agent_id: Uuid,
+    handler_contract: String,
+    project_id: Uuid,
+    repository_id: Uuid,
+    exposure: String,
+    path: String,
+    enabled: bool,
+    methods: Vec<String>,
 }
 
 #[derive(Debug, FromRow)]
 struct ManagedRow {
+    gateway_name: String,
     route: String,
     release_agent_id: Uuid,
 }
@@ -531,6 +664,7 @@ struct ManagedRow {
 #[derive(Debug, FromRow)]
 struct ApiRow {
     api_key: String,
+    gateway_name: String,
     method: String,
     route: String,
     release_agent_id: Uuid,
@@ -538,6 +672,211 @@ struct ApiRow {
 
 #[derive(Debug, FromRow)]
 struct IssuedRow {
+    issued_at: OffsetDateTime,
+    expires_at: OffsetDateTime,
+}
+
+impl PgUiBrowserSessionStore {
+    /// Atomically exchanges one handoff for one child session.
+    ///
+    /// This is called by the trusted UI-origin handler after it resolves the
+    /// exact generation host behind Caddy's namespace forward. Phoenix creates
+    /// the handoff secret through its sensitive authenticated RPC boundary;
+    /// this method never returns a secret, digest, or cookie value.
+    // Keep child insertion and one-time consumption in one auditable
+    // transaction after every authority lock and the final timestamp read.
+    #[allow(clippy::too_many_lines)]
+    ///
+    /// # Errors
+    ///
+    /// Returns [`UiBrowserHandoffError::InvalidOrExpired`] when the handoff is
+    /// consumed, expired, bound to another generation, or no longer eligible.
+    /// Returns [`UiBrowserHandoffError::Unavailable`] for persistence failures.
+    pub async fn exchange_ui_browser_handoff(
+        &self,
+        command: ExchangeUiBrowserHandoff,
+    ) -> Result<CreatedUiBrowserSession, UiBrowserHandoffError> {
+        let mut tx = begin_exchange_transaction(&self.worker_pool, command.request_id)
+            .await
+            .map_err(|_| UiBrowserHandoffError::Unavailable)?;
+        let handoff_digest = command.handoff_secret.digest().as_bytes();
+        let handoff = sqlx::query_as::<_, HandoffRow>(
+            r"
+            SELECT id, actor_id, parent_session_id, installation_id,
+                   generation_id, organization_id, route, issued_at, expires_at,
+                   consumed_at
+            FROM ui_browser_handoffs
+            WHERE handoff_digest = $1
+            FOR UPDATE
+            ",
+        )
+        .bind(handoff_digest.as_slice())
+        .fetch_optional(&mut *tx)
+        .await
+        .map_err(|_| UiBrowserHandoffError::Unavailable)?
+        .ok_or(UiBrowserHandoffError::InvalidOrExpired)?;
+        if handoff.consumed_at.is_some()
+            || handoff.generation_id != command.expected_generation_id.as_uuid()
+        {
+            return Err(UiBrowserHandoffError::InvalidOrExpired);
+        }
+        set_exchange_actor_context(&mut tx, handoff.actor_id, command.request_id)
+            .await
+            .map_err(|_| UiBrowserHandoffError::Unavailable)?;
+
+        let route = UiBrowserRoute::parse(&handoff.route)
+            .map_err(|_| UiBrowserHandoffError::InvalidOrExpired)?;
+        // Reuse the shared eligibility path to preserve user -> parent ->
+        // owner -> installation -> source ordering and every current check.
+        let eligibility = self
+            .lock_and_check_eligibility(
+                &mut tx,
+                &EligibilityInput {
+                    actor_id: UserId::from_uuid(handoff.actor_id),
+                    parent_session_id: identity_domain::BrowserSessionId::from_uuid(
+                        handoff.parent_session_id,
+                    ),
+                    installation_id: UiInstallationId::from_uuid(handoff.installation_id),
+                    generation_id: release_domain::UiInstallationGenerationId::from_uuid(
+                        handoff.generation_id,
+                    ),
+                    route: route.clone(),
+                },
+            )
+            .await
+            .map_err(|error| match error {
+                UiBrowserHandoffError::Unavailable => error,
+                _ => UiBrowserHandoffError::InvalidOrExpired,
+            })?;
+        let parent_survives_handoff = eligibility.parent_expires_at > handoff.issued_at;
+        if eligibility.organization_id != handoff.organization_id || !parent_survives_handoff {
+            return Err(UiBrowserHandoffError::InvalidOrExpired);
+        }
+
+        // This clock is after the handoff, parent, owner, installation, and
+        // mutable release locks. It closes the wait/expiry race before issue.
+        let issue_now: OffsetDateTime = sqlx::query_scalar(r"SELECT statement_timestamp()")
+            .fetch_one(&mut *tx)
+            .await
+            .map_err(|_| UiBrowserHandoffError::Unavailable)?;
+        if handoff.issued_at > issue_now || handoff.expires_at <= issue_now {
+            return Err(UiBrowserHandoffError::InvalidOrExpired);
+        }
+        let child_expires_at = child_session_expiry(issue_now, eligibility.parent_expires_at)
+            .map_err(|_| UiBrowserHandoffError::InvalidOrExpired)?;
+        let session_id = UiBrowserSessionId::new();
+        let session_digest = command.child_secret.digest().as_bytes();
+        let inserted = sqlx::query_as::<_, ChildRow>(
+            r"
+            INSERT INTO ui_browser_sessions (
+                id, session_digest, request_id, handoff_id, parent_session_id,
+                installation_id, generation_id, organization_id, route,
+                issued_at, expires_at
+            ) VALUES (
+                $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11
+            ) RETURNING issued_at, expires_at
+            ",
+        )
+        .bind(session_id.as_uuid())
+        .bind(session_digest.as_slice())
+        .bind(command.request_id.as_uuid())
+        .bind(handoff.id)
+        .bind(handoff.parent_session_id)
+        .bind(handoff.installation_id)
+        .bind(handoff.generation_id)
+        .bind(handoff.organization_id)
+        .bind(&handoff.route)
+        .bind(issue_now)
+        .bind(child_expires_at)
+        .fetch_one(&mut *tx)
+        .await
+        .map_err(|_| UiBrowserHandoffError::Unavailable)?;
+        if inserted.issued_at != issue_now || inserted.expires_at != child_expires_at {
+            return Err(UiBrowserHandoffError::Unavailable);
+        }
+        let consumed = sqlx::query(
+            r"UPDATE ui_browser_handoffs
+               SET consumed_at = $2
+               WHERE id = $1 AND consumed_at IS NULL",
+        )
+        .bind(handoff.id)
+        .bind(issue_now)
+        .execute(&mut *tx)
+        .await
+        .map_err(|_| UiBrowserHandoffError::Unavailable)?;
+        if consumed.rows_affected() != 1 {
+            return Err(UiBrowserHandoffError::InvalidOrExpired);
+        }
+        tx.commit()
+            .await
+            .map_err(|_| UiBrowserHandoffError::Unavailable)?;
+        Ok(CreatedUiBrowserSession {
+            context: UiBrowserSessionContext {
+                session_id,
+                parent_session_id: identity_domain::BrowserSessionId::from_uuid(
+                    handoff.parent_session_id,
+                ),
+                actor_id: UserId::from_uuid(handoff.actor_id),
+                organization_id: OrganizationId::from_uuid(handoff.organization_id),
+                installation_id: UiInstallationId::from_uuid(handoff.installation_id),
+                generation_id: release_domain::UiInstallationGenerationId::from_uuid(
+                    handoff.generation_id,
+                ),
+                route,
+                expires_at: inserted.expires_at,
+            },
+        })
+    }
+}
+
+async fn begin_exchange_transaction(
+    pool: &PgPool,
+    request_id: RequestId,
+) -> Result<Transaction<'_, Postgres>, sqlx::Error> {
+    let mut tx = pool.begin().await?;
+    sqlx::query(
+        r"SELECT set_config('hephaestus.subject_type', 'user', true),
+                  set_config('hephaestus.request_id', $1, true)",
+    )
+    .bind(request_id.as_uuid().to_string())
+    .execute(&mut *tx)
+    .await?;
+    Ok(tx)
+}
+
+async fn set_exchange_actor_context(
+    tx: &mut Transaction<'_, Postgres>,
+    actor_id: Uuid,
+    request_id: RequestId,
+) -> Result<(), sqlx::Error> {
+    sqlx::query(
+        r"SELECT set_config('hephaestus.actor_id', $1, true),
+                  set_config('hephaestus.subject_type', 'user', true),
+                  set_config('hephaestus.request_id', $2, true)",
+    )
+    .bind(actor_id.to_string())
+    .bind(request_id.as_uuid().to_string())
+    .execute(&mut **tx)
+    .await?;
+    Ok(())
+}
+
+#[derive(Debug, FromRow)]
+struct HandoffRow {
+    id: Uuid,
+    actor_id: Uuid,
+    parent_session_id: Uuid,
+    installation_id: Uuid,
+    generation_id: Uuid,
+    organization_id: Uuid,
+    route: String,
+    issued_at: OffsetDateTime,
+    expires_at: OffsetDateTime,
+    consumed_at: Option<OffsetDateTime>,
+}
+
+#[derive(Debug, FromRow)]
+struct ChildRow {
     issued_at: OffsetDateTime,
     expires_at: OffsetDateTime,
 }

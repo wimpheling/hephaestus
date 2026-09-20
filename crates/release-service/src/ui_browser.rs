@@ -123,13 +123,17 @@ pub struct UiBrowserSessionContext {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum UiBrowserRequestRoute {
     /// A declared static document or asset relative to the UI namespace.
+    /// The Rust UI handler resolves this platform-relative path beneath the
+    /// declaration's `route_base` before serving the verified artifact.
     Static {
-        /// Relative route within the published UI namespace.
+        /// Platform-relative route within the declaration's `route_base`.
         route: UiBrowserRoute,
     },
     /// A declared managed-service entrypoint or descendant route.
+    /// The Rust UI handler resolves this platform-relative path beneath the
+    /// declaration's `route_base` before forwarding to the managed gateway.
     Managed {
-        /// Relative route within the managed-service namespace.
+        /// Platform-relative route within the declaration's `route_base`.
         route: UiBrowserRoute,
     },
     /// A declared authenticated gateway API route and exact method.

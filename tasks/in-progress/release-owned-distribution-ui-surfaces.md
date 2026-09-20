@@ -34,6 +34,30 @@ integrated quality gate remain incomplete. The user approved organization-owned
 global installations and organization isolation. Historical checkpoints record the state
 at their time; later integration checkpoints supersede earlier pending notes.
 
+## Browser handoff exchange checkpoint (2026-09-20)
+
+The worker adapter atomically exchanges one generation-bound handoff for one
+digest-only child session, then consumes the handoff in the same transaction.
+It derives actor and parent from the locked handoff and shares current authority
+checks with issuance. Expiry is checked after all mutable-state locks, including
+gateway waits; child lifetime is twelve hours capped by the parent expiry.
+Static UIs without bindings retain target-read and release-use requirements.
+Managed/API binding checks use the source project and exact pinned gateway
+revision without requiring a running service instance before admission.
+
+The real PostgreSQL suite passes all three schema, issuance, and exchange tests
+in `/home/a/heph-ui-browser-exchange-final4-20260920.log`. Two named worker
+connections are observed waiting on the same handoff before release; exactly
+one exchange succeeds. Tests check exact child digests, lifetime caps, replay,
+wrong generation, and denial without child creation or handoff consumption.
+Scoped formatting, Clippy, rustdoc, and architecture pass in
+`/home/a/heph-ui-browser-exchange-release-*-20260920.log`. Disposable databases
+were cleaned. Managed/API runtime fixtures, the application-role verifier,
+transport, audit, and HTTP serving remain incomplete.
+
+Issuance checkpoint `e9da357` also passes all CI jobs in run `35509613687`.
+This CI result predates the exchange changes and is not the final quality gate.
+
 ## Browser handoff issuance checkpoint (2026-09-20)
 
 The worker adapter issues digest-only, sixty-second handoffs for the exact
@@ -89,7 +113,10 @@ The exact PostgreSQL/NATS update-admission script passes all branches, including
 the no-feature guard, in
 `/home/a/heph-update-admission-feature-fix-final-20260920.log`. Scoped app
 formatting, Clippy, and docs pass in `/home/a/heph-golden-fixture-*-final-20260920.log`.
-Updated CI and final integrated quality remain pending.
+CI run `35509033607` passes all jobs at `7017ffb`, including the Rust and
+authorization job, Cooking applications, and Phoenix/browser checks. This
+confirms the feature-specific fixture fix. Later implementation checkpoints
+still require their own CI result and the final integrated quality gate.
 
 ## Disable/remove lifecycle checkpoint (2026-09-20)
 
