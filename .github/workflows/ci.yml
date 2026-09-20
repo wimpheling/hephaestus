@@ -54,6 +54,16 @@ jobs:
         run: cargo clippy --workspace --all-targets --all-features
       - name: Tests
         run: cargo test --workspace --all-features -- --test-threads=1
+      - name: Browser-session RPC lifecycle integration
+        timeout-minutes: 5
+        env:
+          REAL_APP_BROWSER_SESSION_RPC: "1"
+        run: |
+          timeout --kill-after=30s 180s cargo test --manifest-path Cargo.toml \
+            --package hephaestus-app \
+            --test browser_session_lifecycle \
+            --features test-fixtures \
+            -- --nocapture --test-threads=1
       - name: Deferred update admission and reconciler race
         timeout-minutes: 15
         env:

@@ -69,6 +69,13 @@ formatting, and app docs pass in the matching `architecture-v4`, `clippy-v5`,
 `workspace-fmt-v2`, and `doc` logs. UI handoff/child sessions, browser isolation,
 and final repository-wide quality remain outstanding.
 
+CI now explicitly runs the opt-in browser-session lifecycle target after the
+serial workspace tests, using that job's existing disposable PostgreSQL/NATS.
+The ordering keeps its named-stream cleanup outside other workspace tests.
+Workflow YAML parsing and diff checks pass; CI execution of this wiring remains
+pending. Local `cargo dev quality` must receive the same service URLs and
+`REAL_APP_BROWSER_SESSION_RPC=1` to include this proof in its workspace-test phase.
+
 CI for the preceding managed reference fixture commit `9d506bc` passed in run
 `35499684144`; that run predates these session integration changes.
 
