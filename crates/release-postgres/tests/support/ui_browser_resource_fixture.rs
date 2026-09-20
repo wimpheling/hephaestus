@@ -41,6 +41,15 @@ pub async fn seed_fixture_reusing_installation_helpers_draft(worker: &PgPool) ->
     seed_fixture_reusing_installation_helpers_with_publication(worker, false).await
 }
 
+/// Derive a stable test secret from the fixture identity while keeping it
+/// unique across fixture runs that share a real `PostgreSQL` database.
+pub fn fixture_session_secret(actor: Uuid, seed: u8) -> [u8; 32] {
+    let mut secret = [seed; 32];
+    secret[..16].copy_from_slice(actor.as_bytes());
+    secret[16..].fill(seed);
+    secret
+}
+
 // This integration fixture deliberately seeds the full release/gateway graph
 // so the application-role projection is exercised against canonical rows.
 #[allow(clippy::cognitive_complexity, clippy::too_many_lines)]

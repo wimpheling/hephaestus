@@ -41,6 +41,9 @@ use time::OffsetDateTime;
 pub use ui_browser::PgUiBrowserSessionStore;
 pub use ui_browser_resources::{PgUiBrowserServingStore, PgUiGenerationHostResolver};
 pub use ui_installation_navigation::PgUiInstallationNavigator;
+pub use ui_request_audit::{
+    PgUiRequestAuditRepository, append_in_transaction as append_ui_request_audit_in_transaction,
+};
 use uuid::Uuid;
 
 mod ui_browser;
@@ -48,6 +51,7 @@ mod ui_browser_resources;
 mod ui_installation;
 mod ui_installation_navigation;
 mod ui_publication;
+mod ui_request_audit;
 
 const RUN_START_SUBJECT: &str = "hephaestus.run.start";
 const MAILBOX_WAKE_SUBJECT: &str = "heph.mailbox.v1.wake";

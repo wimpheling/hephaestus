@@ -79,6 +79,93 @@ async fn ui_browser_schema_matrix_enforces_bindings_lifecycle_timing_and_roles()
     assert_role(&app, "hephaestus_app", false, false).await;
     let fixture = seed_fixture_reusing_installation_helpers(&worker).await;
 
+    let partial_context = sqlx::query(
+        "INSERT INTO ui_request_audit_events
+            (id, request_id, surface, decision, outcome, reason_code,
+             actor_id, installation_id, occurred_at)
+         VALUES ($1, $2, 'handoff_issue', 'denied', 'not_attempted',
+                 'unauthorized', $3, $4, statement_timestamp())",
+    )
+    .bind(Uuid::new_v4())
+    .bind(Uuid::new_v4())
+    .bind(fixture.actor)
+    .bind(fixture.installation)
+    .execute(&worker)
+    .await;
+    let partial_error = take_query_error(
+        partial_context,
+        "partial audit context unexpectedly succeeded",
+    );
+    assert_database_code(&partial_error, "23514", "partial verified target tuple");
+
+    let audit_child = insert_audit_child(&worker, &fixture).await;
+    let child_actor_mismatch = sqlx::query(
+        "INSERT INTO ui_request_audit_events
+            (id, request_id, surface, decision, outcome, reason_code,
+             actor_id, organization_id, installation_id, generation_id,
+             child_session_id, occurred_at)
+         VALUES ($1, $2, 'handoff_exchange', 'allowed', 'succeeded', 'none',
+                 $3, $4, $5, $6, $7, statement_timestamp())",
+    )
+    .bind(Uuid::new_v4())
+    .bind(Uuid::new_v4())
+    .bind(fixture.outsider)
+    .bind(fixture.organization)
+    .bind(fixture.installation)
+    .bind(fixture.generation)
+    .bind(audit_child)
+    .execute(&worker)
+    .await;
+    let child_error = take_query_error(
+        child_actor_mismatch,
+        "child actor mismatch unexpectedly succeeded",
+    );
+    assert_database_code(&child_error, "23000", "child actor context");
+
+    let valid_gateway_request = Uuid::new_v4();
+    sqlx::query(
+        "INSERT INTO ui_request_audit_events
+            (id, request_id, surface, decision, outcome, reason_code,
+             actor_id, organization_id, installation_id, generation_id,
+             gateway_id, gateway_revision_id, occurred_at)
+         VALUES ($1, $2, 'managed', 'allowed', 'succeeded', 'none',
+                 $3, $4, $5, $6, $7, $8, statement_timestamp())",
+    )
+    .bind(Uuid::new_v4())
+    .bind(valid_gateway_request)
+    .bind(fixture.actor)
+    .bind(fixture.organization)
+    .bind(fixture.managed_installation)
+    .bind(fixture.managed_generation)
+    .bind(fixture.managed_gateway)
+    .bind(fixture.managed_revision)
+    .execute(&worker)
+    .await
+    .expect("generation gateway binding is accepted");
+    let gateway_mismatch = sqlx::query(
+        "INSERT INTO ui_request_audit_events
+            (id, request_id, surface, decision, outcome, reason_code,
+             actor_id, organization_id, installation_id, generation_id,
+             gateway_id, gateway_revision_id, occurred_at)
+         VALUES ($1, $2, 'managed', 'allowed', 'succeeded', 'none',
+                 $3, $4, $5, $6, $7, $8, statement_timestamp())",
+    )
+    .bind(Uuid::new_v4())
+    .bind(Uuid::new_v4())
+    .bind(fixture.actor)
+    .bind(fixture.organization)
+    .bind(fixture.other_installation)
+    .bind(fixture.other_generation)
+    .bind(fixture.managed_gateway)
+    .bind(fixture.managed_revision)
+    .execute(&worker)
+    .await;
+    let gateway_error = take_query_error(
+        gateway_mismatch,
+        "unbound gateway revision unexpectedly succeeded",
+    );
+    assert_database_code(&gateway_error, "23000", "historical gateway binding");
+
     assert_digest_constraints(&worker, &fixture).await;
     assert_wrong_actor_binding(&worker, &fixture).await;
     assert_wrong_organization_binding(&worker, &fixture).await;
@@ -117,7 +204,7 @@ async fn ui_browser_application_authentication_is_generation_and_route_bound() {
     let worker = role_pool(&database_url, "hephaestus_worker").await;
     let app = role_pool(&database_url, "hephaestus_app").await;
     let fixture = seed_fixture_reusing_installation_helpers(&worker).await;
-    let child_digest = UiBrowserSessionSecret::from_bytes([90; 32])
+    let child_digest = UiBrowserSessionSecret::from_bytes(test_secret(fixture.actor, 90))
         .digest()
         .as_bytes()
         .to_vec();
@@ -132,7 +219,7 @@ async fn ui_browser_application_authentication_is_generation_and_route_bound() {
         .expect("set spoofed application actor context");
     let valid_base = store
         .authenticate_ui_browser_session(AuthenticateUiBrowserSession {
-            session_secret: UiBrowserSessionSecret::from_bytes([90; 32]),
+            session_secret: UiBrowserSessionSecret::from_bytes(test_secret(fixture.actor, 90)),
             expected_generation_id: UiInstallationGenerationId::from_uuid(fixture.generation),
             request_route: UiBrowserRequestRoute::Static {
                 route: UiBrowserRoute::parse("schema-ui").expect("route base"),
@@ -146,7 +233,7 @@ async fn ui_browser_application_authentication_is_generation_and_route_bound() {
 
     let valid_file = store
         .authenticate_ui_browser_session(AuthenticateUiBrowserSession {
-            session_secret: UiBrowserSessionSecret::from_bytes([90; 32]),
+            session_secret: UiBrowserSessionSecret::from_bytes(test_secret(fixture.actor, 90)),
             expected_generation_id: UiInstallationGenerationId::from_uuid(fixture.generation),
             request_route: UiBrowserRequestRoute::Static {
                 route: UiBrowserRoute::parse("schema-ui/index.html").expect("asset route"),
@@ -159,7 +246,7 @@ async fn ui_browser_application_authentication_is_generation_and_route_bound() {
     let valid_static_api = authenticate_request(
         &store,
         fixture.generation,
-        [90; 32],
+        test_secret(fixture.actor, 90),
         UiBrowserRequestRoute::Api {
             route: RoutePath::parse("/service/api").expect("API route"),
             method: HttpMethod::Post,
@@ -174,13 +261,13 @@ async fn ui_browser_application_authentication_is_generation_and_route_bound() {
         fixture.global_installation,
         fixture.global_generation,
         "schema-global",
-        [95; 32],
+        test_secret(fixture.actor, 95),
     )
     .await;
     let valid_global = authenticate_request(
         &store,
         fixture.global_generation,
-        [95; 32],
+        test_secret(fixture.actor, 95),
         UiBrowserRequestRoute::Static {
             route: UiBrowserRoute::parse("schema-global").expect("global route"),
         },
@@ -192,7 +279,7 @@ async fn ui_browser_application_authentication_is_generation_and_route_bound() {
         authenticate_request(
             &store,
             fixture.generation,
-            [90; 32],
+            test_secret(fixture.actor, 90),
             UiBrowserRequestRoute::Api {
                 route: RoutePath::parse("/service/api").expect("API route"),
                 method: HttpMethod::Get,
@@ -202,11 +289,12 @@ async fn ui_browser_application_authentication_is_generation_and_route_bound() {
         Err(UiBrowserSessionError::Unauthenticated)
     );
 
-    let managed_child = insert_managed_authenticated_child(&worker, &fixture, [94; 32]).await;
+    let managed_child =
+        insert_managed_authenticated_child(&worker, &fixture, test_secret(fixture.actor, 94)).await;
     let valid_managed = authenticate_request(
         &store,
         fixture.managed_generation,
-        [94; 32],
+        test_secret(fixture.actor, 94),
         UiBrowserRequestRoute::Managed {
             route: UiBrowserRoute::parse("schema-managed").expect("managed route"),
         },
@@ -217,7 +305,7 @@ async fn ui_browser_application_authentication_is_generation_and_route_bound() {
     let valid_managed_descendant = authenticate_request(
         &store,
         fixture.managed_generation,
-        [94; 32],
+        test_secret(fixture.actor, 94),
         UiBrowserRequestRoute::Managed {
             route: UiBrowserRoute::parse("schema-managed/child").expect("managed descendant"),
         },
@@ -228,7 +316,7 @@ async fn ui_browser_application_authentication_is_generation_and_route_bound() {
     let valid_managed_api = authenticate_request(
         &store,
         fixture.managed_generation,
-        [94; 32],
+        test_secret(fixture.actor, 94),
         UiBrowserRequestRoute::Api {
             route: RoutePath::parse("/service/api").expect("managed API route"),
             method: HttpMethod::Post,
@@ -248,7 +336,13 @@ async fn ui_browser_application_authentication_is_generation_and_route_bound() {
         },
     ] {
         assert_eq!(
-            authenticate_request(&store, fixture.managed_generation, [94; 32], request_route).await,
+            authenticate_request(
+                &store,
+                fixture.managed_generation,
+                test_secret(fixture.actor, 94),
+                request_route,
+            )
+            .await,
             Err(UiBrowserSessionError::Unauthenticated)
         );
     }
@@ -261,7 +355,7 @@ async fn ui_browser_application_authentication_is_generation_and_route_bound() {
     for (generation, secret, request_route) in [
         (
             fixture.generation,
-            [90; 32],
+            test_secret(fixture.actor, 90),
             UiBrowserRequestRoute::Api {
                 route: RoutePath::parse("/service/api").expect("static API route"),
                 method: HttpMethod::Post,
@@ -269,7 +363,7 @@ async fn ui_browser_application_authentication_is_generation_and_route_bound() {
         ),
         (
             fixture.managed_generation,
-            [94; 32],
+            test_secret(fixture.actor, 94),
             UiBrowserRequestRoute::Managed {
                 route: UiBrowserRoute::parse("schema-managed").expect("managed route"),
             },
@@ -328,7 +422,7 @@ async fn ui_browser_application_authentication_is_generation_and_route_bound() {
     for (generation, secret, request_route) in [
         (
             fixture.generation,
-            [90; 32],
+            test_secret(fixture.actor, 90),
             UiBrowserRequestRoute::Api {
                 route: RoutePath::parse("/service/api").expect("static API route"),
                 method: HttpMethod::Post,
@@ -336,7 +430,7 @@ async fn ui_browser_application_authentication_is_generation_and_route_bound() {
         ),
         (
             fixture.managed_generation,
-            [94; 32],
+            test_secret(fixture.actor, 94),
             UiBrowserRequestRoute::Managed {
                 route: UiBrowserRoute::parse("schema-managed").expect("managed route"),
             },
@@ -357,7 +451,7 @@ async fn ui_browser_application_authentication_is_generation_and_route_bound() {
     for route in ["schema-ui/missing.js", "other-ui/index.html"] {
         let denied = store
             .authenticate_ui_browser_session(AuthenticateUiBrowserSession {
-                session_secret: UiBrowserSessionSecret::from_bytes([90; 32]),
+                session_secret: UiBrowserSessionSecret::from_bytes(test_secret(fixture.actor, 90)),
                 expected_generation_id: UiInstallationGenerationId::from_uuid(fixture.generation),
                 request_route: UiBrowserRequestRoute::Static {
                     route: UiBrowserRoute::parse(route).expect("safe negative route"),
@@ -368,7 +462,7 @@ async fn ui_browser_application_authentication_is_generation_and_route_bound() {
     }
     let wrong_generation = store
         .authenticate_ui_browser_session(AuthenticateUiBrowserSession {
-            session_secret: UiBrowserSessionSecret::from_bytes([90; 32]),
+            session_secret: UiBrowserSessionSecret::from_bytes(test_secret(fixture.actor, 90)),
             expected_generation_id: UiInstallationGenerationId::from_uuid(fixture.other_generation),
             request_route: UiBrowserRequestRoute::Static {
                 route: UiBrowserRoute::parse("schema-ui").expect("route base"),
@@ -381,7 +475,7 @@ async fn ui_browser_application_authentication_is_generation_and_route_bound() {
     );
     let wrong_kind = store
         .authenticate_ui_browser_session(AuthenticateUiBrowserSession {
-            session_secret: UiBrowserSessionSecret::from_bytes([90; 32]),
+            session_secret: UiBrowserSessionSecret::from_bytes(test_secret(fixture.actor, 90)),
             expected_generation_id: UiInstallationGenerationId::from_uuid(fixture.generation),
             request_route: UiBrowserRequestRoute::Managed {
                 route: UiBrowserRoute::parse("schema-ui").expect("route base"),
@@ -401,7 +495,7 @@ async fn ui_browser_application_authentication_is_generation_and_route_bound() {
     .expect("wrong method returns zero rows");
     assert!(wrong_method.is_none());
 
-    let expired_digest = UiBrowserSessionSecret::from_bytes([91; 32])
+    let expired_digest = UiBrowserSessionSecret::from_bytes(test_secret(fixture.actor, 91))
         .digest()
         .as_bytes()
         .to_vec();
@@ -409,7 +503,7 @@ async fn ui_browser_application_authentication_is_generation_and_route_bound() {
     tokio::time::sleep(Duration::from_secs(2)).await;
     let expired = store
         .authenticate_ui_browser_session(AuthenticateUiBrowserSession {
-            session_secret: UiBrowserSessionSecret::from_bytes([91; 32]),
+            session_secret: UiBrowserSessionSecret::from_bytes(test_secret(fixture.actor, 91)),
             expected_generation_id: UiInstallationGenerationId::from_uuid(fixture.generation),
             request_route: UiBrowserRequestRoute::Static {
                 route: UiBrowserRoute::parse("schema-ui").expect("route base"),
@@ -425,7 +519,7 @@ async fn ui_browser_application_authentication_is_generation_and_route_bound() {
         .expect("suspend account");
     let suspended = store
         .authenticate_ui_browser_session(AuthenticateUiBrowserSession {
-            session_secret: UiBrowserSessionSecret::from_bytes([90; 32]),
+            session_secret: UiBrowserSessionSecret::from_bytes(test_secret(fixture.actor, 90)),
             expected_generation_id: UiInstallationGenerationId::from_uuid(fixture.generation),
             request_route: UiBrowserRequestRoute::Static {
                 route: UiBrowserRoute::parse("schema-ui").expect("route base"),
@@ -458,7 +552,7 @@ async fn ui_browser_application_authentication_is_generation_and_route_bound() {
         .await
         .expect("move installation current generation");
     assert_eq!(
-        authenticate_static(&store, &fixture, [90; 32]).await,
+        authenticate_static(&store, &fixture, test_secret(fixture.actor, 90)).await,
         Err(UiBrowserSessionError::Unauthenticated)
     );
     sqlx::query("UPDATE ui_installations SET current_generation_id = $2 WHERE id = $1")
@@ -474,7 +568,7 @@ async fn ui_browser_application_authentication_is_generation_and_route_bound() {
         .await
         .expect("disable installation");
     assert_eq!(
-        authenticate_static(&store, &fixture, [90; 32]).await,
+        authenticate_static(&store, &fixture, test_secret(fixture.actor, 90)).await,
         Err(UiBrowserSessionError::Unauthenticated)
     );
     sqlx::query("UPDATE ui_installations SET lifecycle = 'enabled' WHERE id = $1")
@@ -496,7 +590,7 @@ async fn ui_browser_application_authentication_is_generation_and_route_bound() {
         .await
         .expect("revoke target organization membership");
     assert_eq!(
-        authenticate_static(&store, &fixture, [90; 32]).await,
+        authenticate_static(&store, &fixture, test_secret(fixture.actor, 90)).await,
         Err(UiBrowserSessionError::Unauthenticated)
     );
     sqlx::query("INSERT INTO organization_members (organization_id, user_id, role) VALUES ($1, $2, 'owner')")
@@ -565,14 +659,14 @@ async fn ui_browser_application_authentication_is_generation_and_route_bound() {
     for (generation, secret, request_route) in [
         (
             fixture.generation,
-            [90; 32],
+            test_secret(fixture.actor, 90),
             UiBrowserRequestRoute::Static {
                 route: UiBrowserRoute::parse("schema-ui").expect("source-revoked static route"),
             },
         ),
         (
             fixture.generation,
-            [90; 32],
+            test_secret(fixture.actor, 90),
             UiBrowserRequestRoute::Api {
                 route: RoutePath::parse("/service/api").expect("source-revoked static API route"),
                 method: HttpMethod::Post,
@@ -580,7 +674,7 @@ async fn ui_browser_application_authentication_is_generation_and_route_bound() {
         ),
         (
             fixture.managed_generation,
-            [94; 32],
+            test_secret(fixture.actor, 94),
             UiBrowserRequestRoute::Managed {
                 route: UiBrowserRoute::parse("schema-managed")
                     .expect("source-revoked managed route"),
@@ -588,7 +682,7 @@ async fn ui_browser_application_authentication_is_generation_and_route_bound() {
         ),
         (
             fixture.managed_generation,
-            [94; 32],
+            test_secret(fixture.actor, 94),
             UiBrowserRequestRoute::Api {
                 route: RoutePath::parse("/service/api").expect("source-revoked managed API route"),
                 method: HttpMethod::Post,
@@ -625,11 +719,17 @@ async fn ui_browser_application_authentication_is_generation_and_route_bound() {
         "+2 seconds",
     )
     .await;
-    insert_authenticated_child_for_parent(&worker, &fixture, expired_parent, [92; 32], "1 second")
-        .await;
+    insert_authenticated_child_for_parent(
+        &worker,
+        &fixture,
+        expired_parent,
+        test_secret(fixture.actor, 92),
+        "1 second",
+    )
+    .await;
     tokio::time::sleep(Duration::from_secs(3)).await;
     assert_eq!(
-        authenticate_static(&store, &fixture, [92; 32]).await,
+        authenticate_static(&store, &fixture, test_secret(fixture.actor, 92)).await,
         Err(UiBrowserSessionError::Unauthenticated)
     );
     let future_parent = Uuid::new_v4();
@@ -641,10 +741,16 @@ async fn ui_browser_application_authentication_is_generation_and_route_bound() {
         "+2 hours",
     )
     .await;
-    insert_authenticated_child_for_parent(&worker, &fixture, future_parent, [93; 32], "1 hour")
-        .await;
+    insert_authenticated_child_for_parent(
+        &worker,
+        &fixture,
+        future_parent,
+        test_secret(fixture.actor, 93),
+        "1 hour",
+    )
+    .await;
     assert_eq!(
-        authenticate_static(&store, &fixture, [93; 32]).await,
+        authenticate_static(&store, &fixture, test_secret(fixture.actor, 93)).await,
         Err(UiBrowserSessionError::Unauthenticated)
     );
 
@@ -656,13 +762,13 @@ async fn ui_browser_application_authentication_is_generation_and_route_bound() {
     .await
     .expect("revoke release for verifier denial");
     assert_eq!(
-        authenticate_static(&store, &fixture, [90; 32]).await,
+        authenticate_static(&store, &fixture, test_secret(fixture.actor, 90)).await,
         Err(UiBrowserSessionError::Unauthenticated)
     );
     for (generation, secret, request_route) in [
         (
             fixture.generation,
-            [90; 32],
+            test_secret(fixture.actor, 90),
             UiBrowserRequestRoute::Api {
                 route: RoutePath::parse("/service/api").expect("revoked static API route"),
                 method: HttpMethod::Post,
@@ -670,14 +776,14 @@ async fn ui_browser_application_authentication_is_generation_and_route_bound() {
         ),
         (
             fixture.managed_generation,
-            [94; 32],
+            test_secret(fixture.actor, 94),
             UiBrowserRequestRoute::Managed {
                 route: UiBrowserRoute::parse("schema-managed").expect("revoked managed route"),
             },
         ),
         (
             fixture.managed_generation,
-            [94; 32],
+            test_secret(fixture.actor, 94),
             UiBrowserRequestRoute::Api {
                 route: RoutePath::parse("/service/api").expect("revoked managed API route"),
                 method: HttpMethod::Post,
@@ -700,7 +806,7 @@ async fn ui_browser_application_authentication_is_generation_and_route_bound() {
     .expect("revoke parent session");
     let revoked = store
         .authenticate_ui_browser_session(AuthenticateUiBrowserSession {
-            session_secret: UiBrowserSessionSecret::from_bytes([90; 32]),
+            session_secret: UiBrowserSessionSecret::from_bytes(test_secret(fixture.actor, 90)),
             expected_generation_id: UiInstallationGenerationId::from_uuid(fixture.generation),
             request_route: UiBrowserRequestRoute::Static {
                 route: UiBrowserRoute::parse("schema-ui").expect("route base"),
@@ -950,17 +1056,22 @@ async fn seed_fixture_reusing_installation_helpers(worker: &PgPool) -> Fixture {
     .execute(worker)
     .await
     .expect("seed browser service release agent");
-    for (ui_key, route_base, scope) in [
-        ("schema-ui", "schema-ui", "project"),
-        ("schema-ui-two", "schema-ui-two", "project"),
-        ("schema-global", "schema-global", "global"),
-        ("schema-repository", "schema-repository", "repository"),
+    for (ui_key, route_base, scope, presentation) in [
+        ("schema-ui", "schema-ui", "project", "iframe"),
+        ("schema-ui-two", "schema-ui-two", "project", "full_page"),
+        ("schema-global", "schema-global", "global", "iframe"),
+        (
+            "schema-repository",
+            "schema-repository",
+            "repository",
+            "iframe",
+        ),
     ] {
         sqlx::query(
             "INSERT INTO release_ui_descriptors
              (release_id, ui_key, scope, label, icon, presentation, route_base,
               entrypoint, ui_kit_version, cache, content_kind)
-             VALUES ($1, $2, $5, $3, 'app', 'iframe', $4,
+             VALUES ($1, $2, $5, $3, 'app', $6, $4,
                      'index.html', 1, 'no_store', 'static')",
         )
         .bind(release)
@@ -968,6 +1079,7 @@ async fn seed_fixture_reusing_installation_helpers(worker: &PgPool) -> Fixture {
         .bind(ui_key)
         .bind(route_base)
         .bind(scope)
+        .bind(presentation)
         .execute(worker)
         .await
         .expect("seed release UI descriptor");
@@ -1354,6 +1466,20 @@ fn digest(seed: u8) -> Vec<u8> {
     let mut value = vec![seed; 32];
     value[..16].copy_from_slice(Uuid::new_v4().as_bytes());
     value
+}
+
+/// Derive a stable test secret from the fixture identity while keeping it
+/// unique across fixture runs that share a real `PostgreSQL` database.
+fn test_secret(actor: Uuid, seed: u8) -> [u8; 32] {
+    let mut secret = [seed; 32];
+    secret[..16].copy_from_slice(actor.as_bytes());
+    secret[16..].fill(seed);
+    secret
+}
+
+fn scoped_secret(actor: Uuid, mut secret: [u8; 32]) -> [u8; 32] {
+    secret[..16].copy_from_slice(actor.as_bytes());
+    secret
 }
 
 async fn assert_digest_constraints(worker: &PgPool, fixture: &Fixture) {
@@ -1997,6 +2123,53 @@ async fn insert_authenticated_child(
     child_id
 }
 
+async fn insert_audit_child(pool: &PgPool, fixture: &Fixture) -> Uuid {
+    let handoff_digest = UiBrowserHandoffSecret::random()
+        .digest()
+        .as_bytes()
+        .to_vec();
+    let handoff = insert_handoff(
+        pool,
+        fixture,
+        fixture.organization,
+        fixture.installation,
+        fixture.generation,
+        handoff_digest,
+    )
+    .await
+    .expect("insert audit child handoff");
+    let child_id = Uuid::new_v4();
+    let mut transaction = pool.begin().await.expect("begin audit child transaction");
+    sqlx::query(
+        "INSERT INTO ui_browser_sessions
+         (id, session_digest, request_id, handoff_id, parent_session_id,
+          installation_id, generation_id, organization_id, route, issued_at, expires_at)
+         SELECT $1, $2, $3, handoff.id, handoff.parent_session_id,
+                handoff.installation_id, handoff.generation_id, handoff.organization_id,
+                handoff.route, handoff.issued_at, handoff.issued_at + interval '1 hour'
+         FROM ui_browser_handoffs AS handoff WHERE handoff.id = $4",
+    )
+    .bind(child_id)
+    .bind(
+        UiBrowserSessionSecret::random()
+            .digest()
+            .as_bytes()
+            .to_vec(),
+    )
+    .bind(Uuid::new_v4())
+    .bind(handoff)
+    .execute(&mut *transaction)
+    .await
+    .expect("insert audit child");
+    sqlx::query("UPDATE ui_browser_handoffs SET consumed_at = statement_timestamp() WHERE id = $1")
+        .bind(handoff)
+        .execute(&mut *transaction)
+        .await
+        .expect("consume audit child handoff");
+    transaction.commit().await.expect("commit audit child");
+    child_id
+}
+
 async fn insert_authenticated_child_for_installation(
     pool: &PgPool,
     fixture: &Fixture,
@@ -2039,7 +2212,7 @@ async fn insert_authenticated_child_for_installation(
     )
     .bind(child_id)
     .bind(
-        UiBrowserSessionSecret::from_bytes(session_secret)
+        UiBrowserSessionSecret::from_bytes(scoped_secret(fixture.actor, session_secret))
             .digest()
             .as_bytes()
             .to_vec(),
@@ -2129,7 +2302,7 @@ async fn insert_authenticated_child_for_parent(
     )
     .bind(child_id)
     .bind(
-        UiBrowserSessionSecret::from_bytes(session_secret)
+        UiBrowserSessionSecret::from_bytes(scoped_secret(fixture.actor, session_secret))
             .digest()
             .as_bytes()
             .to_vec(),
@@ -2187,7 +2360,7 @@ async fn insert_managed_authenticated_child(
     )
     .bind(child_id)
     .bind(
-        UiBrowserSessionSecret::from_bytes(session_secret)
+        UiBrowserSessionSecret::from_bytes(scoped_secret(fixture.actor, session_secret))
             .digest()
             .as_bytes()
             .to_vec(),
@@ -2294,6 +2467,13 @@ fn assert_database_code(error: &sqlx::Error, expected_code: &str, reason: &str) 
     );
 }
 
+fn take_query_error<T>(result: Result<T, sqlx::Error>, message: &str) -> sqlx::Error {
+    match result {
+        Ok(_) => panic!("{message}"),
+        Err(error) => error,
+    }
+}
+
 // These helpers match the existing release schema tests. The test URL's login
 // role must be allowed to SET ROLE to each restricted disposable-db role.
 async fn role_pool(database_url: &str, role: &str) -> PgPool {
@@ -2398,6 +2578,127 @@ async fn assert_role(pool: &PgPool, expected: &str, superuser: bool, bypass_rls:
     assert_eq!(row, (expected.to_owned(), superuser, bypass_rls));
 }
 
+async fn assert_audit_row(
+    pool: &PgPool,
+    request_id: RequestId,
+    surface: &str,
+    decision: &str,
+    outcome: &str,
+    reason: &str,
+) {
+    let rows: Vec<(String, String, String, String)> = sqlx::query_as(
+        "SELECT surface, decision, outcome, reason_code
+         FROM ui_request_audit_events
+         WHERE request_id = $1 AND surface = $2",
+    )
+    .bind(request_id.as_uuid())
+    .bind(surface)
+    .fetch_all(pool)
+    .await
+    .expect("read UI request audit row");
+    assert_eq!(rows.len(), 1, "expected one {surface} audit row");
+    assert_eq!(
+        rows[0],
+        (
+            surface.into(),
+            decision.into(),
+            outcome.into(),
+            reason.into()
+        )
+    );
+}
+
+// This assertion keeps every verified foreign-key context field explicit so
+// an audit row cannot silently omit one relationship.
+#[allow(clippy::too_many_arguments)]
+async fn assert_audit_context(
+    pool: &PgPool,
+    request_id: RequestId,
+    surface: &str,
+    actor: Uuid,
+    organization: Uuid,
+    installation: Uuid,
+    generation: Uuid,
+    child_session: Option<Uuid>,
+) {
+    type AuditContext = (
+        Option<Uuid>,
+        Option<Uuid>,
+        Option<Uuid>,
+        Option<Uuid>,
+        Option<Uuid>,
+        Option<Uuid>,
+        Option<Uuid>,
+    );
+    let context: AuditContext = sqlx::query_as(
+        "SELECT actor_id, organization_id, installation_id, generation_id,
+                child_session_id, gateway_id, gateway_revision_id
+         FROM ui_request_audit_events
+         WHERE request_id = $1 AND surface = $2",
+    )
+    .bind(request_id.as_uuid())
+    .bind(surface)
+    .fetch_one(pool)
+    .await
+    .expect("read UI request audit context");
+    assert_eq!(
+        context,
+        (
+            Some(actor),
+            Some(organization),
+            Some(installation),
+            Some(generation),
+            child_session,
+            None,
+            None,
+        ),
+        "verified context for {surface} audit row"
+    );
+}
+
+async fn assert_audit_actor_only(pool: &PgPool, request_id: RequestId, actor: Uuid) {
+    type AuditSubjectContext = (
+        Option<Uuid>,
+        Option<Uuid>,
+        Option<Uuid>,
+        Option<Uuid>,
+        Option<Uuid>,
+    );
+    let context: AuditSubjectContext = sqlx::query_as(
+        "SELECT actor_id, organization_id, installation_id, generation_id,
+                child_session_id
+         FROM ui_request_audit_events
+         WHERE request_id = $1 AND surface = 'handoff_issue'",
+    )
+    .bind(request_id.as_uuid())
+    .fetch_one(pool)
+    .await
+    .expect("read actor-only UI request audit context");
+    assert_eq!(context, (Some(actor), None, None, None, None));
+}
+
+async fn assert_audit_anonymous(pool: &PgPool, request_id: RequestId, surface: &str) {
+    type AuditSubjectContext = (
+        Option<Uuid>,
+        Option<Uuid>,
+        Option<Uuid>,
+        Option<Uuid>,
+        Option<Uuid>,
+    );
+    let context: AuditSubjectContext = sqlx::query_as(
+        "SELECT actor_id, organization_id, installation_id, generation_id,
+                child_session_id
+         FROM ui_request_audit_events
+         WHERE request_id = $1 AND surface = $2",
+    )
+    .bind(request_id.as_uuid())
+    .bind(surface)
+    .fetch_one(pool)
+    .await
+    .expect("read anonymous UI request audit context");
+    assert_eq!(context, (None, None, None, None, None));
+}
+
 /// Exercises the first adapter slice against the complete 0089 fixture. The
 /// schema matrix above remains the owner of SQLSTATE and lifecycle checks.
 #[tokio::test]
@@ -2444,6 +2745,124 @@ async fn ui_browser_issue_binds_current_authority_and_fresh_expiry() {
         .expect("active actor may issue for current generation");
     assert_eq!(created.organization_id.as_uuid(), fixture.organization);
     assert_eq!(created.route, route);
+    assert_audit_row(
+        &bootstrap,
+        request_id,
+        "handoff_issue",
+        "allowed",
+        "succeeded",
+        "none",
+    )
+    .await;
+    assert_audit_row(
+        &bootstrap,
+        request_id,
+        "embed",
+        "allowed",
+        "succeeded",
+        "none",
+    )
+    .await;
+    assert_audit_context(
+        &bootstrap,
+        request_id,
+        "handoff_issue",
+        fixture.actor,
+        fixture.organization,
+        fixture.installation,
+        fixture.generation,
+        None,
+    )
+    .await;
+    assert_audit_context(
+        &bootstrap,
+        request_id,
+        "embed",
+        fixture.actor,
+        fixture.organization,
+        fixture.installation,
+        fixture.generation,
+        None,
+    )
+    .await;
+
+    let full_page_request_id = RequestId::new();
+    store
+        .create_ui_browser_handoff(CreateUiBrowserHandoff {
+            request_id: full_page_request_id,
+            actor_id: actor,
+            parent_session_id: parent,
+            installation_id: UiInstallationId::from_uuid(fixture.other_installation),
+            generation_id: UiInstallationGenerationId::from_uuid(fixture.other_generation),
+            route: UiBrowserRoute::parse("schema-ui-two").expect("full-page route"),
+            secret: UiBrowserHandoffSecret::random(),
+        })
+        .await
+        .expect("full-page UI may issue a handoff");
+    assert_audit_row(
+        &bootstrap,
+        full_page_request_id,
+        "handoff_issue",
+        "allowed",
+        "succeeded",
+        "none",
+    )
+    .await;
+    let full_page_embeds: i64 = sqlx::query_scalar(
+        "SELECT count(*) FROM ui_request_audit_events
+         WHERE request_id = $1 AND surface = 'embed'",
+    )
+    .bind(full_page_request_id.as_uuid())
+    .fetch_one(&bootstrap)
+    .await
+    .expect("count full-page embed audit rows");
+    assert_eq!(
+        full_page_embeds, 0,
+        "full-page UI must not emit embed audit"
+    );
+
+    let handoff_count_before_audit_failure: i64 =
+        sqlx::query_scalar("SELECT count(*) FROM ui_browser_handoffs")
+            .fetch_one(&bootstrap)
+            .await
+            .expect("count handoffs before audit failure");
+    sqlx::query("REVOKE INSERT ON public.ui_request_audit_events FROM hephaestus_worker")
+        .execute(&bootstrap)
+        .await
+        .expect("revoke audit insert for atomicity test");
+    let audit_failure_request_id = RequestId::new();
+    let audit_failure = store
+        .create_ui_browser_handoff(CreateUiBrowserHandoff {
+            request_id: audit_failure_request_id,
+            actor_id: actor,
+            parent_session_id: parent,
+            installation_id: installation,
+            generation_id: generation,
+            route: route.clone(),
+            secret: UiBrowserHandoffSecret::random(),
+        })
+        .await;
+    assert_eq!(audit_failure, Err(UiBrowserHandoffError::Unavailable));
+    sqlx::query("GRANT INSERT ON public.ui_request_audit_events TO hephaestus_worker")
+        .execute(&bootstrap)
+        .await
+        .expect("restore audit insert after atomicity test");
+    let handoff_count_after_audit_failure: i64 =
+        sqlx::query_scalar("SELECT count(*) FROM ui_browser_handoffs")
+            .fetch_one(&bootstrap)
+            .await
+            .expect("count handoffs after audit failure");
+    assert_eq!(
+        handoff_count_after_audit_failure, handoff_count_before_audit_failure,
+        "audit append failure rolled back the handoff mutation"
+    );
+    let audit_failure_rows: i64 =
+        sqlx::query_scalar("SELECT count(*) FROM ui_request_audit_events WHERE request_id = $1")
+            .bind(audit_failure_request_id.as_uuid())
+            .fetch_one(&bootstrap)
+            .await
+            .expect("count audit failure rows");
+    assert_eq!(audit_failure_rows, 0);
 
     let stored: (
         Vec<u8>,
@@ -2576,9 +2995,10 @@ async fn ui_browser_issue_binds_current_authority_and_fresh_expiry() {
         .expect("count after expiry barrier");
     assert_eq!(after_barrier, baseline);
 
+    let route_denied_request_id = RequestId::new();
     let route_denied = store
         .create_ui_browser_handoff(CreateUiBrowserHandoff {
-            request_id: RequestId::new(),
+            request_id: route_denied_request_id,
             actor_id: actor,
             parent_session_id: parent,
             installation_id: installation,
@@ -2588,11 +3008,53 @@ async fn ui_browser_issue_binds_current_authority_and_fresh_expiry() {
         })
         .await;
     assert_eq!(route_denied, Err(UiBrowserHandoffError::InvalidRoute));
+    assert_audit_row(
+        &bootstrap,
+        route_denied_request_id,
+        "handoff_issue",
+        "denied",
+        "not_attempted",
+        "invalid_route",
+    )
+    .await;
+    assert_audit_actor_only(&bootstrap, route_denied_request_id, fixture.actor).await;
     let after_route: i64 = sqlx::query_scalar("SELECT count(*) FROM ui_browser_handoffs")
         .fetch_one(&worker)
         .await
         .expect("count after route denial");
     assert_eq!(after_route, baseline);
+
+    sqlx::query("REVOKE INSERT ON public.ui_request_audit_events FROM hephaestus_worker")
+        .execute(&bootstrap)
+        .await
+        .expect("revoke audit insert for denied-operation test");
+    let unavailable_audit_request_id = RequestId::new();
+    let denied_with_unavailable_audit = store
+        .create_ui_browser_handoff(CreateUiBrowserHandoff {
+            request_id: unavailable_audit_request_id,
+            actor_id: actor,
+            parent_session_id: parent,
+            installation_id: installation,
+            generation_id: generation,
+            route: UiBrowserRoute::parse("arbitrary").expect("safe undeclared route"),
+            secret: UiBrowserHandoffSecret::random(),
+        })
+        .await;
+    assert_eq!(
+        denied_with_unavailable_audit,
+        Err(UiBrowserHandoffError::InvalidRoute)
+    );
+    sqlx::query("GRANT INSERT ON public.ui_request_audit_events TO hephaestus_worker")
+        .execute(&bootstrap)
+        .await
+        .expect("restore audit insert after denied-operation test");
+    let unavailable_audit_rows: i64 =
+        sqlx::query_scalar("SELECT count(*) FROM ui_request_audit_events WHERE request_id = $1")
+            .bind(unavailable_audit_request_id.as_uuid())
+            .fetch_one(&bootstrap)
+            .await
+            .expect("count unavailable audit rows");
+    assert_eq!(unavailable_audit_rows, 0);
 
     let revoked_parent_id = Uuid::new_v4();
     insert_canonical_session(
@@ -2961,7 +3423,7 @@ async fn ui_browser_exchange_is_atomic_generation_bound_and_parent_capped() {
     let route = UiBrowserRoute::parse("schema-ui").expect("published route base");
 
     // A host resolved to another generation cannot exchange the locked handoff.
-    let wrong_host_secret = UiBrowserHandoffSecret::from_bytes([41; 32]);
+    let wrong_host_secret = UiBrowserHandoffSecret::from_bytes(test_secret(fixture.actor, 41));
     issue_handoff(
         &store,
         actor,
@@ -2972,18 +3434,33 @@ async fn ui_browser_exchange_is_atomic_generation_bound_and_parent_capped() {
         wrong_host_secret,
     )
     .await;
+    let wrong_host_request_id = RequestId::new();
     let wrong_host = store
         .exchange_ui_browser_handoff(ExchangeUiBrowserHandoff {
-            request_id: RequestId::new(),
-            handoff_secret: UiBrowserHandoffSecret::from_bytes([41; 32]),
+            request_id: wrong_host_request_id,
+            handoff_secret: UiBrowserHandoffSecret::from_bytes(test_secret(fixture.actor, 41)),
             expected_generation_id: UiInstallationGenerationId::from_uuid(fixture.other_generation),
-            child_secret: UiBrowserSessionSecret::from_bytes([42; 32]),
+            child_secret: UiBrowserSessionSecret::from_bytes(test_secret(fixture.actor, 42)),
         })
         .await;
     assert_eq!(wrong_host, Err(UiBrowserHandoffError::InvalidOrExpired));
-    assert_exchange_denial_unchanged(&worker, UiBrowserHandoffSecret::from_bytes([41; 32])).await;
+    assert_exchange_denial_unchanged(
+        &worker,
+        UiBrowserHandoffSecret::from_bytes(test_secret(fixture.actor, 41)),
+    )
+    .await;
+    assert_audit_row(
+        &bootstrap,
+        wrong_host_request_id,
+        "handoff_exchange",
+        "denied",
+        "not_attempted",
+        "expired",
+    )
+    .await;
+    assert_audit_anonymous(&bootstrap, wrong_host_request_id, "handoff_exchange").await;
 
-    let success_secret = UiBrowserHandoffSecret::from_bytes([43; 32]);
+    let success_secret = UiBrowserHandoffSecret::from_bytes(test_secret(fixture.actor, 43));
     issue_handoff(
         &store,
         actor,
@@ -2994,12 +3471,13 @@ async fn ui_browser_exchange_is_atomic_generation_bound_and_parent_capped() {
         success_secret,
     )
     .await;
+    let success_request_id = RequestId::new();
     let success = store
         .exchange_ui_browser_handoff(ExchangeUiBrowserHandoff {
-            request_id: RequestId::new(),
-            handoff_secret: UiBrowserHandoffSecret::from_bytes([43; 32]),
+            request_id: success_request_id,
+            handoff_secret: UiBrowserHandoffSecret::from_bytes(test_secret(fixture.actor, 43)),
             expected_generation_id: generation,
-            child_secret: UiBrowserSessionSecret::from_bytes([44; 32]),
+            child_secret: UiBrowserSessionSecret::from_bytes(test_secret(fixture.actor, 44)),
         })
         .await
         .expect("valid handoff exchanges once");
@@ -3019,19 +3497,40 @@ async fn ui_browser_exchange_is_atomic_generation_bound_and_parent_capped() {
     .expect("read child safe metadata");
     assert_eq!(
         child_row.0,
-        UiBrowserSessionSecret::from_bytes([44; 32])
+        UiBrowserSessionSecret::from_bytes(test_secret(fixture.actor, 44))
             .digest()
             .as_bytes()
     );
     assert_eq!(child_row.3, fixture.parent_session);
     assert_eq!(child_row.4, fixture.generation);
     assert_eq!(child_row.2 - child_row.1, time::Duration::hours(12));
+    assert_audit_row(
+        &bootstrap,
+        success_request_id,
+        "handoff_exchange",
+        "allowed",
+        "succeeded",
+        "none",
+    )
+    .await;
+    assert_audit_context(
+        &bootstrap,
+        success_request_id,
+        "handoff_exchange",
+        fixture.actor,
+        fixture.organization,
+        fixture.installation,
+        fixture.generation,
+        Some(success.context.session_id.as_uuid()),
+    )
+    .await;
+    let replay_request_id = RequestId::new();
     let replay = store
         .exchange_ui_browser_handoff(ExchangeUiBrowserHandoff {
-            request_id: RequestId::new(),
-            handoff_secret: UiBrowserHandoffSecret::from_bytes([43; 32]),
+            request_id: replay_request_id,
+            handoff_secret: UiBrowserHandoffSecret::from_bytes(test_secret(fixture.actor, 43)),
             expected_generation_id: generation,
-            child_secret: UiBrowserSessionSecret::from_bytes([45; 32]),
+            child_secret: UiBrowserSessionSecret::from_bytes(test_secret(fixture.actor, 45)),
         })
         .await;
     assert_eq!(replay, Err(UiBrowserHandoffError::InvalidOrExpired));
@@ -3040,7 +3539,7 @@ async fn ui_browser_exchange_is_atomic_generation_bound_and_parent_capped() {
          (SELECT id FROM ui_browser_handoffs WHERE handoff_digest = $1)",
     )
     .bind(
-        UiBrowserHandoffSecret::from_bytes([43; 32])
+        UiBrowserHandoffSecret::from_bytes(test_secret(fixture.actor, 43))
             .digest()
             .as_bytes()
             .as_slice(),
@@ -3049,6 +3548,147 @@ async fn ui_browser_exchange_is_atomic_generation_bound_and_parent_capped() {
     .await
     .expect("count replay children");
     assert_eq!(replay_children, 1);
+    assert_audit_row(
+        &bootstrap,
+        replay_request_id,
+        "handoff_exchange",
+        "denied",
+        "not_attempted",
+        "expired",
+    )
+    .await;
+    assert_audit_anonymous(&bootstrap, replay_request_id, "handoff_exchange").await;
+
+    // An audit persistence failure must roll back both the child insertion and
+    // one-time handoff consumption. Restoring the grant must allow that same
+    // handoff to be retried successfully.
+    let rollback_handoff_secret_bytes = test_secret(fixture.actor, 60);
+    let rollback_handoff_digest = UiBrowserHandoffSecret::from_bytes(rollback_handoff_secret_bytes)
+        .digest()
+        .as_bytes()
+        .to_vec();
+    issue_handoff(
+        &store,
+        actor,
+        parent,
+        installation,
+        generation,
+        route.clone(),
+        UiBrowserHandoffSecret::from_bytes(rollback_handoff_secret_bytes),
+    )
+    .await;
+    let rollback_handoff_id: Uuid =
+        sqlx::query_scalar("SELECT id FROM ui_browser_handoffs WHERE handoff_digest = $1")
+            .bind(&rollback_handoff_digest)
+            .fetch_one(&worker)
+            .await
+            .expect("find audit rollback handoff");
+    let rollback_children_before: i64 =
+        sqlx::query_scalar("SELECT count(*) FROM ui_browser_sessions WHERE handoff_id = $1")
+            .bind(rollback_handoff_id)
+            .fetch_one(&worker)
+            .await
+            .expect("count audit rollback children before failure");
+    let rollback_consumed_before: Option<time::OffsetDateTime> =
+        sqlx::query_scalar("SELECT consumed_at FROM ui_browser_handoffs WHERE id = $1")
+            .bind(rollback_handoff_id)
+            .fetch_one(&worker)
+            .await
+            .expect("read audit rollback handoff before failure");
+    assert!(rollback_consumed_before.is_none());
+
+    sqlx::query("REVOKE INSERT ON public.ui_request_audit_events FROM hephaestus_worker")
+        .execute(&bootstrap)
+        .await
+        .expect("revoke audit insert for exchange rollback");
+    let rollback_request_id = RequestId::new();
+    let rollback = store
+        .exchange_ui_browser_handoff(ExchangeUiBrowserHandoff {
+            request_id: rollback_request_id,
+            handoff_secret: UiBrowserHandoffSecret::from_bytes(rollback_handoff_secret_bytes),
+            expected_generation_id: generation,
+            child_secret: UiBrowserSessionSecret::from_bytes(test_secret(fixture.actor, 61)),
+        })
+        .await;
+    assert_eq!(rollback, Err(UiBrowserHandoffError::Unavailable));
+    sqlx::query("GRANT INSERT ON public.ui_request_audit_events TO hephaestus_worker")
+        .execute(&bootstrap)
+        .await
+        .expect("restore audit insert after exchange rollback");
+
+    let rollback_children_after: i64 =
+        sqlx::query_scalar("SELECT count(*) FROM ui_browser_sessions WHERE handoff_id = $1")
+            .bind(rollback_handoff_id)
+            .fetch_one(&worker)
+            .await
+            .expect("count audit rollback children after failure");
+    let rollback_consumed_after: Option<time::OffsetDateTime> =
+        sqlx::query_scalar("SELECT consumed_at FROM ui_browser_handoffs WHERE id = $1")
+            .bind(rollback_handoff_id)
+            .fetch_one(&worker)
+            .await
+            .expect("read audit rollback handoff after failure");
+    assert_eq!(rollback_children_after, rollback_children_before);
+    assert!(rollback_consumed_after.is_none());
+    let rollback_audit_rows: i64 =
+        sqlx::query_scalar("SELECT count(*) FROM ui_request_audit_events WHERE request_id = $1")
+            .bind(rollback_request_id.as_uuid())
+            .fetch_one(&bootstrap)
+            .await
+            .expect("count failed exchange audit rows");
+    assert_eq!(rollback_audit_rows, 0);
+
+    let retry_request_id = RequestId::new();
+    let retry = store
+        .exchange_ui_browser_handoff(ExchangeUiBrowserHandoff {
+            request_id: retry_request_id,
+            handoff_secret: UiBrowserHandoffSecret::from_bytes(rollback_handoff_secret_bytes),
+            expected_generation_id: generation,
+            child_secret: UiBrowserSessionSecret::from_bytes(test_secret(fixture.actor, 61)),
+        })
+        .await
+        .expect("retry exchange after restoring audit insert");
+    let retry_children: i64 =
+        sqlx::query_scalar("SELECT count(*) FROM ui_browser_sessions WHERE handoff_id = $1")
+            .bind(rollback_handoff_id)
+            .fetch_one(&worker)
+            .await
+            .expect("count retried exchange child");
+    let retry_consumed: Option<time::OffsetDateTime> =
+        sqlx::query_scalar("SELECT consumed_at FROM ui_browser_handoffs WHERE id = $1")
+            .bind(rollback_handoff_id)
+            .fetch_one(&worker)
+            .await
+            .expect("read retried exchange handoff");
+    assert_eq!(retry_children, 1);
+    assert!(retry_consumed.is_some());
+    assert_audit_row(
+        &bootstrap,
+        retry_request_id,
+        "handoff_exchange",
+        "allowed",
+        "succeeded",
+        "none",
+    )
+    .await;
+    assert_audit_context(
+        &bootstrap,
+        retry_request_id,
+        "handoff_exchange",
+        fixture.actor,
+        fixture.organization,
+        fixture.installation,
+        fixture.generation,
+        Some(retry.context.session_id.as_uuid()),
+    )
+    .await;
+    println!(
+        "REAL_UI_BROWSER_EXCHANGE_AUDIT_ROLLBACK=1 child_rollback={} handoff_unconsumed={} retry_children={} retry_consumed={}",
+        rollback_children_after == rollback_children_before,
+        rollback_consumed_after.is_none(),
+        retry_children,
+        retry_consumed.is_some(),
+    );
 
     // Two named worker connections contend on one handoff row. An external
     // blocker makes both waits observable before release; after release only
@@ -3061,7 +3701,7 @@ async fn ui_browser_exchange_is_atomic_generation_bound_and_parent_capped() {
     let parallel_app_b = role_pool(&database_url, "hephaestus_app").await;
     let parallel_store_a = PgUiBrowserSessionStore::new(parallel_worker_a, parallel_app_a);
     let parallel_store_b = PgUiBrowserSessionStore::new(parallel_worker_b, parallel_app_b);
-    let concurrent_secret = UiBrowserHandoffSecret::from_bytes([46; 32]);
+    let concurrent_secret = UiBrowserHandoffSecret::from_bytes(test_secret(fixture.actor, 46));
     let concurrent_digest = concurrent_secret.digest().as_bytes().to_vec();
     issue_handoff(
         &store,
@@ -3095,9 +3735,9 @@ async fn ui_browser_exchange_is_atomic_generation_bound_and_parent_capped() {
         parallel_store_a
             .exchange_ui_browser_handoff(ExchangeUiBrowserHandoff {
                 request_id: RequestId::new(),
-                handoff_secret: UiBrowserHandoffSecret::from_bytes([46; 32]),
+                handoff_secret: UiBrowserHandoffSecret::from_bytes(test_secret(fixture.actor, 46)),
                 expected_generation_id: generation,
-                child_secret: UiBrowserSessionSecret::from_bytes([47; 32]),
+                child_secret: UiBrowserSessionSecret::from_bytes(test_secret(fixture.actor, 47)),
             })
             .await
     });
@@ -3105,9 +3745,9 @@ async fn ui_browser_exchange_is_atomic_generation_bound_and_parent_capped() {
         parallel_store_b
             .exchange_ui_browser_handoff(ExchangeUiBrowserHandoff {
                 request_id: RequestId::new(),
-                handoff_secret: UiBrowserHandoffSecret::from_bytes([46; 32]),
+                handoff_secret: UiBrowserHandoffSecret::from_bytes(test_secret(fixture.actor, 46)),
                 expected_generation_id: generation,
-                child_secret: UiBrowserSessionSecret::from_bytes([48; 32]),
+                child_secret: UiBrowserSessionSecret::from_bytes(test_secret(fixture.actor, 48)),
             })
             .await
     });
@@ -3130,7 +3770,7 @@ async fn ui_browser_exchange_is_atomic_generation_bound_and_parent_capped() {
          (SELECT id FROM ui_browser_handoffs WHERE handoff_digest = $1)",
     )
     .bind(
-        UiBrowserHandoffSecret::from_bytes([46; 32])
+        UiBrowserHandoffSecret::from_bytes(test_secret(fixture.actor, 46))
             .digest()
             .as_bytes()
             .as_slice(),
@@ -3154,7 +3794,7 @@ async fn ui_browser_exchange_is_atomic_generation_bound_and_parent_capped() {
     )
     .bind(expired_handoff)
     .bind(
-        UiBrowserHandoffSecret::from_bytes([49; 32])
+        UiBrowserHandoffSecret::from_bytes(test_secret(fixture.actor, 49))
             .digest()
             .as_bytes()
             .as_slice(),
@@ -3172,16 +3812,20 @@ async fn ui_browser_exchange_is_atomic_generation_bound_and_parent_capped() {
     let expired = store
         .exchange_ui_browser_handoff(ExchangeUiBrowserHandoff {
             request_id: RequestId::new(),
-            handoff_secret: UiBrowserHandoffSecret::from_bytes([49; 32]),
+            handoff_secret: UiBrowserHandoffSecret::from_bytes(test_secret(fixture.actor, 49)),
             expected_generation_id: generation,
-            child_secret: UiBrowserSessionSecret::from_bytes([50; 32]),
+            child_secret: UiBrowserSessionSecret::from_bytes(test_secret(fixture.actor, 50)),
         })
         .await;
     assert_eq!(expired, Err(UiBrowserHandoffError::InvalidOrExpired));
-    assert_exchange_denial_unchanged(&worker, UiBrowserHandoffSecret::from_bytes([49; 32])).await;
+    assert_exchange_denial_unchanged(
+        &worker,
+        UiBrowserHandoffSecret::from_bytes(test_secret(fixture.actor, 49)),
+    )
+    .await;
 
     // Current generation and source publication are rechecked at exchange.
-    let stale_secret = UiBrowserHandoffSecret::from_bytes([51; 32]);
+    let stale_secret = UiBrowserHandoffSecret::from_bytes(test_secret(fixture.actor, 51));
     issue_handoff(
         &store,
         actor,
@@ -3213,16 +3857,20 @@ async fn ui_browser_exchange_is_atomic_generation_bound_and_parent_capped() {
     let stale = store
         .exchange_ui_browser_handoff(ExchangeUiBrowserHandoff {
             request_id: RequestId::new(),
-            handoff_secret: UiBrowserHandoffSecret::from_bytes([51; 32]),
+            handoff_secret: UiBrowserHandoffSecret::from_bytes(test_secret(fixture.actor, 51)),
             expected_generation_id: generation,
-            child_secret: UiBrowserSessionSecret::from_bytes([52; 32]),
+            child_secret: UiBrowserSessionSecret::from_bytes(test_secret(fixture.actor, 52)),
         })
         .await;
     assert_eq!(stale, Err(UiBrowserHandoffError::InvalidOrExpired));
-    assert_exchange_denial_unchanged(&worker, UiBrowserHandoffSecret::from_bytes([51; 32])).await;
+    assert_exchange_denial_unchanged(
+        &worker,
+        UiBrowserHandoffSecret::from_bytes(test_secret(fixture.actor, 51)),
+    )
+    .await;
 
     // Parent revocation/account state is checked before child creation.
-    let revoked_secret = UiBrowserHandoffSecret::from_bytes([53; 32]);
+    let revoked_secret = UiBrowserHandoffSecret::from_bytes(test_secret(fixture.actor, 53));
     issue_handoff(
         &store,
         actor,
@@ -3245,13 +3893,17 @@ async fn ui_browser_exchange_is_atomic_generation_bound_and_parent_capped() {
     let revoked = store
         .exchange_ui_browser_handoff(ExchangeUiBrowserHandoff {
             request_id: RequestId::new(),
-            handoff_secret: UiBrowserHandoffSecret::from_bytes([53; 32]),
+            handoff_secret: UiBrowserHandoffSecret::from_bytes(test_secret(fixture.actor, 53)),
             expected_generation_id: UiInstallationGenerationId::from_uuid(fixture.other_generation),
-            child_secret: UiBrowserSessionSecret::from_bytes([54; 32]),
+            child_secret: UiBrowserSessionSecret::from_bytes(test_secret(fixture.actor, 54)),
         })
         .await;
     assert_eq!(revoked, Err(UiBrowserHandoffError::InvalidOrExpired));
-    assert_exchange_denial_unchanged(&worker, UiBrowserHandoffSecret::from_bytes([53; 32])).await;
+    assert_exchange_denial_unchanged(
+        &worker,
+        UiBrowserHandoffSecret::from_bytes(test_secret(fixture.actor, 53)),
+    )
+    .await;
 
     let account_parent = Uuid::new_v4();
     insert_canonical_session(&worker, account_parent, fixture.actor, Uuid::new_v4(), 20).await;
@@ -3262,7 +3914,7 @@ async fn ui_browser_exchange_is_atomic_generation_bound_and_parent_capped() {
         UiInstallationId::from_uuid(fixture.other_installation),
         UiInstallationGenerationId::from_uuid(fixture.other_generation),
         UiBrowserRoute::parse("schema-ui-two").expect("second published route base"),
-        UiBrowserHandoffSecret::from_bytes([57; 32]),
+        UiBrowserHandoffSecret::from_bytes(test_secret(fixture.actor, 57)),
     )
     .await;
     sqlx::query("UPDATE users SET status = 'suspended' WHERE id = $1")
@@ -3273,16 +3925,20 @@ async fn ui_browser_exchange_is_atomic_generation_bound_and_parent_capped() {
     let account_suspended = store
         .exchange_ui_browser_handoff(ExchangeUiBrowserHandoff {
             request_id: RequestId::new(),
-            handoff_secret: UiBrowserHandoffSecret::from_bytes([57; 32]),
+            handoff_secret: UiBrowserHandoffSecret::from_bytes(test_secret(fixture.actor, 57)),
             expected_generation_id: UiInstallationGenerationId::from_uuid(fixture.other_generation),
-            child_secret: UiBrowserSessionSecret::from_bytes([58; 32]),
+            child_secret: UiBrowserSessionSecret::from_bytes(test_secret(fixture.actor, 58)),
         })
         .await;
     assert_eq!(
         account_suspended,
         Err(UiBrowserHandoffError::InvalidOrExpired)
     );
-    assert_exchange_denial_unchanged(&worker, UiBrowserHandoffSecret::from_bytes([57; 32])).await;
+    assert_exchange_denial_unchanged(
+        &worker,
+        UiBrowserHandoffSecret::from_bytes(test_secret(fixture.actor, 57)),
+    )
+    .await;
     sqlx::query("UPDATE users SET status = 'active' WHERE id = $1")
         .bind(fixture.actor)
         .execute(&worker)
@@ -3298,7 +3954,7 @@ async fn ui_browser_exchange_is_atomic_generation_bound_and_parent_capped() {
         UiInstallationId::from_uuid(fixture.other_installation),
         UiInstallationGenerationId::from_uuid(fixture.other_generation),
         UiBrowserRoute::parse("schema-ui-two").expect("second published route base"),
-        UiBrowserHandoffSecret::from_bytes([55; 32]),
+        UiBrowserHandoffSecret::from_bytes(test_secret(fixture.actor, 55)),
     )
     .await;
     sqlx::query(
@@ -3312,13 +3968,17 @@ async fn ui_browser_exchange_is_atomic_generation_bound_and_parent_capped() {
     let source_revoked = store
         .exchange_ui_browser_handoff(ExchangeUiBrowserHandoff {
             request_id: RequestId::new(),
-            handoff_secret: UiBrowserHandoffSecret::from_bytes([55; 32]),
+            handoff_secret: UiBrowserHandoffSecret::from_bytes(test_secret(fixture.actor, 55)),
             expected_generation_id: UiInstallationGenerationId::from_uuid(fixture.other_generation),
-            child_secret: UiBrowserSessionSecret::from_bytes([56; 32]),
+            child_secret: UiBrowserSessionSecret::from_bytes(test_secret(fixture.actor, 56)),
         })
         .await;
     assert_eq!(source_revoked, Err(UiBrowserHandoffError::InvalidOrExpired));
-    assert_exchange_denial_unchanged(&worker, UiBrowserHandoffSecret::from_bytes([55; 32])).await;
+    assert_exchange_denial_unchanged(
+        &worker,
+        UiBrowserHandoffSecret::from_bytes(test_secret(fixture.actor, 55)),
+    )
+    .await;
 }
 
 async fn assert_exchange_denial_unchanged(pool: &PgPool, secret: UiBrowserHandoffSecret) {

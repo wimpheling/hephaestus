@@ -4,6 +4,9 @@
 //! The application-role verifier is a separate, read-only method on the same
 //! store; worker writes never use the application pool.
 
+use super::ui_request_audit::{
+    PgUiRequestAuditRepository, append_in_transaction as append_ui_request_audit_in_transaction,
+};
 use async_trait::async_trait;
 use authz_domain::{AuthorizationDecision, ObjectRef, ObjectType, Permission, Subject};
 use authz_postgres::PostgresMelangeAuthorizer;
@@ -16,8 +19,10 @@ use release_domain::{
 };
 use release_service::{
     AuthenticateUiBrowserSession, CreateUiBrowserHandoff, CreatedUiBrowserHandoff,
-    CreatedUiBrowserSession, ExchangeUiBrowserHandoff, UiBrowserHandoffError,
-    UiBrowserRequestRoute, UiBrowserSessionContext, UiBrowserSessionError, UiBrowserSessionStore,
+    CreatedUiBrowserSession, ExchangeUiBrowserHandoff, NewUiRequestAuditEvent,
+    UiBrowserHandoffError, UiBrowserRequestRoute, UiBrowserSessionContext, UiBrowserSessionError,
+    UiBrowserSessionStore, UiRequestAuditContext, UiRequestAuditDecision, UiRequestAuditOutcome,
+    UiRequestAuditReason, UiRequestAuditSink, UiRequestAuditSurface,
 };
 use sqlx::{FromRow, PgPool, Postgres, Transaction};
 use std::collections::{BTreeMap, BTreeSet};
@@ -54,6 +59,30 @@ impl PgUiBrowserSessionStore {
     // post-lock authority checks remain auditable.
     #[allow(clippy::too_many_lines)]
     pub async fn create_ui_browser_handoff(
+        &self,
+        command: CreateUiBrowserHandoff,
+    ) -> Result<CreatedUiBrowserHandoff, UiBrowserHandoffError> {
+        let actor_id = command.actor_id;
+        let request_id = command.request_id;
+        match self.create_ui_browser_handoff_inner(command).await {
+            Ok(created) => Ok(created),
+            Err(error) => {
+                if let Some(reason) = issue_audit_reason(error) {
+                    append_handoff_denial(
+                        &self.worker_pool,
+                        request_id,
+                        UiRequestAuditSurface::HandoffIssue,
+                        UiRequestAuditContext::actor(actor_id),
+                        reason,
+                    )
+                    .await;
+                }
+                Err(error)
+            }
+        }
+    }
+
+    async fn create_ui_browser_handoff_inner(
         &self,
         command: CreateUiBrowserHandoff,
     ) -> Result<CreatedUiBrowserHandoff, UiBrowserHandoffError> {
@@ -101,6 +130,45 @@ impl PgUiBrowserSessionStore {
         .map_err(|_| UiBrowserHandoffError::Unavailable)?;
         if issued.expires_at != issued.issued_at + Duration::seconds(60) {
             return Err(UiBrowserHandoffError::Unavailable);
+        }
+        let audit_context = UiRequestAuditContext::verified(
+            command.actor_id,
+            OrganizationId::from_uuid(eligible.organization_id),
+            command.installation_id,
+            command.generation_id,
+            None,
+            None,
+        );
+        append_ui_request_audit_in_transaction(
+            &mut tx,
+            NewUiRequestAuditEvent::now(
+                command.request_id,
+                UiRequestAuditSurface::HandoffIssue,
+                UiRequestAuditDecision::Allowed,
+                UiRequestAuditOutcome::Succeeded,
+                UiRequestAuditReason::None,
+                audit_context,
+            ),
+        )
+        .await
+        .map_err(|_| UiBrowserHandoffError::Unavailable)?;
+        // The published descriptor is locked and checked by the eligibility
+        // path above. Record launch intent from that descriptor-derived
+        // presentation; callers cannot claim an embed surface themselves.
+        if eligible.presentation == "iframe" {
+            append_ui_request_audit_in_transaction(
+                &mut tx,
+                NewUiRequestAuditEvent::now(
+                    command.request_id,
+                    UiRequestAuditSurface::Embed,
+                    UiRequestAuditDecision::Allowed,
+                    UiRequestAuditOutcome::Succeeded,
+                    UiRequestAuditReason::None,
+                    audit_context,
+                ),
+            )
+            .await
+            .map_err(|_| UiBrowserHandoffError::Unavailable)?;
         }
         tx.commit()
             .await
@@ -204,7 +272,8 @@ impl PgUiBrowserSessionStore {
         let source = sqlx::query_as::<_, SourceRow>(
             r"
             SELECT release_record.state, descriptor.scope, descriptor.route_base,
-                   descriptor.content_kind, source_project.id AS source_project_id,
+                   descriptor.presentation, descriptor.content_kind,
+                   source_project.id AS source_project_id,
                    source_repository.id AS source_repository_id,
                    source_project.organization_id AS source_org
             FROM releases AS release_record
@@ -303,6 +372,7 @@ impl PgUiBrowserSessionStore {
         Ok(IssueEligibility {
             organization_id,
             parent_expires_at: parent.expires_at,
+            presentation: source.presentation,
         })
     }
 }
@@ -323,6 +393,48 @@ async fn begin_actor_transaction(
     .execute(&mut *tx)
     .await?;
     Ok(tx)
+}
+
+async fn append_handoff_denial(
+    worker_pool: &PgPool,
+    request_id: RequestId,
+    surface: UiRequestAuditSurface,
+    context: UiRequestAuditContext,
+    reason: UiRequestAuditReason,
+) {
+    let repository = PgUiRequestAuditRepository::new(worker_pool.clone());
+    if let Err(error) = repository
+        .append(NewUiRequestAuditEvent::now(
+            request_id,
+            surface,
+            UiRequestAuditDecision::Denied,
+            UiRequestAuditOutcome::NotAttempted,
+            reason,
+            context,
+        ))
+        .await
+    {
+        // Audit persistence must never turn an already-determined denial into
+        // a different result, but operators still need a safe diagnostic when
+        // the independent evidence write is unavailable.
+        tracing::warn!(
+            request_id = %request_id,
+            surface = %surface,
+            reason = reason.as_str(),
+            error = %error,
+            "UI handoff denial audit append failed"
+        );
+    }
+}
+
+const fn issue_audit_reason(error: UiBrowserHandoffError) -> Option<UiRequestAuditReason> {
+    match error {
+        UiBrowserHandoffError::PermissionDenied => Some(UiRequestAuditReason::Unauthorized),
+        UiBrowserHandoffError::InvalidRoute => Some(UiRequestAuditReason::InvalidRoute),
+        UiBrowserHandoffError::InvalidOrExpired => Some(UiRequestAuditReason::Expired),
+        // Infrastructure failure is not an authorization denial.
+        UiBrowserHandoffError::Unavailable => None,
+    }
 }
 
 async fn require_permission(
@@ -582,6 +694,7 @@ struct EligibilityInput {
 struct IssueEligibility {
     organization_id: Uuid,
     parent_expires_at: OffsetDateTime,
+    presentation: String,
 }
 
 #[derive(Debug, FromRow)]
@@ -620,6 +733,7 @@ struct SourceRow {
     state: String,
     scope: String,
     route_base: String,
+    presentation: String,
     content_kind: String,
     source_project_id: Uuid,
     source_repository_id: Uuid,
@@ -697,6 +811,30 @@ impl PgUiBrowserSessionStore {
     /// consumed, expired, bound to another generation, or no longer eligible.
     /// Returns [`UiBrowserHandoffError::Unavailable`] for persistence failures.
     pub async fn exchange_ui_browser_handoff(
+        &self,
+        command: ExchangeUiBrowserHandoff,
+    ) -> Result<CreatedUiBrowserSession, UiBrowserHandoffError> {
+        let request_id = command.request_id;
+        match self.exchange_ui_browser_handoff_inner(command).await {
+            Ok(created) => Ok(created),
+            Err(error) => {
+                if let Some(reason) = issue_audit_reason(error) {
+                    append_handoff_denial(
+                        &self.worker_pool,
+                        request_id,
+                        UiRequestAuditSurface::HandoffExchange,
+                        UiRequestAuditContext::anonymous(),
+                        reason,
+                    )
+                    .await;
+                }
+                Err(error)
+            }
+        }
+    }
+
+    #[allow(clippy::too_many_lines)]
+    async fn exchange_ui_browser_handoff_inner(
         &self,
         command: ExchangeUiBrowserHandoff,
     ) -> Result<CreatedUiBrowserSession, UiBrowserHandoffError> {
@@ -811,6 +949,27 @@ impl PgUiBrowserSessionStore {
         if consumed.rows_affected() != 1 {
             return Err(UiBrowserHandoffError::InvalidOrExpired);
         }
+        let audit_context = UiRequestAuditContext::verified(
+            UserId::from_uuid(handoff.actor_id),
+            OrganizationId::from_uuid(handoff.organization_id),
+            UiInstallationId::from_uuid(handoff.installation_id),
+            UiInstallationGenerationId::from_uuid(handoff.generation_id),
+            Some(session_id),
+            None,
+        );
+        append_ui_request_audit_in_transaction(
+            &mut tx,
+            NewUiRequestAuditEvent::now(
+                command.request_id,
+                UiRequestAuditSurface::HandoffExchange,
+                UiRequestAuditDecision::Allowed,
+                UiRequestAuditOutcome::Succeeded,
+                UiRequestAuditReason::None,
+                audit_context,
+            ),
+        )
+        .await
+        .map_err(|_| UiBrowserHandoffError::Unavailable)?;
         tx.commit()
             .await
             .map_err(|_| UiBrowserHandoffError::Unavailable)?;

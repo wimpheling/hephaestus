@@ -5,6 +5,7 @@ pub mod ui_browser_host;
 pub mod ui_browser_serving;
 mod ui_installation;
 mod ui_installation_navigation;
+mod ui_request_audit;
 
 use capability_domain::{
     CapabilityBindingId, CapabilityOperation, CapabilityResource, CapabilitySlotKey,
@@ -47,6 +48,10 @@ pub use ui_installation_navigation::{
     UiInstallationContentKind, UiInstallationNavigation, UiInstallationNavigationError,
     UiInstallationNavigationPage, UiInstallationNavigator, UiInstallationPage,
     UiInstallationTargetFilter,
+};
+pub use ui_request_audit::{
+    NewUiRequestAuditEvent, UiRequestAuditContext, UiRequestAuditDecision, UiRequestAuditError,
+    UiRequestAuditOutcome, UiRequestAuditReason, UiRequestAuditSink, UiRequestAuditSurface,
 };
 
 /// One already safely imported immutable artifact.

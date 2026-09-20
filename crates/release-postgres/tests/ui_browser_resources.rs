@@ -4,7 +4,7 @@
 mod fixture;
 
 use fixture::{
-    insert_authenticated_child, insert_managed_authenticated_child,
+    fixture_session_secret, insert_authenticated_child, insert_managed_authenticated_child,
     seed_fixture_reusing_installation_helpers, seed_fixture_reusing_installation_helpers_draft,
 };
 use gateway_domain::HttpMethod;
@@ -128,7 +128,8 @@ async fn ui_browser_resource_adapter_enforces_host_role_projection_and_current_a
         );
     }
 
-    let session_secret = UiBrowserSessionSecret::from_bytes([90; 32]);
+    let session_secret =
+        UiBrowserSessionSecret::from_bytes(fixture_session_secret(fixture.actor, 90));
     let child_id = insert_authenticated_child(
         &worker,
         &fixture,
@@ -140,7 +141,7 @@ async fn ui_browser_resource_adapter_enforces_host_role_projection_and_current_a
     let static_projection = store
         .authenticate_and_project_http(
             RequestId::new(),
-            UiBrowserSessionSecret::from_bytes([90; 32]),
+            UiBrowserSessionSecret::from_bytes(fixture_session_secret(fixture.actor, 90)),
             UiInstallationGenerationId::from_uuid(fixture.generation),
             UiBrowserHttpRequest::new(HttpMethod::Get, "/schema-ui").expect("static path"),
         )
@@ -158,7 +159,7 @@ async fn ui_browser_resource_adapter_enforces_host_role_projection_and_current_a
     let static_file_projection = store
         .authenticate_and_project_http(
             RequestId::new(),
-            UiBrowserSessionSecret::from_bytes([90; 32]),
+            UiBrowserSessionSecret::from_bytes(fixture_session_secret(fixture.actor, 90)),
             UiInstallationGenerationId::from_uuid(fixture.generation),
             UiBrowserHttpRequest::new(HttpMethod::Get, "/schema-ui/index.html")
                 .expect("static entrypoint path"),
@@ -180,7 +181,7 @@ async fn ui_browser_resource_adapter_enforces_host_role_projection_and_current_a
     let static_head_projection = store
         .authenticate_and_project_http(
             RequestId::new(),
-            UiBrowserSessionSecret::from_bytes([90; 32]),
+            UiBrowserSessionSecret::from_bytes(fixture_session_secret(fixture.actor, 90)),
             UiInstallationGenerationId::from_uuid(fixture.generation),
             UiBrowserHttpRequest::new(HttpMethod::Head, "/schema-ui").expect("static HEAD path"),
         )
@@ -197,7 +198,7 @@ async fn ui_browser_resource_adapter_enforces_host_role_projection_and_current_a
     let api_projection = store
         .authenticate_and_project_http(
             RequestId::new(),
-            UiBrowserSessionSecret::from_bytes([90; 32]),
+            UiBrowserSessionSecret::from_bytes(fixture_session_secret(fixture.actor, 90)),
             UiInstallationGenerationId::from_uuid(fixture.generation),
             UiBrowserHttpRequest::new(HttpMethod::Post, "/service/api").expect("API path"),
         )
@@ -213,12 +214,17 @@ async fn ui_browser_resource_adapter_enforces_host_role_projection_and_current_a
         UiServingProjection::Static { .. } => panic!("API request projected as static"),
     }
 
-    insert_managed_authenticated_child(&worker, &fixture, [94; 32]).await;
+    insert_managed_authenticated_child(
+        &worker,
+        &fixture,
+        fixture_session_secret(fixture.actor, 94),
+    )
+    .await;
     let long_managed_path = format!("/schema-managed/{}", "x".repeat(260));
     let managed_projection = store
         .authenticate_and_project_http(
             RequestId::new(),
-            UiBrowserSessionSecret::from_bytes([94; 32]),
+            UiBrowserSessionSecret::from_bytes(fixture_session_secret(fixture.actor, 94)),
             UiInstallationGenerationId::from_uuid(fixture.managed_generation),
             UiBrowserHttpRequest::new(HttpMethod::Get, &long_managed_path)
                 .expect("long managed path"),
@@ -238,7 +244,7 @@ async fn ui_browser_resource_adapter_enforces_host_role_projection_and_current_a
     let managed_base_projection = store
         .authenticate_and_project_http(
             RequestId::new(),
-            UiBrowserSessionSecret::from_bytes([94; 32]),
+            UiBrowserSessionSecret::from_bytes(fixture_session_secret(fixture.actor, 94)),
             UiInstallationGenerationId::from_uuid(fixture.managed_generation),
             UiBrowserHttpRequest::new(HttpMethod::Get, "/schema-managed")
                 .expect("managed base path"),
@@ -262,7 +268,7 @@ async fn ui_browser_resource_adapter_enforces_host_role_projection_and_current_a
         store
             .authenticate_and_project_http(
                 RequestId::new(),
-                UiBrowserSessionSecret::from_bytes([94; 32]),
+                UiBrowserSessionSecret::from_bytes(fixture_session_secret(fixture.actor, 94)),
                 UiInstallationGenerationId::from_uuid(fixture.managed_generation),
                 UiBrowserHttpRequest::new(HttpMethod::Get, "/schema-managed/index.html")
                     .expect("paused managed path"),
@@ -396,7 +402,7 @@ async fn ui_browser_resource_projection_fails_closed_on_static_api_ambiguity() {
     .execute(&worker)
     .await
     .expect("publish ambiguous release");
-    let secret = UiBrowserSessionSecret::from_bytes([96; 32]);
+    let secret = UiBrowserSessionSecret::from_bytes(fixture_session_secret(fixture.actor, 96));
     insert_authenticated_child(
         &worker,
         &fixture,

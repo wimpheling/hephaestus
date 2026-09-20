@@ -38,6 +38,45 @@ integrated quality gate remain incomplete. The user approved organization-owned
 global installations and organization isolation. Historical checkpoints record the state
 at their time; later integration checkpoints supersede earlier pending notes.
 
+## Redacted handoff audit and fixture isolation checkpoint (2026-09-20)
+
+Migration 93 adds a dedicated append-only request audit stream with closed
+surface/decision/outcome/reason vocabularies and safe opaque references. It has
+no credential, parent SID, digest, path, query, header, body, or guest-response
+columns. Worker access is INSERT-only; the application role has no direct
+access. Context guards enforce complete verified target tuples, canonical
+child-parent actor relationships, and immutable generation/gateway bindings.
+This request stream is separate from product events and their committed outboxes.
+
+Successful handoff issue/exchange audits commit in the same transaction as the
+credential mutation. Iframe launch intent is derived from the locked published
+descriptor; full-page issuance emits no embed event. Deterministic denials append
+independently after rollback. Audit unavailability preserves a denied result and
+emits a redacted diagnostic. Both issue and exchange fail atomically when a
+required success audit cannot be written; the exchange proof verifies no child,
+an unconsumed handoff, and a successful single-child retry after recovery.
+
+The real PostgreSQL gate passed two resource tests, four browser-schema tests,
+and one audit schema/role test at migration 93. Resource and browser-schema
+groups then passed again against the same database. Fixture secrets now derive
+from each fixture's UUID, fixing the CI collision caused by repeated fixed
+secrets while preserving production uniqueness constraints. Exact success and
+denial contexts, full-page/iframe intent, replay, privilege denial, append-only
+behavior, and rollback assertions execute against production adapters.
+
+Scoped strict Clippy and documentation passed for release-service,
+release-postgres, and agent-config; nine service unit tests and the reference
+fixture test passed. Workspace formatting passed. Architecture checking found
+only the separately uncommitted HTTP middleware test route, queued for correction
+with that slice. Migration floor expectations advance to 93; the new app-pool
+bootstrap check remains part of the next integrated validation.
+
+Evidence: `/home/a/heph-ui-audit-{check,pg-final,pg-repeat}-20260920.log`,
+`/home/a/heph-ui-audit-quality-{clippy,doc,fmt,architecture}-20260920.log`, and
+`/home/a/heph-ui-exchange-audit-rollback{,-clippy}-20260920.log`.
+HTTP serving/timeout audit and pre-store RPC/middleware audit remain external
+drafts. No full request-audit or installed-browser acceptance is claimed yet.
+
 ## Reference fixture contract follow-up (2026-09-20)
 
 CI caught a stale Rust fixture assertion after the optional JavaScript helper
