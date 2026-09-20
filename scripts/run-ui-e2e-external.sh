@@ -39,11 +39,85 @@ if [[ -n "${HEPHAESTUS_COOKING_BROWSER_BRIDGE_DIR:-}" ]]; then
         printf 'browser fixture is outside the bridge directory\n' >&2
         exit 1
     }
+    browser_runner="${HEPHAESTUS_E2E_BROWSER_RUNNER:-legacy}"
+    case "${browser_runner}" in
+        legacy|installed-ui) ;;
+        *) printf 'unsupported browser bridge runner\n' >&2; exit 1 ;;
+    esac
+    if [[ "${browser_runner}" == installed-ui && "${phase}" != initial ]]; then
+        printf 'installed UI browser bridge supports only the initial phase\n' >&2
+        exit 1
+    fi
     request_id="$(date +%s%N)-$$"
     request="${bridge_dir}/request.${request_id}.json"
     pending="${request}.pending"
     response="${bridge_dir}/response.${request_id}"
-    python3 - "${pending}" <<'PY'
+    if [[ "${browser_runner}" == installed-ui ]]; then
+        platform_origin="${HEPHAESTUS_PLATFORM_HTTPS_ORIGIN:?set HEPHAESTUS_PLATFORM_HTTPS_ORIGIN}"
+        ui_namespace="${HEPHAESTUS_UI_NAMESPACE:?set HEPHAESTUS_UI_NAMESPACE}"
+        ui_port="${HEPHAESTUS_UI_PORT:?set HEPHAESTUS_UI_PORT}"
+        ca_source="${HEPHAESTUS_CADDY_TEST_CA_CERT:?set HEPHAESTUS_CADDY_TEST_CA_CERT}"
+        [[ -f "${ca_source}" && ! -L "${ca_source}" ]] || {
+            printf 'installed UI Caddy CA certificate is not a regular file\n' >&2
+            exit 1
+        }
+        ca_name="ca.${request_id}.pem"
+        ca_target="${bridge_real}/${ca_name}"
+        cp -- "${ca_source}" "${ca_target}"
+        chmod 600 -- "${ca_target}"
+        [[ -f "${ca_target}" && ! -L "${ca_target}" ]] || {
+            printf 'installed UI Caddy CA copy is not a regular file\n' >&2
+            rm -f -- "${ca_target}"
+            exit 1
+        }
+        if ! python3 - "${platform_origin}" "${ui_namespace}" "${ui_port}" "${ca_target}" <<'PY'
+import pathlib
+import re
+import sys
+from urllib.parse import urlsplit
+
+origin, namespace, port, ca_path = sys.argv[1:]
+try:
+    parsed = urlsplit(origin)
+    host = parsed.hostname
+    parsed_port = parsed.port
+except ValueError:
+    raise SystemExit("installed UI platform origin is invalid")
+if (
+    parsed.scheme != "https"
+    or parsed.username is not None
+    or parsed.password is not None
+    or parsed.path != ""
+    or parsed.query
+    or parsed.fragment
+    or not host
+    or not re.fullmatch(r"[a-z0-9-]+(?:\.[a-z0-9-]+)*\.localhost", host)
+    or parsed_port is None
+    or not port.isdecimal()
+    or parsed_port != int(port)
+    or not 1 <= int(port) <= 65535
+    or not re.fullmatch(r"[a-z0-9-]+(?:\.[a-z0-9-]+)*\.localhost", namespace)
+    or namespace == host
+    or not namespace.endswith("." + host)
+):
+    raise SystemExit("installed UI origin, namespace, or port is invalid")
+try:
+    certificate = pathlib.Path(ca_path)
+    if certificate.is_symlink() or not certificate.is_file():
+        raise ValueError
+    text = certificate.read_text(encoding="ascii")
+except (OSError, UnicodeError, ValueError):
+    raise SystemExit("installed UI Caddy CA copy is invalid")
+if "-----BEGIN CERTIFICATE-----" not in text or "-----END CERTIFICATE-----" not in text:
+    raise SystemExit("installed UI Caddy CA copy is not PEM")
+PY
+        then
+            rm -f -- "${ca_target}"
+            exit 1
+        fi
+    fi
+    if [[ "${browser_runner}" == legacy ]]; then
+        python3 - "${pending}" <<'PY'
 import json
 import os
 import sys
@@ -63,6 +137,33 @@ with open(sys.argv[1], "x", opener=lambda path, flags: os.open(path, flags, 0o60
     json.dump(payload, stream, separators=(",", ":"))
     stream.write("\n")
 PY
+    else
+        HEPHAESTUS_BROWSER_CA_NAME="${ca_name}" python3 - "${pending}" <<'PY'
+import json
+import os
+import sys
+
+payload = {
+    "runner": "installed-ui",
+    "fixture": os.environ["HEPHAESTUS_E2E_COOKING_FIXTURE"],
+    "database_url": os.environ["HEPHAESTUS_E2E_EXTERNAL_DATABASE_URL"],
+    "rpc_endpoint": os.environ["HEPHAESTUS_E2E_EXTERNAL_RPC_ENDPOINT"],
+    "rpc_secret": os.environ["HEPHAESTUS_E2E_EXTERNAL_RPC_SECRET"],
+    "oidc_issuer": os.environ["HEPHAESTUS_E2E_EXTERNAL_OIDC_ISSUER"],
+    "oidc_client_id": os.environ.get("HEPHAESTUS_E2E_EXTERNAL_OIDC_CLIENT_ID", "hephaestus-web"),
+    "oidc_client_secret": os.environ.get("HEPHAESTUS_E2E_EXTERNAL_OIDC_CLIENT_SECRET", "development-secret"),
+    "web_port": os.environ.get("HEPHAESTUS_E2E_EXTERNAL_WEB_PORT", "4000"),
+    "phase": os.environ.get("HEPHAESTUS_E2E_COOKING_PHASE", "initial"),
+    "platform_origin": os.environ["HEPHAESTUS_PLATFORM_HTTPS_ORIGIN"],
+    "ui_namespace": os.environ["HEPHAESTUS_UI_NAMESPACE"],
+    "ui_port": os.environ["HEPHAESTUS_UI_PORT"],
+    "ca_cert": os.environ["HEPHAESTUS_BROWSER_CA_NAME"],
+}
+with open(sys.argv[1], "x", opener=lambda path, flags: os.open(path, flags, 0o600), encoding="utf-8") as stream:
+    json.dump(payload, stream, separators=(",", ":"))
+    stream.write("\n")
+PY
+    fi
     mv -- "${pending}" "${request}"
     bridge_deadline="${HEPHAESTUS_COOKING_BRIDGE_DEADLINE_EPOCH:-0}"
     [[ "${bridge_deadline}" =~ ^[1-9][0-9]*$ ]] || {

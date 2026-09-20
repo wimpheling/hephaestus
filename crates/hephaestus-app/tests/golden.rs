@@ -9,7 +9,7 @@ use forge_postgres::PgForgeRepository;
 use forge_service::{CreateRepository, GitStorage};
 use hephaestus_app::{
     AppConfig, GatewayEdgeConfig, HephaestusApp, OciBuilderWorkerConfig, OidcConfig,
-    RegistryConfig, RunEventKind, VmBackendConfig,
+    RegistryConfig, RunEventKind, UiOriginConfig, VmBackendConfig,
 };
 use identity_domain::{
     AuthenticatedIdentity, BrowserSessionSid, RequestId, UserId,
@@ -25,6 +25,10 @@ use oci_builder_runtime_local::LocalOciRuntimeConfig;
 use registry_domain::{RegistryAuthority, SupplyChainPolicy};
 use registry_publisher::PublisherConfiguration;
 use registry_token::{RegistryTokenIssuer, SigningKey, TokenLifetime};
+use release_service::{
+    UiNamespace, UiPublicPort, UiRequestAuditDecision, UiRequestAuditOutcome, UiRequestAuditReason,
+    UiRequestAuditSurface,
+};
 use run_runtime_local::LocalRunRuntimeConfig;
 use secret_application::{
     BindSecret, CreateSecret, DeclareBrokeredHttpsRule, GrantAndAcceptSecretImport,
@@ -545,6 +549,90 @@ struct IsolatedGoldenDatabase {
     database_name: String,
     maintenance_url: String,
     target_url: String,
+}
+
+/// Verifies only the redacted, safe context emitted by the installed UI
+/// browser flow. The request audit stream deliberately has no route, query,
+/// cookie, credential, or response-payload columns for this observer to read.
+async fn assert_installed_ui_audit_success(
+    pool: &sqlx::PgPool,
+    actor_id: uuid::Uuid,
+    organization_id: uuid::Uuid,
+    installation_id: uuid::Uuid,
+    generation_id: uuid::Uuid,
+    surface: UiRequestAuditSurface,
+    child_required: bool,
+) -> Vec<uuid::Uuid> {
+    type AuditRow = (
+        uuid::Uuid,
+        Option<uuid::Uuid>,
+        Option<uuid::Uuid>,
+        Option<uuid::Uuid>,
+        Option<uuid::Uuid>,
+        Option<uuid::Uuid>,
+        Option<uuid::Uuid>,
+        Option<uuid::Uuid>,
+    );
+    let rows: Vec<AuditRow> = sqlx::query_as(
+        "SELECT request_id, actor_id, organization_id, installation_id,
+                generation_id, child_session_id, gateway_id, gateway_revision_id
+           FROM ui_request_audit_events
+          WHERE installation_id = $1
+            AND generation_id = $2
+            AND surface = $3
+            AND decision = $4
+            AND outcome = $5
+            AND reason_code = $6
+          ORDER BY occurred_at, id",
+    )
+    .bind(installation_id)
+    .bind(generation_id)
+    .bind(surface.as_str())
+    .bind(UiRequestAuditDecision::Allowed.as_str())
+    .bind(UiRequestAuditOutcome::Succeeded.as_str())
+    .bind(UiRequestAuditReason::None.as_str())
+    .fetch_all(pool)
+    .await
+    .expect("read installed UI request audit rows");
+    assert!(
+        !rows.is_empty(),
+        "installed UI must emit a successful {} audit row",
+        surface.as_str()
+    );
+    for row in &rows {
+        assert_eq!(row.1, Some(actor_id), "{} audit actor", surface.as_str());
+        assert_eq!(
+            row.2,
+            Some(organization_id),
+            "{} audit organization",
+            surface.as_str()
+        );
+        assert_eq!(
+            row.3,
+            Some(installation_id),
+            "{} audit installation",
+            surface.as_str()
+        );
+        assert_eq!(
+            row.4,
+            Some(generation_id),
+            "{} audit generation",
+            surface.as_str()
+        );
+        assert_eq!(
+            row.5.is_some(),
+            child_required,
+            "{} audit child-session context",
+            surface.as_str()
+        );
+        assert_eq!(
+            row.6.is_some(),
+            row.7.is_some(),
+            "{} audit gateway context must be paired",
+            surface.as_str()
+        );
+    }
+    rows.into_iter().map(|row| row.0).collect()
 }
 
 impl IsolatedGoldenDatabase {
@@ -2850,6 +2938,8 @@ async fn bearer_push_starts_run_through_production_bootstrap() {
         Duration::from_secs(300)
     };
     let browser_e2e = env::var("HEPHAESTUS_COOKING_BROWSER_E2E").as_deref() == Ok("1");
+    let installed_ui_fixture =
+        env::var("HEPHAESTUS_COOKING_INSTALLED_UI_FIXTURE").as_deref() == Ok("1");
     let gateway_caddy_e2e = env::var("HEPHAESTUS_APP_GATEWAY_CADDY_E2E").as_deref() == Ok("1");
     let gateway_service_e2e = env::var("HEPHAESTUS_APP_GATEWAY_SERVICE_E2E").as_deref() == Ok("1");
     let gateway_service_external_e2e =
@@ -2957,6 +3047,14 @@ async fn bearer_push_starts_run_through_production_bootstrap() {
     assert!(
         !cooking_service_build_proof || (gateway_caddy_e2e && libkrun_e2e),
         "the Cooking service build proof requires the joined Caddy/libkrun fixture"
+    );
+    assert!(
+        !installed_ui_fixture || cooking_service_build_proof,
+        "the installed UI fixture requires the Cooking service build proof"
+    );
+    assert!(
+        !installed_ui_fixture || caddy_tls,
+        "the installed UI fixture requires Caddy TLS"
     );
     assert!(
         !cooking_service_build_proof
@@ -3597,6 +3695,17 @@ async fn bearer_push_starts_run_through_production_bootstrap() {
             },
             timeout: cooking_wait_timeout,
         };
+        let installed_reference_uis = if env::var("HEPHAESTUS_COOKING_INSTALLED_UI_FIXTURE").as_deref()
+            == Ok("1")
+        {
+            Some(
+                cooking_builds::build_and_install_reference_uis(&cooking_context, organization_id)
+                    .await
+                    .expect("build and install reference UIs through production boundaries"),
+            )
+        } else {
+            None
+        };
         if cooking_service_build_proof {
             let published = cooking_service_build::build_and_publish_cooking_service(
                 &cooking_context,
@@ -3654,7 +3763,10 @@ async fn bearer_push_starts_run_through_production_bootstrap() {
                 caddy_server_name: String::from("shared"),
                 dispatcher_listen,
                 public_authority: String::from("gateway.golden.invalid"),
-                ui_origin: None,
+                ui_origin: installed_reference_uis.as_ref().map(|_| {
+                    let listener = reserve_installed_ui_listener();
+                    installed_ui_origin_config(listener)
+                }),
             });
             running
                 .shutdown()
@@ -4071,7 +4183,15 @@ async fn bearer_push_starts_run_through_production_bootstrap() {
                     "inbound_placeholder": cooking_inbound_placeholder.clone(),
                     "alice_provider_id": 1001,
                     "bob_provider_id": 1002
-                }
+                },
+                "installed_reference_uis": installed_reference_uis.map(|uis| serde_json::json!({
+                    "organization_id": uis.organization_id,
+                    "project_id": uis.project_id,
+                    "static_installation_id": uis.static_ui.installation_id,
+                    "static_generation_id": uis.static_ui.generation_id,
+                    "managed_installation_id": uis.managed_ui.installation_id,
+                    "managed_generation_id": uis.managed_ui.generation_id
+                }))
             });
             tokio::fs::write(
                 &path,
@@ -4082,11 +4202,17 @@ async fn bearer_push_starts_run_through_production_bootstrap() {
             if browser_e2e {
                 let issuer = env::var("HEPHAESTUS_COOKING_BROWSER_OIDC_ISSUER")
                     .expect("cooking browser OIDC issuer");
-                let script = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-                    .join("../../scripts/run-ui-e2e-external.sh");
+                let installed_browser = installed_reference_uis.is_some();
+                let script_name = if installed_browser {
+                    "../../scripts/run-installed-ui-e2e.sh"
+                } else {
+                    "../../scripts/run-ui-e2e-external.sh"
+                };
+                let script = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join(script_name);
                 let browser_timer =
                     WorkloadPhaseTimer::start("browser-initial", workload_phase_timing);
-                let status = tokio::process::Command::new(script)
+                let mut browser_command = tokio::process::Command::new(script);
+                browser_command
                     .env("HEPHAESTUS_E2E_COOKING_FIXTURE", &path)
                     .env("HEPHAESTUS_E2E_EXTERNAL_DATABASE_URL", &database_url)
                     .env(
@@ -4098,12 +4224,153 @@ async fn bearer_push_starts_run_through_production_bootstrap() {
                         "golden-internal-command-token-with-sufficient-entropy",
                     )
                     .env("HEPHAESTUS_E2E_EXTERNAL_OIDC_ISSUER", issuer)
-                    .env("HEPHAESTUS_E2E_COOKING_PHASE", "initial")
-                    .status()
-                    .await;
+                    .env("HEPHAESTUS_E2E_COOKING_PHASE", "initial");
+                if installed_browser {
+                    browser_command
+                        .env("HEPHAESTUS_PLATFORM_HTTPS_ORIGIN", installed_ui_platform_origin())
+                        .env("HEPHAESTUS_UI_NAMESPACE", installed_ui_namespace())
+                        .env(
+                            "HEPHAESTUS_CADDY_TEST_CA_CERT",
+                            env::var("HEPHAESTUS_CADDY_TEST_CA_CERT")
+                                .expect("joined Caddy CA certificate for installed UI"),
+                        );
+                }
+                let status = browser_command.status().await;
                 browser_timer.finish(status.as_ref().is_ok_and(std::process::ExitStatus::success));
                 let status = status.expect("run cooking browser E2E");
                 assert!(status.success(), "cooking browser E2E failed: {status}");
+                if let Some(installed_uis) = installed_reference_uis {
+                    let audit_actor_id = user_id.as_uuid();
+                    let audit_organization_id = organization_id.as_uuid();
+                    let static_installation_id = installed_uis.static_ui.installation_id;
+                    let static_generation_id = installed_uis.static_ui.generation_id;
+                    let managed_installation_id = installed_uis.managed_ui.installation_id;
+                    let managed_generation_id = installed_uis.managed_ui.generation_id;
+                    assert_installed_ui_audit_success(
+                        &pool,
+                        audit_actor_id,
+                        audit_organization_id,
+                        static_installation_id,
+                        static_generation_id,
+                        UiRequestAuditSurface::HandoffIssue,
+                        false,
+                    )
+                    .await;
+                    assert_installed_ui_audit_success(
+                        &pool,
+                        audit_actor_id,
+                        audit_organization_id,
+                        static_installation_id,
+                        static_generation_id,
+                        UiRequestAuditSurface::HandoffExchange,
+                        true,
+                    )
+                    .await;
+                    assert_installed_ui_audit_success(
+                        &pool,
+                        audit_actor_id,
+                        audit_organization_id,
+                        static_installation_id,
+                        static_generation_id,
+                        UiRequestAuditSurface::Bootstrap,
+                        true,
+                    )
+                    .await;
+                    assert_installed_ui_audit_success(
+                        &pool,
+                        audit_actor_id,
+                        audit_organization_id,
+                        static_installation_id,
+                        static_generation_id,
+                        UiRequestAuditSurface::Static,
+                        true,
+                    )
+                    .await;
+                    assert_installed_ui_audit_success(
+                        &pool,
+                        audit_actor_id,
+                        audit_organization_id,
+                        managed_installation_id,
+                        managed_generation_id,
+                        UiRequestAuditSurface::HandoffIssue,
+                        false,
+                    )
+                    .await;
+                    assert_installed_ui_audit_success(
+                        &pool,
+                        audit_actor_id,
+                        audit_organization_id,
+                        managed_installation_id,
+                        managed_generation_id,
+                        UiRequestAuditSurface::HandoffExchange,
+                        true,
+                    )
+                    .await;
+                    assert_installed_ui_audit_success(
+                        &pool,
+                        audit_actor_id,
+                        audit_organization_id,
+                        managed_installation_id,
+                        managed_generation_id,
+                        UiRequestAuditSurface::Bootstrap,
+                        true,
+                    )
+                    .await;
+                    assert_installed_ui_audit_success(
+                        &pool,
+                        audit_actor_id,
+                        audit_organization_id,
+                        managed_installation_id,
+                        managed_generation_id,
+                        UiRequestAuditSurface::Managed,
+                        true,
+                    )
+                    .await;
+                    let api_request_ids = assert_installed_ui_audit_success(
+                        &pool,
+                        audit_actor_id,
+                        audit_organization_id,
+                        managed_installation_id,
+                        managed_generation_id,
+                        UiRequestAuditSurface::Api,
+                        true,
+                    )
+                    .await;
+                    assert_installed_ui_audit_success(
+                        &pool,
+                        audit_actor_id,
+                        audit_organization_id,
+                        managed_installation_id,
+                        managed_generation_id,
+                        UiRequestAuditSurface::Embed,
+                        false,
+                    )
+                    .await;
+                    let correlated_api_count: i64 = sqlx::query_scalar(
+                        "SELECT count(*)
+                           FROM gateway_invocations invocation
+                           JOIN ui_request_audit_events audit
+                             ON audit.request_id = invocation.request_id
+                          WHERE audit.installation_id = $1
+                            AND audit.generation_id = $2
+                            AND audit.surface = $3
+                            AND audit.request_id = ANY($4)",
+                    )
+                    .bind(managed_installation_id)
+                    .bind(managed_generation_id)
+                    .bind(UiRequestAuditSurface::Api.as_str())
+                    .bind(&api_request_ids)
+                    .fetch_one(&pool)
+                    .await
+                    .expect("read managed UI gateway invocation correlation");
+                    assert!(
+                        correlated_api_count > 0,
+                        "managed API audit must correlate to a gateway invocation"
+                    );
+                    println!(
+                        "REAL_UI_INSTALLATION_AUDIT=1 static=1 managed=1 api=1 embed=1 gateway_correlation=1"
+                    );
+                }
                 let browser_gateway_id = installed_gateway.gateway_id;
                 let active_revision_id: uuid::Uuid =
                     sqlx::query_scalar("SELECT active_revision_id FROM gateways WHERE id = $1")
@@ -4866,6 +5133,7 @@ async fn bearer_push_starts_run_through_production_bootstrap() {
                 )
                 .env("HEPHAESTUS_E2E_EXTERNAL_OIDC_ISSUER", issuer)
                 .env("HEPHAESTUS_E2E_COOKING_PHASE", "post-operation")
+                .env("HEPHAESTUS_E2E_BROWSER_RUNNER", "legacy")
                 .status()
                 .await;
             browser_timer.finish(status.as_ref().is_ok_and(std::process::ExitStatus::success));
@@ -6125,6 +6393,44 @@ fn signed_token(lifetime: Duration) -> String {
     .expect("sign golden bearer token")
 }
 
+fn installed_ui_fixture_enabled() -> bool {
+    env::var("HEPHAESTUS_COOKING_INSTALLED_UI_FIXTURE").as_deref() == Ok("1")
+}
+
+fn installed_ui_platform_origin() -> String {
+    let public =
+        Url::parse(&env::var("HEPHAESTUS_CADDY_TEST_PUBLIC_URL").expect("joined Caddy public URL"))
+            .expect("joined Caddy public URL");
+    let port = public.port().expect("joined Caddy public port");
+    format!("https://platform.localhost:{port}")
+}
+
+fn installed_ui_namespace() -> String {
+    env::var("HEPHAESTUS_UI_NAMESPACE").unwrap_or_else(|_| String::from("ui.platform.localhost"))
+}
+
+fn reserve_installed_ui_listener() -> std::net::SocketAddr {
+    std::net::TcpListener::bind("127.0.0.1:0")
+        .expect("reserve installed UI origin listener")
+        .local_addr()
+        .expect("installed UI origin listener address")
+}
+
+fn installed_ui_origin_config(listener: std::net::SocketAddr) -> UiOriginConfig {
+    let public =
+        Url::parse(&env::var("HEPHAESTUS_CADDY_TEST_PUBLIC_URL").expect("joined Caddy public URL"))
+            .expect("joined Caddy public URL");
+    let public_port = UiPublicPort::parse(public.port().expect("joined Caddy public port"))
+        .expect("joined Caddy public port is valid");
+    UiOriginConfig::new(
+        UiNamespace::parse(installed_ui_namespace()).expect("installed UI namespace"),
+        public_port,
+        installed_ui_platform_origin(),
+    )
+    .expect("installed UI origin configuration")
+    .with_listener(listener)
+}
+
 fn caddy_configuration(admin_url: &str) -> Vec<u8> {
     let admin = reqwest::Url::parse(admin_url).expect("Caddy admin URL");
     let admin_listen = format!(
@@ -6132,15 +6438,49 @@ fn caddy_configuration(admin_url: &str) -> Vec<u8> {
         admin.host_str().expect("Caddy admin host"),
         admin.port().expect("Caddy admin port")
     );
+    let mut routes = vec![
+        serde_json::json!({
+            "match": [{ "path": ["/platform/*"] }],
+            "handle": [{ "handler": "static_response", "body": "platform-owned" }]
+        }),
+        serde_json::json!({
+            "group": "hephaestus.gateway",
+            "handle": [{ "handler": "subroute", "routes": [] }]
+        }),
+        serde_json::json!({ "handle": [{ "handler": "static_response", "status_code": 404 }] }),
+    ];
+    if installed_ui_fixture_enabled() {
+        let web_port =
+            env::var("HEPHAESTUS_E2E_EXTERNAL_WEB_PORT").unwrap_or_else(|_| "4000".into());
+        let platform_host = Url::parse(&installed_ui_platform_origin())
+            .expect("installed UI platform origin")
+            .host_str()
+            .expect("installed UI platform host")
+            .to_owned();
+        routes.insert(
+            0,
+            serde_json::json!({
+                "group": "hephaestus.ui",
+                "handle": [{ "handler": "subroute", "routes": [] }]
+            }),
+        );
+        routes.insert(
+            1,
+            serde_json::json!({
+                "match": [{ "host": [platform_host] }],
+                "handle": [{
+                    "handler": "reverse_proxy",
+                    "upstreams": [{ "dial": format!("127.0.0.1:{web_port}") }]
+                }],
+                "terminal": true
+            }),
+        );
+    }
     let mut configuration = serde_json::json!({
         "admin": { "listen": admin_listen },
         "apps": { "http": { "servers": { "shared": {
             "listen": [env::var("HEPHAESTUS_CADDY_TEST_LISTEN").expect("joined Caddy listen address")],
-            "routes": [
-                { "match": [{ "path": ["/platform/*"] }], "handle": [{ "handler": "static_response", "body": "platform-owned" }] },
-                { "group": "hephaestus.gateway", "handle": [{ "handler": "subroute", "routes": [] }] },
-                { "handle": [{ "handler": "static_response", "status_code": 404 }] }
-            ]
+            "routes": routes
         } } } }
     });
     if env::var("HEPHAESTUS_CADDY_TEST_TLS").as_deref() == Ok("1") {
@@ -6149,11 +6489,24 @@ fn caddy_configuration(admin_url: &str) -> Vec<u8> {
             .expect("shared Caddy server configuration");
         server["automatic_https"] = serde_json::json!({ "disable_redirects": true });
         server["tls_connection_policies"] = serde_json::json!([{}]);
+        let subjects = if installed_ui_fixture_enabled() {
+            serde_json::json!([
+                "127.0.0.1",
+                Url::parse(&installed_ui_platform_origin())
+                    .expect("installed UI platform origin")
+                    .host_str()
+                    .expect("installed UI platform host")
+                    .to_owned(),
+                format!("*.{}", installed_ui_namespace())
+            ])
+        } else {
+            serde_json::json!(["127.0.0.1"])
+        };
         configuration["apps"]["tls"] = serde_json::json!({
-            "certificates": { "automate": ["127.0.0.1"] },
+            "certificates": { "automate": subjects },
             "automation": {
                 "policies": [{
-                    "subjects": ["127.0.0.1"],
+                    "subjects": subjects,
                     "issuers": [{ "module": "internal" }]
                 }]
             }

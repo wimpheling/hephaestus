@@ -38,6 +38,42 @@ proofs, and the final integrated quality gate remain incomplete. The user approv
 global installations and organization isolation. Historical checkpoints record the state
 at their time; later integration checkpoints supersede earlier pending notes.
 
+## Installed UI fixture and safe browser harness checkpoint (2026-09-20)
+
+The opt-in Cooking fixture now builds and publishes both reference releases
+through the existing Git/build/release path, installs the managed gateway and
+both UIs through RPC, validates scoped listing, and records only safe owner,
+installation, and generation IDs for the browser. Golden configuration enables
+the loopback listener and Caddy platform/wildcard TLS routes for this mode.
+
+The dedicated smoke specification uses genuine OIDC/Phoenix launch, checks
+static full-page and managed iframe serving, cookie attributes/isolation,
+fragment removal, and the declared identity API. After browser success, golden
+assertions require actual scoped audit rows and API-to-gateway request-ID
+correlation. Those assertions are compiled, not yet executed against a browser.
+
+The existing host bridge now has a closed installed-UI selector with exact
+initial-phase, origin/subdomain/port, and bridge-owned CA checks. Legacy
+post-operation requests remain on the legacy runner. Protocol tests execute the
+real client/host scripts with fake fixed child runners and cover rejection and
+cleanup; they are not browser evidence.
+
+The installed browser uses a dedicated reporter that emits only fixed IDs,
+phases, statuses, and numeric counts. It discards raw errors and worker output;
+automatic Playwright error artifacts remain in unmounted disposable-container
+storage. Only explicit screenshots and safe reporter output are retained. The
+runner copies an allowlist of source files, excluding prior browser state,
+traces, and dependency/output directories. Reporter tests reject a synthetic
+43-character bootstrap fragment, cookie, dynamic title, and raw failure output.
+
+Source validation passed: app all-target compilation and strict Clippy,
+workspace formatting, TypeScript checks, shell syntax, both bridge suites,
+mocked installed-runner delegation and port rejection, and two reporter tests.
+Logs are preserved in `/home/a/heph-release-ui-installed-fixture-20260920/`.
+The actual VM/browser smoke remains pending; a browser-image registry transfer
+has delayed its Chromium trusted-CA preflight. No installed serving, audit-row,
+revocation, or lifecycle proof is claimed by this source checkpoint.
+
 ## Reference identity API declaration checkpoint (2026-09-20)
 
 The managed reference now explicitly declares `GET /reference/identity` through
