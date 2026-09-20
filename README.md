@@ -204,6 +204,13 @@ formatting/Clippy/tests/docs, Phoenix checks, UI checks, and their focused
 integration tests. Individual `cargo dev check <family>` commands remain useful
 for fast iteration.
 
+The UI family (`cargo dev check ui`, and therefore `cargo dev quality`) also
+runs `npm test` in the [release UI kit](web/assets/release_ui_kit/README.md)
+using Node and npm. The kit has no npm dependencies and the gate does not run
+an install; CI provisions Node 24 for this check. Its Node checks cover
+deterministic package output and source constraints. Browser rendering,
+accessibility, and visual regression remain separate checks.
+
 State selectors cover PostgreSQL, NATS, repositories, artifacts, agent
 volumes, workspaces, secret keys, rootfs, fixtures, runtime files, and logs.
 With no selectors, `state init`, `clean`, and `reinit` operate on every
