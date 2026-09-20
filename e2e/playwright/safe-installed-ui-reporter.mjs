@@ -4,6 +4,10 @@ const TEST_IDS = new Map([
 
 const STAGE_IDS = new Map([
   ["signin", "signin"],
+  ["signin-platform", "signin_platform"],
+  ["signin-redirect", "signin_redirect"],
+  ["signin-account", "signin_account"],
+  ["signin-return", "signin_return"],
   ["static-launch", "static_launch"],
   ["static-cookie", "static_cookie"],
   ["static-accessibility", "static_accessibility"],
@@ -39,6 +43,12 @@ export class SafeInstalledUiReporter {
     const stageId = STAGE_IDS.get(step.title);
     if (!stageId) return;
     this.write({event: "stage", stage_id: stageId, status: step.error ? "failed" : "passed"});
+  }
+
+  onStepBegin(_test, _result, step) {
+    const stageId = STAGE_IDS.get(step.title);
+    if (!stageId) return;
+    this.write({event: "stage", stage_id: stageId, status: "pending"});
   }
 
   onTestEnd(test, result) {

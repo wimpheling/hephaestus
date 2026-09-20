@@ -19,6 +19,11 @@ test("safe reporter emits only fixed IDs and bounded result fields", () => {
   const cookie = "__Host-hephaestus_ui=secret-cookie-value";
 
   reporter.onBegin({}, {allTests: () => [{title: "cooking installed UI TLS full-page and managed iframe smoke"}]});
+  reporter.onStepBegin(
+    {title: "cooking installed UI TLS full-page and managed iframe smoke"},
+    {},
+    {title: "signin-redirect"},
+  );
   reporter.onStepEnd(
     {title: "cooking installed UI TLS full-page and managed iframe smoke"},
     {},
@@ -53,6 +58,7 @@ test("safe reporter emits only fixed IDs and bounded result fields", () => {
   const records = output.trim().split("\n").map(JSON.parse);
   assert.deepEqual(records, [
     {event: "run_started", test_count: 1},
+    {event: "stage", stage_id: "signin_redirect", status: "pending"},
     {event: "stage", stage_id: "static_cookie", status: "passed"},
     {event: "test", test_id: "unknown_test", status: "failed", duration_ms: 12, retry: 0},
     {event: "run_finished", status: "failed", counts: {passed: 0, failed: 1, skipped: 0, other: 0}},

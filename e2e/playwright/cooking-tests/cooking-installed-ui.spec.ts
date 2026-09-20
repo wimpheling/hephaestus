@@ -281,13 +281,22 @@ function loadFixture(): CookingFixture {
 }
 
 async function signIn(page: import("@playwright/test").Page, account: string) {
-  await page.goto("/");
-  await page.getByTestId("oidc-login").click();
-  await expect(page).toHaveURL(new RegExp(escapeRegExp(`${oidcUrl}/authorize`)));
-  await page.locator('input[name="login"]').fill(account);
-  await page.getByRole("button", {name: /Continue as/}).click();
-  await expect(page).toHaveURL(/\/organizations$/);
-  await waitForLiveView(page);
+  await test.step("signin-platform", async () => {
+    await page.goto("/");
+    await expect(page.getByTestId("oidc-login")).toBeVisible();
+  });
+  await test.step("signin-redirect", async () => {
+    await page.getByTestId("oidc-login").click();
+    await expect(page).toHaveURL(new RegExp(escapeRegExp(`${oidcUrl}/authorize`)));
+  });
+  await test.step("signin-account", async () => {
+    await page.locator('input[name="login"]').fill(account);
+    await page.getByRole("button", {name: /Continue as/}).click();
+  });
+  await test.step("signin-return", async () => {
+    await expect(page).toHaveURL(/\/organizations$/);
+    await waitForLiveView(page);
+  });
 }
 
 async function waitForLiveView(page: import("@playwright/test").Page) {
