@@ -1,12 +1,16 @@
-//! `PostgreSQL` adapter for the first static, zero-API UI installation command.
+//! `PostgreSQL` adapter for static UI installation and lifecycle commands.
 
 use authz_domain::{ObjectRef, ObjectType, Permission};
+use forge_domain::{OrganizationId, ProjectId, RepositoryId};
 use identity_domain::{AuthenticatedIdentity, actor_idempotency_id};
 use release_domain::{
     ReleaseCommandKey, ReleaseId, UiInstallationCommandIdentity, UiInstallationGenerationId,
-    UiInstallationId, UiInstallationInputDigest, UiInstallationState,
+    UiInstallationId, UiInstallationInputDigest, UiInstallationOperation, UiInstallationState,
 };
-use release_service::{InstallStaticUi, InstallStaticUiResult, UiInstallationError};
+use release_service::{
+    DisableUiInstallation, InstallStaticUi, InstallStaticUiResult, RemoveUiInstallation,
+    UiInstallationError, UiInstallationLifecycleResult,
+};
 use sqlx::{FromRow, Postgres, Transaction};
 use uuid::Uuid;
 
@@ -20,6 +24,30 @@ struct OwnerRow {
     organization: Uuid,
     #[sqlx(rename = "repository_id")]
     repository: Option<Uuid>,
+}
+
+#[derive(Debug, FromRow)]
+struct InstallationOwnerRow {
+    #[sqlx(rename = "project_id")]
+    project: Option<Uuid>,
+    #[sqlx(rename = "organization_id")]
+    organization: Uuid,
+    #[sqlx(rename = "repository_id")]
+    repository: Option<Uuid>,
+    scope: String,
+}
+
+#[derive(Debug, FromRow)]
+struct LockedInstallationRow {
+    #[sqlx(rename = "project_id")]
+    project: Option<Uuid>,
+    #[sqlx(rename = "organization_id")]
+    organization: Uuid,
+    #[sqlx(rename = "repository_id")]
+    repository: Option<Uuid>,
+    scope: String,
+    lifecycle: String,
+    current_generation_id: Uuid,
 }
 
 #[derive(Debug, FromRow)]
@@ -70,6 +98,222 @@ impl ReleaseService {
             }
         }
         Err(UiInstallationError::Unavailable)
+    }
+
+    /// Disables an installation while retaining its current generation and
+    /// immutable history. Source-release permissions are deliberately not
+    /// consulted: current ownership authority controls this lifecycle change.
+    ///
+    /// # Errors
+    ///
+    /// Returns a redacted failure for unavailable persistence, denied current
+    /// owner authority, stale generation CAS, invalid lifecycle state, or a
+    /// changed replay input.
+    pub async fn disable_ui_installation(
+        &self,
+        identity: &AuthenticatedIdentity,
+        command: DisableUiInstallation,
+    ) -> Result<UiInstallationLifecycleResult, UiInstallationError> {
+        for attempt in 0..2 {
+            match self
+                .mutate_ui_installation(
+                    identity,
+                    command.installation_id,
+                    command.caller_key.clone(),
+                    command.expected_generation_id,
+                    UiInstallationOperation::Disable,
+                )
+                .await
+            {
+                Err(AttemptError::RetryLedgerRace) if attempt == 0 => {}
+                Err(AttemptError::RetryLedgerRace) => return Err(UiInstallationError::Unavailable),
+                Err(AttemptError::Public(error)) => return Err(error),
+                Ok(result) => return Ok(result),
+            }
+        }
+        Err(UiInstallationError::Unavailable)
+    }
+
+    /// Terminally removes an installation while retaining its current
+    /// generation and immutable history. The owner/key can then be reused by
+    /// a new installation identity.
+    ///
+    /// # Errors
+    ///
+    /// Returns a redacted failure for unavailable persistence, denied current
+    /// owner authority, stale generation CAS, invalid lifecycle state, or a
+    /// changed replay input.
+    pub async fn remove_ui_installation(
+        &self,
+        identity: &AuthenticatedIdentity,
+        command: RemoveUiInstallation,
+    ) -> Result<UiInstallationLifecycleResult, UiInstallationError> {
+        for attempt in 0..2 {
+            match self
+                .mutate_ui_installation(
+                    identity,
+                    command.installation_id,
+                    command.caller_key.clone(),
+                    command.expected_generation_id,
+                    UiInstallationOperation::Remove,
+                )
+                .await
+            {
+                Err(AttemptError::RetryLedgerRace) if attempt == 0 => {}
+                Err(AttemptError::RetryLedgerRace) => return Err(UiInstallationError::Unavailable),
+                Err(AttemptError::Public(error)) => return Err(error),
+                Ok(result) => return Ok(result),
+            }
+        }
+        Err(UiInstallationError::Unavailable)
+    }
+
+    // Keep the lifecycle transaction ordering visible beside the command
+    // boundary: owner lock, authorization, immutable ledger, then outbox.
+    #[allow(clippy::too_many_lines)]
+    async fn mutate_ui_installation(
+        &self,
+        identity: &AuthenticatedIdentity,
+        installation_id: UiInstallationId,
+        caller_key: release_domain::UiInstallationCallerKey,
+        expected_generation_id: Option<UiInstallationGenerationId>,
+        operation: UiInstallationOperation,
+    ) -> Result<UiInstallationLifecycleResult, AttemptError> {
+        let next_state = match operation {
+            UiInstallationOperation::Disable => UiInstallationState::Disabled,
+            UiInstallationOperation::Remove => UiInstallationState::Removed,
+            _ => return Err(UiInstallationError::Unavailable.into()),
+        };
+        let mut tx = authz_postgres::begin_actor_transaction(&self.pool, identity)
+            .await
+            .map_err(|_| UiInstallationError::Unavailable)?;
+        let initial = load_installation_owner(&mut tx, installation_id)
+            .await
+            .map_err(|_| UiInstallationError::Unavailable)?
+            .ok_or(UiInstallationError::Unavailable)?;
+        let target = installation_target(&initial).ok_or(UiInstallationError::Unavailable)?;
+        let owner = lock_owner(&mut tx, target)
+            .await
+            .map_err(|_| UiInstallationError::Unavailable)?
+            .ok_or(UiInstallationError::Unavailable)?;
+        require_owner_management(self, &mut tx, identity, target, &owner).await?;
+        let locked = lock_installation(&mut tx, installation_id)
+            .await
+            .map_err(|_| UiInstallationError::Unavailable)?
+            .ok_or(UiInstallationError::Unavailable)?;
+        if !same_owner(&initial, &locked) {
+            return Err(UiInstallationError::Unavailable.into());
+        }
+
+        let command_identity = UiInstallationCommandIdentity::new(
+            identity.user_id.as_uuid(),
+            operation,
+            caller_key.clone(),
+        );
+        let command_key = command_identity.command_key();
+        let input_hash = match operation {
+            UiInstallationOperation::Disable => {
+                UiInstallationInputDigest::disable(installation_id, expected_generation_id)
+            }
+            UiInstallationOperation::Remove => {
+                UiInstallationInputDigest::remove(installation_id, expected_generation_id)
+            }
+            _ => unreachable!("lifecycle mutation only accepts disable/remove"),
+        };
+        if let Some(existing) = find_existing_command(
+            &mut tx,
+            identity.user_id.as_uuid(),
+            operation,
+            caller_key.as_str(),
+        )
+        .await
+        .map_err(|_| UiInstallationError::Unavailable)?
+        {
+            return replay_lifecycle_or_conflict(
+                &existing,
+                command_key,
+                input_hash,
+                identity.user_id.as_uuid(),
+                installation_id,
+                next_state,
+            );
+        }
+        // Disabled -> disabled is intentionally valid: a fresh caller key is
+        // a new effective command and therefore emits its own owner event.
+        if locked.lifecycle == "removed"
+            || !lifecycle_state(&locked.lifecycle)
+                .is_some_and(|state| state.can_transition_to(next_state))
+        {
+            return Err(UiInstallationError::InvalidTransition.into());
+        }
+        if expected_generation_id
+            .is_some_and(|expected| expected.as_uuid() != locked.current_generation_id)
+        {
+            return Err(UiInstallationError::GenerationConflict.into());
+        }
+
+        let result_lifecycle = lifecycle_name(next_state);
+        sqlx::query(
+            "UPDATE ui_installations
+             SET lifecycle = $2, removed_at = CASE WHEN $2 = 'removed' THEN now() ELSE NULL END,
+                 updated_at = now()
+             WHERE id = $1",
+        )
+        .bind(installation_id.as_uuid())
+        .bind(result_lifecycle)
+        .execute(&mut *tx)
+        .await
+        .map_err(|_| UiInstallationError::Unavailable)?;
+        let command_insert = sqlx::query(
+            "INSERT INTO ui_installation_commands
+             (command_key, caller_idempotency_key, operation, installation_id, actor_id,
+              request_id, input_hash, expected_generation_id, result_generation_id,
+              result_lifecycle)
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)",
+        )
+        .bind(command_key.as_bytes().as_slice())
+        .bind(caller_key.as_str())
+        .bind(operation.as_str())
+        .bind(installation_id.as_uuid())
+        .bind(identity.user_id.as_uuid())
+        .bind(identity.request_id.as_uuid())
+        .bind(input_hash.as_bytes().as_slice())
+        .bind(expected_generation_id.map(release_domain::UiInstallationGenerationId::as_uuid))
+        .bind(locked.current_generation_id)
+        .bind(result_lifecycle)
+        .execute(&mut *tx)
+        .await;
+        if let Err(error) = command_insert {
+            let mapped = map_command_insert_error(&error);
+            if matches!(mapped, AttemptError::RetryLedgerRace) {
+                tx.rollback()
+                    .await
+                    .map_err(|_| UiInstallationError::Unavailable)?;
+            }
+            return Err(mapped);
+        }
+
+        let idempotency_id = actor_idempotency_id(
+            identity.user_id.as_uuid().as_bytes(),
+            command_key.as_bytes(),
+        );
+        sqlx::query("SELECT set_config('hephaestus.occurrence_id', $1, true)")
+            .bind(idempotency_id.to_string())
+            .execute(&mut *tx)
+            .await
+            .map_err(|_| UiInstallationError::Unavailable)?;
+        append_owner_event(&mut tx, idempotency_id.as_uuid(), &owner)
+            .await
+            .map_err(|_| UiInstallationError::Unavailable)?;
+        tx.commit()
+            .await
+            .map_err(|_| UiInstallationError::Unavailable)?;
+        Ok(UiInstallationLifecycleResult {
+            installation_id,
+            generation_id: UiInstallationGenerationId::from_uuid(locked.current_generation_id),
+            state: next_state,
+            idempotency_id: idempotency_id.as_uuid(),
+        })
     }
 
     // Keep the ordered transaction in one function so its rollback and
@@ -133,6 +377,7 @@ impl ReleaseService {
         if let Some(existing) = find_existing_command(
             &mut tx,
             identity.user_id.as_uuid(),
+            release_domain::UiInstallationOperation::Install,
             command.caller_key.as_str(),
         )
         .await
@@ -260,6 +505,158 @@ impl ReleaseService {
     }
 }
 
+async fn load_installation_owner(
+    tx: &mut Transaction<'_, Postgres>,
+    installation_id: UiInstallationId,
+) -> Result<Option<InstallationOwnerRow>, sqlx::Error> {
+    sqlx::query_as(
+        "SELECT installation.project_id,
+                COALESCE(installation.organization_id, project.organization_id)
+                    AS organization_id,
+                installation.repository_id, installation.scope
+         FROM ui_installations AS installation
+         LEFT JOIN projects AS project ON project.id = installation.project_id
+         WHERE installation.id = $1",
+    )
+    .bind(installation_id.as_uuid())
+    .fetch_optional(&mut **tx)
+    .await
+}
+
+async fn lock_installation(
+    tx: &mut Transaction<'_, Postgres>,
+    installation_id: UiInstallationId,
+) -> Result<Option<LockedInstallationRow>, sqlx::Error> {
+    sqlx::query_as(
+        "SELECT installation.project_id,
+                COALESCE(installation.organization_id, project.organization_id)
+                    AS organization_id,
+                installation.repository_id, installation.scope, installation.lifecycle,
+                installation.current_generation_id
+         FROM ui_installations AS installation
+         LEFT JOIN projects AS project ON project.id = installation.project_id
+         WHERE installation.id = $1
+         FOR UPDATE OF installation",
+    )
+    .bind(installation_id.as_uuid())
+    .fetch_optional(&mut **tx)
+    .await
+}
+
+fn installation_target(
+    owner: &InstallationOwnerRow,
+) -> Option<release_domain::UiInstallationTarget> {
+    match (owner.scope.as_str(), owner.project, owner.repository) {
+        ("global", None, None) => Some(release_domain::UiInstallationTarget::organization(
+            OrganizationId::from_uuid(owner.organization),
+        )),
+        ("project", Some(project_id), None) => Some(release_domain::UiInstallationTarget::project(
+            ProjectId::from_uuid(project_id),
+        )),
+        ("repository", Some(_project_id), Some(repository_id)) => {
+            Some(release_domain::UiInstallationTarget::repository(
+                RepositoryId::from_uuid(repository_id),
+            ))
+        }
+        _ => None,
+    }
+}
+
+fn same_owner(initial: &InstallationOwnerRow, locked: &LockedInstallationRow) -> bool {
+    initial.project == locked.project
+        && initial.organization == locked.organization
+        && initial.repository == locked.repository
+        && initial.scope == locked.scope
+}
+
+async fn require_owner_management(
+    service: &ReleaseService,
+    tx: &mut Transaction<'_, Postgres>,
+    identity: &AuthenticatedIdentity,
+    target: release_domain::UiInstallationTarget,
+    owner: &OwnerRow,
+) -> Result<(), UiInstallationError> {
+    match target {
+        release_domain::UiInstallationTarget::Organization(_) => service
+            .require(
+                tx,
+                identity,
+                Permission::CanManage,
+                ObjectRef::new(ObjectType::Organization, owner.organization),
+            )
+            .await
+            .map_err(|error| map_authorization_public(&error)),
+        release_domain::UiInstallationTarget::Project(_)
+        | release_domain::UiInstallationTarget::Repository(_) => {
+            let project_id = owner.project.ok_or(UiInstallationError::Unavailable)?;
+            service
+                .require(
+                    tx,
+                    identity,
+                    Permission::CanManage,
+                    ObjectRef::new(ObjectType::Project, project_id),
+                )
+                .await
+                .map_err(|error| map_authorization_public(&error))?;
+            if let Some(repository_id) = owner.repository {
+                service
+                    .require(
+                        tx,
+                        identity,
+                        Permission::CanWrite,
+                        ObjectRef::new(ObjectType::Repository, repository_id),
+                    )
+                    .await
+                    .map_err(|error| map_authorization_public(&error))?;
+            }
+            Ok(())
+        }
+    }
+}
+
+fn lifecycle_state(value: &str) -> Option<UiInstallationState> {
+    match value {
+        "enabled" => Some(UiInstallationState::Enabled),
+        "disabled" => Some(UiInstallationState::Disabled),
+        "removed" => Some(UiInstallationState::Removed),
+        _ => None,
+    }
+}
+
+const fn lifecycle_name(value: UiInstallationState) -> &'static str {
+    match value {
+        UiInstallationState::Enabled => "enabled",
+        UiInstallationState::Disabled => "disabled",
+        UiInstallationState::Removed => "removed",
+    }
+}
+
+fn replay_lifecycle_or_conflict(
+    existing: &ExistingInstallCommand,
+    command_key: ReleaseCommandKey,
+    input_hash: UiInstallationInputDigest,
+    actor_id: Uuid,
+    installation_id: UiInstallationId,
+    expected_state: UiInstallationState,
+) -> Result<UiInstallationLifecycleResult, AttemptError> {
+    if existing.command_key.as_slice() != command_key.as_bytes()
+        || existing.input_hash.as_slice() != input_hash.as_bytes()
+    {
+        return Err(UiInstallationError::IdempotencyConflict.into());
+    }
+    if existing.installation_id != installation_id.as_uuid()
+        || lifecycle_state(&existing.result_lifecycle) != Some(expected_state)
+    {
+        return Err(UiInstallationError::Unavailable.into());
+    }
+    Ok(UiInstallationLifecycleResult {
+        installation_id,
+        generation_id: UiInstallationGenerationId::from_uuid(existing.result_generation_id),
+        state: expected_state,
+        idempotency_id: actor_idempotency_id(actor_id.as_bytes(), command_key.as_bytes()).as_uuid(),
+    })
+}
+
 async fn append_owner_event(
     tx: &mut Transaction<'_, Postgres>,
     occurrence_id: Uuid,
@@ -358,16 +755,18 @@ async fn lock_owner(
 async fn find_existing_command(
     tx: &mut Transaction<'_, Postgres>,
     actor_id: Uuid,
+    operation: UiInstallationOperation,
     caller_key: &str,
 ) -> Result<Option<ExistingInstallCommand>, sqlx::Error> {
     sqlx::query_as(
         "SELECT command_key, input_hash, installation_id, result_generation_id,
                 result_lifecycle
          FROM ui_installation_commands
-         WHERE actor_id = $1 AND operation = 'install'
-           AND caller_idempotency_key = $2",
+         WHERE actor_id = $1 AND operation = $2
+           AND caller_idempotency_key = $3",
     )
     .bind(actor_id)
+    .bind(operation.as_str())
     .bind(caller_key)
     .fetch_optional(&mut **tx)
     .await
@@ -508,6 +907,13 @@ fn map_authorization_error(error: &super::ReleaseServiceError) -> AttemptError {
             UiInstallationError::Unavailable.into()
         }
         _ => UiInstallationError::Unavailable.into(),
+    }
+}
+
+fn map_authorization_public(error: &super::ReleaseServiceError) -> UiInstallationError {
+    match map_authorization_error(error) {
+        AttemptError::Public(error) => error,
+        AttemptError::RetryLedgerRace => UiInstallationError::Unavailable,
     }
 }
 

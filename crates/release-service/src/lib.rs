@@ -23,7 +23,10 @@ pub use ui_browser::{
     CreatedUiBrowserSession, ExchangeUiBrowserHandoff, UiBrowserHandoffError,
     UiBrowserRequestRoute, UiBrowserSessionContext, UiBrowserSessionError, UiBrowserSessionStore,
 };
-pub use ui_installation::{InstallStaticUi, InstallStaticUiResult, UiInstallationError};
+pub use ui_installation::{
+    DisableUiInstallation, InstallStaticUi, InstallStaticUiResult, RemoveUiInstallation,
+    UiInstallationError, UiInstallationLifecycleResult,
+};
 
 /// One already safely imported immutable artifact.
 #[derive(Debug, Clone)]

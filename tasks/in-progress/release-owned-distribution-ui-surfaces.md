@@ -53,6 +53,59 @@ release-domain/release-service/dev tests, strict release-domain/release-service/
 release-postgres/dev Clippy, and docs passed with Rust 1.88.0. This is focused
 local evidence; updated CI and final integrated quality remain pending.
 
+## Disable/remove lifecycle checkpoint (2026-09-20)
+
+The release service now disables and terminally removes project, repository,
+and organization UI installations. Both operations preserve the current immutable
+generation, require current owner management before replay, enforce optional
+internal generation CAS, and atomically retain the command outcome plus one owner
+event/outbox pair. Source permission revocation does not prevent owner cleanup.
+Exact replay adds no event; a fresh disable of an already disabled installation
+records a new command/event. Removed identities remain terminal and release their
+owner/key for a new installation identity.
+
+The real PostgreSQL lifecycle matrix passes owner scopes, stale CAS, replay and
+input conflicts, provenance, source revocation, terminal removal, key reuse, and
+per-command event/outbox counts. A two-owner concurrent caller-key race proves one
+committed command and one conflict after bounded ledger retry and reauthorization.
+The owner loader derives project/repository organization through the project;
+it does not decode their intentionally null direct organization column.
+
+Evidence: `/home/a/heph-ui-lifecycle-matrix-exact-final-20260920.log` and
+`/home/a/heph-ui-lifecycle-ledger-race-exact-final-20260920.log`. Existing static
+project/global/replay/rollback regressions pass in matching
+`heph-static-*-regression-final-20260920.log` files. Scoped strict Clippy/docs,
+workspace formatting, and architecture pass in the lifecycle final gate logs.
+Activation/rollback generation creation, managed/API binding commands, transport,
+and serving remain incomplete.
+
+## UI-origin serving integration decision (2026-09-20)
+
+The existing Caddy namespace will route to one bounded loopback Rust UI-origin
+handler. That handler will canonicalize the host, resolve the exact immutable
+generation, reject unknown/revoked hosts before content, own the reserved
+bootstrap exchange route and separate host-only child cookie, authorize each
+request, and serve verified artifacts or proxy exact declared gateways. It will
+reuse the existing gateway dispatcher rather than introduce another Caddy writer.
+
+Phoenix remains the platform session owner and generates the one-time handoff
+secret through an authenticated sensitive RPC. The handoff travels through a
+fragment-to-same-origin-POST bootstrap, removed before release navigation. The
+Rust UI handler generates the child secret; no raw parent SID reaches that origin
+or a guest. Browser credentials are stripped before proxying and guest cookie
+writes are rejected. This is the implementation direction, not serving evidence.
+
+Managed/API installation will resolve preexisting, currently active gateway
+revisions and pin them in the generation. It will not silently create or retarget
+agent instances or gateways. Same-organization cross-project reuse requires
+explicit source gateway/project read access plus release/agent use permission;
+organization management alone does not confer that access. The resolver must
+preserve the declaration validator's supported HTTP contracts and segment-wise
+route-prefix coverage, including declared narrower routes. Activation and
+rollback create fresh generations; disable/removal require current target
+management even when source access is revoked. Internal CAS remains optional;
+external lifecycle actions will require the displayed generation expectation.
+
 ## Static installation race and rollback checkpoint (2026-09-20)
 
 Two named worker connections now prove concurrent exact replay through the

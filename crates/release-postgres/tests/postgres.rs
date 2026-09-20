@@ -29,14 +29,15 @@ use release_domain::{
     ArtifactPath, BuildRequestId, ContentHash, InstanceName, NetworkAccess, ParameterName,
     ParameterValue, RefSelector, ReleaseAgentId, ReleaseArtifactId, ReleaseCommandKey, ReleaseId,
     ReleaseVersion, RuntimePolicy, TriggerPolicy, UiInstallationCallerKey,
-    UiInstallationCommandIdentity, UiInstallationOperation, UiInstallationTarget,
+    UiInstallationCommandIdentity, UiInstallationGenerationId, UiInstallationOperation,
+    UiInstallationTarget,
 };
 use release_postgres::{
     BeginUpdateHook, BrokeredRuleCopy, CompleteBuild, CreateAttachment, CreateInstanceUpdate,
-    ImportAgent, InstallStaticUi, RecoverInstanceUpdate, ReleaseArtifactInput, ReleaseService,
-    RemoveAttachment, ReviseInstance, ReviseInstanceCapabilities, SetAttachmentEnabled,
-    UiInstallationError, UpdateDecision, UpdateHookResult, UpdateRecoveryAction,
-    UpdateRecoveryDecision,
+    DisableUiInstallation, ImportAgent, InstallStaticUi, RecoverInstanceUpdate,
+    ReleaseArtifactInput, ReleaseService, RemoveAttachment, RemoveUiInstallation, ReviseInstance,
+    ReviseInstanceCapabilities, SetAttachmentEnabled, UiInstallationError, UpdateDecision,
+    UpdateHookResult, UpdateRecoveryAction, UpdateRecoveryDecision,
 };
 use runtime_types::RunId;
 use secret_application::{
@@ -622,7 +623,7 @@ async fn complete_build_persists_static_ui_and_preserves_legacy_no_ui_builds() {
         .run(&admin_pool)
         .await
         .expect("apply application migrations");
-    let Some(worker_pool) = worker_pool().await else {
+    let Some(worker_pool) = worker_pool_named("heph-static-install-replay").await else {
         return;
     };
 
@@ -825,7 +826,7 @@ async fn complete_build_managed_api_and_invalid_ui_matrix_is_atomic() {
         .run(&admin_pool)
         .await
         .expect("apply application migrations");
-    let Some(worker_pool) = worker_pool().await else {
+    let Some(worker_pool) = worker_pool_named("heph-static-install-replay").await else {
         return;
     };
     let worker_user: String = sqlx::query_scalar("SELECT current_user")
@@ -1833,6 +1834,539 @@ async fn install_static_ui_global_organization_matrix() {
 
 #[tokio::test]
 #[serial]
+// Disable/remove use only current target management. The matrix deliberately
+// revokes source-release use before replaying an exact disable command.
+// This exception keeps all owner shapes and post-commit assertions in one
+// matrix so replay and terminal-state evidence share one installation.
+#[allow(clippy::too_many_lines)]
+async fn ui_installation_disable_remove_lifecycle_matrix() {
+    let Some(admin_pool) = pool().await else {
+        return;
+    };
+    sqlx::migrate!("../../migrations")
+        .run(&admin_pool)
+        .await
+        .expect("apply application migrations");
+    let Some(worker_pool) = worker_pool().await else {
+        return;
+    };
+    let service = ReleaseService::new(worker_pool.clone(), Arc::new(PostgresMelangeAuthorizer));
+
+    let fixture = seed(&admin_pool).await;
+    let release = publish_static_release(
+        &admin_pool,
+        &worker_pool,
+        &fixture,
+        "project",
+        "lifecycle-project",
+    )
+    .await;
+    let installation = service
+        .install_static_ui(
+            &identity(fixture.actor),
+            install_command(
+                "lifecycle-install",
+                UiInstallationTarget::project(fixture.first_project),
+                release,
+                "docs",
+            ),
+        )
+        .await
+        .expect("install lifecycle project fixture");
+    let disabled = service
+        .disable_ui_installation(
+            &identity(fixture.actor),
+            DisableUiInstallation {
+                caller_key: UiInstallationCallerKey::parse("lifecycle-disable").expect("key"),
+                installation_id: installation.installation_id,
+                expected_generation_id: Some(installation.generation_id),
+            },
+        )
+        .await
+        .expect("disable project installation");
+    assert_eq!(
+        disabled.state,
+        release_domain::UiInstallationState::Disabled
+    );
+    assert_eq!(disabled.generation_id, installation.generation_id);
+    let stored_disable_request: Uuid = sqlx::query_scalar(
+        "SELECT request_id FROM ui_installation_commands
+         WHERE installation_id = $1 AND operation = 'disable'
+           AND caller_idempotency_key = 'lifecycle-disable'",
+    )
+    .bind(installation.installation_id.as_uuid())
+    .fetch_one(&admin_pool)
+    .await
+    .expect("stored disable request provenance");
+
+    let replay = service
+        .disable_ui_installation(
+            &identity(fixture.actor),
+            DisableUiInstallation {
+                caller_key: UiInstallationCallerKey::parse("lifecycle-disable").expect("key"),
+                installation_id: installation.installation_id,
+                expected_generation_id: Some(installation.generation_id),
+            },
+        )
+        .await
+        .expect("exact disable replay");
+    assert_eq!(replay, disabled);
+    let replayed_disable_request: Uuid = sqlx::query_scalar(
+        "SELECT request_id FROM ui_installation_commands
+         WHERE installation_id = $1 AND operation = 'disable'
+           AND caller_idempotency_key = 'lifecycle-disable'",
+    )
+    .bind(installation.installation_id.as_uuid())
+    .fetch_one(&admin_pool)
+    .await
+    .expect("replayed disable request provenance");
+    assert_eq!(replayed_disable_request, stored_disable_request);
+    let conflict = service
+        .disable_ui_installation(
+            &identity(fixture.actor),
+            DisableUiInstallation {
+                caller_key: UiInstallationCallerKey::parse("lifecycle-disable").expect("key"),
+                installation_id: installation.installation_id,
+                expected_generation_id: None,
+            },
+        )
+        .await;
+    assert!(matches!(
+        conflict,
+        Err(UiInstallationError::IdempotencyConflict)
+    ));
+    let stale = service
+        .disable_ui_installation(
+            &identity(fixture.actor),
+            DisableUiInstallation {
+                caller_key: UiInstallationCallerKey::parse("lifecycle-stale").expect("key"),
+                installation_id: installation.installation_id,
+                expected_generation_id: Some(UiInstallationGenerationId::new()),
+            },
+        )
+        .await;
+    assert!(matches!(
+        stale,
+        Err(UiInstallationError::GenerationConflict)
+    ));
+
+    let source_project: Uuid = sqlx::query_scalar(
+        "SELECT repository.project_id
+         FROM releases AS release
+         JOIN repositories AS repository ON repository.id = release.repository_id
+         WHERE release.id = $1",
+    )
+    .bind(release.as_uuid())
+    .fetch_one(&admin_pool)
+    .await
+    .expect("source project");
+    sqlx::query("DELETE FROM project_maintainers WHERE project_id = $1 AND user_id = $2")
+        .bind(source_project)
+        .bind(fixture.actor.as_uuid())
+        .execute(&admin_pool)
+        .await
+        .expect("revoke source release use");
+    let revoked_replay = service
+        .disable_ui_installation(
+            &identity(fixture.actor),
+            DisableUiInstallation {
+                caller_key: UiInstallationCallerKey::parse("lifecycle-disable").expect("key"),
+                installation_id: installation.installation_id,
+                expected_generation_id: Some(installation.generation_id),
+            },
+        )
+        .await
+        .expect("replay without source permission");
+    assert_eq!(revoked_replay, disabled);
+
+    let same_state = service
+        .disable_ui_installation(
+            &identity(fixture.actor),
+            DisableUiInstallation {
+                caller_key: UiInstallationCallerKey::parse("lifecycle-disable-again").expect("key"),
+                installation_id: installation.installation_id,
+                expected_generation_id: Some(installation.generation_id),
+            },
+        )
+        .await
+        .expect("fresh same-state disable");
+    assert_eq!(same_state.generation_id, installation.generation_id);
+    let removed = service
+        .remove_ui_installation(
+            &identity(fixture.actor),
+            RemoveUiInstallation {
+                caller_key: UiInstallationCallerKey::parse("lifecycle-remove").expect("key"),
+                installation_id: installation.installation_id,
+                expected_generation_id: Some(installation.generation_id),
+            },
+        )
+        .await
+        .expect("remove project installation");
+    assert_eq!(removed.state, release_domain::UiInstallationState::Removed);
+    assert_eq!(removed.generation_id, installation.generation_id);
+    let remove_replay = service
+        .remove_ui_installation(
+            &identity(fixture.actor),
+            RemoveUiInstallation {
+                caller_key: UiInstallationCallerKey::parse("lifecycle-remove").expect("key"),
+                installation_id: installation.installation_id,
+                expected_generation_id: Some(installation.generation_id),
+            },
+        )
+        .await
+        .expect("exact remove replay");
+    assert_eq!(remove_replay, removed);
+    let terminal = service
+        .disable_ui_installation(
+            &identity(fixture.actor),
+            DisableUiInstallation {
+                caller_key: UiInstallationCallerKey::parse("lifecycle-terminal").expect("key"),
+                installation_id: installation.installation_id,
+                expected_generation_id: Some(installation.generation_id),
+            },
+        )
+        .await;
+    assert!(matches!(
+        terminal,
+        Err(UiInstallationError::InvalidTransition)
+    ));
+    let project_event_counts: (i64, i64) = sqlx::query_as(
+        "SELECT count(*), count(outbox.event_id)
+         FROM application_events AS event
+         LEFT JOIN product_event_outbox AS outbox ON outbox.event_id = event.id
+         WHERE event.aggregate_type = 'project' AND event.aggregate_id = $1
+           AND event.event_type = 'project.changed'
+           AND event.request_id IN (
+               SELECT request_id FROM ui_installation_commands
+               WHERE installation_id = $2
+           )",
+    )
+    .bind(fixture.first_project.as_uuid())
+    .bind(installation.installation_id.as_uuid())
+    .fetch_one(&admin_pool)
+    .await
+    .expect("project lifecycle event counts");
+    assert_eq!(project_event_counts, (4, 4));
+    let command_count: i64 = sqlx::query_scalar(
+        "SELECT count(*) FROM ui_installation_commands WHERE installation_id = $1",
+    )
+    .bind(installation.installation_id.as_uuid())
+    .fetch_one(&admin_pool)
+    .await
+    .expect("project lifecycle command count");
+    assert_eq!(command_count, 4);
+
+    sqlx::query(
+        "INSERT INTO project_maintainers (project_id, user_id)
+         VALUES ($1, $2) ON CONFLICT DO NOTHING",
+    )
+    .bind(source_project)
+    .bind(fixture.actor.as_uuid())
+    .execute(&admin_pool)
+    .await
+    .expect("restore source release use");
+    let reused = service
+        .install_static_ui(
+            &identity(fixture.actor),
+            install_command(
+                "lifecycle-reused-key",
+                UiInstallationTarget::project(fixture.first_project),
+                release,
+                "docs",
+            ),
+        )
+        .await
+        .expect("reuse removed installation key");
+    assert_ne!(reused.installation_id, installation.installation_id);
+
+    let repository_fixture = seed(&admin_pool).await;
+    sqlx::query("INSERT INTO repository_managers (repository_id, user_id) VALUES ($1, $2)")
+        .bind(repository_fixture.first_repository.as_uuid())
+        .bind(repository_fixture.actor.as_uuid())
+        .execute(&admin_pool)
+        .await
+        .expect("repository manager");
+    let repository_release = publish_static_release(
+        &admin_pool,
+        &worker_pool,
+        &repository_fixture,
+        "repository",
+        "lifecycle-repository",
+    )
+    .await;
+    let repository_install = service
+        .install_static_ui(
+            &identity(repository_fixture.actor),
+            install_command(
+                "lifecycle-repository-install",
+                UiInstallationTarget::repository(repository_fixture.first_repository),
+                repository_release,
+                "docs",
+            ),
+        )
+        .await
+        .expect("install repository lifecycle fixture");
+    service
+        .remove_ui_installation(
+            &identity(repository_fixture.actor),
+            RemoveUiInstallation {
+                caller_key: UiInstallationCallerKey::parse("lifecycle-repository-remove")
+                    .expect("key"),
+                installation_id: repository_install.installation_id,
+                expected_generation_id: Some(repository_install.generation_id),
+            },
+        )
+        .await
+        .expect("remove repository installation");
+    let repository_event: i64 = sqlx::query_scalar(
+        "SELECT count(*) FROM application_events
+         WHERE aggregate_type = 'repository' AND aggregate_id = $1
+           AND event_type = 'repository.changed' AND related_id_one = $2
+           AND request_id IN (
+               SELECT request_id FROM ui_installation_commands
+               WHERE installation_id = $3
+           )",
+    )
+    .bind(repository_fixture.first_repository.as_uuid())
+    .bind(repository_fixture.first_project.as_uuid())
+    .bind(repository_install.installation_id.as_uuid())
+    .fetch_one(&admin_pool)
+    .await
+    .expect("repository owner event");
+    assert_eq!(repository_event, 2);
+
+    let global_fixture = seed(&admin_pool).await;
+    sqlx::query(
+        "UPDATE organization_members SET role = 'owner'
+         WHERE organization_id = $1 AND user_id = $2",
+    )
+    .bind(global_fixture.organization.as_uuid())
+    .bind(global_fixture.actor.as_uuid())
+    .execute(&admin_pool)
+    .await
+    .expect("global owner");
+    let global_release = publish_static_release(
+        &admin_pool,
+        &worker_pool,
+        &global_fixture,
+        "global",
+        "lifecycle-global",
+    )
+    .await;
+    let global_install = service
+        .install_static_ui(
+            &identity(global_fixture.actor),
+            install_command(
+                "lifecycle-global-install",
+                UiInstallationTarget::organization(global_fixture.organization),
+                global_release,
+                "docs",
+            ),
+        )
+        .await
+        .expect("install global lifecycle fixture");
+    service
+        .disable_ui_installation(
+            &identity(global_fixture.actor),
+            DisableUiInstallation {
+                caller_key: UiInstallationCallerKey::parse("lifecycle-global-disable")
+                    .expect("key"),
+                installation_id: global_install.installation_id,
+                expected_generation_id: Some(global_install.generation_id),
+            },
+        )
+        .await
+        .expect("disable global installation");
+    let global_event: i64 = sqlx::query_scalar(
+        "SELECT count(*) FROM application_events
+         WHERE aggregate_type = 'organization' AND aggregate_id = $1
+           AND event_type = 'organization.changed'
+           AND request_id IN (
+               SELECT request_id FROM ui_installation_commands
+               WHERE installation_id = $2
+           )",
+    )
+    .bind(global_fixture.organization.as_uuid())
+    .bind(global_install.installation_id.as_uuid())
+    .fetch_one(&admin_pool)
+    .await
+    .expect("global owner event");
+    assert_eq!(global_event, 2);
+}
+
+#[tokio::test]
+#[serial]
+// Two distinct owner rows let both lifecycle transactions pass owner
+// authorization independently while contending on the actor command ledger.
+// The loser must retry its rolled-back mutation and report changed input.
+#[allow(clippy::too_many_lines)]
+async fn ui_installation_lifecycle_cross_owner_ledger_race_conflicts() {
+    let Some(admin_pool) = pool().await else {
+        return;
+    };
+    sqlx::migrate!("../../migrations")
+        .run(&admin_pool)
+        .await
+        .expect("apply application migrations");
+    let Some(worker_pool) = worker_pool_named("heph-ui-lifecycle-ledger-race").await else {
+        return;
+    };
+    let fixture = seed(&admin_pool).await;
+    let release = publish_static_release(
+        &admin_pool,
+        &worker_pool,
+        &fixture,
+        "project",
+        "lifecycle-ledger-race",
+    )
+    .await;
+    let service = ReleaseService::new(worker_pool.clone(), Arc::new(PostgresMelangeAuthorizer));
+    let first_install = service
+        .install_static_ui(
+            &identity(fixture.actor),
+            install_command(
+                "lifecycle-ledger-race-first-install",
+                UiInstallationTarget::project(fixture.first_project),
+                release,
+                "docs",
+            ),
+        )
+        .await
+        .expect("first race installation");
+    let second_install = service
+        .install_static_ui(
+            &identity(fixture.actor),
+            install_command(
+                "lifecycle-ledger-race-second-install",
+                UiInstallationTarget::project(fixture.second_project),
+                release,
+                "docs",
+            ),
+        )
+        .await
+        .expect("second race installation");
+
+    let mut first_owner_lock = admin_pool.begin().await.expect("begin first owner lock");
+    sqlx::query("SELECT id FROM projects WHERE id = $1 FOR UPDATE")
+        .bind(fixture.first_project.as_uuid())
+        .fetch_one(&mut *first_owner_lock)
+        .await
+        .expect("hold first project owner lock");
+    let mut second_owner_lock = admin_pool.begin().await.expect("begin second owner lock");
+    sqlx::query("SELECT id FROM projects WHERE id = $1 FOR UPDATE")
+        .bind(fixture.second_project.as_uuid())
+        .fetch_one(&mut *second_owner_lock)
+        .await
+        .expect("hold second project owner lock");
+
+    let start = Arc::new(tokio::sync::Barrier::new(3));
+    let first_start = Arc::clone(&start);
+    let first_pool = worker_pool.clone();
+    let first_id = first_install.installation_id;
+    let first_generation = first_install.generation_id;
+    let actor = fixture.actor;
+    let first_task = tokio::spawn(async move {
+        first_start.wait().await;
+        ReleaseService::new(first_pool, Arc::new(PostgresMelangeAuthorizer))
+            .disable_ui_installation(
+                &identity(actor),
+                DisableUiInstallation {
+                    caller_key: UiInstallationCallerKey::parse("lifecycle-ledger-race")
+                        .expect("race caller key"),
+                    installation_id: first_id,
+                    expected_generation_id: Some(first_generation),
+                },
+            )
+            .await
+    });
+    let second_start = Arc::clone(&start);
+    let second_pool = worker_pool.clone();
+    let second_id = second_install.installation_id;
+    let second_generation = second_install.generation_id;
+    let second_actor = fixture.actor;
+    let second_task = tokio::spawn(async move {
+        second_start.wait().await;
+        ReleaseService::new(second_pool, Arc::new(PostgresMelangeAuthorizer))
+            .disable_ui_installation(
+                &identity(second_actor),
+                DisableUiInstallation {
+                    caller_key: UiInstallationCallerKey::parse("lifecycle-ledger-race")
+                        .expect("race caller key"),
+                    installation_id: second_id,
+                    expected_generation_id: Some(second_generation),
+                },
+            )
+            .await
+    });
+    start.wait().await;
+    wait_for_named_lock_waiters(&admin_pool, "heph-ui-lifecycle-ledger-race", 2).await;
+    let (first_release, second_release) =
+        tokio::join!(first_owner_lock.commit(), second_owner_lock.commit());
+    first_release.expect("release first owner lock");
+    second_release.expect("release second owner lock");
+
+    let first_result = first_task.await.expect("first lifecycle race task");
+    let second_result = second_task.await.expect("second lifecycle race task");
+    let winner = match (first_result, second_result) {
+        (Err(UiInstallationError::IdempotencyConflict), Ok(result))
+        | (Ok(result), Err(UiInstallationError::IdempotencyConflict)) => result,
+        (first, second) => {
+            panic!("unexpected cross-owner ledger race results: {first:?}, {second:?}")
+        }
+    };
+    let loser_id = if winner.installation_id == first_install.installation_id {
+        second_install.installation_id
+    } else {
+        first_install.installation_id
+    };
+    let command_count: i64 = sqlx::query_scalar(
+        "SELECT count(*) FROM ui_installation_commands
+         WHERE actor_id = $1 AND operation = 'disable'
+           AND caller_idempotency_key = 'lifecycle-ledger-race'",
+    )
+    .bind(fixture.actor.as_uuid())
+    .fetch_one(&admin_pool)
+    .await
+    .expect("one winning lifecycle command");
+    assert_eq!(command_count, 1);
+    let event_counts: (i64, i64) = sqlx::query_as(
+        "SELECT count(*), count(outbox.event_id)
+         FROM application_events AS event
+         LEFT JOIN product_event_outbox AS outbox ON outbox.event_id = event.id
+         WHERE event.occurrence_id = $1
+           AND event.aggregate_type = 'project'
+           AND event.aggregate_id IN ($2, $3)
+           AND event.event_type = 'project.changed'",
+    )
+    .bind(winner.idempotency_id)
+    .bind(fixture.first_project.as_uuid())
+    .bind(fixture.second_project.as_uuid())
+    .fetch_one(&admin_pool)
+    .await
+    .expect("one winning lifecycle event and outbox");
+    assert_eq!(event_counts, (1, 1));
+    let winner_state: String =
+        sqlx::query_scalar("SELECT lifecycle FROM ui_installations WHERE id = $1")
+            .bind(winner.installation_id.as_uuid())
+            .fetch_one(&admin_pool)
+            .await
+            .expect("winning installation state");
+    let loser_state: String =
+        sqlx::query_scalar("SELECT lifecycle FROM ui_installations WHERE id = $1")
+            .bind(loser_id.as_uuid())
+            .fetch_one(&admin_pool)
+            .await
+            .expect("losing installation state");
+    assert_eq!(winner_state, "disabled");
+    assert_eq!(loser_state, "enabled");
+    println!(
+        "REAL_UI_LIFECYCLE_LEDGER_RACE=1 winner={} loser={} command_rows={} event_rows={} outbox_rows={}",
+        winner.installation_id, loser_id, command_count, event_counts.0, event_counts.1
+    );
+}
+
+#[tokio::test]
+#[serial]
 // The owner-row lock is the production synchronization point: two real
 // worker connections are held behind it, then released to race the same
 // actor-bound command and prove one committed result is replayed exactly.
@@ -2125,6 +2659,15 @@ async fn install_static_ui_parent_move_rejects_and_rolls_back_naturally() {
     );
 }
 
+type SessionDiagnostic = (
+    i32,
+    String,
+    String,
+    Option<String>,
+    Option<String>,
+    Vec<i32>,
+);
+
 async fn wait_for_row_lock_waiters(
     pool: &PgPool,
     relation_name: &str,
@@ -2191,6 +2734,57 @@ async fn wait_for_row_lock_waiters(
         tokio::time::sleep(Duration::from_millis(10)).await;
     }
     panic!("timed out waiting for {minimum} row lock waiters on {relation_name}");
+}
+
+async fn wait_for_named_lock_waiters(pool: &PgPool, application_name: &str, minimum: i64) {
+    for attempt in 0..200 {
+        let (named_sessions, lock_waiters): (i64, i64) = sqlx::query_as(
+            "SELECT
+                 (SELECT count(*) FROM pg_stat_activity
+                  WHERE application_name = $1 AND pid <> pg_backend_pid()),
+                 (SELECT count(*) FROM pg_stat_activity
+                  WHERE application_name = $1
+                    AND pid <> pg_backend_pid()
+                    AND wait_event_type = 'Lock'
+                    AND cardinality(pg_blocking_pids(pid)) > 0)",
+        )
+        .bind(application_name)
+        .fetch_one(pool)
+        .await
+        .expect("read PostgreSQL command-ledger waiters");
+        if named_sessions >= minimum && lock_waiters >= minimum {
+            println!(
+                "REAL_UI_INSTALLATION_LEDGER_BARRIER=1 application_name={application_name} \
+                 named_sessions={named_sessions} lock_waiters={lock_waiters} minimum={minimum}"
+            );
+            return;
+        }
+        if attempt == 199 {
+            println!(
+                "REAL_UI_INSTALLATION_LEDGER_TIMEOUT=1 application_name={application_name} \
+                 named_sessions={named_sessions} lock_waiters={lock_waiters} minimum={minimum}"
+            );
+            let diagnostics: Vec<SessionDiagnostic> = sqlx::query_as(
+                "SELECT pid, state, query, wait_event_type, wait_event, pg_blocking_pids(pid)
+                     FROM pg_stat_activity
+                     WHERE application_name = $1
+                     ORDER BY pid",
+            )
+            .bind(application_name)
+            .fetch_all(pool)
+            .await
+            .expect("inspect command-ledger sessions");
+            for (pid, state, query, wait_type, wait_event, blockers) in diagnostics {
+                println!(
+                    "REAL_UI_INSTALLATION_LEDGER_SESSION=1 pid={pid} state={state:?} \
+                     query={query:?} wait_type={wait_type:?} wait_event={wait_event:?} \
+                     blockers={blockers:?}"
+                );
+            }
+        }
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }
+    panic!("timed out waiting for {minimum} named command-ledger lock waiters");
 }
 
 fn install_command(

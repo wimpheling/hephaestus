@@ -33,6 +33,41 @@ pub struct InstallStaticUiResult {
     pub idempotency_id: Uuid,
 }
 
+/// A command that disables one retained UI installation.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DisableUiInstallation {
+    /// Actor-bound caller idempotency key.
+    pub caller_key: UiInstallationCallerKey,
+    /// Stable installation identity.
+    pub installation_id: UiInstallationId,
+    /// Optional compare-and-swap expectation for the current generation.
+    pub expected_generation_id: Option<UiInstallationGenerationId>,
+}
+
+/// A command that terminally removes one retained UI installation.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RemoveUiInstallation {
+    /// Actor-bound caller idempotency key.
+    pub caller_key: UiInstallationCallerKey,
+    /// Stable installation identity.
+    pub installation_id: UiInstallationId,
+    /// Optional compare-and-swap expectation for the current generation.
+    pub expected_generation_id: Option<UiInstallationGenerationId>,
+}
+
+/// Result of a committed disable or remove command.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct UiInstallationLifecycleResult {
+    /// Stable installation identity.
+    pub installation_id: UiInstallationId,
+    /// The retained current generation; lifecycle changes do not create one.
+    pub generation_id: UiInstallationGenerationId,
+    /// Committed lifecycle state.
+    pub state: UiInstallationState,
+    /// Actor-bound occurrence/idempotency identity used by the event ledger.
+    pub idempotency_id: Uuid,
+}
+
 /// Stable, transport-neutral failures for static UI installation.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Error)]
 #[non_exhaustive]
@@ -52,4 +87,10 @@ pub enum UiInstallationError {
     /// A caller key was reused with different canonical input.
     #[error("UI installation idempotency key conflicts with prior input")]
     IdempotencyConflict,
+    /// The caller supplied a stale expected generation.
+    #[error("UI installation generation no longer matches the expected generation")]
+    GenerationConflict,
+    /// The requested lifecycle transition is not valid for the installation.
+    #[error("UI installation lifecycle transition is invalid")]
+    InvalidTransition,
 }
