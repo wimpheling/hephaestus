@@ -2,6 +2,7 @@
 
 mod ui_browser;
 mod ui_installation;
+mod ui_installation_navigation;
 
 use capability_domain::{
     CapabilityBindingId, CapabilityOperation, CapabilityResource, CapabilitySlotKey,
@@ -27,6 +28,12 @@ pub use ui_installation::{
     ActivateUiInstallation, DisableUiInstallation, InstallStaticUi, InstallStaticUiResult,
     InstallUi, InstallUiResult, RemoveUiInstallation, RollbackUiInstallation, UiInstallationError,
     UiInstallationGenerationResult, UiInstallationLifecycleResult,
+};
+pub use ui_installation_navigation::{
+    DEFAULT_UI_INSTALLATION_PAGE_SIZE, ListUiInstallations, MAX_UI_INSTALLATION_PAGE_SIZE,
+    UiInstallationContentKind, UiInstallationNavigation, UiInstallationNavigationError,
+    UiInstallationNavigationPage, UiInstallationNavigator, UiInstallationPage,
+    UiInstallationTargetFilter,
 };
 
 /// One already safely imported immutable artifact.

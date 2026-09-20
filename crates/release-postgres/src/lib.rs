@@ -39,10 +39,12 @@ use std::{
 };
 use time::OffsetDateTime;
 pub use ui_browser::PgUiBrowserSessionStore;
+pub use ui_installation_navigation::PgUiInstallationNavigator;
 use uuid::Uuid;
 
 mod ui_browser;
 mod ui_installation;
+mod ui_installation_navigation;
 mod ui_publication;
 
 const RUN_START_SUBJECT: &str = "hephaestus.run.start";

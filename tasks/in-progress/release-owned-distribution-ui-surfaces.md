@@ -9,8 +9,9 @@ Work resumed on 2026-09-20 from the
 CI execution, organization-owned static installations, disable/remove lifecycle,
 browser credential storage, handoff issuance/exchange, managed/API installation,
 and application-role request authentication have passed focused verification.
-Activation/rollback also passes focused verification. Current work validates
-navigation and prepares RPC and hosting integration.
+Activation/rollback and explicit-organization navigation also pass focused
+verification. Current work validates RPC prerequisites and prepares transport,
+hosting, and Phoenix integration.
 The handoff remains the record of the stopped session; new evidence is recorded
 below as each resumed slice passes review and verification.
 
@@ -34,6 +35,25 @@ navigation/authorization/isolation, real Caddy/VM/browser proofs, and the final
 integrated quality gate remain incomplete. The user approved organization-owned
 global installations and organization isolation. Historical checkpoints record the state
 at their time; later integration checkpoints supersede earlier pending notes.
+
+## Installed UI navigation checkpoint (2026-09-20)
+
+The release application port and application-role PostgreSQL navigator project
+safe current-generation metadata for one explicitly requested organization and
+global/project/repository target. Pagination is bounded and cursors must belong
+to that exact target and tenant. Removed entries are excluded; disabled entries
+remain unavailable. Current source read controls metadata visibility, while
+source/agent use contributes a launchability hint that never grants serving
+authority. No runtime URL, credential, or gateway binding authority is returned.
+
+The real application-role navigation matrix passes in
+`/home/a/heph-ui-navigation-20260920.log`, including all owner scopes, dual-org
+membership, paging/cursors, invalid sizes, removed exclusion, source-use denial,
+source-read hiding while target access remains, and owner revocation with the
+other organization still visible. Scoped Clippy/docs, formatting, architecture,
+and diff whitespace checks pass in `/home/a/heph-ui-navigation-*-20260920.log`.
+No disposable test resources remain. RPC exposure and Phoenix rendering still
+require separate integration and browser checks.
 
 ## Activation and rollback checkpoint (2026-09-20)
 
