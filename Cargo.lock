@@ -4001,12 +4001,16 @@ dependencies = [
 name = "release-service"
 version = "0.1.0"
 dependencies = [
+ "async-trait",
  "capability-domain",
  "forge-domain",
+ "gateway-domain",
  "git-capability-domain",
+ "identity-domain",
  "release-domain",
  "runtime-types",
  "thiserror 2.0.19",
+ "time",
  "uuid",
 ]
 

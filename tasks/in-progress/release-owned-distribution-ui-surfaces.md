@@ -53,6 +53,27 @@ release-domain/release-service/dev tests, strict release-domain/release-service/
 release-postgres/dev Clippy, and docs passed with Rust 1.88.0. This is focused
 local evidence; updated CI and final integrated quality remain pending.
 
+## Browser domain and port checkpoint (2026-09-20)
+
+The release domain now contains distinct handoff/child identities, redacted
+bearer/digest types, validated relative routes, sixty-second handoff lifetime,
+and fixed twelve-hour child expiry capped by the parent. The release application
+port binds an explicit actor to the canonical internal parent-session ID and
+carries request provenance for issue/exchange. Safe result metadata contains no
+bearer or digest. Static, managed, and exact-method API request kinds remain
+separate; implementations must validate them against immutable declarations.
+
+The port documents current account/parent, organization, generation, lifecycle,
+owner/source/agent authorization, and atomic one-time exchange requirements.
+It does not implement persistence, RPC, cookies, routing, or working browser
+authorization. Those requirements remain unchecked.
+
+Fresh focused tests pass: 25 release-domain tests, release-service compilation
+and doctests, and 68 dev tests with one preexisting ignored test. Scoped strict
+Clippy/docs, workspace formatting, and architecture pass. This resumed evidence
+was captured in tool output; earlier handoff log paths are historical evidence,
+not logs of these current checks.
+
 ## Organization-owner schema checkpoint (2026-09-20)
 
 Migration 88 adds organization-owned global installation identities, owner-shape

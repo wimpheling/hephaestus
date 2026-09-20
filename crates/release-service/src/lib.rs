@@ -1,5 +1,6 @@
 //! Provider-neutral release command DTOs and workflow ports.
 
+mod ui_browser;
 mod ui_installation;
 
 use capability_domain::{
@@ -17,6 +18,11 @@ use runtime_types::RunId;
 use std::collections::BTreeMap;
 use uuid::Uuid;
 
+pub use ui_browser::{
+    AuthenticateUiBrowserSession, CreateUiBrowserHandoff, CreatedUiBrowserHandoff,
+    CreatedUiBrowserSession, ExchangeUiBrowserHandoff, UiBrowserHandoffError,
+    UiBrowserRequestRoute, UiBrowserSessionContext, UiBrowserSessionError, UiBrowserSessionStore,
+};
 pub use ui_installation::{InstallStaticUi, InstallStaticUiResult, UiInstallationError};
 
 /// One already safely imported immutable artifact.

@@ -17,6 +17,7 @@ use time::OffsetDateTime;
 use uuid::Uuid;
 
 pub mod ui;
+pub mod ui_browser;
 
 macro_rules! identifier {
     ($name:ident, $documentation:literal) => {

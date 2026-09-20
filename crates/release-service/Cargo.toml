@@ -9,11 +9,15 @@ layer = "application"
 context = "release"
 
 [dependencies]
+async-trait.workspace = true
 capability-domain = { path = "../capability-domain" }
+gateway-domain = { path = "../gateway-domain" }
 forge-domain = { path = "../forge-domain" }
 git-capability-domain = { path = "../git-capability-domain" }
+identity-domain = { path = "../identity-domain" }
 release-domain = { path = "../release-domain" }
 runtime-types = { path = "../runtime-types" }
+time.workspace = true
 thiserror.workspace = true
 uuid.workspace = true
 
