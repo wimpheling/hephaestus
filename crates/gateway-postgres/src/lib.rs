@@ -876,6 +876,7 @@ impl PostgresGatewayEdgeAuthority {
     async fn finish_accepted_invocation(
         &self,
         invocation_id: Uuid,
+        request_id: Uuid,
         accepted: AcceptedInvocationRow,
     ) -> Result<Uuid, GatewayEdgeError> {
         let Some(issuer) = &self.runtime_authority else {
@@ -907,9 +908,13 @@ impl PostgresGatewayEdgeAuthority {
             issuer.issue_gateway(request).await
         };
         let Ok(issued_session) = issued_result else {
-            if let Err(error) = issued_result {
-                tracing::warn!(%error, invocation_id = %invocation_id, "gateway runtime authority issuance failed");
-            }
+            tracing::warn!(
+                target: "gateway_postgres::ui_post_admission",
+                request_id = %request_id,
+                invocation_id = %invocation_id,
+                category = "runtime_authority_issuance_failed",
+                "gateway post-admission setup failed"
+            );
             self.reject_invocation(invocation_id).await?;
             return Err(GatewayEdgeError::Unavailable);
         };
@@ -917,7 +922,13 @@ impl PostgresGatewayEdgeAuthority {
             .create_gateway_secret_leases(invocation_id, issued_session.id.as_uuid())
             .await
         {
-            tracing::warn!(%invocation_id, "gateway secret lease setup failed after authority issuance");
+            tracing::warn!(
+                target: "gateway_postgres::ui_post_admission",
+                request_id = %request_id,
+                invocation_id = %invocation_id,
+                category = "secret_lease_setup_failed",
+                "gateway post-admission setup failed"
+            );
             let _ = self
                 .completed(invocation_id, GatewayInvocationOutcome::Rejected)
                 .await;
@@ -1128,7 +1139,7 @@ impl GatewayInvocationRecorder for PostgresGatewayEdgeAuthority {
             .await
             .map_err(|_| GatewayEdgeError::Unavailable)?;
 
-        self.finish_accepted_invocation(invocation_id, accepted)
+        self.finish_accepted_invocation(invocation_id, request_id, accepted)
             .await
     }
 

@@ -3098,7 +3098,12 @@ async fn bearer_push_starts_run_through_production_bootstrap() {
         tracing_subscriber::fmt()
             .with_env_filter(
                 tracing_subscriber::EnvFilter::try_from_default_env()
-                    .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("info")),
+                    .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("info"))
+                    .add_directive(
+                        "gateway_postgres::ui_post_admission=warn"
+                            .parse()
+                            .expect("valid installed UI diagnostic filter"),
+                    ),
             )
             .with_test_writer()
             .try_init(),
