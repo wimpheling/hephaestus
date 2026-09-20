@@ -1,19 +1,23 @@
 //! Worker-side UI browser handoff issuance adapter.
 //!
 //! This file contains the worker-side issuance and exchange methods only.
-//! Authentication and the application-role verifier remain separate slices.
+//! The application-role verifier is a separate, read-only method on the same
+//! store; worker writes never use the application pool.
 
+use async_trait::async_trait;
 use authz_domain::{AuthorizationDecision, ObjectRef, ObjectType, Permission, Subject};
 use authz_postgres::PostgresMelangeAuthorizer;
 use forge_domain::OrganizationId;
-use identity_domain::{RequestId, UserId};
+use gateway_domain::HttpMethod;
+use identity_domain::{BrowserSessionId, RequestId, UserId};
 use release_domain::{
-    UiInstallationId,
+    UiInstallationGenerationId, UiInstallationId,
     ui_browser::{UiBrowserHandoffId, UiBrowserRoute, UiBrowserSessionId, child_session_expiry},
 };
 use release_service::{
-    CreateUiBrowserHandoff, CreatedUiBrowserHandoff, CreatedUiBrowserSession,
-    ExchangeUiBrowserHandoff, UiBrowserHandoffError, UiBrowserSessionContext,
+    AuthenticateUiBrowserSession, CreateUiBrowserHandoff, CreatedUiBrowserHandoff,
+    CreatedUiBrowserSession, ExchangeUiBrowserHandoff, UiBrowserHandoffError,
+    UiBrowserRequestRoute, UiBrowserSessionContext, UiBrowserSessionError, UiBrowserSessionStore,
 };
 use sqlx::{FromRow, PgPool, Postgres, Transaction};
 use std::collections::{BTreeMap, BTreeSet};
@@ -23,7 +27,7 @@ use uuid::Uuid;
 /// `PostgreSQL` store for trusted UI browser handoff issuance and exchange.
 pub struct PgUiBrowserSessionStore {
     worker_pool: PgPool,
-    _app_pool: PgPool,
+    app_pool: PgPool,
     authorizer: PostgresMelangeAuthorizer,
 }
 
@@ -33,7 +37,7 @@ impl PgUiBrowserSessionStore {
     pub const fn new(worker_pool: PgPool, app_pool: PgPool) -> Self {
         Self {
             worker_pool,
-            _app_pool: app_pool,
+            app_pool,
             authorizer: PostgresMelangeAuthorizer,
         }
     }
@@ -827,6 +831,108 @@ impl PgUiBrowserSessionStore {
             },
         })
     }
+}
+
+impl PgUiBrowserSessionStore {
+    /// Authenticates one child bearer through the application-role verifier.
+    ///
+    /// The verifier derives actor and organization from the stored child row;
+    /// this method supplies no caller actor context and returns only safe
+    /// generation-bound metadata.
+    ///
+    /// # Errors
+    ///
+    /// Returns `Unavailable` when the verifier or stored route cannot be read,
+    /// and `Unauthenticated` when no valid child bearer matches the request.
+    pub async fn authenticate_ui_browser_session(
+        &self,
+        command: AuthenticateUiBrowserSession,
+    ) -> Result<UiBrowserSessionContext, UiBrowserSessionError> {
+        let (request_kind, request_path, request_method) = match command.request_route {
+            UiBrowserRequestRoute::Static { route } => ("static", route.as_str().to_owned(), "GET"),
+            UiBrowserRequestRoute::Managed { route } => {
+                ("managed_service", route.as_str().to_owned(), "GET")
+            }
+            UiBrowserRequestRoute::Api { route, method } => {
+                ("api", route.as_str().to_owned(), http_method_name(method))
+            }
+        };
+        let session_digest = command.session_secret.digest().as_bytes().to_vec();
+        let row = sqlx::query_as::<_, AuthenticatedUiBrowserSessionRow>(
+            "SELECT session_id, parent_session_id, actor_id, organization_id,
+                    installation_id, generation_id, route, expires_at
+             FROM authenticate_ui_browser_session($1, $2, $3, $4, $5)",
+        )
+        .bind(session_digest)
+        .bind(command.expected_generation_id.as_uuid())
+        .bind(request_kind)
+        .bind(request_path)
+        .bind(request_method)
+        .fetch_optional(&self.app_pool)
+        .await
+        .map_err(|_| UiBrowserSessionError::Unavailable)?
+        .ok_or(UiBrowserSessionError::Unauthenticated)?;
+        let route =
+            UiBrowserRoute::parse(row.route).map_err(|_| UiBrowserSessionError::Unavailable)?;
+        Ok(UiBrowserSessionContext {
+            session_id: UiBrowserSessionId::from_uuid(row.session_id),
+            parent_session_id: BrowserSessionId::from_uuid(row.parent_session_id),
+            actor_id: UserId::from_uuid(row.actor_id),
+            organization_id: OrganizationId::from_uuid(row.organization_id),
+            installation_id: UiInstallationId::from_uuid(row.installation_id),
+            generation_id: UiInstallationGenerationId::from_uuid(row.generation_id),
+            route,
+            expires_at: row.expires_at,
+        })
+    }
+}
+
+#[async_trait]
+impl UiBrowserSessionStore for PgUiBrowserSessionStore {
+    async fn create_ui_browser_handoff(
+        &self,
+        command: CreateUiBrowserHandoff,
+    ) -> Result<CreatedUiBrowserHandoff, UiBrowserHandoffError> {
+        self.create_ui_browser_handoff(command).await
+    }
+
+    async fn exchange_ui_browser_handoff(
+        &self,
+        command: ExchangeUiBrowserHandoff,
+    ) -> Result<CreatedUiBrowserSession, UiBrowserHandoffError> {
+        self.exchange_ui_browser_handoff(command).await
+    }
+
+    async fn authenticate_ui_browser_session(
+        &self,
+        command: AuthenticateUiBrowserSession,
+    ) -> Result<UiBrowserSessionContext, UiBrowserSessionError> {
+        self.authenticate_ui_browser_session(command).await
+    }
+}
+
+const fn http_method_name(method: HttpMethod) -> &'static str {
+    match method {
+        HttpMethod::Get => "GET",
+        HttpMethod::Post => "POST",
+        HttpMethod::Put => "PUT",
+        HttpMethod::Patch => "PATCH",
+        HttpMethod::Delete => "DELETE",
+        HttpMethod::Head => "HEAD",
+        HttpMethod::Options => "OPTIONS",
+    }
+}
+
+#[derive(Debug, FromRow)]
+struct AuthenticatedUiBrowserSessionRow {
+    session_id: Uuid,
+    parent_session_id: Uuid,
+    actor_id: Uuid,
+    organization_id: Uuid,
+    installation_id: Uuid,
+    generation_id: Uuid,
+    route: String,
+    expires_at: OffsetDateTime,
 }
 
 async fn begin_exchange_transaction(

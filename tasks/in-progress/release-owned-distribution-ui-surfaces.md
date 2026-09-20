@@ -7,10 +7,10 @@ Owner: Astra orchestration / Luna bounded subtasks
 Work resumed on 2026-09-20 from the
 [session handoff](release-ui-session-handoff-2026-09-20.md). Isolated-database
 CI execution, organization-owned static installations, disable/remove lifecycle,
-browser credential storage, and handoff issuance/exchange have passed focused
-verification. Current work validates managed/API installation and prepares
-request authentication, activation/rollback, and navigation before the hosting
-slices.
+browser credential storage, handoff issuance/exchange, managed/API installation,
+and application-role request authentication have passed focused verification.
+Current work validates activation/rollback and navigation and prepares RPC and
+hosting integration.
 The handoff remains the record of the stopped session; new evidence is recorded
 below as each resumed slice passes review and verification.
 
@@ -34,6 +34,37 @@ navigation/authorization/isolation, real Caddy/VM/browser proofs, and the final
 integrated quality gate remain incomplete. The user approved organization-owned
 global installations and organization isolation. Historical checkpoints record the state
 at their time; later integration checkpoints supersede earlier pending notes.
+
+## Application-role UI verifier checkpoint (2026-09-20)
+
+Migration 90 adds a restricted SECURITY DEFINER child-session verifier; the
+application role receives function execution without direct credential-table
+access. It derives the actor from the canonical parent, ignores caller actor
+GUCs, and checks child/parent time, revocation, account state, current enabled
+generation, tenant, publication, permissions, route, and the complete current
+managed/API binding set. Static zero-API requests need no gateway permission.
+Static UIs with APIs also fail closed when those bindings lose authority.
+The Rust adapter uses its application pool for verification and implements the
+existing session-store port; worker issuance/exchange remain separate paths.
+
+Four real PostgreSQL schema/issuance/exchange/authentication tests pass in
+`/home/a/heph-ui-browser-schema-auth-20260920.log`. They cover static base/assets,
+managed base/descendants, exact API methods/routes, paused gateways, revision
+cutover, revoked publication, spoofed actor context, direct-table denial, parent
+time/revocation, lifecycle/current-generation changes, and retained concurrency
+proofs. A distinct source/target fixture proves target read remains allowed
+while source read is revoked, plus release-agent use revocation; cross-project
+and global positive cases pass. The source/target evidence marker explicitly
+records these permission states.
+
+Production application-pool bootstrap passes at migration 90 in
+`/home/a/heph-app-pool-migration90-20260920.log`. Scoped release and app-floor
+Clippy/docs, workspace formatting, and architecture pass in the
+`heph-browser-*-auth-final*-20260920.log` files. Architecture reports 61 enabled
+rules and two migration-gated rules. Disposable databases and processes were
+cleaned. HTTP serving, cookies, RPC wiring, audit, and browser acceptance remain
+open. General-installation commit `9c58d98` passes all CI jobs in run
+`35512072235`, which predates this verifier checkpoint.
 
 ## General UI installation checkpoint (2026-09-20)
 
@@ -190,6 +221,18 @@ fragment-to-same-origin-POST bootstrap, removed before release navigation. The
 Rust UI handler generates the child secret; no raw parent SID reaches that origin
 or a guest. Browser credentials are stripped before proxying and guest cookie
 writes are rejected. This is the implementation direction, not serving evidence.
+
+The deterministic generation host is `g-<32 lowercase UUID hex digits>` under
+the configured UI namespace. Only that exact single label is accepted; DNS case
+is normalized, trailing-dot/deep-prefix aliases are rejected, and ports must
+match the configured public HTTPS port. No persisted hostname mapping is needed.
+The reserved bootstrap endpoint is `/_heph/bootstrap` for GET and POST. Its
+trusted page clears a base64url handoff fragment before a same-origin POST and
+then replaces the location with the validated host-relative release route.
+The distinct child cookie is `__Host-hephaestus_ui`, with Secure, HttpOnly,
+Path=/, SameSite=Strict, and the fixed child expiry. Reserved `/_heph/` routes
+must not collide with release declarations. These are implementation contracts,
+not yet runtime or browser verification claims.
 
 Managed/API installation will resolve preexisting, currently active gateway
 revisions and pin them in the generation. It will not silently create or retarget

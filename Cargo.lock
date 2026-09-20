@@ -3964,6 +3964,7 @@ version = "0.1.0"
 dependencies = [
  "agent-config",
  "async-nats",
+ "async-trait",
  "authz-domain",
  "authz-postgres",
  "brokered-egress-domain",

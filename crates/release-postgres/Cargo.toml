@@ -6,6 +6,7 @@ edition.workspace = true
 rust-version.workspace = true
 
 [dependencies]
+async-trait.workspace = true
 agent-config = { path = "../agent-config" }
 brokered-egress-domain = { path = "../brokered-egress-domain" }
 authz-domain = { path = "../authz-domain" }
