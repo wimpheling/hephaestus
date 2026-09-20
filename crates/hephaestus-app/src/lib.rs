@@ -5,6 +5,12 @@ mod event_adapter;
 mod event_cursor;
 pub mod rpc;
 mod service_log_maintenance;
+mod ui_bootstrap;
+mod ui_browser_content;
+mod ui_origin_config;
+mod ui_origin_wiring;
+
+pub use ui_origin_config::{UiOriginConfig, UiOriginConfigError};
 
 /// Test-only lifecycle synchronization hooks used by daemon integration tests.
 #[cfg(feature = "test-fixtures")]
@@ -116,8 +122,11 @@ use registry_token::{
 use registry_zot::{RegistryPullTokenProvider, ZotClientConfig, ZotClientError, ZotHttpRegistry};
 use release_artifact_store::LocalArtifactStore;
 use release_domain::{BuildRequestId, ReleaseCommandKey};
-use release_postgres::{ReleaseService, ReleaseServiceError};
-use release_service::BeginUpdateHook;
+use release_postgres::{
+    PgUiBrowserServingStore, PgUiBrowserSessionStore, PgUiGenerationHostResolver, ReleaseService,
+    ReleaseServiceError,
+};
+use release_service::{BeginUpdateHook, UiBrowserSessionStore};
 use review_domain::CONTROL_EXECUTE_SUBJECT;
 use review_postgres::{GitRepositoryLocator, PostgresReviewRepository};
 use review_service::{NatsControlHandler, ReviewControlService, ReviewOutboxPublisher};
@@ -235,6 +244,8 @@ pub struct GatewayEdgeConfig {
     pub dispatcher_listen: SocketAddr,
     /// Canonical public authority recorded as trusted gateway metadata.
     pub public_authority: String,
+    /// Optional private UI-origin listener and generation-host policy.
+    pub ui_origin: Option<UiOriginConfig>,
 }
 
 /// Configured VM backend.
@@ -492,11 +503,26 @@ impl AppConfig {
         }
         LocalCaddyAdministration::new(&gateway.caddy_admin_url)
             .map_err(|error| AppError::Configuration(error.to_string()))?;
-        LocalCaddyConfigurationTemplate::new(
+        let template = LocalCaddyConfigurationTemplate::new(
             &gateway.caddy_configuration_template,
             gateway.caddy_server_name.clone(),
         )
         .map_err(|error| AppError::Configuration(error.to_string()))?;
+        if let Some(ui) = &gateway.ui_origin {
+            let listener = ui.listener().ok_or_else(|| {
+                AppError::Configuration(String::from(
+                    "UI origin listener is required when UI origin is enabled",
+                ))
+            })?;
+            if !listener.ip().is_loopback() || listener.port() == 0 {
+                return Err(AppError::Configuration(String::from(
+                    "UI origin listener must use a nonzero loopback address",
+                )));
+            }
+            template
+                .with_ui_namespace(ui.namespace().as_str(), listener)
+                .map_err(|error| AppError::Configuration(error.to_string()))?;
+        }
         Ok(())
     }
 
@@ -639,6 +665,8 @@ struct GatewayEdgeRuntime {
     dispatcher: Arc<dyn GatewayRequestDispatcher>,
     dispatcher_listen: SocketAddr,
     public_authority: String,
+    ui_dispatcher: Option<Arc<dyn ui_browser_content::UiGatewayDispatcher>>,
+    ui_origin: Option<UiOriginConfig>,
 }
 
 /// Narrow provider adapter used only after the gateway release resolver has
@@ -1439,13 +1467,15 @@ impl HephaestusApp {
                 &service_supervisor_context,
             ))
             .map_err(component("gateway service supervisor"))?;
-            let handler = GatewayServiceHandler::new(
-                PostgresGatewayExecutionTargetResolver::new(gateway_authority_pool.clone()),
-                stateless_handler,
-                service_registry,
-                service_owner,
-            )
-            .map_err(component("gateway service handler"))?;
+            let handler = Arc::new(
+                GatewayServiceHandler::new(
+                    PostgresGatewayExecutionTargetResolver::new(gateway_authority_pool.clone()),
+                    stateless_handler,
+                    service_registry,
+                    service_owner,
+                )
+                .map_err(component("gateway service handler"))?,
+            );
             let ingress_pool = connect_control_plane(&config.database_url, 4)
                 .await
                 .map_err(component("gateway secret resolver PostgreSQL connection"))?;
@@ -1454,13 +1484,30 @@ impl HephaestusApp {
                     ingress_pool,
                     EncryptedStore::new(gateway_secret_keys),
                 ));
+            let mailbox: Arc<dyn gateway_edge::GatewayMailboxPublisher> =
+                Arc::new(PostgresGatewayMailboxPublisher::new(pool.clone()));
             let dispatcher: Arc<dyn GatewayRequestDispatcher> = Arc::new(
-                GatewayDispatcher::new(authority.clone(), handler, authority.clone())
-                    .with_inbound_secret_resolver(inbound)
-                    .with_mailbox_publisher(Arc::new(PostgresGatewayMailboxPublisher::new(
-                        pool.clone(),
-                    ))),
+                GatewayDispatcher::new(authority.clone(), Arc::clone(&handler), authority.clone())
+                    .with_inbound_secret_resolver(Arc::clone(&inbound))
+                    .with_mailbox_publisher(Arc::clone(&mailbox)),
             );
+            let ui_dispatcher = gateway.ui_origin.as_ref().map(|ui| {
+                let ui_core = Arc::new(
+                    GatewayDispatcher::new(
+                        recovery_authority.clone(),
+                        Arc::clone(&handler),
+                        recovery_authority.clone(),
+                    )
+                    .with_inbound_secret_resolver(Arc::clone(&inbound))
+                    .with_mailbox_publisher(Arc::clone(&mailbox)),
+                );
+                Arc::new(ui_origin_wiring::RealUiGatewayDispatcher::new(
+                    ui_core,
+                    Arc::new(recovery_authority.clone()),
+                    ui.namespace().clone(),
+                    ui.public_port(),
+                )) as Arc<dyn ui_browser_content::UiGatewayDispatcher>
+            });
             let administration = LocalCaddyAdministration::new(&gateway.caddy_admin_url)
                 .map_err(component("gateway Caddy administration"))?;
             let template = LocalCaddyConfigurationTemplate::new(
@@ -1468,6 +1515,17 @@ impl HephaestusApp {
                 gateway.caddy_server_name,
             )
             .map_err(component("gateway Caddy configuration template"))?;
+            let template = match &gateway.ui_origin {
+                Some(ui) => template
+                    .with_ui_namespace(
+                        ui.namespace().as_str(),
+                        ui.listener().ok_or_else(|| {
+                            AppError::Configuration(String::from("missing UI origin listener"))
+                        })?,
+                    )
+                    .map_err(component("gateway UI Caddy configuration"))?,
+                None => template,
+            };
             let provider: Arc<dyn gateway_edge::GatewayProvider> = Arc::new(
                 LocalCaddyGatewayProvider::new(administration, Arc::clone(&dispatcher))
                     .with_dispatcher_upstream(gateway.dispatcher_listen.to_string())
@@ -1485,6 +1543,8 @@ impl HephaestusApp {
                 dispatcher,
                 dispatcher_listen: gateway.dispatcher_listen,
                 public_authority: gateway.public_authority,
+                ui_dispatcher,
+                ui_origin: gateway.ui_origin,
             })
         } else {
             None
@@ -1636,6 +1696,68 @@ impl HephaestusApp {
         })
     }
 
+    /// Binds and constructs the optional UI-origin listener before shared
+    /// gateway configuration is reconciled.
+    async fn build_ui_listener(
+        &self,
+    ) -> Result<Option<(tokio::net::TcpListener, Router)>, AppError> {
+        let Some(gateway) = &self.gateway_edge else {
+            return Ok(None);
+        };
+        let Some(ui) = &gateway.ui_origin else {
+            return Ok(None);
+        };
+        let listen = ui.listener().ok_or_else(|| {
+            AppError::Configuration(String::from(
+                "UI origin listener is missing from validated configuration",
+            ))
+        })?;
+        let listener = tokio::net::TcpListener::bind(listen)
+            .await
+            .map_err(component("UI origin listener"))?;
+        let origin = ui_bootstrap::UiBootstrapConfig::new(
+            ui.namespace().clone(),
+            ui.public_port(),
+            ui.platform_origin().to_owned(),
+        )
+        .map_err(component("UI origin configuration"))?;
+        let sessions: Arc<dyn UiBrowserSessionStore> = Arc::new(PgUiBrowserSessionStore::new(
+            self.service_log_pool.clone(),
+            self.application_pool.clone(),
+        ));
+        let host_resolver: Arc<dyn release_service::UiGenerationHostResolver> = Arc::new(
+            PgUiGenerationHostResolver::new(self.application_pool.clone()),
+        );
+        let bootstrap = Arc::new(ui_bootstrap::UiBootstrapState::new(
+            Arc::clone(&host_resolver),
+            sessions,
+            origin,
+        ));
+        let serving: Arc<dyn release_service::UiBrowserHttpServingProjection> =
+            Arc::new(PgUiBrowserServingStore::new(self.application_pool.clone()));
+        let gateway = gateway.ui_dispatcher.clone().ok_or_else(|| {
+            AppError::Configuration(String::from("UI origin requires a real gateway dispatcher"))
+        })?;
+        let content = Arc::new(
+            ui_browser_content::UiContentState::new(
+                host_resolver,
+                serving,
+                Arc::new(self.artifact_store.clone()),
+                gateway,
+                ui.namespace().clone(),
+                ui.public_port(),
+                ui.platform_origin().to_owned(),
+            )
+            .map_err(component("UI content configuration"))?,
+        );
+        let router = ui_origin_wiring::bounded_ui_router(
+            ui_bootstrap::router(bootstrap).merge(ui_browser_content::router(content)),
+            Arc::new(Semaphore::new(128)),
+            Duration::from_secs(30),
+        );
+        Ok(Some((listener, router)))
+    }
+
     /// Binds HTTP, establishes durable NATS topology, and starts supervised
     /// background workers.
     ///
@@ -1646,10 +1768,14 @@ impl HephaestusApp {
     ///
     /// Returns an error when startup or readiness fails. Already-started tasks
     /// are cancelled and reaped before the error is returned.
-    // Startup deliberately remains ordered in one method so the readiness
-    // barrier and failure cleanup sequence are directly auditable.
-    #[allow(clippy::too_many_lines)]
     pub async fn start(self) -> Result<RunningHephaestus, AppError> {
+        // Keep the large startup state machine off the caller's stack.
+        Box::pin(self.start_inner()).await
+    }
+
+    // Keep readiness barriers and failure cleanup ordered and directly auditable.
+    #[allow(clippy::too_many_lines)]
+    async fn start_inner(self) -> Result<RunningHephaestus, AppError> {
         self.build_executor
             .recover_after_restart()
             .await
@@ -1676,6 +1802,9 @@ impl HephaestusApp {
         let mailbox_consumer = ensure_mailbox_jetstream_topology(&self.jetstream)
             .await
             .map_err(component("mailbox JetStream topology"))?;
+        // Bind the optional UI listener before constructing the HTTP/Caddy
+        // graph, while all application fields are still borrowed in place.
+        let ui_listener = self.build_ui_listener().await?;
         let broker = BrokerServer::bind(
             self.secret_broker_socket,
             Arc::clone(&self.secret_broker_executor),
@@ -1915,6 +2044,29 @@ impl HephaestusApp {
         } else {
             None
         };
+        let ui_ready_rx = if let Some((listener, router)) = ui_listener {
+            let (ui_ready_tx, ui_ready_rx) = oneshot::channel();
+            let ui_cancel = cancellation.clone();
+            tasks.push(tokio::spawn(async move {
+                if ui_ready_tx.send(()).is_err() {
+                    return Ok(());
+                }
+                let result = axum::serve(
+                    listener,
+                    router.into_make_service_with_connect_info::<SocketAddr>(),
+                )
+                .with_graceful_shutdown(ui_cancel.clone().cancelled_owned())
+                .await
+                .map_err(|error| error.to_string());
+                if !ui_cancel.is_cancelled() {
+                    ui_cancel.cancel();
+                }
+                result
+            }));
+            Some(ui_ready_rx)
+        } else {
+            None
+        };
         let (http_ready_tx, http_ready_rx) = oneshot::channel();
         let http_cancel = cancellation.clone();
         tasks.push(tokio::spawn(async move {
@@ -2099,6 +2251,11 @@ impl HephaestusApp {
             if let Some(gateway_ready_rx) = gateway_ready_rx {
                 gateway_ready_rx.await.map_err(|_| {
                     AppError::Readiness(String::from("gateway private dispatcher task exited"))
+                })?;
+            }
+            if let Some(ui_ready_rx) = ui_ready_rx {
+                ui_ready_rx.await.map_err(|_| {
+                    AppError::Readiness(String::from("UI origin listener task exited"))
                 })?;
             }
             publisher_ready_rx

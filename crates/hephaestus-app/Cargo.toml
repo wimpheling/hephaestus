@@ -42,6 +42,7 @@ forge-service = { path = "../forge-service" }
 forge-postgres = { path = "../forge-postgres" }
 forge-domain = { path = "../forge-domain" }
 gateway-edge = { path = "../gateway-edge" }
+gateway-domain = { path = "../gateway-domain" }
 gateway-postgres = { path = "../gateway-postgres" }
 futures-util.workspace = true
 git-http = { path = "../git-http" }
@@ -117,7 +118,6 @@ workspace-domain = { path = "../workspace-domain" }
 
 [dev-dependencies]
 base64.workspace = true
-gateway-domain = { path = "../gateway-domain" }
 registry-token = { path = "../registry-token" }
 rpc-proto = { path = "../rpc-proto", features = ["client"] }
 brokered-egress-domain = { path = "../brokered-egress-domain" }

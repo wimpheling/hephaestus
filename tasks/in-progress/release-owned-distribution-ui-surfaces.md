@@ -38,6 +38,42 @@ integrated quality gate remain incomplete. The user approved organization-owned
 global installations and organization isolation. Historical checkpoints record the state
 at their time; later integration checkpoints supersede earlier pending notes.
 
+## UI HTTP listener and bridge baseline (2026-09-20)
+
+The optional loopback UI listener is wired into the existing daemon and Caddy
+configuration owner. Startup validates the complete UI configuration, binds the
+listener before Caddy reconciliation, and includes it in cancellation/readiness
+handling. Bootstrap and content share exact HTTPS origin canonicalization;
+platform and UI ports are independent, and the namespace must be a strict
+platform-host subdomain.
+
+Bootstrap exchanges the one-time fragment through the worker store and emits
+only the host-only Secure/HttpOnly UI cookie. Content authenticates each request,
+verifies static artifact bytes before conditional/range responses, redirects
+canonical entrypoints with unchanged opaque queries, and dispatches managed/API
+requests through the existing VM handler and worker admission/recorder. Managed
+paths lose exactly one leading slash at the bridge; API paths remain absolute.
+Request correlation is preserved through that bridge. Guest cookies and redirect
+headers are rejected. Shared request limits bound concurrency, bodies, reads,
+and deadlines. HTTP request audit remains a separate pending integration.
+
+All app targets/features compile. Thirty-one in-process HTTP/config/bridge tests
+and three daemon configuration tests pass. These use typed doubles for authority
+and dispatch and real temporary artifact bytes; they are not a live listener,
+PostgreSQL-to-HTTP, Caddy/TLS, or VM/browser proof. Strict app Clippy, rustdoc,
+formatting, diff, and architecture checks pass (61 enabled rules). The synthetic
+middleware test uses the existing health route; no architecture rule was relaxed.
+A fresh database app-pool test passed at migration 93 on both restricted app-role
+connections, including denial of worker-only columns.
+
+Evidence: `/home/a/heph-ui-http-baseline-check-final-20260920.log`,
+`/home/a/heph-ui-http-baseline-clippy-final-20260920.log`,
+`/home/a/heph-ui-http-baseline-lib-tests-final3-20260920.log`,
+`/home/a/heph-ui-http-baseline-bin-ui-origin-tests-final3-20260920.log`,
+`/home/a/heph-ui-http-baseline-doc-final2-20260920.log`,
+`/home/a/heph-ui-http-baseline-architecture-final2-20260920.log`, and
+`/home/a/heph-ui-http-baseline-app-pool-20260920.log`.
+
 ## Redacted handoff audit and fixture isolation checkpoint (2026-09-20)
 
 Migration 93 adds a dedicated append-only request audit stream with closed

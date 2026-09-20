@@ -3216,6 +3216,7 @@ async fn bearer_push_starts_run_through_production_bootstrap() {
                 caddy_server_name: String::from("shared"),
                 dispatcher_listen,
                 public_authority: String::from("gateway.golden.invalid"),
+                ui_origin: None,
             },
             gateway_fixture,
         ))
@@ -3653,6 +3654,7 @@ async fn bearer_push_starts_run_through_production_bootstrap() {
                 caddy_server_name: String::from("shared"),
                 dispatcher_listen,
                 public_authority: String::from("gateway.golden.invalid"),
+                ui_origin: None,
             });
             running
                 .shutdown()
@@ -4206,6 +4208,7 @@ async fn bearer_push_starts_run_through_production_bootstrap() {
             caddy_server_name: String::from("shared"),
             dispatcher_listen,
             public_authority: String::from("gateway.golden.invalid"),
+            ui_origin: None,
         });
         app_config.secret_broker_adapter = actual_brokered.upstream.adapter();
         // Finish the separate adversarial instance's immutable bindings and
