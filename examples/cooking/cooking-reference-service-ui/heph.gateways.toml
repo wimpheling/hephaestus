@@ -10,6 +10,7 @@ exposure = "heph_authenticated"
 loopback_port = 8080
 readiness_path = "/readyz"
 health_path = "/healthz"
+log_capture_mode = "application"
 
 [[gateways.routes]]
 path = "/reference"
