@@ -91,7 +91,7 @@ identifier!(
 );
 identifier!(
     UiInstallationId,
-    "Stable identity for one project or repository UI installation."
+    "Stable identity for one project, repository, or organization-owned global UI installation."
 );
 identifier!(
     UiInstallationGenerationId,

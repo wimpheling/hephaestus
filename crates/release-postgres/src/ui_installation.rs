@@ -81,6 +81,12 @@ impl ReleaseService {
         identity: &AuthenticatedIdentity,
         command: &InstallStaticUi,
     ) -> Result<InstallStaticUiResult, AttemptError> {
+        if matches!(
+            command.target,
+            release_domain::UiInstallationTarget::Organization(_)
+        ) {
+            return Err(UiInstallationError::InvalidOrUnsupported.into());
+        }
         let mut tx = authz_postgres::begin_actor_transaction(&self.pool, identity)
             .await
             .map_err(|_| UiInstallationError::Unavailable)?;
@@ -298,6 +304,7 @@ async fn lock_owner(
             .fetch_optional(&mut **tx)
             .await
         }
+        release_domain::UiInstallationTarget::Organization(_) => Ok(None),
     }
 }
 

@@ -4,7 +4,7 @@ use crate::{
     ReleaseCommandKey, ReleaseId, ReleaseValueError, UiInstallationGenerationId, UiInstallationId,
     ui::UiKey,
 };
-use forge_domain::{ProjectId, RepositoryId};
+use forge_domain::{OrganizationId, ProjectId, RepositoryId};
 use serde::{Deserialize, Serialize};
 use std::fmt;
 use uuid::Uuid;
@@ -64,8 +64,8 @@ impl From<UiInstallationCallerKey> for String {
     }
 }
 
-/// Navigation owner for an installation. There is intentionally no global
-/// variant until global ownership is specified by product policy.
+/// Navigation owner for an installation. Global installations are owned by
+/// an organization; personal global installations are intentionally unsupported.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 #[serde(tag = "scope", content = "id", rename_all = "snake_case")]
 pub enum UiInstallationTarget {
@@ -73,6 +73,9 @@ pub enum UiInstallationTarget {
     Project(ProjectId),
     /// An installation scoped to one repository.
     Repository(RepositoryId),
+    /// An organization-owned installation visible across that organization.
+    #[serde(rename = "global")]
+    Organization(OrganizationId),
 }
 
 impl UiInstallationTarget {
@@ -88,12 +91,19 @@ impl UiInstallationTarget {
         Self::Repository(repository_id)
     }
 
+    /// Creates an organization-owned global target.
+    #[must_use]
+    pub const fn organization(organization_id: OrganizationId) -> Self {
+        Self::Organization(organization_id)
+    }
+
     /// Returns the target UUID.
     #[must_use]
     pub const fn as_uuid(self) -> Uuid {
         match self {
             Self::Project(id) => id.as_uuid(),
             Self::Repository(id) => id.as_uuid(),
+            Self::Organization(id) => id.as_uuid(),
         }
     }
 
@@ -103,6 +113,7 @@ impl UiInstallationTarget {
         match self {
             Self::Project(_) => "project",
             Self::Repository(_) => "repository",
+            Self::Organization(_) => "global",
         }
     }
 }
@@ -468,6 +479,53 @@ mod tests {
                 &ui_key,
             ),
         );
+        assert_ne!(
+            UiInstallationInputDigest::install(
+                UiInstallationTarget::project(ProjectId::from_uuid(Uuid::from_u128(4))),
+                release,
+                &ui_key,
+            ),
+            UiInstallationInputDigest::install(
+                UiInstallationTarget::organization(OrganizationId::from_uuid(Uuid::from_u128(4))),
+                release,
+                &ui_key,
+            ),
+        );
+        assert_ne!(
+            UiInstallationInputDigest::install(
+                UiInstallationTarget::repository(RepositoryId::from_uuid(Uuid::from_u128(4))),
+                release,
+                &ui_key,
+            ),
+            UiInstallationInputDigest::install(
+                UiInstallationTarget::organization(OrganizationId::from_uuid(Uuid::from_u128(4))),
+                release,
+                &ui_key,
+            ),
+        );
+    }
+
+    #[test]
+    fn global_target_round_trips_with_global_scope_and_same_uuid_isolated() {
+        let target =
+            UiInstallationTarget::organization(OrganizationId::from_uuid(Uuid::from_u128(4)));
+        let json = serde_json::to_value(target).expect("serialize global target");
+        assert_eq!(json["scope"], "global");
+        let decoded: UiInstallationTarget =
+            serde_json::from_value(json).expect("deserialize global target");
+        assert_eq!(decoded, target);
+        assert_ne!(
+            UiInstallationInputDigest::install(
+                target,
+                ReleaseId::from_uuid(Uuid::from_u128(3)),
+                &key("assistant"),
+            ),
+            UiInstallationInputDigest::install(
+                UiInstallationTarget::project(ProjectId::from_uuid(Uuid::from_u128(4))),
+                ReleaseId::from_uuid(Uuid::from_u128(3)),
+                &key("assistant"),
+            )
+        );
     }
 
     #[test]
@@ -518,6 +576,15 @@ mod tests {
         assert_eq!(
             hex(digest.as_bytes()),
             "7fa65774e07cca5430f05b76b3f47307bc6112d3b042c2368fe8d6dc7dc6b536"
+        );
+        let global_digest = UiInstallationInputDigest::install(
+            UiInstallationTarget::organization(OrganizationId::from_uuid(Uuid::from_u128(4))),
+            ReleaseId::from_uuid(Uuid::from_u128(3)),
+            &key("assistant"),
+        );
+        assert_eq!(
+            hex(global_digest.as_bytes()),
+            "1d1ae21cbc5353f9924d426f624115c15b5703acb55d1a10dd90499a097435fe"
         );
     }
 

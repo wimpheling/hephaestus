@@ -53,6 +53,28 @@ release-domain/release-service/dev tests, strict release-domain/release-service/
 release-postgres/dev Clippy, and docs passed with Rust 1.88.0. This is focused
 local evidence; updated CI and final integrated quality remain pending.
 
+## Organization-owner schema checkpoint (2026-09-20)
+
+Migration 88 adds organization-owned global installation identities, owner-shape
+constraints, scoped uniqueness, and authorized organization reads. It retains
+`ui_installations_active_owner_key`. Deferred generation validation locks the
+source release and the relevant repositories/projects, rereads parent pointers,
+and rejects cross-organization bindings. Parent-move guards apply only to
+retained installation/generation history. This does not claim deadlock freedom.
+
+Four real PostgreSQL schema tests pass, including dual-organization membership,
+explicit organization filtering, unauthorized reads, tenant rejection, the
+source-project move barrier, and a direct source-release lock barrier using a
+legal draft mutation. Immutable source/build provenance already prevents a
+standalone release-repository reassignment. The existing static-installation
+matrix and restricted app-pool bootstrap also pass at migration 88. Evidence:
+`/home/a/heph-migration88-validation-retry-20260920.log`.
+
+Scoped Rust tests, strict Clippy/docs, workspace formatting, architecture, and
+diff checks pass. Global installation commands remain explicitly unsupported by
+the current adapter until the next slice; this checkpoint adds storage and domain
+support only. Final workspace quality remains pending.
+
 ## Approved organization ownership model (2026-09-20)
 
 The organization is the tenant and permission boundary. A user account may belong
