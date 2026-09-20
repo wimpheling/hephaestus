@@ -45,6 +45,22 @@
   --shadow: 0 20px 70px rgba(0, 0, 0, .25);
 }
 
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]):not([data-theme="dark"]) {
+  --ink: #efeee8;
+  --muted: #aaa79c;
+  --paper: #161713;
+  --panel: #1f201b;
+  --line: #35372f;
+  --ember: #f0683d;
+  --ember-dark: #ff8a66;
+  --green: #56b493;
+  --amber: #e0a04c;
+  --red: #e97970;
+  --shadow: 0 20px 70px rgba(0, 0, 0, .25);
+  }
+}
+
 /*
  * Standalone release-UI components.
  *

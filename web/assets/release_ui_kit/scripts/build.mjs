@@ -16,11 +16,20 @@ function withTrailingNewline(value) {
   return value.endsWith("\n") ? value : `${value}\n`
 }
 
+function systemThemeFallback(tokenSource) {
+  const darkTheme = tokenSource.match(/\[data-theme="dark"\]\s*\{([\s\S]*?)\}/u)
+  if (!darkTheme) {
+    throw new Error('token source must define a [data-theme="dark"] theme')
+  }
+
+  return `@media (prefers-color-scheme: dark) {\n  :root:not([data-theme="light"]):not([data-theme="dark"]) {${darkTheme[1]}  }\n}\n`
+}
+
 async function render() {
   const packageJson = JSON.parse(await readFile(resolve(packageRoot, "package.json"), "utf8"))
   const tokenSource = await readFile(tokenSourcePath, "utf8")
   const componentSource = await readFile(componentSourcePath, "utf8")
-  const css = `${withTrailingNewline(tokenSource)}\n${withTrailingNewline(componentSource)}`
+  const css = `${withTrailingNewline(tokenSource)}\n${systemThemeFallback(tokenSource)}\n${withTrailingNewline(componentSource)}`
   const cssBytes = Buffer.from(css, "utf8")
   const cssFile = `heph-ui-kit-v${packageJson.version}.css`
   const manifest = `${JSON.stringify(

@@ -18,12 +18,29 @@ section 1 is complete. The versioned CSS kit and its local/CI checks are also
 implemented; reference-release integration remains open.
 
 Verified static-byte loading and read-only release-page metadata display are
-implemented. Durable browser authority is the current integration slice.
-UI installation, static/managed hosting, browser
+implemented. Durable browser sessions are integrated through RPC and Phoenix.
+UI installation is the current slice; static/managed hosting, browser
 navigation/authorization/isolation, real Caddy/VM/browser proofs, and the final
 integrated quality gate remain incomplete. Global installation ownership is an
 open question sent to the user. Historical checkpoints below record the state
 at their time; later integration checkpoints supersede earlier pending notes.
+
+## Reference UI automatic-theme checkpoint (2026-09-20)
+
+The kit now derives a dark system-preference fallback from the canonical dark
+tokens. An explicit root `data-theme="light"` or `data-theme="dark"` takes
+precedence. Both reference documents omit their former forced-light attribute.
+Canonical generation, manifest hashes, vendored copies, and the static artifact
+checker remain synchronized; the CSS digest is
+`777b9bbaf8bd1fbf3a121b8f4252a1e3c389dd2d2078d98309bd2a625e36571f`.
+
+Node build/test/check, package dry-run, and both fixture builds/checkers pass in
+`/home/a/heph-ui-theme-canonical-20260920.log`. Local Firefox computed-style
+evidence verifies automatic light/dark and the opposite explicit override for
+both built reference documents, including root tokens and actual body colors:
+`/home/a/heph-ui-theme-browser-20260920-script.log`. The reproducible probe is
+`/home/a/heph-ui-theme-browser-smoke-20260920.sh`. This verifies system-theme
+fallback, not host-selected theme propagation or installed Caddy/browser serving.
 
 ## Browser-session RPC and Phoenix checkpoint (2026-09-20)
 
@@ -306,9 +323,10 @@ Browser handoff implementation direction (still unimplemented):
   is not a CSRF boundary between sibling origins. Browser TLS and adversarial
   replay/cookie/origin tests must prove this flow before the task is complete.
 
-The fixtures currently force light mode. Their manually selected dark rendering
-checks demonstrate kit styling only; automatic or host-selected theme behavior
-remains part of browser integration acceptance.
+The initial fixtures forced light mode, and their manually selected dark checks
+demonstrated kit styling only. The later automatic-theme checkpoint verifies
+system-preference fallback. Host-selected theme propagation remains part of
+browser integration acceptance.
 
 The retained-cleanup fixture isolation follow-up is implemented below. Production
 lease semantics and cleanup behavior remain unchanged.

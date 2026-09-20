@@ -48,6 +48,20 @@ for (const className of [
 assert.match(second.css, /prefers-reduced-motion/)
 assert.match(second.css, /--ink:\s*#171714/)
 assert.match(second.css, /\[data-theme="dark"\]/)
+assert.match(second.css, /@media \(prefers-color-scheme: dark\)/)
+assert.match(
+  second.css,
+  /:root:not\(\[data-theme="light"\]\):not\(\[data-theme="dark"\]\)/,
+)
+
+for (const fixture of [
+  "../../../examples/cooking/cooking-reference-ui/index.html",
+  "../../../examples/cooking/cooking-reference-service-ui/index.html",
+]) {
+  const html = await readFile(resolve(packageRoot, fixture), "utf8")
+  assert.match(html, /<html lang="en">/)
+  assert.equal(html.includes('data-theme="light"'), false)
+}
 
 const packed = JSON.parse(
   execFileSync("npm", ["pack", "--dry-run", "--json", "--ignore-scripts"], {

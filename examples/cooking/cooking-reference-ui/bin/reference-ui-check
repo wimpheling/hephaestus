@@ -4,7 +4,7 @@
 import hashlib
 from pathlib import Path
 
-EXPECTED_CSS_SHA256 = "79a23f981523db70c39e07be76830be59f419d2b7d3336485fe56b8a09af5c1d"
+EXPECTED_CSS_SHA256 = "777b9bbaf8bd1fbf3a121b8f4252a1e3c389dd2d2078d98309bd2a625e36571f"
 artifact_root = Path(__file__).resolve().parent.parent
 html_path = artifact_root / "dist/index.html"
 css_path = artifact_root / "dist/heph-ui-kit-v1.0.0.css"

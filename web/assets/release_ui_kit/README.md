@@ -9,14 +9,16 @@ The kit has no Phoenix, LiveView, HEEx, Tailwind runtime, authentication,
 session, navigation, or platform-authority behavior. It is suitable for a
 release UI rendered on its isolated origin. Its component classes use the
 `heph-ui-` prefix to avoid class-name collisions within that document.
-Set the theme on the document root; the kit reads the existing token themes:
+The kit follows the operating system dark preference when the document root
+does not have a valid theme attribute. An explicit `data-theme="light"` or
+`data-theme="dark"` always overrides that preference:
 
 ```html
-<html lang="en" data-theme="light">
+<html lang="en">
 ```
 
-Use `data-theme="dark"` for the dark palette. The kit does not persist or
-change this value.
+Use `data-theme="light"` or `data-theme="dark"` when a release needs a fixed
+palette. The kit does not persist or change this value.
 
 Build and test it without downloading dependencies:
 
