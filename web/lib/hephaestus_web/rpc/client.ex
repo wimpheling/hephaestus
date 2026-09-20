@@ -5,6 +5,7 @@ defmodule HephaestusWeb.RPC.Client do
   """
 
   alias Hephaestus.Common.V1.{
+    MutationReceipt,
     NetworkPolicy,
     OpaqueId,
     PageRequest,
@@ -13,7 +14,13 @@ defmodule HephaestusWeb.RPC.Client do
     RuntimePolicy
   }
 
-  alias Hephaestus.Identity.V1.{IdentityService, ResolveIdentityRequest}
+  alias Hephaestus.Identity.V1.{
+    CreateBrowserSessionRequest,
+    CreateBrowserSessionResponse,
+    IdentityService,
+    ResolveIdentityRequest,
+    RevokeBrowserSessionRequest
+  }
 
   alias Hephaestus.Image.V1.{
     GetImageRequest,
@@ -163,16 +170,7 @@ defmodule HephaestusWeb.RPC.Client do
   @doc "Resolves a verified OIDC subject using bootstrap-only mediator authority."
   def resolve_identity(issuer, %{"sub" => subject} = claims)
       when is_binary(issuer) and is_binary(subject) do
-    display_name =
-      claims["name"] || claims["preferred_username"] || claims["email"] || subject
-
-    attributes = %{
-      issuer: issuer,
-      subject: subject,
-      display_name: display_name,
-      email: claims["email"] || "",
-      email_verified: claims["email_verified"] == true
-    }
+    attributes = bootstrap_attributes(issuer, subject, claims)
 
     {context, request_id} = request_context()
     request = struct!(ResolveIdentityRequest, Map.put(attributes, :context, context))
@@ -193,7 +191,9 @@ defmodule HephaestusWeb.RPC.Client do
            user_id: response.user_id.value,
            issuer: issuer,
            subject: subject,
-           display_name: response.display_name
+           display_name: response.display_name,
+           sid: nil,
+           session_expires_at: nil
          }}
 
       {:error, error} ->
@@ -202,6 +202,79 @@ defmodule HephaestusWeb.RPC.Client do
   end
 
   def resolve_identity(_issuer, _claims), do: {:error, Error.local(:unauthenticated)}
+
+  @doc "Creates one durable browser session from the verified OIDC assertion."
+  def create_browser_session(issuer, %{"sub" => subject} = claims, sid)
+      when is_binary(issuer) and is_binary(subject) and is_binary(sid) do
+    with {:ok, sid_bytes} <- session_id_bytes(sid) do
+      attributes = bootstrap_attributes(issuer, subject, claims)
+      {context, request_id} = request_context()
+
+      request = %CreateBrowserSessionRequest{
+        context: context,
+        issuer: issuer,
+        subject: subject,
+        sid: sid_bytes
+      }
+
+      case Invoke.bootstrap_unary(
+             issuer,
+             attributes,
+             "/hephaestus.identity.v1.IdentityService/CreateBrowserSession",
+             request,
+             &IdentityService.Stub.create_browser_session/3,
+             request_id: request_id,
+             maximum_request_bytes: 16_384,
+             maximum_response_bytes: 4_096
+           ) do
+        {:ok, response} ->
+          project_created_session_response(response)
+
+        {:error, error} ->
+          {:error, error}
+      end
+    else
+      :error -> {:error, Error.local(:invalid)}
+    end
+  end
+
+  def create_browser_session(_issuer, _claims, _sid),
+    do: {:error, Error.local(:unauthenticated)}
+
+  @doc false
+  @spec project_created_session_response(term()) :: {:ok, map()} | {:error, Error.t()}
+  def project_created_session_response(%CreateBrowserSessionResponse{
+        user_id: %OpaqueId{value: user_id},
+        session_id: %OpaqueId{value: session_id},
+        expires_at: %Google.Protobuf.Timestamp{} = expires_at,
+        receipt: %MutationReceipt{} = receipt
+      }) do
+    projected = %{
+      user_id: user_id,
+      session_id: session_id,
+      expires_at: Projection.to_value(expires_at),
+      receipt: Projection.to_value(receipt)
+    }
+
+    if valid_created_session?(projected) do
+      {:ok, projected}
+    else
+      {:error, Error.local(:invalid)}
+    end
+  end
+
+  def project_created_session_response(_response), do: {:error, Error.local(:invalid)}
+
+  @doc "Best-effort self-revocation of the durable session in the signed identity."
+  def revoke_browser_session(%Identity{} = identity),
+    do:
+      mutation(
+        identity,
+        "/hephaestus.identity.v1.IdentityService/RevokeBrowserSession",
+        RevokeBrowserSessionRequest,
+        [],
+        &IdentityService.Stub.revoke_browser_session/3
+      )
 
   @doc "Lists every organization visible to the current user in stable server order."
   @spec list_organizations(Identity.t()) :: {:ok, [map()]} | {:error, term()}
@@ -1465,6 +1538,51 @@ defmodule HephaestusWeb.RPC.Client do
        idempotency_key: idempotency_key
      }, request_id}
   end
+
+  defp bootstrap_attributes(issuer, subject, claims) do
+    display_name =
+      claims["name"] || claims["preferred_username"] || claims["email"] || subject
+
+    %{
+      issuer: issuer,
+      subject: subject,
+      display_name: display_name,
+      email: claims["email"] || "",
+      email_verified: claims["email_verified"] == true
+    }
+  end
+
+  defp session_id_bytes(sid) do
+    if Identity.valid_session_id?(sid) do
+      sid
+      |> String.replace("-", "")
+      |> Base.decode16(case: :mixed)
+      |> case do
+        {:ok, <<_::binary-size(16)>> = bytes} -> {:ok, bytes}
+        _invalid -> :error
+      end
+    else
+      :error
+    end
+  end
+
+  defp valid_created_session?(%{
+         user_id: user_id,
+         session_id: session_id,
+         expires_at: %DateTime{} = expires_at,
+         receipt: %{
+           "committed_cursor" => cursor,
+           "aggregate_version" => version,
+           "event_id" => event_id
+         }
+       }) do
+    Identity.valid_session_id?(user_id) and Identity.valid_session_id?(session_id) and
+      DateTime.compare(expires_at, DateTime.utc_now()) == :gt and is_binary(cursor) and
+      cursor != "" and is_integer(version) and version > 0 and
+      Identity.valid_session_id?(event_id)
+  end
+
+  defp valid_created_session?(_response), do: false
 
   defp secret_owner(:organization, owner_id),
     do: %SecretOwner{owner: {:organization_id, id(owner_id)}}

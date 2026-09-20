@@ -125,6 +125,16 @@ defmodule HephaestusWeb.RPC.InvokeTest do
              )
   end
 
+  test "normalizes a channel provider exit without crashing the caller" do
+    never_called = fn _channel, _request, _options -> flunk("stub must not be called") end
+
+    assert {:error, %Error{kind: :unavailable}} =
+             Invoke.unary(identity(), @audience, %Google.Protobuf.Empty{}, never_called,
+               channel_provider: fn -> exit(:noproc) end,
+               channel_reset: fn -> :ok end
+             )
+  end
+
   test "does not retry a mutation after an unavailable response" do
     counter = start_supervised!({Agent, fn -> 0 end}, id: make_ref())
 
@@ -183,7 +193,9 @@ defmodule HephaestusWeb.RPC.InvokeTest do
       user_id: "38fa596b-d96f-43c7-a4bc-6ad9f2ce07ad",
       issuer: "https://issuer.example",
       subject: "external-subject",
-      display_name: "Reviewer"
+      display_name: "Reviewer",
+      sid: "20000000-0000-4000-8000-000000000002",
+      session_expires_at: 4_000_000_000
     }
   end
 

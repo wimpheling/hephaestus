@@ -1,9 +1,10 @@
 use axum::{body::Body, extract::State, http::Request, middleware::Next, response::Response};
 use http::{HeaderMap, StatusCode, header::AUTHORIZATION};
-use identity_domain::UserId;
+use identity_application::{BrowserSessionAuthenticationError, BrowserSessionStore};
+use identity_domain::{BrowserSessionSid, UserId};
 use jsonwebtoken::{Algorithm, DecodingKey, Validation, decode};
 use serde::Deserialize;
-use std::{collections::HashSet, str::FromStr};
+use std::{collections::HashSet, str::FromStr, sync::Arc};
 use time::OffsetDateTime;
 use uuid::Uuid;
 
@@ -11,6 +12,9 @@ const ISSUER: &str = "hephaestus-web-mediator";
 const BOOTSTRAP_SUBJECT: &str = "hephaestus-web-mediator";
 const BOOTSTRAP_ACTOR_KIND: &str = "verified_oidc_bootstrap";
 const BOOTSTRAP_AUDIENCE: &str = "/hephaestus.identity.v1.IdentityService/ResolveIdentity";
+const CREATE_BOOTSTRAP_AUDIENCE: &str =
+    "/hephaestus.identity.v1.IdentityService/CreateBrowserSession";
+const REVOKE_AUDIENCE: &str = "/hephaestus.identity.v1.IdentityService/RevokeBrowserSession";
 const MAX_LIFETIME_SECONDS: i64 = 30;
 const CLOCK_SKEW_SECONDS: i64 = 5;
 
@@ -21,6 +25,8 @@ pub struct MediatorPrincipal {
     pub user_id: UserId,
     /// Unique assertion identifier retained only for audit correlation.
     pub assertion_id: Uuid,
+    /// Browser SID carried by the signed mediator assertion.
+    pub sid: BrowserSessionSid,
 }
 
 /// Identity fields a bootstrap assertion must bind to the request body.
@@ -35,6 +41,84 @@ pub struct BootstrapIdentity<'a> {
     pub email: &'a str,
     /// Whether the upstream issuer verified the email.
     pub email_verified: bool,
+}
+
+/// Typed mediator session claims installed by the edge.
+///
+/// Normal RPCs carry claims that have passed the durable active-session check.
+/// Revoke carries signed claims only so an expired session can self-revoke; the
+/// revoke handler must not treat that path as proof of current activity.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct VerifiedMediatorSession {
+    /// Internal user selected by the signed mediator assertion.
+    pub user_id: UserId,
+    /// Unique assertion identifier retained only for audit correlation.
+    pub assertion_id: Uuid,
+    /// Browser SID carried by the signed assertion; active routes verify it
+    /// against `PostgreSQL` before admitting the request.
+    pub sid: BrowserSessionSid,
+}
+
+/// Cloneable middleware state for signed mediator and browser-session checks.
+#[derive(Clone)]
+pub struct MediatorAuthenticationState {
+    authenticator: MediatorAuthenticator,
+    browser_sessions: Arc<dyn BrowserSessionStore>,
+}
+
+impl MediatorAuthenticationState {
+    /// Creates middleware state with the application-role session verifier.
+    #[must_use]
+    pub fn new(
+        authenticator: MediatorAuthenticator,
+        browser_sessions: Arc<dyn BrowserSessionStore>,
+    ) -> Self {
+        Self {
+            authenticator,
+            browser_sessions,
+        }
+    }
+
+    fn authenticate_signed(
+        &self,
+        headers: &HeaderMap,
+        expected_audience: &str,
+    ) -> Result<VerifiedMediatorSession, MediatorAssertionError> {
+        let principal = self
+            .authenticator
+            .authenticate(headers, expected_audience)?;
+        Ok(VerifiedMediatorSession {
+            user_id: principal.user_id,
+            assertion_id: principal.assertion_id,
+            sid: principal.sid,
+        })
+    }
+
+    async fn authenticate_active(
+        &self,
+        headers: &HeaderMap,
+        expected_audience: &str,
+    ) -> Result<VerifiedMediatorSession, SessionAuthenticationError> {
+        let session = self
+            .authenticate_signed(headers, expected_audience)
+            .map_err(|_| SessionAuthenticationError::Unauthenticated)?;
+        let metadata = self
+            .browser_sessions
+            .authenticate_browser_session(session.user_id, session.sid)
+            .await
+            .map_err(|error| match error {
+                BrowserSessionAuthenticationError::Unauthenticated => {
+                    SessionAuthenticationError::Unauthenticated
+                }
+                BrowserSessionAuthenticationError::Unavailable => {
+                    SessionAuthenticationError::Unavailable
+                }
+            })?;
+        if metadata.user_id() != session.user_id {
+            return Err(SessionAuthenticationError::Unauthenticated);
+        }
+        Ok(session)
+    }
 }
 
 /// Verifies audience-bound, short-lived Phoenix mediator assertions.
@@ -72,7 +156,41 @@ impl MediatorAuthenticator {
         Ok(MediatorPrincipal {
             user_id: UserId::from_str(&claims.sub).map_err(|_| MediatorAssertionError)?,
             assertion_id: Uuid::parse_str(&claims.jti).map_err(|_| MediatorAssertionError)?,
+            sid: BrowserSessionSid::from_str(claims.sid.as_deref().ok_or(MediatorAssertionError)?)
+                .map_err(|_| MediatorAssertionError)?,
         })
+    }
+
+    /// Authenticates one bootstrap assertion by its verified OIDC binding.
+    ///
+    /// This deliberately checks only issuer and subject. The full `ResolveIdentity`
+    /// bootstrap retains its display and email binding in `authenticate_bootstrap`.
+    ///
+    /// # Errors
+    ///
+    /// Returns one non-sensitive error unless the signed bootstrap assertion
+    /// has the expected audience, actor kind, issuer, and subject.
+    pub fn authenticate_session_bootstrap(
+        &self,
+        headers: &HeaderMap,
+        expected_audience: &str,
+        issuer: &str,
+        subject: &str,
+    ) -> Result<Uuid, MediatorAssertionError> {
+        let token = bearer_token(headers)?;
+        let mut validation = mediator_validation(expected_audience);
+        validation.sub = Some(String::from(BOOTSTRAP_SUBJECT));
+        let claims = decode::<SessionBootstrapClaims>(token, &self.decoding_key, &validation)
+            .map_err(|_| MediatorAssertionError)?
+            .claims;
+        claims.registered.validate_times()?;
+        if claims.actor_kind != BOOTSTRAP_ACTOR_KIND
+            || claims.oidc_iss != issuer
+            || claims.oidc_sub != subject
+        {
+            return Err(MediatorAssertionError);
+        }
+        Uuid::parse_str(&claims.registered.jti).map_err(|_| MediatorAssertionError)
     }
 
     /// Authenticates the method-specific identity-resolution bootstrap.
@@ -110,43 +228,97 @@ impl MediatorAuthenticator {
 /// Axum middleware that validates a mediator assertion for the exact request
 /// path and installs the resulting identity in request extensions.
 ///
-/// Identity bootstrap is the one RPC exception: its assertion binds to
-/// request-body OIDC fields, so the identity adapter performs that validation
-/// after decoding the typed request.
+/// The two bootstrap procedures validate their request-body identity later in
+/// their typed RPC handlers. Revoke authenticates the signed session claims but
+/// deliberately skips the active-row check so an expired session can log out.
+/// Every other Connect RPC requires an active durable browser session.
 pub async fn mediator_identity_middleware(
-    State(authenticator): State<MediatorAuthenticator>,
+    State(state): State<MediatorAuthenticationState>,
     mut request: Request<Body>,
     next: Next,
 ) -> Response {
-    if !requires_mediator_auth(request.uri().path()) {
-        return next.run(request).await;
-    }
-    let audience = request.uri().path().to_owned();
-    let Ok(principal) = authenticator.authenticate(request.headers(), &audience) else {
-        let mut response = Response::new(Body::empty());
-        *response.status_mut() = StatusCode::UNAUTHORIZED;
-        return response;
+    let mode = auth_mode(request.uri().path());
+    let session = match mode {
+        MediatorAuthMode::Public | MediatorAuthMode::Bootstrap => {
+            return next.run(request).await;
+        }
+        MediatorAuthMode::Signed => {
+            match state.authenticate_signed(request.headers(), request.uri().path()) {
+                Ok(session) => session,
+                Err(_) => return auth_response(StatusCode::UNAUTHORIZED),
+            }
+        }
+        MediatorAuthMode::Active => match state
+            .authenticate_active(request.headers(), request.uri().path())
+            .await
+        {
+            Ok(session) => session,
+            Err(SessionAuthenticationError::Unauthenticated) => {
+                return auth_response(StatusCode::UNAUTHORIZED);
+            }
+            Err(SessionAuthenticationError::Unavailable) => {
+                return auth_response(StatusCode::SERVICE_UNAVAILABLE);
+            }
+        },
     };
+    request.extensions_mut().insert(session);
     request
         .extensions_mut()
         .insert(identity_domain::AuthenticatedIdentity::new(
-            principal.user_id,
+            session.user_id,
             ISSUER,
-            principal.user_id.to_string(),
-            serde_json::json!({"mediator": "phoenix", "assertion_id": principal.assertion_id}),
-            identity_domain::RequestId::from_uuid(principal.assertion_id),
+            session.user_id.to_string(),
+            serde_json::json!({"mediator": "phoenix", "assertion_id": session.assertion_id}),
+            identity_domain::RequestId::from_uuid(session.assertion_id),
         ));
     next.run(request).await
 }
 
+fn auth_response(status: StatusCode) -> Response {
+    let mut response = Response::new(Body::empty());
+    *response.status_mut() = status;
+    response
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum SessionAuthenticationError {
+    Unauthenticated,
+    Unavailable,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum MediatorAuthMode {
+    Public,
+    Bootstrap,
+    Signed,
+    Active,
+}
+
+fn auth_mode(path: &str) -> MediatorAuthMode {
+    if !path.starts_with("/hephaestus.") {
+        return MediatorAuthMode::Public;
+    }
+    match path {
+        BOOTSTRAP_AUDIENCE | CREATE_BOOTSTRAP_AUDIENCE => MediatorAuthMode::Bootstrap,
+        REVOKE_AUDIENCE => MediatorAuthMode::Signed,
+        _ => MediatorAuthMode::Active,
+    }
+}
+
+#[cfg(test)]
 fn requires_mediator_auth(path: &str) -> bool {
-    path.starts_with("/hephaestus.") && path != BOOTSTRAP_AUDIENCE
+    !matches!(
+        auth_mode(path),
+        MediatorAuthMode::Public | MediatorAuthMode::Bootstrap
+    )
 }
 
 #[derive(Deserialize)]
 struct MediatorClaims {
     sub: String,
     jti: String,
+    #[serde(default)]
+    sid: Option<String>,
     iat: i64,
     nbf: i64,
     exp: i64,
@@ -162,6 +334,15 @@ struct BootstrapClaims {
     name: String,
     email: String,
     email_verified: bool,
+}
+
+#[derive(Deserialize)]
+struct SessionBootstrapClaims {
+    #[serde(flatten)]
+    registered: MediatorClaims,
+    actor_kind: String,
+    oidc_iss: String,
+    oidc_sub: String,
 }
 
 impl MediatorClaims {
@@ -217,13 +398,28 @@ fn mediator_validation(expected_audience: &str) -> Validation {
 mod tests {
     use super::{
         BOOTSTRAP_ACTOR_KIND, BOOTSTRAP_AUDIENCE, BOOTSTRAP_SUBJECT, BootstrapIdentity,
-        CLOCK_SKEW_SECONDS, ISSUER, MediatorAuthenticator, requires_mediator_auth,
+        CLOCK_SKEW_SECONDS, CREATE_BOOTSTRAP_AUDIENCE, ISSUER, MediatorAuthenticationState,
+        MediatorAuthenticator, REVOKE_AUDIENCE, requires_mediator_auth,
     };
     use crate::rpc::mediator_signing_key;
+    use async_trait::async_trait;
+    use axum::{
+        Router,
+        body::Body,
+        http::{Request, StatusCode},
+    };
     use http::{HeaderMap, HeaderValue, header::AUTHORIZATION};
+    use identity_application::{
+        BrowserSessionAuthenticationError, BrowserSessionStore, CreateBrowserSession,
+        CreateBrowserSessionError, CreatedBrowserSession, RevokeBrowserSession,
+        RevokeBrowserSessionError, RevokedBrowserSession,
+    };
+    use identity_domain::{BrowserSessionId, BrowserSessionMetadata, BrowserSessionSid, UserId};
     use jsonwebtoken::{Algorithm, EncodingKey, Header, encode};
     use serde::Serialize;
-    use time::OffsetDateTime;
+    use std::sync::{Arc, Mutex};
+    use time::{Duration, OffsetDateTime};
+    use tower::ServiceExt;
     use uuid::Uuid;
 
     const TOKEN: &[u8] = b"test-mediator-token-with-sufficient-entropy";
@@ -238,6 +434,7 @@ mod tests {
         iat: i64,
         nbf: i64,
         exp: i64,
+        sid: Option<String>,
     }
 
     #[derive(Serialize)]
@@ -257,6 +454,357 @@ mod tests {
         email_verified: bool,
     }
 
+    #[derive(Serialize)]
+    struct MinimalBootstrapClaims<'a> {
+        iss: &'a str,
+        aud: &'a str,
+        sub: &'a str,
+        jti: String,
+        iat: i64,
+        nbf: i64,
+        exp: i64,
+        actor_kind: &'a str,
+        oidc_iss: &'a str,
+        oidc_sub: &'a str,
+    }
+
+    #[derive(Clone, Copy)]
+    enum FakeSessionOutcome {
+        Active,
+        Unauthenticated,
+        Unavailable,
+    }
+
+    #[derive(Clone)]
+    struct RecordingSessionStore {
+        expected_user: UserId,
+        expected_sid: BrowserSessionSid,
+        metadata: BrowserSessionMetadata,
+        outcome: FakeSessionOutcome,
+        calls: Arc<Mutex<Vec<(UserId, BrowserSessionSid)>>>,
+    }
+
+    #[async_trait]
+    impl BrowserSessionStore for RecordingSessionStore {
+        async fn create_browser_session(
+            &self,
+            _command: CreateBrowserSession,
+        ) -> Result<CreatedBrowserSession, CreateBrowserSessionError> {
+            Err(CreateBrowserSessionError::Unavailable)
+        }
+
+        async fn authenticate_browser_session(
+            &self,
+            user_id: UserId,
+            sid: BrowserSessionSid,
+        ) -> Result<BrowserSessionMetadata, BrowserSessionAuthenticationError> {
+            self.calls
+                .lock()
+                .expect("recording store lock")
+                .push((user_id, sid));
+            if user_id != self.expected_user || sid != self.expected_sid {
+                return Err(BrowserSessionAuthenticationError::Unauthenticated);
+            }
+            match self.outcome {
+                FakeSessionOutcome::Active => Ok(self.metadata),
+                FakeSessionOutcome::Unauthenticated => {
+                    Err(BrowserSessionAuthenticationError::Unauthenticated)
+                }
+                FakeSessionOutcome::Unavailable => {
+                    Err(BrowserSessionAuthenticationError::Unavailable)
+                }
+            }
+        }
+
+        async fn revoke_browser_session(
+            &self,
+            _command: RevokeBrowserSession,
+        ) -> Result<RevokedBrowserSession, RevokeBrowserSessionError> {
+            Err(RevokeBrowserSessionError::Unavailable)
+        }
+    }
+
+    fn session_metadata(user_id: UserId) -> BrowserSessionMetadata {
+        let issued_at = OffsetDateTime::now_utc();
+        BrowserSessionMetadata::new(
+            BrowserSessionId::new(),
+            user_id,
+            issued_at,
+            issued_at + Duration::hours(1),
+            None,
+        )
+        .expect("valid test session metadata")
+    }
+
+    async fn dispatch_status(
+        state: MediatorAuthenticationState,
+        path: &str,
+        token: Option<&str>,
+    ) -> StatusCode {
+        let app = Router::new()
+            .fallback(|| async { StatusCode::NO_CONTENT })
+            .layer(axum::middleware::from_fn_with_state(
+                state,
+                super::mediator_identity_middleware,
+            ));
+        let mut request = Request::builder().uri(path);
+        if let Some(token) = token {
+            request = request.header(AUTHORIZATION, format!("Bearer {token}"));
+        }
+        app.oneshot(
+            request
+                .body(Body::empty())
+                .expect("test request should build"),
+        )
+        .await
+        .expect("middleware response")
+        .status()
+    }
+
+    async fn inspect_extensions(request: Request<Body>) -> StatusCode {
+        let identity = request
+            .extensions()
+            .get::<identity_domain::AuthenticatedIdentity>()
+            .expect("identity extension");
+        let session = request
+            .extensions()
+            .get::<super::VerifiedMediatorSession>()
+            .expect("session extension");
+        let sid = session.sid.to_protocol_string();
+        let debug = format!("{identity:?}{session:?}");
+        if debug.contains(&sid) {
+            StatusCode::INTERNAL_SERVER_ERROR
+        } else {
+            StatusCode::NO_CONTENT
+        }
+    }
+
+    #[tokio::test]
+    async fn active_middleware_checks_sid_and_maps_store_results() {
+        let key = mediator_signing_key(TOKEN);
+        let user_id = UserId::new();
+        let sid = BrowserSessionSid::new();
+        let assertion_id = Uuid::new_v4();
+        let now = OffsetDateTime::now_utc().unix_timestamp();
+        let token = assertion_with_sid(
+            &key,
+            AUDIENCE,
+            user_id.as_uuid(),
+            assertion_id,
+            now,
+            now + 30,
+            sid,
+        );
+        let calls = Arc::new(Mutex::new(Vec::new()));
+        let state = MediatorAuthenticationState::new(
+            MediatorAuthenticator::new(&key),
+            Arc::new(RecordingSessionStore {
+                expected_user: user_id,
+                expected_sid: sid,
+                metadata: session_metadata(user_id),
+                outcome: FakeSessionOutcome::Active,
+                calls: Arc::clone(&calls),
+            }),
+        );
+        assert_eq!(
+            dispatch_status(state, AUDIENCE, Some(&token)).await,
+            StatusCode::NO_CONTENT
+        );
+        assert_eq!(
+            *calls.lock().expect("recording store lock"),
+            vec![(user_id, sid)]
+        );
+
+        let unauthenticated = MediatorAuthenticationState::new(
+            MediatorAuthenticator::new(&key),
+            Arc::new(RecordingSessionStore {
+                expected_user: user_id,
+                expected_sid: sid,
+                metadata: session_metadata(user_id),
+                outcome: FakeSessionOutcome::Unauthenticated,
+                calls: Arc::new(Mutex::new(Vec::new())),
+            }),
+        );
+        assert_eq!(
+            dispatch_status(unauthenticated, AUDIENCE, Some(&token)).await,
+            StatusCode::UNAUTHORIZED
+        );
+
+        let unavailable = MediatorAuthenticationState::new(
+            MediatorAuthenticator::new(&key),
+            Arc::new(RecordingSessionStore {
+                expected_user: user_id,
+                expected_sid: sid,
+                metadata: session_metadata(user_id),
+                outcome: FakeSessionOutcome::Unavailable,
+                calls: Arc::new(Mutex::new(Vec::new())),
+            }),
+        );
+        assert_eq!(
+            dispatch_status(unavailable, AUDIENCE, Some(&token)).await,
+            StatusCode::SERVICE_UNAVAILABLE
+        );
+    }
+
+    #[tokio::test]
+    async fn revoke_skips_active_lookup_but_keeps_signed_audience_and_sid_checks() {
+        let key = mediator_signing_key(TOKEN);
+        let user_id = UserId::new();
+        let sid = BrowserSessionSid::new();
+        let now = OffsetDateTime::now_utc().unix_timestamp();
+        let calls = Arc::new(Mutex::new(Vec::new()));
+        let state = MediatorAuthenticationState::new(
+            MediatorAuthenticator::new(&key),
+            Arc::new(RecordingSessionStore {
+                expected_user: user_id,
+                expected_sid: sid,
+                metadata: session_metadata(user_id),
+                outcome: FakeSessionOutcome::Unavailable,
+                calls: Arc::clone(&calls),
+            }),
+        );
+        let token = assertion_with_sid(
+            &key,
+            REVOKE_AUDIENCE,
+            user_id.as_uuid(),
+            Uuid::new_v4(),
+            now,
+            now + 30,
+            sid,
+        );
+        assert_eq!(
+            dispatch_status(state, REVOKE_AUDIENCE, Some(&token)).await,
+            StatusCode::NO_CONTENT
+        );
+        assert!(calls.lock().expect("recording store lock").is_empty());
+
+        let wrong_audience = assertion_with_sid(
+            &key,
+            AUDIENCE,
+            user_id.as_uuid(),
+            Uuid::new_v4(),
+            now,
+            now + 30,
+            sid,
+        );
+        let state = MediatorAuthenticationState::new(
+            MediatorAuthenticator::new(&key),
+            Arc::new(RecordingSessionStore {
+                expected_user: user_id,
+                expected_sid: sid,
+                metadata: session_metadata(user_id),
+                outcome: FakeSessionOutcome::Active,
+                calls: Arc::new(Mutex::new(Vec::new())),
+            }),
+        );
+        assert_eq!(
+            dispatch_status(state, REVOKE_AUDIENCE, Some(&wrong_audience)).await,
+            StatusCode::UNAUTHORIZED
+        );
+        let sidless = assertion_without_sid(
+            &key,
+            REVOKE_AUDIENCE,
+            user_id.as_uuid(),
+            Uuid::new_v4(),
+            now,
+            now + 30,
+        );
+        let state = MediatorAuthenticationState::new(
+            MediatorAuthenticator::new(&key),
+            Arc::new(RecordingSessionStore {
+                expected_user: user_id,
+                expected_sid: sid,
+                metadata: session_metadata(user_id),
+                outcome: FakeSessionOutcome::Active,
+                calls: Arc::new(Mutex::new(Vec::new())),
+            }),
+        );
+        assert_eq!(
+            dispatch_status(state, REVOKE_AUDIENCE, Some(&sidless)).await,
+            StatusCode::UNAUTHORIZED
+        );
+    }
+
+    #[tokio::test]
+    async fn only_exact_bootstrap_paths_skip_the_session_gate_and_debug_redacts_sid() {
+        let key = mediator_signing_key(TOKEN);
+        let user_id = UserId::new();
+        let sid = BrowserSessionSid::new();
+        let store = Arc::new(RecordingSessionStore {
+            expected_user: user_id,
+            expected_sid: sid,
+            metadata: session_metadata(user_id),
+            outcome: FakeSessionOutcome::Unavailable,
+            calls: Arc::new(Mutex::new(Vec::new())),
+        });
+        let state = MediatorAuthenticationState::new(
+            MediatorAuthenticator::new(&key),
+            Arc::clone(&store) as Arc<dyn BrowserSessionStore>,
+        );
+        assert_eq!(
+            dispatch_status(state, BOOTSTRAP_AUDIENCE, None).await,
+            StatusCode::NO_CONTENT
+        );
+        assert!(store.calls.lock().expect("recording store lock").is_empty());
+
+        let nearby = "/hephaestus.identity.v1.IdentityService/ResolveIdentity/extra";
+        let token = assertion_with_sid(
+            &key,
+            nearby,
+            user_id.as_uuid(),
+            Uuid::new_v4(),
+            OffsetDateTime::now_utc().unix_timestamp(),
+            OffsetDateTime::now_utc().unix_timestamp() + 30,
+            sid,
+        );
+        let nearby_state = MediatorAuthenticationState::new(
+            MediatorAuthenticator::new(&key),
+            Arc::clone(&store) as Arc<dyn BrowserSessionStore>,
+        );
+        assert_eq!(
+            dispatch_status(nearby_state, nearby, Some(&token)).await,
+            StatusCode::SERVICE_UNAVAILABLE
+        );
+
+        let active_calls = Arc::new(Mutex::new(Vec::new()));
+        let active_store = Arc::new(RecordingSessionStore {
+            expected_user: user_id,
+            expected_sid: sid,
+            metadata: session_metadata(user_id),
+            outcome: FakeSessionOutcome::Active,
+            calls: active_calls,
+        });
+        let active_state = MediatorAuthenticationState::new(
+            MediatorAuthenticator::new(&key),
+            Arc::clone(&active_store) as Arc<dyn BrowserSessionStore>,
+        );
+        let app =
+            Router::new()
+                .fallback(inspect_extensions)
+                .layer(axum::middleware::from_fn_with_state(
+                    active_state,
+                    super::mediator_identity_middleware,
+                ));
+        let token = assertion_with_sid(
+            &key,
+            AUDIENCE,
+            user_id.as_uuid(),
+            Uuid::new_v4(),
+            OffsetDateTime::now_utc().unix_timestamp(),
+            OffsetDateTime::now_utc().unix_timestamp() + 30,
+            sid,
+        );
+        let mut request = Request::builder().uri(AUDIENCE);
+        request = request.header(AUTHORIZATION, format!("Bearer {token}"));
+        assert_eq!(
+            app.oneshot(request.body(Body::empty()).expect("test request"))
+                .await
+                .expect("middleware response")
+                .status(),
+            StatusCode::NO_CONTENT
+        );
+    }
+
     #[test]
     fn accepts_only_exact_short_lived_audience_bound_assertions() {
         let key = mediator_signing_key(TOKEN);
@@ -272,6 +820,7 @@ mod tests {
             .expect("valid assertion");
         assert_eq!(principal.user_id.to_string(), user_id.to_string());
         assert_eq!(principal.assertion_id, assertion_id);
+        assert!(principal.sid.to_protocol_string().parse::<Uuid>().is_ok());
         assert!(
             authenticator
                 .authenticate(&valid_headers, "/wrong.Service/Method")
@@ -309,6 +858,43 @@ mod tests {
             .expect_err("malformed assertion must fail");
         assert!(!error.to_string().contains(sentinel));
         assert!(!format!("{error:?}").contains(sentinel));
+    }
+
+    #[test]
+    fn normal_assertions_require_a_sid_without_leaking_token_material() {
+        let key = mediator_signing_key(TOKEN);
+        let authenticator = MediatorAuthenticator::new(&key);
+        let now = OffsetDateTime::now_utc().unix_timestamp();
+        let token = encode(
+            &Header::new(Algorithm::HS256),
+            &Claims {
+                iss: ISSUER,
+                aud: AUDIENCE,
+                sub: Uuid::new_v4().to_string(),
+                jti: Uuid::new_v4().to_string(),
+                iat: now,
+                nbf: now,
+                exp: now + 30,
+                sid: None,
+            },
+            &EncodingKey::from_secret(&key),
+        )
+        .expect("encode sidless assertion");
+        let error = authenticator
+            .authenticate(&headers(&token), AUDIENCE)
+            .expect_err("normal assertion without sid must fail");
+        assert!(!error.to_string().contains(&token));
+        assert!(!format!("{error:?}").contains(&token));
+    }
+
+    #[test]
+    fn bootstrap_and_revoke_are_the_only_signed_session_exceptions() {
+        assert!(!requires_mediator_auth(BOOTSTRAP_AUDIENCE));
+        assert!(!requires_mediator_auth(CREATE_BOOTSTRAP_AUDIENCE));
+        assert!(requires_mediator_auth(REVOKE_AUDIENCE));
+        assert!(requires_mediator_auth(
+            "/hephaestus.identity.v1.IdentityService/ResolveIdentity/extra"
+        ));
     }
 
     #[test]
@@ -410,7 +996,109 @@ mod tests {
         );
     }
 
+    #[test]
+    fn session_bootstrap_binds_only_verified_oidc_identity() {
+        let key = mediator_signing_key(TOKEN);
+        let authenticator = MediatorAuthenticator::new(&key);
+        let assertion_id = Uuid::new_v4();
+        let now = OffsetDateTime::now_utc().unix_timestamp();
+        let token = encode(
+            &Header::new(Algorithm::HS256),
+            &MinimalBootstrapClaims {
+                iss: ISSUER,
+                aud: CREATE_BOOTSTRAP_AUDIENCE,
+                sub: BOOTSTRAP_SUBJECT,
+                jti: assertion_id.to_string(),
+                iat: now,
+                nbf: now,
+                exp: now + 30,
+                actor_kind: BOOTSTRAP_ACTOR_KIND,
+                oidc_iss: "https://issuer.example",
+                oidc_sub: "external-subject",
+            },
+            &EncodingKey::from_secret(&key),
+        )
+        .expect("encode session bootstrap assertion");
+        let headers = headers(&token);
+        assert_eq!(
+            authenticator
+                .authenticate_session_bootstrap(
+                    &headers,
+                    CREATE_BOOTSTRAP_AUDIENCE,
+                    "https://issuer.example",
+                    "external-subject",
+                )
+                .expect("valid session bootstrap"),
+            assertion_id
+        );
+        assert!(
+            authenticator
+                .authenticate_session_bootstrap(
+                    &headers,
+                    CREATE_BOOTSTRAP_AUDIENCE,
+                    "https://attacker.example",
+                    "external-subject",
+                )
+                .is_err()
+        );
+        assert!(
+            authenticator
+                .authenticate_session_bootstrap(
+                    &headers,
+                    CREATE_BOOTSTRAP_AUDIENCE,
+                    "https://issuer.example",
+                    "other-subject",
+                )
+                .is_err()
+        );
+    }
+
     fn assertion(
+        key: &[u8],
+        audience: &str,
+        user_id: Uuid,
+        assertion_id: Uuid,
+        issued_at: i64,
+        expires_at: i64,
+    ) -> String {
+        assertion_with_sid(
+            key,
+            audience,
+            user_id,
+            assertion_id,
+            issued_at,
+            expires_at,
+            BrowserSessionSid::new(),
+        )
+    }
+
+    fn assertion_with_sid(
+        key: &[u8],
+        audience: &str,
+        user_id: Uuid,
+        assertion_id: Uuid,
+        issued_at: i64,
+        expires_at: i64,
+        sid: BrowserSessionSid,
+    ) -> String {
+        encode(
+            &Header::new(Algorithm::HS256),
+            &Claims {
+                iss: ISSUER,
+                aud: audience,
+                sub: user_id.to_string(),
+                jti: assertion_id.to_string(),
+                iat: issued_at,
+                nbf: issued_at,
+                exp: expires_at,
+                sid: Some(sid.to_protocol_string()),
+            },
+            &EncodingKey::from_secret(key),
+        )
+        .expect("encode assertion")
+    }
+
+    fn assertion_without_sid(
         key: &[u8],
         audience: &str,
         user_id: Uuid,
@@ -428,10 +1116,11 @@ mod tests {
                 iat: issued_at,
                 nbf: issued_at,
                 exp: expires_at,
+                sid: None,
             },
             &EncodingKey::from_secret(key),
         )
-        .expect("encode assertion")
+        .expect("encode sidless assertion")
     }
 
     fn headers(token: &str) -> HeaderMap {

@@ -18,11 +18,59 @@ section 1 is complete. The versioned CSS kit and its local/CI checks are also
 implemented; reference-release integration remains open.
 
 Verified static-byte loading and read-only release-page metadata display are
-implemented. Durable browser authority is the current integration slice. UI installation, static/managed hosting, browser
+implemented. Durable browser authority is the current integration slice.
+UI installation, static/managed hosting, browser
 navigation/authorization/isolation, real Caddy/VM/browser proofs, and the final
 integrated quality gate remain incomplete. Global installation ownership is an
 open question sent to the user. Historical checkpoints below record the state
 at their time; later integration checkpoints supersede earlier pending notes.
+
+## Browser-session RPC and Phoenix checkpoint (2026-09-20)
+
+The integration adds separate bootstrap-authorized session creation and
+signed self-revocation RPCs. Ordinary mediator RPCs require the durable session
+verifier; request conversion no longer falls back to signature-only identity.
+Self-revocation deliberately accepts signed inactive-session claims so logout
+can replay safely. Raw SIDs remain sensitive request material and are excluded
+from mutation responses and general identity claims.
+
+Generated consistency, 15 descriptor-policy tests, protocol interoperability,
+62 app RPC tests, scoped app Clippy/docs, workspace formatting, and architecture
+checks pass. Logs use `/home/a/heph-identity-session-rpc-*-20260920.log`.
+Existing mediated integration fixtures now use distinct random, persisted SIDs;
+their updated call graph passes app all-target/all-feature Clippy and test
+compilation. VM-dependent golden acceptance was not rerun for this wiring change.
+
+Phoenix creates a session after verified OIDC identity resolution, validates the
+typed response and matching user, and stores its SID and Unix expiry in the
+signed cookie. Legacy or expired identities require sign-in. Callback failure
+clears a preexisting identity; logout requests self-revocation and clears the
+local session even when the RPC returns unavailability. Channel-provider exits
+now normalize to that transport error. Failed remote revocation is not evidence
+that the durable session was revoked.
+
+The full Phoenix gate passes 264 tests, formatting, and 19 architecture rules in
+`/home/a/heph-phoenix-full-20260920-v3.log`. Tests cover typed generated response
+projection, callback session writes/clearing, SID/expiry validation, and transport
+failure handling. These are Plug/controller tests, not an HTTPS browser proof.
+
+The production HTTP router test passes against disposable PostgreSQL/NATS:
+creation, authorized ordinary RPC, self-revocation, denial with the same JWT
+still cryptographically valid, exact receipt replay without extra events/outbox
+rows, and an unaffected second user. It checks response expiry against storage
+and actor/request provenance, and rejects malformed SID/bootstrap identity
+mismatch. Final log: `/home/a/heph-browser-session-rpc-real-20260920.log`.
+Run the `hephaestus-app` integration target `browser_session_lifecycle` with
+all features and `REAL_APP_BROWSER_SESSION_RPC=1`, plus disposable
+`HEPHAESTUS_POSTGRES_TEST_URL` and `HEPHAESTUS_NATS_TEST_URL`.
+The generated client lives in the declared test composition boundary; no
+architecture rule was weakened. Final architecture, strict Clippy, workspace
+formatting, and app docs pass in the matching `architecture-v4`, `clippy-v5`,
+`workspace-fmt-v2`, and `doc` logs. UI handoff/child sessions, browser isolation,
+and final repository-wide quality remain outstanding.
+
+CI for the preceding managed reference fixture commit `9d506bc` passed in run
+`35499684144`; that run predates these session integration changes.
 
 ## Managed reference fixture checkpoint (2026-09-20)
 
@@ -154,8 +202,10 @@ The routing foundation is implemented and validated as described below.
 Browser authority needs a durable human session bound to the verified OIDC
 identity, with current active-user, expiry, and revocation checks at the mediator
 boundary. Session creation will be a separate bootstrap-authorized operation;
-legacy cookies without a session ID must require login. Storage/domain support is implemented and validated below; no session RPC,
-cookie migration, logout revocation, or UI handoff is implemented yet.
+legacy cookies without a session ID must require login. Storage/domain support,
+creation/verification/revocation adapters, and production cookie isolation are
+implemented and validated below. RPC/middleware/Phoenix integration is in progress;
+UI handoff remains unimplemented.
 
 Project tabs currently repeat across six page components; repository tabs use
 `RepositoryRouteModel` and `RepositoryShell`. Installed entries will be projected
@@ -208,6 +258,22 @@ release-level CanUse for UI installation is an explicit policy (needed for stati
 UIs), not a claim that existing agent imports already enforce that permission.
 Removed installation identities remain terminal; a new installation may reuse the
 key, while enabled/disabled installations may receive fresh activation generations.
+
+The reviewed project/repository storage direction uses four tables: stable
+installations, immutable generations, exact managed/API bindings, and immutable
+command outcomes. Composite foreign keys bind generations to their installation
+key/scope, bindings to the generation's release/UI, and gateway revisions to the
+same gateway/release/agent/exposure. A deferred current-generation foreign key
+permits allocating both IDs before insertion while retaining a non-null pointer
+in every committed lifecycle state. Existing migrations remain unchanged.
+
+Command identity derives from actor, operation, and the caller's bounded
+idempotency key. Canonical input, including the expected-generation CAS, is
+compared separately: changed input under one key conflicts, while a fresh key
+can activate the same release again. The adapter will append one existing
+project/repository owner event through the committed-outbox function, rather
+than adding a second event trigger. These remain implementation directions;
+no installation schema or adapter has been applied at this checkpoint.
 
 Browser handoff implementation direction (still unimplemented):
 
@@ -924,12 +990,13 @@ escape hatch for custom HTML in core pages.
 
 ### Browser-origin deployment findings (2026-09-20)
 
-Current local Phoenix uses loopback port 4000; production takes `PHX_HOST`.
-Its session cookie has no Domain attribute. Current Caddy reconciliation
-replaces a single `hephaestus.gateway` subroute with path-based routes and
-forwards to one trusted dispatcher authority. It has no release-UI host route
-or UI namespace, and the repository supplies no production wildcard DNS or
-certificate configuration.
+At the initial deployment review, local Phoenix used loopback port 4000 and
+production took `PHX_HOST`; its session cookie had no Domain attribute. Caddy
+reconciliation replaced one `hephaestus.gateway` subroute and forwarded to the
+trusted dispatcher, without a UI namespace. The later routing checkpoint adds
+an opt-in namespace guard, and the cookie checkpoint adds production `__Host-`
+isolation. Production wildcard DNS/certificate provisioning and the actual UI
+upstream remain outstanding.
 
 UI deployment will require an explicitly configured platform-owned hostname
 namespace, with each immutable installed binding receiving its own hostname.
@@ -959,7 +1026,8 @@ represent global authority merely by null project/repository IDs.
 `LocalArtifactStore` already handles bounded imports, content hashing, and safe
 opaque-key lookup. `ArtifactApplication` supplies actor-authorized artifact-ID
 lookup and bounded preview/stream paths. Existing read validation checks regular
-file type and stored length, but does not recompute content hashes on each read.
+file type and stored length. The later verified-byte checkpoint adds a separate
+bounded read that recomputes the content hash before returning bytes.
 The UI serving path must verify content integrity before emitting bytes and
 reject files beyond the 16 MiB UI bound; its 64 MiB aggregate counts unique
 referenced artifact IDs. Existing generic streaming can truncate at a caller

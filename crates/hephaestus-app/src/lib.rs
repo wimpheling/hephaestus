@@ -71,10 +71,10 @@ use git_http::{
     CompositeGitAuthenticator, GitAuthenticator, GitHttpLimits, GitHttpService,
     OidcGitAuthenticator, PostgresGitAuthorizer, RuntimeGitHttpAuthenticator,
 };
-use identity_application::IdempotentIdentityResolver;
+use identity_application::{BrowserSessionStore, IdempotentIdentityResolver};
 use identity_domain::{AuthenticatedIdentity, RequestId, UserId};
 use identity_oidc::OidcVerifier;
-use identity_postgres::PostgresIdentityStore;
+use identity_postgres::{PostgresBrowserSessionStore, PostgresIdentityStore};
 use jsonwebtoken::{Algorithm, DecodingKey};
 use mailbox_dispatch::{
     MailboxCommandHandler, MailboxDispatchStore, MailboxOutboxPublisher, MailboxRunCompletion,
@@ -1697,6 +1697,9 @@ impl HephaestusApp {
             self.internal_platform_policy.clone(),
             self.internal_platform_policy_version.clone(),
         );
+        let browser_sessions: Arc<dyn BrowserSessionStore> = Arc::new(
+            PostgresBrowserSessionStore::new(self.pool.clone(), self.application_pool.clone()),
+        );
         let rpc = rpc::service(
             rpc::ApplicationDependencies::new(
                 self.pool.clone(),
@@ -1706,6 +1709,7 @@ impl HephaestusApp {
                     self.pool.clone(),
                 )),
                 Arc::clone(&self.identity_store) as Arc<dyn IdempotentIdentityResolver>,
+                Arc::clone(&browser_sessions),
             ),
             Arc::clone(&self.storage),
             self.artifact_store.clone(),
@@ -1783,7 +1787,10 @@ impl HephaestusApp {
             .merge(registry_notifications)
             .fallback_service(rpc)
             .layer(axum::middleware::from_fn_with_state(
-                rpc::MediatorAuthenticator::new(&self.rpc_mediator_signing_key),
+                rpc::MediatorAuthenticationState::new(
+                    rpc::MediatorAuthenticator::new(&self.rpc_mediator_signing_key),
+                    browser_sessions,
+                ),
                 rpc::mediator_identity_middleware,
             ));
         let listener = tokio::net::TcpListener::bind(self.http_listen)

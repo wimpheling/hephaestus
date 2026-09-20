@@ -23,7 +23,8 @@ mod secret;
 
 pub use auth::mediator_identity_middleware;
 pub use auth::{
-    BootstrapIdentity, MediatorAssertionError, MediatorAuthenticator, MediatorPrincipal,
+    BootstrapIdentity, MediatorAssertionError, MediatorAuthenticationState, MediatorAuthenticator,
+    MediatorPrincipal, VerifiedMediatorSession,
 };
 pub use error::{RpcError, into_connect_error};
 
@@ -33,7 +34,7 @@ use control_plane_postgres::ControlPlanePool as PgPool;
 use event_application::MutationReceiptReader;
 use forge_postgres::PgForgeRepository;
 use forge_service::GitStorage;
-use identity_application::IdempotentIdentityResolver;
+use identity_application::{BrowserSessionStore, IdempotentIdentityResolver};
 use release_artifact_store::LocalArtifactStore;
 use rpc_proto::connect::hephaestus::identity::v1::IdentityServiceExt;
 use std::{path::PathBuf, sync::Arc, time::Duration};
@@ -142,6 +143,7 @@ pub(crate) struct ApplicationDependencies {
     forge: Arc<PgForgeRepository>,
     mutation_receipt_reader: Arc<dyn MutationReceiptReader>,
     identity_resolver: Arc<dyn IdempotentIdentityResolver>,
+    browser_sessions: Arc<dyn BrowserSessionStore>,
 }
 
 impl ApplicationDependencies {
@@ -151,6 +153,7 @@ impl ApplicationDependencies {
         forge: Arc<PgForgeRepository>,
         mutation_receipt_reader: Arc<dyn MutationReceiptReader>,
         identity_resolver: Arc<dyn IdempotentIdentityResolver>,
+        browser_sessions: Arc<dyn BrowserSessionStore>,
     ) -> Self {
         Self {
             pool,
@@ -158,6 +161,7 @@ impl ApplicationDependencies {
             forge,
             mutation_receipt_reader,
             identity_resolver,
+            browser_sessions,
         }
     }
 }
@@ -183,6 +187,7 @@ pub(crate) fn service(
         Arc::clone(&applications.identity_resolver),
         MediatorAuthenticator::new(mediator_signing_key),
         mutation_receipts.clone(),
+        Arc::clone(&applications.browser_sessions),
     ));
     let organization = Arc::new(organization::OrganizationRpc::new(
         pool.clone(),

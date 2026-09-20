@@ -61,7 +61,7 @@ fn reflection_inventory_contains_every_application_service_and_method() {
             .iter()
             .map(|service| service.methods().len())
             .sum::<usize>(),
-        89
+        91
     );
 
     let reflector = connectrpc_reflection::Reflector::from_descriptor_pool(pool)
@@ -318,7 +318,11 @@ fn every_method_declares_auth_kind_limits_and_retry_policy() {
             );
             assert_eq!(authorization.audience, format!("/{qualified}"));
 
-            let bootstrap = qualified == "hephaestus.identity.v1.IdentityService/ResolveIdentity";
+            let bootstrap = matches!(
+                qualified.as_str(),
+                "hephaestus.identity.v1.IdentityService/ResolveIdentity"
+                    | "hephaestus.identity.v1.IdentityService/CreateBrowserSession"
+            );
             assert_eq!(
                 authorization.actor_source.to_i32(),
                 if bootstrap {
@@ -357,7 +361,7 @@ fn every_method_declares_auth_kind_limits_and_retry_policy() {
         }
     }
 
-    assert_eq!(methods, 89, "review the policy when adding an RPC method");
+    assert_eq!(methods, 91, "review the policy when adding an RPC method");
 }
 
 #[test]
@@ -964,6 +968,7 @@ fn application_payloads_are_typed_and_responses_are_secret_safe() {
     let allowed_bytes = BTreeSet::from([
         "hephaestus.artifact.v1.StreamArtifactResponse.contents",
         "hephaestus.gateway.v1.GatewayServiceLogRecord.contents",
+        "hephaestus.identity.v1.CreateBrowserSessionRequest.sid",
         "hephaestus.repository_browser.v1.StreamFileResponse.contents",
         "hephaestus.pat.v1.PersonalAccessTokenValue.value",
         "hephaestus.secret.v1.SecretValue.value",
@@ -1011,6 +1016,7 @@ fn application_payloads_are_typed_and_responses_are_secret_safe() {
     assert_eq!(
         sensitive_fields(&pool),
         BTreeSet::from([
+            "hephaestus.identity.v1.CreateBrowserSessionRequest.sid".to_owned(),
             "hephaestus.pat.v1.PersonalAccessTokenValue.value".to_owned(),
             "hephaestus.secret.v1.SecretValue.value".to_owned(),
         ])
@@ -1119,7 +1125,7 @@ fn sensitive_fields_are_annotated_and_reachable_only_at_reviewed_boundaries() {
     let sensitive = sensitive_fields(&pool);
     assert_eq!(
         sensitive.len(),
-        2,
+        3,
         "review every sensitive descriptor field"
     );
     for qualified in sensitive {
@@ -1232,6 +1238,16 @@ fn actor_identity_is_metadata_only_except_for_exact_bootstrap_shape() {
                         "email",
                         "email_verified",
                     ])
+                );
+            } else if qualified == "hephaestus.identity.v1.IdentityService/CreateBrowserSession" {
+                let actual = request
+                    .fields()
+                    .iter()
+                    .map(buffa_descriptor::FieldDescriptor::name)
+                    .collect::<BTreeSet<_>>();
+                assert_eq!(
+                    actual,
+                    BTreeSet::from(["context", "issuer", "subject", "sid"])
                 );
             } else {
                 assert!(

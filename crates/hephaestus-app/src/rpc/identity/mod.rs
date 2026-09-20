@@ -1,18 +1,24 @@
 //! Identity-resolution Connect adapter.
 
+mod create_browser_session;
+mod revoke_browser_session;
+
 use super::{
     BootstrapIdentity, MediatorAuthenticator, MutationReceipts, RpcError, into_connect_error,
     mutation_receipt,
 };
 use crate::application::identity::{IdentityApplication, ResolveIdentity, ResolveIdentityError};
 use connectrpc::{RequestContext, Response, ServiceRequest, ServiceResult};
-use identity_application::IdempotentIdentityResolver;
+use identity_application::{BrowserSessionStore, IdempotentIdentityResolver};
 use identity_domain::RequestId;
 use rpc_proto::{
     connect::hephaestus::identity::v1::IdentityService,
     messages::hephaestus::{
         common::v1::OpaqueId,
-        identity::v1::{ResolveIdentityRequest, ResolveIdentityResponse},
+        identity::v1::{
+            CreateBrowserSessionRequest, CreateBrowserSessionResponse, ResolveIdentityRequest,
+            ResolveIdentityResponse, RevokeBrowserSessionRequest, RevokeBrowserSessionResponse,
+        },
     },
 };
 use std::{future::Future, str::FromStr, sync::Arc};
@@ -26,9 +32,10 @@ const MAX_IDEMPOTENCY_KEY_BYTES: usize = 256;
 
 /// Generated identity service implementation.
 pub struct IdentityRpc {
-    application: IdentityApplication,
-    authenticator: MediatorAuthenticator,
-    receipts: MutationReceipts,
+    pub(super) application: IdentityApplication,
+    pub(super) authenticator: MediatorAuthenticator,
+    pub(super) receipts: MutationReceipts,
+    pub(super) browser_sessions: Arc<dyn BrowserSessionStore>,
 }
 
 impl IdentityRpc {
@@ -37,15 +44,20 @@ impl IdentityRpc {
         resolver: Arc<dyn IdempotentIdentityResolver>,
         authenticator: MediatorAuthenticator,
         receipts: MutationReceipts,
+        browser_sessions: Arc<dyn BrowserSessionStore>,
     ) -> Self {
         Self {
             application: IdentityApplication::new(resolver),
             authenticator,
             receipts,
+            browser_sessions,
         }
     }
 }
 
+// The generated trait exposes opaque response encoders; these concrete async
+// handlers keep the transport implementation readable at this boundary.
+#[allow(refining_impl_trait)]
 impl IdentityService for IdentityRpc {
     fn resolve_identity<'a>(
         &'a self,
@@ -114,6 +126,22 @@ impl IdentityService for IdentityRpc {
                 ..Default::default()
             })
         }
+    }
+
+    async fn create_browser_session(
+        &self,
+        ctx: RequestContext,
+        request: ServiceRequest<'_, CreateBrowserSessionRequest>,
+    ) -> ServiceResult<CreateBrowserSessionResponse> {
+        create_browser_session::handle(self, ctx, request).await
+    }
+
+    async fn revoke_browser_session(
+        &self,
+        ctx: RequestContext,
+        request: ServiceRequest<'_, RevokeBrowserSessionRequest>,
+    ) -> ServiceResult<RevokeBrowserSessionResponse> {
+        revoke_browser_session::handle(self, ctx, request).await
     }
 }
 

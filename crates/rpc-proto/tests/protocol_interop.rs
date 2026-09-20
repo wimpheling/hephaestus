@@ -10,7 +10,10 @@ use rpc_proto::{
     },
     messages::hephaestus::{
         common::v1::OpaqueId,
-        identity::v1::{ResolveIdentityRequest, ResolveIdentityResponse},
+        identity::v1::{
+            CreateBrowserSessionRequest, CreateBrowserSessionResponse, ResolveIdentityRequest,
+            ResolveIdentityResponse, RevokeBrowserSessionRequest, RevokeBrowserSessionResponse,
+        },
     },
 };
 use std::sync::Arc;
@@ -34,6 +37,22 @@ impl IdentityService for FixtureIdentity {
             display_name: request.display_name,
             ..Default::default()
         })
+    }
+
+    async fn create_browser_session(
+        &self,
+        _ctx: RequestContext,
+        _request: ServiceRequest<'_, CreateBrowserSessionRequest>,
+    ) -> ServiceResult<CreateBrowserSessionResponse> {
+        Response::ok(CreateBrowserSessionResponse::default())
+    }
+
+    async fn revoke_browser_session(
+        &self,
+        _ctx: RequestContext,
+        _request: ServiceRequest<'_, RevokeBrowserSessionRequest>,
+    ) -> ServiceResult<RevokeBrowserSessionResponse> {
+        Response::ok(RevokeBrowserSessionResponse::default())
     }
 }
 

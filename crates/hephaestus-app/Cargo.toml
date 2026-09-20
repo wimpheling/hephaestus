@@ -130,6 +130,7 @@ rustls = "0.23"
 tokio-rustls = "0.26"
 reqwest.workspace = true
 url = "2.5.8"
+tower = { version = "0.5", features = ["util"] }
 
 [[bin]]
 name = "hephaestusd"

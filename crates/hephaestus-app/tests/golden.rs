@@ -11,7 +11,10 @@ use hephaestus_app::{
     AppConfig, GatewayEdgeConfig, HephaestusApp, OciBuilderWorkerConfig, OidcConfig,
     RegistryConfig, RunEventKind, VmBackendConfig,
 };
-use identity_domain::{AuthenticatedIdentity, RequestId, UserId};
+use identity_domain::{
+    AuthenticatedIdentity, BrowserSessionSid, RequestId, UserId,
+    browser_session_identity_binding_digest, browser_session_sid_digest,
+};
 use jsonwebtoken::{Algorithm, EncodingKey, Header, encode};
 use mailbox_domain::{
     BodyReference, BodyReferenceId, ContentMetadata, DeduplicationKey, EnvelopeMethod,
@@ -3062,6 +3065,15 @@ async fn bearer_push_starts_run_through_production_bootstrap() {
     .execute(&pool)
     .await
     .expect("seed cooking outsider identity");
+    let owner_browser_session = seed_golden_browser_session(
+        &pool,
+        user_id,
+        &browser_oidc_issuer,
+        "golden-subject",
+    )
+    .await;
+    let outsider_browser_session =
+        seed_golden_browser_session(&pool, outsider_id, &browser_oidc_issuer, "outsider").await;
     let project = fixture_repository
         .create_project_trusted(organization_id, "golden-project")
         .await
@@ -3492,7 +3504,8 @@ async fn bearer_push_starts_run_through_production_bootstrap() {
                     "iat": now,
                     "nbf": now,
                     "exp": now + 25,
-                    "jti": uuid::Uuid::new_v4().to_string()
+                    "jti": uuid::Uuid::new_v4().to_string(),
+                    "sid": owner_browser_session.to_protocol_string()
                 }),
                 &EncodingKey::from_secret(&hephaestus_app::rpc::mediator_signing_key(
                     b"golden-internal-command-token-with-sufficient-entropy",
@@ -5104,6 +5117,7 @@ async fn bearer_push_starts_run_through_production_bootstrap() {
                 &running,
                 &admission_instance,
                 user_id.as_uuid(),
+                owner_browser_session,
             )
             .await;
             assert_eq!(race.initial_hook_run_id, race.retried_hook_run_id);
@@ -5136,6 +5150,7 @@ async fn bearer_push_starts_run_through_production_bootstrap() {
             &running,
             &admission_instance,
             user_id.as_uuid(),
+            owner_browser_session,
         )
         .await;
         assert_ne!(admission.update_id, uuid::Uuid::nil());
@@ -5282,6 +5297,7 @@ async fn bearer_push_starts_run_through_production_bootstrap() {
                         project.id.as_uuid(),
                         fencing_token,
                         user_id.as_uuid(),
+                        owner_browser_session,
                         &public_url,
                     )
                     .await;
@@ -5335,7 +5351,9 @@ async fn bearer_push_starts_run_through_production_bootstrap() {
                         &running,
                         rpc_fixture,
                         user_id.as_uuid(),
+                        owner_browser_session,
                         outsider_id.as_uuid(),
+                        outsider_browser_session,
                         || async {
                             sqlx::query(
                                 "DELETE FROM project_maintainers WHERE project_id = $1 AND user_id = $2",
@@ -6045,6 +6063,42 @@ async fn wait_for_caddy_configuration(admin_url: &str, required_route: &str) -> 
     panic!(
         "Caddy did not contain {required_route} after bounded reconciliation: {last_configuration}"
     );
+}
+
+async fn seed_golden_browser_session(
+    pool: &sqlx::PgPool,
+    user_id: UserId,
+    issuer: &str,
+    subject: &str,
+) -> BrowserSessionSid {
+    let sid = BrowserSessionSid::new();
+    let verified = AuthenticatedIdentity::new(
+        user_id,
+        issuer,
+        subject,
+        serde_json::Value::Null,
+        RequestId::new(),
+    );
+    sqlx::query(
+        "INSERT INTO human_browser_sessions
+            (id, sid_digest, creation_idempotency_id, creation_request_id,
+             identity_binding_digest, user_id, issued_at, expires_at)
+         VALUES ($1, $2, $3, $4, $5, $6, now(), now() + interval '12 hours')",
+    )
+    .bind(uuid::Uuid::new_v4())
+    .bind(browser_session_sid_digest(sid).as_bytes().to_vec())
+    .bind(uuid::Uuid::new_v4())
+    .bind(uuid::Uuid::new_v4())
+    .bind(
+        browser_session_identity_binding_digest(&verified)
+            .as_bytes()
+            .to_vec(),
+    )
+    .bind(user_id.as_uuid())
+    .execute(pool)
+    .await
+    .expect("seed active golden browser session");
+    sid
 }
 
 fn signed_token(lifetime: Duration) -> String {
@@ -7566,7 +7620,13 @@ async fn assert_guest_gateway_service_log_retained(
 }
 
 #[cfg(feature = "test-fixtures")]
-#[allow(clippy::too_many_arguments, clippy::too_many_lines)]
+// Keep the complete SQL authority fixture together so its persisted scopes and
+// application-role assertions remain reviewable as one setup boundary.
+#[allow(
+    clippy::cognitive_complexity,
+    clippy::too_many_arguments,
+    clippy::too_many_lines
+)]
 async fn prepare_gateway_service_log_rpc(
     pool: &sqlx::PgPool,
     running: &hephaestus_app::RunningHephaestus,
@@ -7776,6 +7836,13 @@ async fn prepare_gateway_service_log_rpc(
         .execute(pool)
         .await
         .expect("seed service log RPC member");
+    let member_browser_session = seed_golden_browser_session(
+        pool,
+        UserId::from_uuid(member_id),
+        &golden_issuer(),
+        &format!("member-{member_id}"),
+    )
+    .await;
     sqlx::query("INSERT INTO project_maintainers (project_id, user_id) VALUES ($1, $2)")
         .bind(project_id)
         .bind(member_id)
@@ -7798,6 +7865,7 @@ async fn prepare_gateway_service_log_rpc(
             payload_bytes,
             foreign_project,
             member_id,
+            member_browser_session,
         },
     )
 }

@@ -8,6 +8,7 @@ use connectrpc::{
     error::ErrorCode,
 };
 use gateway_edge::MAX_SERVICE_LOG_INSTANCE_CHUNKS;
+use identity_domain::BrowserSessionSid;
 use jsonwebtoken::{Algorithm, EncodingKey, Header, encode};
 use rpc_proto::{
     connect::hephaestus::gateway::v1::GatewayServiceClient,
@@ -66,6 +67,7 @@ pub async fn exercise_gateway_service_guest_log(
     project_id: uuid::Uuid,
     fencing_token: i64,
     owner_id: uuid::Uuid,
+    owner_browser_session: BrowserSessionSid,
     public_url: &str,
 ) -> GatewayServiceGuestLogProof {
     assert!(fencing_token > 0);
@@ -151,7 +153,8 @@ pub async fn exercise_gateway_service_guest_log(
                     .into(),
                 ..Default::default()
             };
-            let token = service_log_rpc_token(&owner_id, "ListGatewayServiceLogs");
+            let token =
+                service_log_rpc_token(&owner_id, owner_browser_session, "ListGatewayServiceLogs");
             let remaining = deadline.saturating_duration_since(Instant::now());
             let response = tokio::time::timeout(
                 remaining,
@@ -277,6 +280,8 @@ pub struct GatewayServiceLogRpcFixture {
     pub(super) foreign_project: uuid::Uuid,
     /// Member whose access is revoked between transport assertions.
     pub(super) member_id: uuid::Uuid,
+    /// Stable random SID seeded for the member before RPC calls.
+    pub(super) member_browser_session: BrowserSessionSid,
 }
 
 #[allow(
@@ -294,7 +299,9 @@ pub async fn exercise_gateway_service_log_rpc<F, Fut>(
     running: &hephaestus_app::RunningHephaestus,
     fixture: GatewayServiceLogRpcFixture,
     owner_id: uuid::Uuid,
+    owner_browser_session: BrowserSessionSid,
     outsider_id: uuid::Uuid,
+    outsider_browser_session: BrowserSessionSid,
     revoke_member: F,
 ) where
     F: FnOnce() -> Fut,
@@ -314,6 +321,7 @@ pub async fn exercise_gateway_service_log_rpc<F, Fut>(
         payload_bytes,
         foreign_project,
         member_id,
+        member_browser_session,
     } = fixture;
     let scope = GatewayServiceLogScope {
         project_id: opaque_id(project_id).into(),
@@ -338,8 +346,13 @@ pub async fn exercise_gateway_service_log_rpc<F, Fut>(
         project_id: opaque_id(project_id).into(),
         ..Default::default()
     };
-    let owner_token = service_log_rpc_token(&owner_id, "ListGatewayServiceLogs");
-    let metadata_token = service_log_rpc_token(&owner_id, "GetProjectServiceLogMetadata");
+    let owner_token =
+        service_log_rpc_token(&owner_id, owner_browser_session, "ListGatewayServiceLogs");
+    let metadata_token = service_log_rpc_token(
+        &owner_id,
+        owner_browser_session,
+        "GetProjectServiceLogMetadata",
+    );
     let metadata = client
         .get_project_service_log_metadata_with_options(
             metadata_request(project_id),
@@ -374,7 +387,8 @@ pub async fn exercise_gateway_service_log_rpc<F, Fut>(
         .await
         .expect_err("missing metadata authorization must fail");
     assert_eq!(error.code, ErrorCode::Unauthenticated);
-    let wrong_audience_token = service_log_rpc_token(&owner_id, "ListGatewayServiceLogs");
+    let wrong_audience_token =
+        service_log_rpc_token(&owner_id, owner_browser_session, "ListGatewayServiceLogs");
     let error = client
         .get_project_service_log_metadata_with_options(
             metadata_request(project_id),
@@ -503,7 +517,11 @@ pub async fn exercise_gateway_service_log_rpc<F, Fut>(
     assert_eq!(error.code, ErrorCode::InvalidArgument);
     assert!(!format!("{error:?}").contains("rpc-service-log"));
 
-    let outsider_token = service_log_rpc_token(&outsider_id, "ListGatewayServiceLogs");
+    let outsider_token = service_log_rpc_token(
+        &outsider_id,
+        outsider_browser_session,
+        "ListGatewayServiceLogs",
+    );
     let error = client
         .list_gateway_service_logs_with_options(
             request(scope.clone(), None),
@@ -514,8 +532,13 @@ pub async fn exercise_gateway_service_log_rpc<F, Fut>(
     assert_eq!(error.code, ErrorCode::PermissionDenied);
     assert!(!format!("{error:?}").contains("rpc-service-log"));
 
-    let member_token = service_log_rpc_token(&member_id, "ListGatewayServiceLogs");
-    let member_metadata_token = service_log_rpc_token(&member_id, "GetProjectServiceLogMetadata");
+    let member_token =
+        service_log_rpc_token(&member_id, member_browser_session, "ListGatewayServiceLogs");
+    let member_metadata_token = service_log_rpc_token(
+        &member_id,
+        member_browser_session,
+        "GetProjectServiceLogMetadata",
+    );
     let member_metadata = client
         .get_project_service_log_metadata_with_options(
             metadata_request(project_id),
@@ -581,7 +604,7 @@ fn opaque_id(value: uuid::Uuid) -> OpaqueId {
 }
 
 #[cfg(feature = "test-fixtures")]
-fn service_log_rpc_token(actor: &uuid::Uuid, method: &str) -> String {
+fn service_log_rpc_token(actor: &uuid::Uuid, sid: BrowserSessionSid, method: &str) -> String {
     let now = OffsetDateTime::now_utc().unix_timestamp();
     encode(
         &Header::new(Algorithm::HS256),
@@ -592,7 +615,8 @@ fn service_log_rpc_token(actor: &uuid::Uuid, method: &str) -> String {
             "iat": now,
             "nbf": now,
             "exp": now + 25,
-            "jti": uuid::Uuid::new_v4().to_string()
+            "jti": uuid::Uuid::new_v4().to_string(),
+            "sid": sid.to_protocol_string()
         }),
         &EncodingKey::from_secret(&hephaestus_app::rpc::mediator_signing_key(
             b"golden-internal-command-token-with-sufficient-entropy",
