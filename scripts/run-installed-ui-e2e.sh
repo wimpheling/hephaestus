@@ -88,6 +88,10 @@ cleanup() {
     podman logs "${web_container}" >"${fixture_root}/web-service.log" 2>&1 || true
     podman rm --force "${web_container}" >/dev/null 2>&1 || true
     podman rm --force "${browser_container}" >/dev/null 2>&1 || true
+    # npm ci creates .bin symlinks in this disposable browser-only tree. Do
+    # not retain generated dependencies; the evidence scanner intentionally
+    # rejects symlinks in retained artifacts.
+    rm -rf -- "${fixture_root}/playwright/node_modules"
     if python3 "${repo_root}/scripts/check-browser-evidence.py" "${fixture_root}"; then
         :
     else
