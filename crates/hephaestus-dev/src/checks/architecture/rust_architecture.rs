@@ -228,7 +228,7 @@ fn validate_source(path: &Path, source: &str, active: &[&str], diagnostics: &mut
             ],
         )
         && !is_storage_path(path)
-        // This build script reads the root migration set only to fingerprint
+        // ARCH-FILESYSTEM-ONLY-IN-ADAPTERS: this build script reads migrations only to fingerprint
         // SQLx's compile-time embedding; it performs no runtime filesystem I/O.
         && !is_migration_fingerprint_build_script(path)
     {
