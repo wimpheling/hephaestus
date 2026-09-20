@@ -84,6 +84,48 @@ defmodule HephaestusWebWeb.DesignSystem.Pages.RepositoryFilesPageTest do
     end
   end
 
+  test "renders installed UI navigation once for empty and nonempty repositories" do
+    installed_ui = %{
+      state: :ready,
+      installations: [
+        %{
+          "installation_id" => "installation-1",
+          "generation_id" => "generation-1",
+          "ui_key" => "assistant",
+          "label" => "Assistant",
+          "icon" => "chat",
+          "presentation" => "iframe",
+          "lifecycle" => "enabled",
+          "launchable" => true,
+          "route_base" => "docs"
+        }
+      ],
+      error: nil,
+      has_more: false,
+      loading_more: false
+    }
+
+    empty_html = render_page(RepositoryPageFixtures.model(), installed_ui)
+
+    nonempty_model =
+      RepositoryPageFixtures.model()
+      |> Map.merge(%{
+        branches_empty?: false,
+        branch_options: ["main"],
+        selected_branch: %{name: "main", commit: "0123456789abcdef"},
+        tree: %{name: "", path: "", directories: [], files: [], file_count: 1}
+      })
+
+    nonempty_html = render_page(nonempty_model, installed_ui)
+
+    for html <- [empty_html, nonempty_html] do
+      document = LazyHTML.from_fragment(html)
+
+      assert count(document, "#installed-ui-navigation-repository") == 1
+      assert count(document, "button[phx-value-id=installation-1]") == 1
+    end
+  end
+
   test "renders file contents as numbered source without template indentation" do
     model =
       RepositoryPageFixtures.model()
@@ -137,6 +179,23 @@ defmodule HephaestusWebWeb.DesignSystem.Pages.RepositoryFilesPageTest do
       <:content>file contents</:content>
     </RepositoryBrowser.repository_browser>
     """
+  end
+
+  defp render_page(model, installed_ui) do
+    render_component(&RepositoryFilesPage.repository_files/1, %{
+      state: :ready,
+      model: model,
+      branch_form: Phoenix.Component.to_form(model.browse_form, as: :browse),
+      select_branch_event: "select-branch",
+      installed_ui: installed_ui
+    })
+  end
+
+  defp count(document, selector) do
+    document
+    |> LazyHTML.query(selector)
+    |> LazyHTML.to_tree()
+    |> length()
   end
 
   defp offset_of(html, value), do: html |> :binary.match(value) |> elem(0)

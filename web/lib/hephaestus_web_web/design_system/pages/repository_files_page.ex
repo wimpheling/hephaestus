@@ -37,7 +37,6 @@ defmodule HephaestusWebWeb.DesignSystem.Pages.RepositoryFilesPage do
       <.empty_repository_push
         :if={@model.branches_empty?}
         model={@model}
-        installed_ui={@installed_ui}
       />
       <.repository_browser :if={!@model.branches_empty?} id="repository-files">
         <:navigation>
@@ -98,6 +97,14 @@ defmodule HephaestusWebWeb.DesignSystem.Pages.RepositoryFilesPage do
           </.frame>
         </:content>
       </.repository_browser>
+      <.installed_ui_navigation
+        scope={:repository}
+        state={@installed_ui.state}
+        installations={@installed_ui.installations}
+        error={@installed_ui.error}
+        has_more={@installed_ui.has_more}
+        loading_more={@installed_ui.loading_more}
+      />
     </.repository_shell>
     """
   end
@@ -151,14 +158,6 @@ defmodule HephaestusWebWeb.DesignSystem.Pages.RepositoryFilesPage do
         </.text>
         <.text as="pre" variant={:mono}>{agent_toml_guidance()}</.text>
       </.frame>
-      <.installed_ui_navigation
-        scope={:repository}
-        state={@installed_ui.state}
-        installations={@installed_ui.installations}
-        error={@installed_ui.error}
-        has_more={@installed_ui.has_more}
-        loading_more={@installed_ui.loading_more}
-      />
     </.frame>
     """
   end
