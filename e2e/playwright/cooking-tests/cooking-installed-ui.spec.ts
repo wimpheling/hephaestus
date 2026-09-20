@@ -510,6 +510,7 @@ test("cooking installed UI TLS full-page and managed iframe smoke", async ({page
   const stalePage = await page.context().newPage();
   let logoutPage: import("@playwright/test").Page | null = null;
   let removedPage: import("@playwright/test").Page | null = null;
+  let managedRestartPage: import("@playwright/test").Page | null = null;
   try {
     let baselineStatusCode = 0;
     let baselineUiCookiePresent = false;
@@ -766,6 +767,149 @@ test("cooking installed UI TLS full-page and managed iframe smoke", async ({page
           mode: 0o600,
           flag: "wx",
         });
+      });
+
+      managedRestartPage = await page.context().newPage();
+      const restartPage = managedRestartPage;
+      let restartBaselineCookie = "";
+      let restartBaselineStartupId = "";
+      let restartPageUrl = reactivatedFrameUrl;
+      let restartBootstrapRequests = 0;
+      restartPage.on("request", request => {
+        try {
+          const pathname = new URL(request.url()).pathname;
+          if (pathname === "/_heph" || pathname.startsWith("/_heph/")) {
+            restartBootstrapRequests += 1;
+          }
+        } catch {
+          // The URL is only used as a fixed-path counter; malformed requests are ignored.
+        }
+      });
+      await test.step("lifecycle-managed-restart-baseline", async () => {
+        const response = await restartPage.goto(reactivatedFrameUrl, {
+          timeout: 30_000,
+          waitUntil: "networkidle",
+        });
+        expect(response?.status()).toBe(200);
+        expect(response?.url() === reactivatedFrameUrl).toBe(true);
+        restartPageUrl = restartPage.url();
+        expect(restartPageUrl === reactivatedFrameUrl).toBe(true);
+        restartBaselineCookie = cookieValueFromHeaders(
+          response ? await response.request().allHeaders() : {},
+          "__Host-hephaestus_ui",
+        ) ?? "";
+        expect(restartBaselineCookie.length > 0).toBe(true);
+        const identity = await fetchIdentityProof(restartPage, reactivatedFrameUrl);
+        expect(identity.status).toBe(200);
+        expect(identity.valid).toBe(true);
+        restartBaselineStartupId = identity.startupId;
+        expect(restartBaselineStartupId.length > 0).toBe(true);
+        expect(restartBootstrapRequests).toBe(0);
+      });
+      await test.step("lifecycle-managed-restart-ready", async () => {
+        writeFileSync(join(controlDirectory, "managed-restart-ready"), "ready\n", {
+          encoding: "utf8",
+          mode: 0o600,
+          flag: "wx",
+        });
+      });
+      await test.step("lifecycle-managed-restart-complete", async () => {
+        await expect.poll(
+          () => existsSync(join(controlDirectory, "managed-restart-complete")),
+          {timeout: 90_000},
+        ).toBe(true);
+      });
+
+      let restartDocumentStatus = 0;
+      let restartDocumentUrl = "";
+      let restartDocumentCookieMatches = false;
+      let restartIdentityStatus = 0;
+      let restartIdentityStartupId = "";
+      let restartIdentityValid = false;
+      let restartIdentityCookieMatches = false;
+      await test.step("lifecycle-managed-restart-document", async () => {
+        const [request, response, result] = await Promise.all([
+          restartPage.waitForRequest(
+            candidate => candidate.url() === reactivatedFrameUrl && candidate.resourceType() === "fetch",
+            {timeout: 30_000},
+          ),
+          restartPage.waitForResponse(
+            candidate => candidate.url() === reactivatedFrameUrl && candidate.request().resourceType() === "fetch",
+            {timeout: 30_000},
+          ),
+          restartPage.evaluate(async url => {
+            const candidate = await fetch(url, {cache: "no-store", credentials: "same-origin"});
+            const body = await candidate.text();
+            return {
+              status: candidate.status,
+              url: candidate.url,
+              bodyPresent: body.length > 0,
+            };
+          }, reactivatedFrameUrl),
+        ]);
+        const requestCookie = cookieValueFromHeaders(await request.allHeaders(), "__Host-hephaestus_ui");
+        restartDocumentStatus = result.status;
+        restartDocumentUrl = result.url;
+        restartDocumentCookieMatches = restartBaselineCookie.length > 0 &&
+          requestCookie === restartBaselineCookie;
+        expect(response.status()).toBe(result.status);
+        expect(result.bodyPresent).toBe(true);
+      });
+      await test.step("lifecycle-managed-restart-identity", async () => {
+        const [request, response, result] = await Promise.all([
+          restartPage.waitForRequest(
+            candidate => candidate.url() === new URL("/reference/identity", reactivatedFrameUrl).toString() &&
+              candidate.resourceType() === "fetch",
+            {timeout: 30_000},
+          ),
+          restartPage.waitForResponse(
+            candidate => candidate.url() === new URL("/reference/identity", reactivatedFrameUrl).toString() &&
+              candidate.request().resourceType() === "fetch",
+            {timeout: 30_000},
+          ),
+          fetchIdentityProof(restartPage, reactivatedFrameUrl),
+        ]);
+        const requestCookie = cookieValueFromHeaders(await request.allHeaders(), "__Host-hephaestus_ui");
+        restartIdentityStatus = result.status;
+        restartIdentityStartupId = result.startupId;
+        restartIdentityValid = result.valid;
+        restartIdentityCookieMatches = restartBaselineCookie.length > 0 &&
+          requestCookie === restartBaselineCookie;
+        expect(response.status()).toBe(result.status);
+      });
+      await test.step("lifecycle-managed-restart-cookie", async () => {
+        expect(restartDocumentCookieMatches && restartIdentityCookieMatches).toBe(true);
+      });
+      await test.step("lifecycle-managed-restart-document-response", async () => {
+        expect(restartDocumentStatus).toBe(200);
+        expect(restartDocumentUrl === restartPageUrl).toBe(true);
+      });
+      await test.step("lifecycle-managed-restart-identity-response", async () => {
+        expect(restartIdentityStatus).toBe(200);
+        expect(restartIdentityValid).toBe(true);
+      });
+      await test.step("lifecycle-managed-restart-startup-changed", async () => {
+        expect(restartIdentityStartupId.length > 0 &&
+          restartIdentityStartupId !== restartBaselineStartupId).toBe(true);
+      });
+      await test.step("lifecycle-managed-restart-url", async () => {
+        expect(restartPage.url() === restartPageUrl && restartDocumentUrl === reactivatedFrameUrl).toBe(true);
+      });
+      await test.step("lifecycle-managed-restart-no-bootstrap", async () => {
+        expect(restartBootstrapRequests).toBe(0);
+      });
+      await test.step("lifecycle-managed-restart-verified", async () => {
+        writeFileSync(join(controlDirectory, "managed-restart-verified"), "verified\n", {
+          encoding: "utf8",
+          mode: 0o600,
+          flag: "wx",
+        });
+      });
+      await test.step("lifecycle-managed-restart-audit-verified", async () => {
+        await expect.poll(
+          () => existsSync(join(controlDirectory, "managed-restart-audit-verified")),
+          {timeout: 30_000},
+        ).toBe(true);
       });
 
       const parentLogoutPage = await page.context().newPage();
@@ -1077,6 +1221,7 @@ test("cooking installed UI TLS full-page and managed iframe smoke", async ({page
   } finally {
     await (logoutPage as import("@playwright/test").Page | null)?.close();
     await (removedPage as import("@playwright/test").Page | null)?.close();
+    await (managedRestartPage as import("@playwright/test").Page | null)?.close();
     await stalePage.close();
   }
 });
@@ -1212,6 +1357,44 @@ function escapeRegExp(value: string) {
 function requestHasCookie(headers: Record<string, string>, name: string): boolean {
   const cookieHeader = headers.cookie ?? "";
   return cookieHeader.split(";").some(cookie => cookie.trim().startsWith(`${name}=`));
+}
+
+function cookieValueFromHeaders(headers: Record<string, string>, name: string): string | null {
+  const cookie = (headers.cookie ?? "").split(";").find(value => value.trim().startsWith(`${name}=`));
+  return cookie ? cookie.trim().slice(name.length + 1) : null;
+}
+
+async function fetchIdentityProof(
+  page: import("@playwright/test").Page,
+  documentUrl: string,
+): Promise<{status: number; valid: boolean; startupId: string}> {
+  return page.evaluate(async url => {
+    const identityUrl = new URL("/reference/identity", url).toString();
+    try {
+      const response = await fetch(identityUrl, {
+        cache: "no-store",
+        credentials: "same-origin",
+        headers: {accept: "application/json"},
+      });
+      const body: unknown = await response.json();
+      if (!body || typeof body !== "object") {
+        return {status: response.status, valid: false, startupId: ""};
+      }
+      const value = body as {pid?: unknown; startup_id?: unknown};
+      const keys = Object.keys(value).sort();
+      const valid = response.status === 200 && keys.length === 2 &&
+        keys[0] === "pid" && keys[1] === "startup_id" &&
+        typeof value.pid === "number" && Number.isInteger(value.pid) && value.pid > 0 &&
+        typeof value.startup_id === "string" && value.startup_id.length > 0;
+      return {
+        status: response.status,
+        valid,
+        startupId: valid ? value.startup_id as string : "",
+      };
+    } catch {
+      return {status: 0, valid: false, startupId: ""};
+    }
+  }, documentUrl);
 }
 
 type GuestHeaderPolicyResult = {
