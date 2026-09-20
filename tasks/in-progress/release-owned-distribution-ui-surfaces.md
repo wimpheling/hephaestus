@@ -38,6 +38,31 @@ proofs, and the final integrated quality gate remain incomplete. The user approv
 global installations and organization isolation. Historical checkpoints record the state
 at their time; later integration checkpoints supersede earlier pending notes.
 
+## Managed reference runtime and browser reachability findings (2026-09-20)
+
+`4489e1a` starts the initial gateway supervisor in installed-UI fixture mode.
+The following readiness run reached real service guests but failed before
+activation. Bounded diagnostics at `07df168` identified the application exit
+as code 127 with `python_command_missing`; no OOM cause was established.
+`70a8566` changes the reference service shebang to the pinned image's
+`/usr/local/bin/python3`, matching the cleared guest environment. `8dea8c6`
+keeps local development commands portable by invoking host `python3` explicitly.
+Fixture build, Python syntax, artifact shebang, and local HTTP probes pass.
+
+The ninth runtime passed 35 golden tests (one ignored), eight gateway PostgreSQL
+tests, and runtime/cgroup cleanup. Its log is
+`/home/a/heph-installed-ui-ninth-runtime-diag-20260920/cooking-execution.nYx0Dg.log`.
+It emitted `REAL_COOKING_SERVICE_BUILD_PROOF=1`, but no installed audit marker.
+Source and log review established that service-proof mode returns before the
+later browser block. This was not environment filtering: a mock child observed
+all twelve required variables through both runner hops. Browser fixture files
+remained empty, so this pass is not installed browser acceptance.
+
+The control-flow correction is in progress: installed mode must execute genuine
+OIDC/Phoenix browser launch and audit assertions before service teardown and
+return, and must reject disabled browser execution. All browser assertions,
+revocation/lifecycle acceptance, and final integrated quality remain pending.
+
 ## Installed runtime fixture corrections and browser assertions (2026-09-20)
 
 `e9b90a1` corrects the reference descriptor expectation to production retrieval's
