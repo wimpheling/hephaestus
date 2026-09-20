@@ -40,7 +40,10 @@ headers so the edge can verify guest-header stripping and response rejection.
 The identity API returns only the service's JSON `pid` and `startup_id` fields;
 `startup_id` changes when the service restarts. Its `no_store` policy is
 explicit.
-Publication and installed browser acceptance remain separate pipeline work.
+Publication and installed browser evidence are recorded in the [release UI
+acceptance record](../../../tasks/in-progress/release-owned-distribution-ui-surfaces.md#first-complete-installed-ui-runtime-proof-2026-09-20).
+The local service smoke below remains separate from the remaining
+owner-navigation, guest-boundary, live-child-recovery, and final-quality gates.
 
 For a local source smoke, build into a disposable absolute output directory,
 start the copied `bin/reference-ui-service`, and request the readiness,

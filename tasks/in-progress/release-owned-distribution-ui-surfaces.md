@@ -14,9 +14,9 @@ verification. The UI RPC transport checkpoint now passes its expanded real
 matrix. Gateway admission, host/resource projection, Phoenix navigation, and
 reference theme helpers pass focused checks. The bounded HTTP listener and request-wide audit now pass focused verification.
 Project-owned static/managed installed-browser smoke, live disable/stale-cookie
-and reactivation, and removal now pass in the bounded runtime. Owner
-navigation, guest-boundary coverage, remaining recovery checks, and the final
-repository-wide quality gate remain open.
+and reactivation, removal, and the reusable reference UI kit integration now
+pass in the bounded runtime. Owner navigation, guest-boundary coverage, live
+child recovery, and the final repository-wide quality gate remain open.
 The handoff remains the record of the stopped session; new evidence is recorded
 below as each resumed slice passes review and verification.
 
@@ -31,7 +31,10 @@ Release UI declaration, immutable capture, receive/manual build identities,
 exact artifact/agent resolution, transactional publication, and authorized
 inspection through `GetRelease` are implemented and focused-validated. Checklist
 section 1 is complete. The versioned CSS kit and its local/CI checks are also
-implemented; reference-release integration remains open.
+implemented. Both reference fixtures consume the repository-local versioned kit
+and have installed browser evidence; no registry publication is claimed. Owner
+navigation, guest-boundary coverage, live child recovery, and the final
+repository-wide quality gate remain open.
 
 Verified static-byte loading and read-only release-page metadata display are
 implemented. Durable browser sessions are integrated through RPC and Phoenix.
@@ -2568,13 +2571,13 @@ rustdoc, and architecture checks passed. Rust evidence is recorded in
   - [ ] Audit allowed and denied UI serving, embeds, handoffs, and API calls
     without recording user payloads, credentials, or secret values.
 
-- [ ] **5. Publish the reusable UI kit**
+- [x] **5. Publish the reusable UI kit**
   - [x] Choose and document a versioned package format that projects the
     design-system tokens and supported components without coupling projects to
     Phoenix internals.
-  - [ ] Provide a small static and managed-service reference UI that uses the
+  - [x] Provide a small static and managed-service reference UI that uses the
     package, including day/night theme behavior and accessible tab content.
-  - [ ] Document compatibility, upgrades, local development, release build,
+  - [x] Document compatibility, upgrades, local development, release build,
     serving, and the boundary between reusable presentation and host authority.
 
 - [ ] **6. Prove isolation, recovery, and user flow**

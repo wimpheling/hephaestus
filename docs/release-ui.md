@@ -2,8 +2,10 @@
 
 This guide describes the release-owned UI package and the two Cooking reference
 fixtures. It covers the repository-local build and the daemon's opt-in UI
-origin. It does not claim that an installed Caddy, VM, TLS, or browser
-acceptance run has passed; that proof is still a separate release check.
+origin. Project-owned installed Caddy, VM, TLS, and browser evidence is recorded
+in the [release UI acceptance record](../tasks/in-progress/release-owned-distribution-ui-surfaces.md#first-complete-installed-ui-runtime-proof-2026-09-20).
+Owner navigation, guest-boundary coverage, live child recovery, and the final
+repository-wide quality gate remain open.
 
 ## Package compatibility
 
@@ -184,14 +186,18 @@ The browser runner creates a fresh NSS database for each disposable run and
 imports only the Caddy fixture CA. Chromium then connects to the platform and
 generation HTTPS origins without a certificate bypass or host trust-store
 change. A disposable Caddy 2.10.2 preflight passed both origins with that
-image. This proves the image and local TLS trust path; the full installed
-release smoke still requires the Cooking fixture, daemon, gateway, RPC, and
-browser environment and remains a separate acceptance run.
+image. This proves the image and local TLS trust path. The completed installed
+reference release evidence, including the daemon, gateway, RPC, and browser
+environment, is recorded in the acceptance record linked above; the remaining
+owner-navigation, guest-boundary, live-child-recovery, and final-quality gates
+are tracked there.
 
 ## Verification status
 
 The repository has package checks, fixture build checks, local service checks,
 and in-process daemon configuration/handler coverage. Installed Caddy/TLS,
 PostgreSQL-to-HTTP, VM lifecycle, authenticated browser, restart, and
-revocation acceptance remain separate pending work. Do not treat the local
-fixture commands above as evidence for those installed-release properties.
+revocation evidence is recorded in the acceptance record above. The local
+fixture commands remain source/build smoke checks and do not replace that
+record's remaining owner-navigation, guest-boundary, live-child-recovery, and
+final-quality gates.
