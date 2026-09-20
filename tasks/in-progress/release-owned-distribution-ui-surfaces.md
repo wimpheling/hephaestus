@@ -7,6 +7,8 @@ Owner: Astra orchestration / Luna bounded subtasks
 Persistent services are a completed prerequisite on the same branch and PR 51;
 service checkpoint `8c1fb51` passed repository-wide quality. Its later SQLx
 cancellation fix has focused runtime and CI evidence in the completed task.
+A newly observed retained-cleanup CI invariant failure is under investigation;
+that follow-up must be resolved before final runtime acceptance.
 
 Release UI declaration, immutable capture, receive/manual build identities,
 exact artifact/agent resolution, transactional publication, and authorized
@@ -20,6 +22,25 @@ navigation/authorization/isolation, real Caddy/VM/browser proofs, and the final
 integrated quality gate remain incomplete. Global installation ownership is an
 open question sent to the user. Historical checkpoints below record the state
 at their time; later integration checkpoints supersede earlier pending notes.
+
+## Public gateway exposure checkpoint (2026-09-20)
+
+Reserved `heph_authenticated` revisions are excluded from public route lookup
+and Caddy projection. The dispatcher rejects them before handler invocation,
+and admission rechecks the immutable revision exposure under the authoritative
+gateway lock, including when a caller supplies a forged public binding. Service
+lifecycle behavior is unchanged; authenticated browser admission is still pending.
+
+The strengthened real PostgreSQL test first admits a public control through a
+persisted-session issuer, then proves the authenticated revision creates neither
+an issuer call nor an invocation. The full service-acceptance target passes 9/9
+without database skips in
+`/home/a/heph-gateway-service-acceptance-full-realpg-v5-20260920.log`.
+Edge unit tests (180), gateway adapter library tests (9), scoped Clippy,
+documentation, formatting, and architecture checks pass. The opt-in Caddy test
+was skipped because its admin endpoint was not configured; these are projection
+and authority proofs, not a new real-Caddy proof. The pre-fix exposure gap was
+identified in source, not reproduced in a pre-fix runtime test.
 
 ## Build-completion publication checkpoint (2026-09-20)
 
@@ -165,6 +186,21 @@ This is release inspection only. Project/repository/global navigation entries,
 embedding, loading/revocation states, and actual browser hosting remain open.
 
 ## Current CI context (2026-09-20)
+
+CI passed the publication matrix `8ab3dca` (`35490762779`), inspection adapter
+`83659e1` (`35490987211`), verified reads `94cdf99` (`35491439692`), and release
+page `60992c5` (`35491550325`). These later passes did not change lifecycle code
+and do not resolve the intermittent failure below. RPC checkpoint `542c2b5` (`35491311596`) passed browser
+and Cooking but failed one service recovery test in the Rust job: 95 app tests
+passed, and `daemon_loop_recovers_expired_owned_cleanup_before_admitting_next_revision`
+observed healthy B destruction while A cleanup was held (`[A, B, A]`). The exact
+cause is unproven. B was awaited active/ready before C became desired, and the
+ordinary current-revision reconciliation branch already preserves B, so a
+capacity-based retirement change is not justified without further evidence.
+Focused lifecycle/lease investigation is open; runtime hosting integration must
+not treat this as resolved merely because a later run passes. Evidence:
+`/home/a/heph-release-ui-rpc-ci-failure-20260920.log`.
+
 
 CI passed at `f2dbfbf` and `b6b86e2` (runs `35488587270` and
 `35488863317`). Schema checkpoint `02080ac` failed only workspace Clippy

@@ -237,6 +237,7 @@ mod tests {
     fn route(timeout: Duration) -> GatewayRouteBinding {
         GatewayRouteBinding {
             route_id: Uuid::new_v4(),
+            exposure: gateway_domain::Exposure::Public,
             gateway_revision_id: Uuid::new_v4(),
             path_prefix: "example".to_owned(),
             methods: BTreeSet::from([Method::GET]),

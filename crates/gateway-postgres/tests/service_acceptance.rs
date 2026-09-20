@@ -4,7 +4,9 @@ use async_trait::async_trait;
 use capability_domain::{
     AuthorityHash, RuntimeCredentialGeneration, RuntimeSessionId, RuntimeSessionStatus,
 };
-use gateway_edge::{GatewayInvocationRecorder, GatewayLimits, GatewayRouteBinding};
+use gateway_edge::{
+    GatewayInvocationRecorder, GatewayLimits, GatewayRouteBinding, GatewayRouteResolver,
+};
 use gateway_postgres::PostgresGatewayEdgeAuthority;
 use http::Method;
 use runtime_authority::{
@@ -270,6 +272,79 @@ async fn gateway_desired_configuration_cancellation_closes_worker_backend() {
         worker.is_closed()
     );
     wait_for_no_gateway_acceptance_sessions(admin).await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+#[serial]
+async fn heph_authenticated_revision_is_excluded_from_public_admission() {
+    let Some(pools) = test_pool().await else {
+        return;
+    };
+    let fixture =
+        seed_fixture_with_exposure(&pools.admin, "http.service.v1", "heph_authenticated").await;
+    let public_fixture = seed_fixture(&pools.admin, "http.service.v1").await;
+    let calls = Arc::new(Mutex::new(Vec::new()));
+    let issuer = Arc::new(RecordingIssuer {
+        pool: pools.worker.clone(),
+        calls: Arc::clone(&calls),
+        entered: None,
+        release: None,
+    });
+
+    let authority = build_authority(pools.worker.clone(), issuer);
+    let public_invocation = authority
+        .accepted(&route(&public_fixture, "public-control"), Uuid::new_v4())
+        .await
+        .expect("public control admission");
+    assert_eq!(
+        session_status(&pools.admin, public_invocation)
+            .await
+            .as_deref(),
+        Some("active")
+    );
+    assert_eq!(
+        &*calls.lock().expect("recording issuer mutex"),
+        &["service"]
+    );
+    let desired = authority
+        .desired_configuration()
+        .await
+        .expect("public desired configuration");
+    assert!(
+        !desired
+            .routes
+            .iter()
+            .any(|route| route.route_id == fixture.route)
+    );
+    let resolved = authority
+        .resolve("/gateway/http.service.v1")
+        .await
+        .expect("public route resolution")
+        .map(|route| route.route_id);
+    assert_ne!(
+        resolved,
+        Some(fixture.route),
+        "authenticated route must not be publicly resolved"
+    );
+    let calls_before = calls.lock().expect("recording issuer mutex").len();
+    let authenticated_invocations_before = invocation_count(&pools.admin, fixture.route).await;
+    assert!(
+        authority
+            .accepted(&route(&fixture, "authenticated-control"), Uuid::new_v4())
+            .await
+            .is_err(),
+        "public admission must recheck the authoritative exposure"
+    );
+    assert_eq!(
+        calls.lock().expect("recording issuer mutex").len(),
+        calls_before,
+        "reserved exposure must fail before issuing a runtime session"
+    );
+    assert_eq!(
+        invocation_count(&pools.admin, fixture.route).await,
+        authenticated_invocations_before,
+        "reserved exposure must fail before inserting an invocation"
+    );
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -698,6 +773,7 @@ const fn limits() -> GatewayLimits {
 fn route(fixture: &Fixture, prefix: &str) -> GatewayRouteBinding {
     GatewayRouteBinding {
         route_id: fixture.route,
+        exposure: gateway_domain::Exposure::Public,
         gateway_revision_id: fixture.revision,
         path_prefix: prefix.to_owned(),
         methods: BTreeSet::from([Method::GET]),
@@ -788,7 +864,15 @@ fn ghost_session(request: GatewayRuntimeSessionRequest) -> StoredRuntimeSession 
 }
 
 async fn seed_fixture(pool: &sqlx::PgPool, contract: &str) -> Fixture {
-    seed_fixture_with_timing(pool, contract, true, 600).await
+    seed_fixture_with_exposure(pool, contract, "public").await
+}
+
+async fn seed_fixture_with_exposure(
+    pool: &sqlx::PgPool,
+    contract: &str,
+    exposure: &str,
+) -> Fixture {
+    seed_fixture_with_timing(pool, contract, true, 600, exposure).await
 }
 
 async fn seed_fixture_with_lease(
@@ -796,7 +880,7 @@ async fn seed_fixture_with_lease(
     contract: &str,
     lease_seconds: i64,
 ) -> Fixture {
-    seed_fixture_with_timing(pool, contract, true, lease_seconds).await
+    seed_fixture_with_timing(pool, contract, true, lease_seconds, "public").await
 }
 
 // This real-PostgreSQL fixture deliberately builds the release, agent,
@@ -807,7 +891,7 @@ async fn seed_fixture_with_expiry(
     contract: &str,
     lease_live: bool,
 ) -> Fixture {
-    seed_fixture_with_timing(pool, contract, lease_live, 600).await
+    seed_fixture_with_timing(pool, contract, lease_live, 600, "public").await
 }
 
 // This real-PostgreSQL fixture deliberately builds the release, agent,
@@ -818,6 +902,7 @@ async fn seed_fixture_with_timing(
     contract: &str,
     lease_live: bool,
     lease_seconds: i64,
+    exposure: &str,
 ) -> Fixture {
     let owner = Uuid::new_v4();
     let organization = Uuid::new_v4();
@@ -939,7 +1024,7 @@ async fn seed_fixture_with_timing(
              parameters, secret_slots, service_loopback_port, service_readiness_path,
              service_health_path, normalized_hash, created_by)
          VALUES ($1, $2, $3, $4, $5,
-                 $6, $7, $8, 'public', '{}', '{}', $9, $10, $11, $12, $13)",
+                 $6, $7, $8, $9, '{}', '{}', $10, $11, $12, $13, $14)",
     )
     .bind(revision)
     .bind(gateway)
@@ -953,6 +1038,7 @@ async fn seed_fixture_with_timing(
         None
     })
     .bind(contract)
+    .bind(exposure)
     .bind(service.then_some(18_080_i32))
     .bind(service.then_some("/ready"))
     .bind(service.then_some("/health"))

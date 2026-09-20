@@ -6,7 +6,7 @@
 
 use async_trait::async_trait;
 use bytes::Bytes;
-pub use gateway_domain::{GatewayInboundSecretResolver, InboundGatewaySecretRule};
+pub use gateway_domain::{Exposure, GatewayInboundSecretResolver, InboundGatewaySecretRule};
 use http::{HeaderMap, HeaderName, Method, StatusCode};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -195,6 +195,10 @@ pub struct GatewayRouteBinding {
     pub route_id: Uuid,
     /// Exact immutable released handler revision to invoke.
     pub gateway_revision_id: Uuid,
+    /// Declared exposure carried from the authoritative revision. Reserved
+    /// authenticated routes must never enter the public Caddy or dispatcher
+    /// path.
+    pub exposure: Exposure,
     /// Normalized public path prefix below `/gateway/`.
     pub path_prefix: String,
     /// Permitted canonical HTTP methods.
@@ -846,6 +850,9 @@ where
         }) else {
             return fallback(StatusCode::NOT_FOUND);
         };
+        if route.exposure != Exposure::Public {
+            return fallback(StatusCode::NOT_FOUND);
+        }
         if let Err(error) = validate_request(&route, &request) {
             let _ = error;
             return fallback(StatusCode::BAD_REQUEST);
@@ -1113,6 +1120,7 @@ fn caddy_gateway_routes(
     routes.sort_by(|left, right| left.path_prefix.cmp(&right.path_prefix));
     routes
         .into_iter()
+        .filter(|route| route.exposure == Exposure::Public)
         .map(|route| {
             let path = route.public_path();
             serde_json::json!({
@@ -1131,6 +1139,11 @@ fn validate_request(
     route: &GatewayRouteBinding,
     request: &GatewayRequest,
 ) -> Result<(), GatewayEdgeError> {
+    if route.exposure != Exposure::Public {
+        return Err(GatewayEdgeError::Contract(
+            "reserved gateway exposure is not publicly admitted",
+        ));
+    }
     if !request.path_and_query.starts_with('/')
         || request.path_and_query.contains("//")
         || request
@@ -1277,7 +1290,7 @@ mod tests {
     use std::{
         collections::BTreeMap,
         sync::{
-            Mutex,
+            Arc, Mutex,
             atomic::{AtomicUsize, Ordering},
         },
     };
@@ -1300,6 +1313,7 @@ mod tests {
     fn route() -> GatewayRouteBinding {
         GatewayRouteBinding {
             route_id: Uuid::new_v4(),
+            exposure: gateway_domain::Exposure::Public,
             gateway_revision_id: Uuid::new_v4(),
             path_prefix: "echo".to_owned(),
             methods: BTreeSet::from([Method::POST]),
@@ -1357,6 +1371,40 @@ mod tests {
             Err(GatewayEdgeError::InvalidCaddyConfiguration)
         ));
     }
+
+    #[test]
+    fn reserved_authenticated_routes_are_not_publicly_rendered_or_admitted() {
+        let public = route();
+        let mut reserved = route();
+        reserved.path_prefix = String::from("reserved");
+        reserved.exposure = Exposure::HephAuthenticated;
+        let rendered = caddy_gateway_routes(
+            &GatewayDesiredConfiguration {
+                revision: GatewayConfigRevision::new(),
+                routes: vec![public, reserved.clone()],
+            },
+            "127.0.0.1:19090",
+        );
+        assert_eq!(rendered.len(), 1);
+        assert_eq!(rendered[0]["match"][0]["path"][0], "/gateway/echo");
+        assert!(validate_request(&reserved, &request("/gateway/reserved")).is_err());
+    }
+
+    #[tokio::test]
+    async fn dispatcher_returns_not_found_for_reserved_authenticated_route() {
+        let mut reserved = route();
+        reserved.exposure = Exposure::HephAuthenticated;
+        let calls = Arc::new(AtomicUsize::new(0));
+        let dispatcher = GatewayDispatcher::new(
+            Resolver(reserved),
+            CountingHandler(Arc::clone(&calls)),
+            Recorder,
+        );
+        let response = dispatcher.dispatch(request("/gateway/echo")).await.response;
+        assert_eq!(response.status, StatusCode::NOT_FOUND);
+        assert_eq!(calls.load(Ordering::SeqCst), 0);
+    }
+
     fn request(path: &str) -> GatewayRequest {
         GatewayRequest {
             method: Method::POST,
@@ -1398,6 +1446,21 @@ mod tests {
         calls: AtomicUsize,
         delay: Duration,
     }
+
+    struct CountingHandler(Arc<AtomicUsize>);
+    #[async_trait]
+    impl GatewayVmHandler for CountingHandler {
+        async fn invoke(
+            &self,
+            _: &GatewayRouteBinding,
+            _: Uuid,
+            _: GatewayRequest,
+        ) -> Result<GatewayResponse, GatewayEdgeError> {
+            self.0.fetch_add(1, Ordering::SeqCst);
+            Ok(empty_response(StatusCode::CREATED))
+        }
+    }
+
     #[async_trait]
     impl GatewayVmHandler for Handler {
         async fn invoke(

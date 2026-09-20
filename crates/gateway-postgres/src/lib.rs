@@ -779,7 +779,8 @@ impl PostgresGatewayEdgeAuthority {
                 AND route.gateway_revision_id = $2
                 AND route.enabled
                 AND gateway.lifecycle = 'enabled'
-                AND gateway.active_revision_id = route.gateway_revision_id",
+                AND gateway.active_revision_id = route.gateway_revision_id
+                AND revision.exposure = 'public'",
         )
         .bind(route.route_id)
         .bind(route.gateway_revision_id)
@@ -797,12 +798,17 @@ impl PostgresGatewayEdgeAuthority {
                 .map_err(|_| GatewayEdgeError::Unavailable)?,
         );
         let rows = sqlx::query_as::<_, ActiveRouteRow>(
-            "SELECT route.id AS route_id, route.gateway_revision_id, route.path, route.methods
+            "SELECT route.id AS route_id, route.gateway_revision_id, route.path, route.methods,
+                    revision.exposure
              FROM gateway_routes AS route
              JOIN gateways AS gateway ON gateway.id = route.gateway_id
+             JOIN gateway_revisions AS revision
+               ON revision.id = route.gateway_revision_id
+              AND revision.gateway_id = route.gateway_id
              WHERE gateway.lifecycle = 'enabled'
                AND gateway.active_revision_id = route.gateway_revision_id
                AND route.enabled
+               AND revision.exposure = 'public'
              ORDER BY route.path, route.id",
         )
         .fetch_all(&mut **connection.connection_mut())
@@ -1734,6 +1740,7 @@ struct ActiveRouteRow {
     gateway_revision_id: Uuid,
     path: String,
     methods: Vec<String>,
+    exposure: String,
 }
 
 #[derive(sqlx::FromRow)]
@@ -1767,6 +1774,11 @@ fn active_route(
     let binding = GatewayRouteBinding {
         route_id: row.route_id,
         gateway_revision_id: row.gateway_revision_id,
+        exposure: match row.exposure.as_str() {
+            "public" => Exposure::Public,
+            "heph_authenticated" => Exposure::HephAuthenticated,
+            _ => return Err(GatewayEdgeError::Unavailable),
+        },
         path_prefix,
         methods,
         limits,
@@ -4111,6 +4123,7 @@ methods = ["POST"]
     fn edge_resolution_selects_the_longest_exact_path_segment() {
         let short = GatewayRouteBinding {
             route_id: Uuid::new_v4(),
+            exposure: gateway_domain::Exposure::Public,
             gateway_revision_id: Uuid::new_v4(),
             path_prefix: String::from("telegram"),
             methods: BTreeSet::from([Method::POST]),
@@ -4118,6 +4131,7 @@ methods = ["POST"]
         };
         let nested = GatewayRouteBinding {
             route_id: Uuid::new_v4(),
+            exposure: gateway_domain::Exposure::Public,
             gateway_revision_id: Uuid::new_v4(),
             path_prefix: String::from("telegram/updates"),
             methods: BTreeSet::from([Method::POST]),
@@ -4139,6 +4153,7 @@ methods = ["POST"]
             gateway_revision_id: Uuid::new_v4(),
             path: String::from("/telegram"),
             methods: vec![String::from("CONNECT")],
+            exposure: String::from("public"),
         };
         assert!(active_route(row, edge_limits()).is_err());
     }
@@ -4147,6 +4162,7 @@ methods = ["POST"]
     fn desired_configuration_revision_is_order_independent_and_tracks_cutover() {
         let first = GatewayRouteBinding {
             route_id: Uuid::new_v4(),
+            exposure: gateway_domain::Exposure::Public,
             gateway_revision_id: Uuid::new_v4(),
             path_prefix: String::from("first"),
             methods: BTreeSet::from([Method::POST]),
@@ -4154,6 +4170,7 @@ methods = ["POST"]
         };
         let second = GatewayRouteBinding {
             route_id: Uuid::new_v4(),
+            exposure: gateway_domain::Exposure::Public,
             gateway_revision_id: Uuid::new_v4(),
             path_prefix: String::from("second"),
             methods: BTreeSet::from([Method::GET]),

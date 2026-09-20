@@ -122,6 +122,7 @@ fn desired_path(path_prefix: &str) -> GatewayDesiredConfiguration {
         revision: GatewayConfigRevision::new(),
         routes: vec![GatewayRouteBinding {
             route_id: uuid::Uuid::new_v4(),
+            exposure: gateway_domain::Exposure::Public,
             gateway_revision_id: uuid::Uuid::new_v4(),
             path_prefix: String::from(path_prefix),
             methods: BTreeSet::from([Method::POST]),
