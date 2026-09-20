@@ -17,9 +17,9 @@ The source cross-manifest validator is now implemented and focused-validated.
 The persistence schema and receive-side Git capture/build-link wiring are
 implemented with focused PostgreSQL evidence below. Manual-build integration
 now passes its application-role and historical compatibility matrix. Receive
-application-role insertion and reuse also pass; receive/manual ordering still
-needs focused regression evidence. Publication,
-serving, browser integration, and aggregate acceptance remain incomplete.
+application-role insertion and reuse also pass. Deterministic receive/manual
+ordering is verified for valid and invalid captures. Publication, serving,
+browser integration, and aggregate acceptance remain incomplete.
 Earlier helper-only checkpoints below describe their state at the time;
 the receive and manual integration checkpoints supersede pending-wiring notes.
 
@@ -523,6 +523,25 @@ Formatting and architecture passed. Failure evidence is retained in
 `/home/a/heph-forge-app-receive-fixed-20260920.log` (which ends with passing runs).
 The receive baseline did not separately reproduce the build-insert RLS failure;
 that insertion pattern was diagnosed through the manual application-role path.
+
+### Receive/manual ordering checkpoint (2026-09-20)
+
+A real composition test now uses separate named application-role pools for
+receive and manual build creation. An existing Git-ref row lock holds receive
+after it acquires the repository lock; PostgreSQL blocking-PID observations
+prove manual waits on that receive. Once released, valid capture produces one
+derived build and event shared by both requests. Invalid capture preserves the
+receive, creates no build/event, and causes manual `FailedPrecondition`.
+
+Both cases passed in one test with explicit server-barrier markers:
+`/home/a/heph-receive-manual-ui-ordering-20260920-v6.log`. Strict app Clippy,
+rustdoc, workspace formatting, and architecture passed in
+`/home/a/heph-receive-manual-ui-clippy-20260920-v2.log`,
+`/home/a/heph-receive-manual-ui-doc-20260920.log`,
+`/home/a/heph-receive-manual-ui-fmt-20260920-v2.log`, and
+`/home/a/heph-receive-manual-ui-architecture-20260920.log`.
+Immutable capture rows are retained for disposable-database teardown; the
+test does not weaken deletion guards or use sleeps as ordering evidence.
 
 ### UI-kit package checkpoint (2026-09-20)
 
