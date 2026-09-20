@@ -2481,11 +2481,8 @@ mod tests {
             accepted: Arc::clone(&accepted),
             completed: Arc::clone(&completed),
         };
-        let dispatcher = GatewayDispatcher::new(
-            Resolver(ui_admission().route.clone()),
-            SetCookieHandler,
-            recorder,
-        );
+        let dispatcher =
+            GatewayDispatcher::new(Resolver(ui_admission().route), SetCookieHandler, recorder);
         let response = dispatcher
             .dispatch_ui(
                 ui_request("echo/index.html"),
@@ -2510,11 +2507,8 @@ mod tests {
             accepted: Arc::clone(&accepted),
             completed: Arc::clone(&completed),
         };
-        let dispatcher = GatewayDispatcher::new(
-            Resolver(ui_admission().route.clone()),
-            SetCookieHandler,
-            recorder,
-        );
+        let dispatcher =
+            GatewayDispatcher::new(Resolver(ui_admission().route), SetCookieHandler, recorder);
         let response = dispatcher
             .dispatch_ui(
                 ui_request("echo/other.html"),
@@ -2532,7 +2526,7 @@ mod tests {
     async fn ui_acceptance_is_default_deny_for_existing_recorders() {
         let calls = Arc::new(AtomicUsize::new(0));
         let dispatcher = GatewayDispatcher::new(
-            Resolver(ui_admission().route.clone()),
+            Resolver(ui_admission().route),
             CountingHandler(Arc::clone(&calls)),
             Recorder,
         );
@@ -2553,7 +2547,7 @@ mod tests {
         let provider_calls = Arc::new(AtomicUsize::new(0));
         let handler_calls = Arc::new(AtomicUsize::new(0));
         let dispatcher = GatewayDispatcher::new(
-            Resolver(ui_admission().route.clone()),
+            Resolver(ui_admission().route),
             CountingHandler(Arc::clone(&handler_calls)),
             Recorder,
         );

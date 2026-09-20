@@ -444,7 +444,7 @@ mod tests {
                 .validate_for(&authority, &Method::GET, "ui/release/index.html")
                 .is_err()
         );
-        let mut nil = authority.clone();
+        let mut nil = authority;
         nil.child_session_id = Uuid::nil();
         assert!(
             nil.validate_for(&Method::GET, "ui/release/index.html")
