@@ -3,7 +3,7 @@
 This guide describes the release-owned UI package and the two Cooking reference
 fixtures. It covers the repository-local build and the daemon's opt-in UI
 origin. Project-owned installed Caddy, VM, TLS, and browser evidence is recorded
-in the [release UI acceptance record](../tasks/in-progress/release-owned-distribution-ui-surfaces.md#final-installed-ui-runtime-proof-2026-09-20).
+in the [release UI acceptance record](../tasks/in-progress/release-owned-distribution-ui-surfaces.md#final-installed-ui-runtime-proof-2026-09-21).
 Owner navigation, guest-boundary coverage, live child recovery, and the
 separated live-child replacement proof now pass in the bounded runtime. The
 final repository-wide quality gate remains pending.
@@ -199,9 +199,9 @@ The repository has package checks, fixture build checks, local service checks,
 and in-process daemon configuration/handler coverage. Installed Caddy/TLS,
 PostgreSQL-to-HTTP, VM lifecycle, authenticated browser, owner navigation,
 guest-boundary, live-child recovery, restart, removal, and revocation evidence
-is recorded in the acceptance record above. Run 31 completed with 35 passed,
+is recorded in the acceptance record above. Run 32 completed with 35 passed,
 one ignored, eight PostgreSQL checks, outer exit zero, and cleanup success; its
-execution log is `/home/a/heph-installed-ui-thirtyfirst-runtime-diag-20260920/cooking-execution.18gRlo.log`.
+execution log is `/home/a/heph-installed-ui-thirtysecond-runtime-diag-20260921/cooking-execution.OpmPOO.log`.
 The live child guest replacement proof is distinct from the separated daemon
 restart proof. No account-administration API or browser-driven account-admin
 action is claimed. Only the final repository-wide quality gate remains

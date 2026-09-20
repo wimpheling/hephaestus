@@ -41,9 +41,9 @@ The identity API returns only the service's JSON `pid` and `startup_id` fields;
 `startup_id` changes when the service restarts. Its `no_store` policy is
 explicit.
 Publication and installed browser evidence are recorded in the [release UI
-acceptance record](../../../tasks/in-progress/release-owned-distribution-ui-surfaces.md#final-installed-ui-runtime-proof-2026-09-20).
+acceptance record](../../../tasks/in-progress/release-owned-distribution-ui-surfaces.md#final-installed-ui-runtime-proof-2026-09-21).
 The local service smoke below remains separate from the installed runtime
-proof. Run 31 covered owner navigation, guest-boundary behavior, live child
+proof. Run 32 covered owner navigation, guest-boundary behavior, live child
 replacement, disable/reactivation/removal, parent-session revocation, and
 audit markers; the final repository-wide quality gate remains pending.
 

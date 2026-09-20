@@ -88,6 +88,19 @@ REAL_UI_INSTALLATION_DISABLE_LIFECYCLE=1 stale_cookie_denied=1 old_generation_de
 REAL_UI_INSTALLATION_AUDIT=1 static=1 managed=1 api=1 embed=1 gateway_correlation=1
 ```
 
+## Final installed UI runtime proof (2026-09-21)
+
+The focused Phoenix checkpoint at `a97cac0` passed 19 enabled architecture
+rules, 303 Phoenix tests, and the UI checks. Run 32 then completed the same
+installed UI acceptance path. Its retained execution log is
+`/home/a/heph-installed-ui-thirtysecond-runtime-diag-20260921/cooking-execution.OpmPOO.log`.
+All guest-boundary, live recovery, parent-session, removal, disable, audit, and
+owner-navigation markers passed. Golden results were 35 passed, one ignored,
+and eight PostgreSQL checks passed; runtime cleanup passed.
+
+This is bounded installed-runtime evidence. The final repository-quality rerun
+is still in progress, so checklist section 7 remains open.
+
 ## First complete installed UI runtime proof (2026-09-20)
 
 The twenty-first installed Cooking run passed at `008be7e` and emitted:
