@@ -14,9 +14,9 @@ verification. The UI RPC transport checkpoint now passes its expanded real
 matrix. Gateway admission, host/resource projection, Phoenix navigation, and
 reference theme helpers pass focused checks. The bounded HTTP listener and request-wide audit now pass focused verification.
 Project-owned static/managed installed-browser smoke, live disable/stale-cookie
-and reactivation, removal, and the reusable reference UI kit integration now
-pass in the bounded runtime. Owner navigation, guest-boundary coverage, live
-child recovery, and the final repository-wide quality gate remain open.
+and reactivation, removal, owner navigation, guest-boundary coverage, live
+child recovery, and the reusable reference UI kit integration now pass in the
+bounded runtime. The final repository-wide quality gate remains open.
 The handoff remains the record of the stopped session; new evidence is recorded
 below as each resumed slice passes review and verification.
 
@@ -32,19 +32,41 @@ exact artifact/agent resolution, transactional publication, and authorized
 inspection through `GetRelease` are implemented and focused-validated. Checklist
 section 1 is complete. The versioned CSS kit and its local/CI checks are also
 implemented. Both reference fixtures consume the repository-local versioned kit
-and have installed browser evidence; no registry publication is claimed. Owner
-navigation, guest-boundary coverage, live child recovery, and the final
-repository-wide quality gate remain open.
+and have installed browser evidence; no registry publication is claimed. The
+final repository-wide quality gate remains open.
 
 Verified static-byte loading and read-only release-page metadata display are
 implemented. Durable browser sessions are integrated through RPC and Phoenix.
 Installation lifecycle and the static/managed HTTP serving baseline are committed.
 Project-owned static/managed installed-browser smoke and real Caddy/VM/browser
-proofs pass, including live disable, reactivation, and removal; owner-navigation
-and guest-boundary proofs, remaining recovery checks, and the final integrated
-quality gate are open. The user approved organization-owned
+proofs pass, including live disable, reactivation, and removal; the user
+approved organization-owned
 global installations and organization isolation. Historical checkpoints record the state
 at their time; later integration checkpoints supersede earlier pending notes.
+
+## Final installed UI runtime proof (2026-09-20)
+
+Run 31 at `d413364` completed the installed UI acceptance path. The retained execution log
+is `/home/a/heph-installed-ui-thirtyfirst-runtime-diag-20260920/cooking-execution.18gRlo.log`.
+All guest-boundary, live recovery, parent-session, removal, disable, and audit
+markers passed; project, organization-global, and repository owner navigation
+also passed in the same test. Golden results were 35 passed, one ignored, and
+eight PostgreSQL checks passed; the outer run exited zero and cleanup passed.
+
+The run proves live child guest replacement separately from the existing
+separated-daemon restart proof. It does not claim an account-administration API
+or browser-driven account-admin action. No owner, guest-boundary, or recovery
+acceptance item remains open; section 7 remains pending while final repository
+quality is running.
+
+```text
+REAL_UI_INSTALLATION_GUEST_POLICY=1 credential_headers_stripped=1 guest_response_headers_rejected=3 gateway_correlation=1
+REAL_UI_INSTALLATION_LIVE_CHILD_RECOVERY=1 same_child=1 new_service_instance=1 old_resources_cleaned=1 gateway_correlation=1
+REAL_UI_INSTALLATION_PARENT_REVOCATION=1 parent_revoked=1 stale_cookie_denied=1 gateway_invocation_unchanged=1 fresh_parent_child=1
+REAL_UI_INSTALLATION_REMOVE_LIFECYCLE=1 stale_cookie_denied=1 gateway_invocation_unchanged=1 navigation_removed=1
+REAL_UI_INSTALLATION_DISABLE_LIFECYCLE=1 stale_cookie_denied=1 old_generation_denied=1 gateway_invocation_unchanged=1 reactivated_generation=1 new_generation_audit=1 gateway_invocation_increased=1
+REAL_UI_INSTALLATION_AUDIT=1 static=1 managed=1 api=1 embed=1 gateway_correlation=1
+```
 
 ## First complete installed UI runtime proof (2026-09-20)
 
@@ -2540,35 +2562,35 @@ rustdoc, and architecture checks passed. Rust evidence is recorded in
   - [x] Persist an immutable published UI declaration tied to the release and
     expose only redacted, authorized inspection projections.
 
-- [ ] **2. Serve static artifacts and managed UI services**
-  - [ ] Materialize and integrity-check static UI artifacts from the published
+- [x] **2. Serve static artifacts and managed UI services**
+  - [x] Materialize and integrity-check static UI artifacts from the published
     release; serve only safe declared files with deterministic MIME types,
     cache headers, range/size limits, path traversal rejection, and no
     directory listing.
-  - [ ] Define the managed-VM UI service lifecycle: launch, readiness,
+  - [x] Define the managed-VM UI service lifecycle: launch, readiness,
     health, restart/recovery, cleanup, resource limits, and failure state.
-  - [ ] Route both artifact kinds through the gateway-owned same-site base;
+  - [x] Route both artifact kinds through the gateway-owned same-site base;
     prevent a service from claiming another release/project route.
 
-- [ ] **3. Add bounded host navigation and embedding**
-  - [ ] Add a release/UI-tab projection to the appropriate project/repository
+- [x] **3. Add bounded host navigation and embedding**
+  - [x] Add a release/UI-tab projection to the appropriate project/repository
     page, and add an explicitly authorized global-interface projection for
     releases installed as global entries; render declared tabs through the
     existing design system.
-  - [ ] Implement exact `iframe` and full-page presentations with a stable
+  - [x] Implement exact `iframe` and full-page presentations with a stable
     loading, unavailable, access-revoked, and terminated state.
-  - [ ] Apply a restrictive iframe sandbox, referrer policy, CSP `frame-src`
+  - [x] Apply a restrictive iframe sandbox, referrer policy, CSP `frame-src`
     and `frame-ancestors` policy, and an allowlist of same-site release routes.
-  - [ ] Prevent embedded content from navigating the parent, redefining core
+  - [x] Prevent embedded content from navigating the parent, redefining core
     tabs, rendering into the host DOM, or using undeclared origins.
 
-- [ ] **4. Bind browser and gateway authority**
-  - [ ] Define the scoped browser-to-release-UI/API handoff: audience,
+- [x] **4. Bind browser and gateway authority**
+  - [x] Define the scoped browser-to-release-UI/API handoff: audience,
     expiration, replay resistance, route/release/project binding, and safe
     revocation behavior.
-  - [ ] Enforce the declared API bindings at the gateway and reauthorize every
+  - [x] Enforce the declared API bindings at the gateway and reauthorize every
     UI route/API request against the current human/project/release state.
-  - [ ] Audit allowed and denied UI serving, embeds, handoffs, and API calls
+  - [x] Audit allowed and denied UI serving, embeds, handoffs, and API calls
     without recording user payloads, credentials, or secret values.
 
 - [x] **5. Publish the reusable UI kit**
@@ -2580,17 +2602,17 @@ rustdoc, and architecture checks passed. Rust evidence is recorded in
   - [x] Document compatibility, upgrades, local development, release build,
     serving, and the boundary between reusable presentation and host authority.
 
-- [ ] **6. Prove isolation, recovery, and user flow**
-  - [ ] Add unit/property tests for declaration/path validation, MIME/path
+- [x] **6. Prove isolation, recovery, and user flow**
+  - [x] Add unit/property tests for declaration/path validation, MIME/path
     handling, artifact integrity, tab collision, handoff binding, and audit
     redaction.
-  - [ ] Add real gateway/VM/static-artifact tests for authorized serving,
+  - [x] Add real gateway/VM/static-artifact tests for authorized serving,
     service restart, failed readiness, cleanup, route conflict, and release
     removal.
-  - [ ] Add browser tests for tab navigation, iframe/full-page rendering,
+  - [x] Add browser tests for tab navigation, iframe/full-page rendering,
     dark/light theme, error/revocation state, and blocked parent-navigation or
     undeclared-origin attempts.
-  - [ ] Add negative tests for cross-project/release access, stale/replayed
+  - [x] Add negative tests for cross-project/release access, stale/replayed
     handoff, undeclared APIs, arbitrary URLs, traversal, unsafe MIME handling,
     CSP/sandbox escape attempts, and raw-secret/token disclosure.
 

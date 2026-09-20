@@ -41,9 +41,11 @@ The identity API returns only the service's JSON `pid` and `startup_id` fields;
 `startup_id` changes when the service restarts. Its `no_store` policy is
 explicit.
 Publication and installed browser evidence are recorded in the [release UI
-acceptance record](../../../tasks/in-progress/release-owned-distribution-ui-surfaces.md#first-complete-installed-ui-runtime-proof-2026-09-20).
-The local service smoke below remains separate from the remaining
-owner-navigation, guest-boundary, live-child-recovery, and final-quality gates.
+acceptance record](../../../tasks/in-progress/release-owned-distribution-ui-surfaces.md#final-installed-ui-runtime-proof-2026-09-20).
+The local service smoke below remains separate from the installed runtime
+proof. Run 31 covered owner navigation, guest-boundary behavior, live child
+replacement, disable/reactivation/removal, parent-session revocation, and
+audit markers; the final repository-wide quality gate remains pending.
 
 For a local source smoke, build into a disposable absolute output directory,
 start the copied `bin/reference-ui-service`, and request the readiness,
@@ -76,6 +78,9 @@ The service uses only files beside its executable and never reflects request
 headers. Its network-disabled behavior applies to the release-agent fixture;
 this local Python process only binds to loopback. The smoke is not proof of
 publication through the authenticated gateway, installed Caddy/TLS, VM
-lifecycle, or browser authorization. See
+lifecycle, or browser authorization. Those boundaries are covered by the
+completed bounded runtime evidence; the live child guest replacement proof is
+distinct from the separated daemon restart proof, and no account-administration
+API or browser-driven account-admin action is claimed. See
 [`docs/release-ui.md`](../../../docs/release-ui.md) for the daemon UI-origin
 settings and serving authority.

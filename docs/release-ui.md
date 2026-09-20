@@ -3,9 +3,10 @@
 This guide describes the release-owned UI package and the two Cooking reference
 fixtures. It covers the repository-local build and the daemon's opt-in UI
 origin. Project-owned installed Caddy, VM, TLS, and browser evidence is recorded
-in the [release UI acceptance record](../tasks/in-progress/release-owned-distribution-ui-surfaces.md#first-complete-installed-ui-runtime-proof-2026-09-20).
-Owner navigation, guest-boundary coverage, live child recovery, and the final
-repository-wide quality gate remain open.
+in the [release UI acceptance record](../tasks/in-progress/release-owned-distribution-ui-surfaces.md#final-installed-ui-runtime-proof-2026-09-20).
+Owner navigation, guest-boundary coverage, live child recovery, and the
+separated live-child replacement proof now pass in the bounded runtime. The
+final repository-wide quality gate remains pending.
 
 ## Package compatibility
 
@@ -187,17 +188,21 @@ imports only the Caddy fixture CA. Chromium then connects to the platform and
 generation HTTPS origins without a certificate bypass or host trust-store
 change. A disposable Caddy 2.10.2 preflight passed both origins with that
 image. This proves the image and local TLS trust path. The completed installed
-reference release evidence, including the daemon, gateway, RPC, and browser
-environment, is recorded in the acceptance record linked above; the remaining
-owner-navigation, guest-boundary, live-child-recovery, and final-quality gates
-are tracked there.
+reference release evidence, including the daemon, gateway, RPC, browser
+environment, owner navigation, guest-boundary, and live-child replacement, is
+recorded in the acceptance record linked above; only the final repository-wide
+quality gate remains pending.
 
 ## Verification status
 
 The repository has package checks, fixture build checks, local service checks,
 and in-process daemon configuration/handler coverage. Installed Caddy/TLS,
-PostgreSQL-to-HTTP, VM lifecycle, authenticated browser, restart, and
-revocation evidence is recorded in the acceptance record above. The local
-fixture commands remain source/build smoke checks and do not replace that
-record's remaining owner-navigation, guest-boundary, live-child-recovery, and
-final-quality gates.
+PostgreSQL-to-HTTP, VM lifecycle, authenticated browser, owner navigation,
+guest-boundary, live-child recovery, restart, removal, and revocation evidence
+is recorded in the acceptance record above. Run 31 completed with 35 passed,
+one ignored, eight PostgreSQL checks, outer exit zero, and cleanup success; its
+execution log is `/home/a/heph-installed-ui-thirtyfirst-runtime-diag-20260920/cooking-execution.18gRlo.log`.
+The live child guest replacement proof is distinct from the separated daemon
+restart proof. No account-administration API or browser-driven account-admin
+action is claimed. Only the final repository-wide quality gate remains
+pending.

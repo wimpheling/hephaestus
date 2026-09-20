@@ -13,7 +13,7 @@ output.
 
 The fixture is intended for the existing Cooking Git/build/release path. Its
 published-service integration and installed browser evidence are recorded in
-the [release UI acceptance record](../../../tasks/in-progress/release-owned-distribution-ui-surfaces.md#first-complete-installed-ui-runtime-proof-2026-09-20);
+the [release UI acceptance record](../../../tasks/in-progress/release-owned-distribution-ui-surfaces.md#final-installed-ui-runtime-proof-2026-09-20);
 it is not a direct database or artifact-store fixture. The release declaration
 contains the same full-page static UI for project, repository, and
 organization-global owners, with route bases `reference`,
@@ -34,5 +34,7 @@ The build verifies the vendored manifest and source hashes before materializing
 `dist/index.html` and the versioned kit assets. This local check is separate
 from the installed evidence recorded above and does not itself prove
 publication through Caddy, an authenticated session, or installed browser
-serving. See [`docs/release-ui.md`](../../../docs/release-ui.md) for the
+serving. Run 31 completed the installed project, repository, and
+organization-global owner flows; the final repository-wide quality gate is
+still pending. See [`docs/release-ui.md`](../../../docs/release-ui.md) for the
 package upgrade and daemon-origin boundary.
