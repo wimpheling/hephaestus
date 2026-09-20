@@ -89,6 +89,21 @@ identifier!(
     DeferredTriggerId,
     "A stable identifier for a trigger received behind a closed run gate."
 );
+identifier!(
+    UiInstallationId,
+    "Stable identity for one project or repository UI installation."
+);
+identifier!(
+    UiInstallationGenerationId,
+    "Opaque identity for one immutable UI activation generation."
+);
+
+pub mod ui_installation;
+
+pub use ui_installation::{
+    UiInstallationCallerKey, UiInstallationCommandIdentity, UiInstallationInputDigest,
+    UiInstallationOperation, UiInstallationState, UiInstallationTarget,
+};
 
 macro_rules! bounded_key {
     ($name:ident, $documentation:literal, $maximum:expr) => {

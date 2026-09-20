@@ -25,6 +25,23 @@ integrated quality gate remain incomplete. Global installation ownership is an
 open question sent to the user. Historical checkpoints below record the state
 at their time; later integration checkpoints supersede earlier pending notes.
 
+## UI installation identity primitives checkpoint (2026-09-20)
+
+The release domain now provides typed installation/generation IDs, structurally
+distinct project/repository targets, lifecycle and operation values, and bounded
+opaque caller keys. Actor/operation/caller identity determines the command key;
+canonical input is hashed separately, including source release/UI and expected
+generation where applicable. Initial install input excludes server-generated IDs.
+Rollback has a distinct operation domain. These types permit same-state commands
+on nonterminal installations; actual generation writes belong to the adapter.
+
+All 21 release-domain tests pass, including stable hash vectors, actor/key/input
+separation, project/repository UUID distinction, optional CAS distinction, and
+terminal removal. Strict scoped Clippy, docs, workspace formatting, and architecture
+pass. Logs: `/home/a/heph-ui-installation-release-test-v2-20260920.log`,
+`/home/a/heph-ui-installation-release-clippy-v2-20260920.log`, and the matching
+release-doc/workspace-fmt/architecture logs. No installation command is exposed yet.
+
 ## UI installation schema checkpoint (2026-09-20)
 
 Migration 87 adds project/repository installation identities, immutable activation
