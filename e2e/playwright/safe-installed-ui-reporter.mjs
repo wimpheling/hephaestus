@@ -6,6 +6,8 @@ const STAGE_IDS = new Map([
   ["signin", "signin"],
   ["static-launch", "static_launch"],
   ["static-cookie", "static_cookie"],
+  ["static-accessibility", "static_accessibility"],
+  ["static-theme", "static_theme"],
   ["managed-launch", "managed_launch"],
   ["managed-cookie", "managed_cookie"],
   ["managed-identity", "managed_identity"],

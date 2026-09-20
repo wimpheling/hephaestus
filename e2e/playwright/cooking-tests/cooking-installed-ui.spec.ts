@@ -30,6 +30,17 @@ test("cooking installed UI TLS full-page and managed iframe smoke", async ({page
 
   let staticUrl = new URL(page.url());
   await test.step("static-launch", async () => {
+    const staticDocument = page.waitForResponse(response => {
+      try {
+        const url = new URL(response.url());
+        return url.hostname.startsWith("g-") &&
+          url.pathname === "/reference/index.html" &&
+          response.request().resourceType() === "document" &&
+          response.status() === 200;
+      } catch {
+        return false;
+      }
+    }, {timeout: 30_000});
     await staticCard.getByRole("button", {name: /Launch/}).click();
     await expect.poll(async () => new URL(page.url()).hostname.startsWith("g-"), {timeout: 30_000}).toBe(true);
     await expect.poll(async () => new URL(page.url()).pathname === "/reference/index.html", {timeout: 30_000}).toBe(true);
@@ -41,6 +52,12 @@ test("cooking installed UI TLS full-page and managed iframe smoke", async ({page
       "href",
       /heph-ui-kit-v1\.0\.0\.css/,
     );
+    const response = await staticDocument;
+    const headers = response.headers();
+    const platformOrigin = new URL(process.env.HEPHAESTUS_WEB_URL ?? "https://invalid.example/").origin;
+    const contentSecurityPolicy = headers["content-security-policy"] ?? "";
+    expect(contentSecurityPolicy.includes(`frame-ancestors ${platformOrigin}`)).toBe(true);
+    expect(headers["x-content-type-options"] === "nosniff").toBe(true);
   });
   await test.step("static-cookie", async () => {
     const staticCookies = await page.context().cookies();
@@ -59,6 +76,27 @@ test("cooking installed UI TLS full-page and managed iframe smoke", async ({page
     expect(platformCookie?.domain).toBe(new URL(process.env.HEPHAESTUS_WEB_URL ?? "https://invalid/").hostname);
     const uiCookies = await page.context().cookies(staticUrl.origin);
     expect(uiCookies.some(cookie => cookie.name === "__Host-hephaestus_web_key")).toBe(false);
+  });
+  await test.step("static-accessibility", async () => {
+    const staticAxe = await new AxeBuilder({page}).analyze();
+    expect(staticAxe.violations.length).toBe(0);
+  });
+  await test.step("static-theme", async () => {
+    const directStaticUrl = new URL(staticUrl.toString());
+    directStaticUrl.search = "";
+    directStaticUrl.hash = "";
+
+    await page.emulateMedia({colorScheme: "dark"});
+    await page.goto(directStaticUrl.toString());
+    await expect(page.locator("body")).toContainText("Static release UI");
+    expect(await page.locator("html").getAttribute("data-theme")).toBeNull();
+    const darkPaper = await page.locator("body").evaluate(element => getComputedStyle(element).backgroundColor);
+
+    await page.emulateMedia({colorScheme: "light"});
+    await expect(page.locator("body")).toContainText("Static release UI");
+    expect(await page.locator("html").getAttribute("data-theme")).toBeNull();
+    const lightPaper = await page.locator("body").evaluate(element => getComputedStyle(element).backgroundColor);
+    expect(darkPaper !== lightPaper).toBe(true);
   });
   await page.screenshot({path: screenshotPath("installed-ui-static-full-page.png"), fullPage: true});
 
