@@ -377,6 +377,7 @@ test("cooking installed UI TLS full-page and managed iframe smoke", async ({page
     managedContentFrameBeforeDisable.url(),
   ).toString();
   const stalePage = await page.context().newPage();
+  let removedPage: import("@playwright/test").Page | null = null;
   try {
     let baselineStatusCode = 0;
     let baselineUiCookiePresent = false;
@@ -634,8 +635,118 @@ test("cooking installed UI TLS full-page and managed iframe smoke", async ({page
           flag: "wx",
         });
       });
+
+      await test.step("lifecycle-new-generation-verified", async () => {
+        await expect.poll(
+          () => existsSync(join(controlDirectory, "new-generation-verified")),
+          {timeout: 30_000},
+        ).toBe(true);
+      });
+
+      const removalPage = await page.context().newPage();
+      removedPage = removalPage;
+      let removalBaselineStatusCode = 0;
+      let removalBaselineUiCookiePresent = false;
+      await test.step("lifecycle-removed-baseline-response", async () => {
+        const response = await removalPage.goto(reactivatedFrameUrl, {
+          timeout: 30_000,
+          waitUntil: "networkidle",
+        });
+        removalBaselineStatusCode = response?.status() ?? 0;
+        if (response) {
+          removalBaselineUiCookiePresent = requestHasCookie(
+            await response.request().allHeaders(),
+            "__Host-hephaestus_ui",
+          );
+        }
+      });
+      await test.step(
+        removalBaselineStatusCode === 200
+          ? "lifecycle-removed-baseline-200"
+          : "lifecycle-removed-baseline-other",
+        async () => {
+          expect(removalBaselineStatusCode).toBe(200);
+        },
+      );
+      await test.step("lifecycle-removed-baseline-cookie", async () => {
+        expect(removalBaselineUiCookiePresent).toBe(true);
+      });
+      await test.step("lifecycle-remove-ready", async () => {
+        writeFileSync(join(controlDirectory, "remove-ready"), "ready\n", {
+          encoding: "utf8",
+          mode: 0o600,
+          flag: "wx",
+        });
+      });
+      await test.step("lifecycle-remove-complete", async () => {
+        await expect.poll(
+          () => existsSync(join(controlDirectory, "remove-complete")),
+          {timeout: 30_000},
+        ).toBe(true);
+      });
+
+      let removedStatusCode = 0;
+      let removedRequestObserved = false;
+      let removedUiCookiePresent = false;
+      await test.step("lifecycle-removed-fetch-response", async () => {
+        const [request, response] = await Promise.all([
+          removalPage.waitForRequest(
+            candidate => candidate.url() === reactivatedFrameUrl && candidate.resourceType() === "fetch",
+            {timeout: 30_000},
+          ),
+          removalPage.waitForResponse(
+            candidate => candidate.url() === reactivatedFrameUrl && candidate.request().resourceType() === "fetch",
+            {timeout: 30_000},
+          ),
+          removalPage.evaluate(async url => {
+            const candidate = await fetch(url, {cache: "no-store", credentials: "same-origin"});
+            return candidate.status;
+          }, reactivatedFrameUrl),
+        ]);
+        removedStatusCode = response.status();
+        removedRequestObserved = true;
+        removedUiCookiePresent = requestHasCookie(
+          await request.allHeaders(),
+          "__Host-hephaestus_ui",
+        );
+      });
+      const removedStatusStage = removedStatusCode === 401 ? "lifecycle-removed-fetch-401" :
+        removedStatusCode === 403 ? "lifecycle-removed-fetch-403" :
+          removedStatusCode === 404 ? "lifecycle-removed-fetch-404" :
+            removedStatusCode === 410 ? "lifecycle-removed-fetch-410" :
+              removedStatusCode === 200 ? "lifecycle-removed-fetch-200" :
+                "lifecycle-removed-fetch-other";
+      await test.step("lifecycle-removed-request-observed", async () => {
+        expect(removedRequestObserved).toBe(true);
+      });
+      await test.step("lifecycle-removed-cookie-present", async () => {
+        expect(removedUiCookiePresent).toBe(true);
+      });
+      await test.step(removedStatusStage, async () => {
+        expect(removedStatusCode).toBe(404);
+      });
+      await test.step("lifecycle-removed-host-denied", async () => {
+        writeFileSync(join(controlDirectory, "removed-host-denied"), "denied\n", {
+          encoding: "utf8",
+          mode: 0o600,
+          flag: "wx",
+        });
+      });
+
+      await page.reload({waitUntil: "domcontentloaded", timeout: 30_000});
+      await waitForLiveView(page);
+      await test.step("lifecycle-removed-card-absent", async () => {
+        await expect(page.locator(`#installed-ui-${installed.managed_installation_id}`)).toHaveCount(0);
+        await expect(page.locator(`#installed-ui-${installed.static_installation_id}`)).toBeVisible();
+        writeFileSync(join(controlDirectory, "removed-card-absent"), "absent\n", {
+          encoding: "utf8",
+          mode: 0o600,
+          flag: "wx",
+        });
+      });
     });
   } finally {
+    await (removedPage as import("@playwright/test").Page | null)?.close();
     await stalePage.close();
   }
 });

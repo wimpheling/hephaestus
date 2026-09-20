@@ -32,7 +32,7 @@ use rpc_proto::{
         release::v1::{
             ActivateUiRequest, DisableUiRequest, GetReleaseRequest, InstallUiRequest,
             ListUiInstallationsRequest, PublishReleaseRequest, ReleaseUiPresentation,
-            ReleaseUiScope, SetDraftVersionRequest, UiInstallationContentKind,
+            ReleaseUiScope, RemoveUiRequest, SetDraftVersionRequest, UiInstallationContentKind,
             UiInstallationLifecycle, UiInstallationNavigation, UiInstallationTarget,
             release_ui_descriptor, ui_installation_target,
         },
@@ -1367,6 +1367,50 @@ pub async fn activate_installed_ui(
     }
     if returned_generation_id == installed_ui.generation_id {
         return Err(invalid_state("ActivateUi reused the disabled generation"));
+    }
+    Ok(InstalledCookingUi {
+        installation_id: returned_installation_id,
+        generation_id: returned_generation_id,
+    })
+}
+
+/// Removes the reactivated managed reference installation with its current
+/// generation as the compare-and-set expectation.
+pub async fn remove_installed_ui(
+    running: &RunningHephaestus,
+    token_factory: &(dyn Fn(&str) -> String + Send + Sync),
+    installed_ui: InstalledCookingUi,
+) -> Result<InstalledCookingUi, BuildError> {
+    let client = rpc_release_client(
+        running,
+        token_factory,
+        "/hephaestus.release.v1.ReleaseService/RemoveUi",
+    )?;
+    let response = client
+        .remove_ui(RemoveUiRequest {
+            context: mutation_context("installed-ui-remove-lifecycle").into(),
+            installation_id: opaque(installed_ui.installation_id).into(),
+            expected_generation_id: opaque(installed_ui.generation_id).into(),
+            ..Default::default()
+        })
+        .await?
+        .into_owned();
+    if response.lifecycle.to_i32()
+        != UiInstallationLifecycle::UI_INSTALLATION_LIFECYCLE_REMOVED as i32
+    {
+        return Err(invalid_state("RemoveUi did not remove the managed UI"));
+    }
+    let returned_installation_id = response_id(
+        response.installation_id.into_option(),
+        "RemoveUi installation",
+    )?;
+    let returned_generation_id =
+        response_id(response.generation_id.into_option(), "RemoveUi generation")?;
+    if returned_installation_id != installed_ui.installation_id {
+        return Err(invalid_state("RemoveUi returned a different installation"));
+    }
+    if returned_generation_id != installed_ui.generation_id {
+        return Err(invalid_state("RemoveUi returned a different generation"));
     }
     Ok(InstalledCookingUi {
         installation_id: returned_installation_id,
