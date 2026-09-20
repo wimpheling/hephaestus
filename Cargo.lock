@@ -4006,6 +4006,7 @@ dependencies = [
  "git-capability-domain",
  "release-domain",
  "runtime-types",
+ "thiserror 2.0.19",
  "uuid",
 ]
 

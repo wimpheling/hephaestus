@@ -48,6 +48,52 @@ with strict owner-shape constraints, scoped uniqueness, and organization read
 policies. Historical migrations will not be rewritten. These are approved
 requirements; organization-wide installation and serving remain unimplemented.
 
+## First static installation command checkpoint (2026-09-20)
+
+The release service now installs published static UIs with zero declared APIs
+into project or repository owners. It checks current owner permissions and
+source-release use, requires source and target organizations to match, and locks
+the owner before looking up prior commands. Installation, first generation,
+immutable command result, and one existing owner-change event/outbox commit
+together. Exact replay preserves IDs and original request provenance; changed
+canonical input conflicts. Current owner permission is required even for replay.
+
+The real PostgreSQL matrix explicitly verifies the worker role and passes project
+and repository installation, same-organization cross-project reuse, rejection
+across organizations despite actor permissions, replay/event counts, input
+conflicts, owner revocation, and wrong-scope/managed/API-bearing UI rejection.
+Log: `/home/a/heph-ui-installation-matrix-20260920-final.log`. Scoped strict
+Clippy, docs, workspace formatting, and architecture pass in the matching
+`heph-release-ui-installation-{clippy,fmt,docs,architecture}-20260920*` logs.
+
+The ledger is immutable and read without a row lock; the worker correctly lacks
+the update privilege required by its former `FOR SHARE` read. Owner locks remain.
+Concurrent replay and post-insert rollback probes are still pending. Global
+installation, activation/rollback/disable/removal commands, RPC exposure, and
+hosting/navigation remain incomplete. Migration 88 will add the global owner and
+database enforcement of the organization invariant, including parent-move guards.
+
+CI run `35504017675` passes workspace tests after the event-watch fixture fix,
+but fails the subsequent browser-session lifecycle step. Its cause is under
+investigation; this checkpoint does not claim integrated CI success.
+
+## UI browser-session implementation contract (2026-09-20)
+
+One-time handoffs expire after 60 seconds. Child UI sessions have a fixed
+12-hour maximum lifetime capped by their parent session's expiry, without sliding
+renewal. Parent logout/revocation, current account state, current installation
+generation/lifecycle, and current owner/source permissions are checked on every
+UI request. A child can never extend its parent authority. These are implementation
+decisions; handoff and child-session persistence/serving are not implemented yet.
+
+Handoff and child secrets are distinct types and only their digests are stored.
+Records bind the parent internal session ID, installation, immutable generation,
+and organization. Validation derives ownership again and requires exact equality;
+the selected navigation organization is not an authority input. Consumption changes
+an unconsumed handoff exactly once in the same transaction that creates the child.
+Multiple organization tabs remain independent; changing navigation does not
+invalidate another organization's otherwise authorized session.
+
 ## Durable-session event-watch fixture checkpoint (2026-09-20)
 
 CI exposed a standalone Connect event-watch test router that still omitted the

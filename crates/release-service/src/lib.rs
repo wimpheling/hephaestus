@@ -1,5 +1,7 @@
 //! Provider-neutral release command DTOs and workflow ports.
 
+mod ui_installation;
+
 use capability_domain::{
     CapabilityBindingId, CapabilityOperation, CapabilityResource, CapabilitySlotKey,
 };
@@ -14,6 +16,8 @@ use release_domain::{
 use runtime_types::RunId;
 use std::collections::BTreeMap;
 use uuid::Uuid;
+
+pub use ui_installation::{InstallStaticUi, InstallStaticUiResult, UiInstallationError};
 
 /// One already safely imported immutable artifact.
 #[derive(Debug, Clone)]

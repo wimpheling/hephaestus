@@ -14,6 +14,7 @@ forge-domain = { path = "../forge-domain" }
 git-capability-domain = { path = "../git-capability-domain" }
 release-domain = { path = "../release-domain" }
 runtime-types = { path = "../runtime-types" }
+thiserror.workspace = true
 uuid.workspace = true
 
 [lints]

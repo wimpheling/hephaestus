@@ -40,6 +40,7 @@ use std::{
 use time::OffsetDateTime;
 use uuid::Uuid;
 
+mod ui_installation;
 mod ui_publication;
 
 const RUN_START_SUBJECT: &str = "hephaestus.run.start";
