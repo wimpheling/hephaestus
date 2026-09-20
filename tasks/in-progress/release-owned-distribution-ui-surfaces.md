@@ -53,6 +53,28 @@ release-domain/release-service/dev tests, strict release-domain/release-service/
 release-postgres/dev Clippy, and docs passed with Rust 1.88.0. This is focused
 local evidence; updated CI and final integrated quality remain pending.
 
+## Global static installation checkpoint (2026-09-20)
+
+The static zero-API installation command now supports organization-owned global
+UIs. It locks the organization owner, requires current organization management
+and source-release use permissions, enforces same-organization source ownership,
+and records the installation/generation/command plus one organization event and
+outbox entry atomically. Replay still requires current owner permission.
+Project/repository authorization and event behavior remain intact.
+
+The real PostgreSQL global matrix passes owner shape, same-organization source
+reuse, exact replay, changed-input conflict, cross-organization rejection despite
+dual ownership, the same UI key in two organizations, event/outbox counts, and
+revoked-owner replay denial. Existing project/repository installation and all four
+schema/barrier tests also pass. Logs: `/home/a/heph-global-static-install-20260920.log`,
+`/home/a/heph-static-install-regression-20260920.log`, and
+`/home/a/heph-schema88-regression-20260920.log`. Formatting, scoped strict
+Clippy/docs, and architecture pass in the `heph-global-install-*` logs.
+
+Concurrent replay and natural post-insert rollback probes remain pending.
+Managed/API bindings, generation lifecycle commands, transport, navigation,
+serving, and browser acceptance remain incomplete.
+
 ## Browser domain and port checkpoint (2026-09-20)
 
 The release domain now contains distinct handoff/child identities, redacted

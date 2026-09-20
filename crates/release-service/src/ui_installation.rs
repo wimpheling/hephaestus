@@ -12,7 +12,7 @@ use uuid::Uuid;
 pub struct InstallStaticUi {
     /// Actor-bound caller idempotency key.
     pub caller_key: UiInstallationCallerKey,
-    /// Project or repository owner of the installation.
+    /// Project, repository, or organization owner of the installation.
     pub target: UiInstallationTarget,
     /// Published release containing the UI declaration and artifacts.
     pub release_id: ReleaseId,

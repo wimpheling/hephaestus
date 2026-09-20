@@ -1,7 +1,6 @@
 //! `PostgreSQL` adapter for the first static, zero-API UI installation command.
 
 use authz_domain::{ObjectRef, ObjectType, Permission};
-use forge_domain::ProjectId;
 use identity_domain::{AuthenticatedIdentity, actor_idempotency_id};
 use release_domain::{
     ReleaseCommandKey, ReleaseId, UiInstallationCommandIdentity, UiInstallationGenerationId,
@@ -16,7 +15,7 @@ use super::ReleaseService;
 #[derive(Debug, FromRow)]
 struct OwnerRow {
     #[sqlx(rename = "project_id")]
-    project: Uuid,
+    project: Option<Uuid>,
     #[sqlx(rename = "organization_id")]
     organization: Uuid,
     #[sqlx(rename = "repository_id")]
@@ -81,12 +80,6 @@ impl ReleaseService {
         identity: &AuthenticatedIdentity,
         command: &InstallStaticUi,
     ) -> Result<InstallStaticUiResult, AttemptError> {
-        if matches!(
-            command.target,
-            release_domain::UiInstallationTarget::Organization(_)
-        ) {
-            return Err(UiInstallationError::InvalidOrUnsupported.into());
-        }
         let mut tx = authz_postgres::begin_actor_transaction(&self.pool, identity)
             .await
             .map_err(|_| UiInstallationError::Unavailable)?;
@@ -94,23 +87,39 @@ impl ReleaseService {
             .await
             .map_err(|_| UiInstallationError::Unavailable)?
             .ok_or(UiInstallationError::Unavailable)?;
-        self.require(
-            &mut tx,
-            identity,
-            Permission::CanManage,
-            ObjectRef::new(ObjectType::Project, owner.project),
-        )
-        .await
-        .map_err(|error| map_authorization_error(&error))?;
-        if let Some(repository_id) = owner.repository {
-            self.require(
-                &mut tx,
-                identity,
-                Permission::CanWrite,
-                ObjectRef::new(ObjectType::Repository, repository_id),
-            )
-            .await
-            .map_err(|error| map_authorization_error(&error))?;
+        match command.target {
+            release_domain::UiInstallationTarget::Organization(_) => {
+                self.require(
+                    &mut tx,
+                    identity,
+                    Permission::CanManage,
+                    ObjectRef::new(ObjectType::Organization, owner.organization),
+                )
+                .await
+                .map_err(|error| map_authorization_error(&error))?;
+            }
+            release_domain::UiInstallationTarget::Project(_)
+            | release_domain::UiInstallationTarget::Repository(_) => {
+                let project_id = owner.project.ok_or(UiInstallationError::Unavailable)?;
+                self.require(
+                    &mut tx,
+                    identity,
+                    Permission::CanManage,
+                    ObjectRef::new(ObjectType::Project, project_id),
+                )
+                .await
+                .map_err(|error| map_authorization_error(&error))?;
+                if let Some(repository_id) = owner.repository {
+                    self.require(
+                        &mut tx,
+                        identity,
+                        Permission::CanWrite,
+                        ObjectRef::new(ObjectType::Repository, repository_id),
+                    )
+                    .await
+                    .map_err(|error| map_authorization_error(&error))?;
+                }
+            }
         }
 
         let command_identity = UiInstallationCommandIdentity::new(
@@ -149,7 +158,7 @@ impl ReleaseService {
             &mut tx,
             command.release_id,
             owner.organization,
-            owner.repository,
+            command.target.scope_name(),
             &command.ui_key,
         )
         .await
@@ -157,10 +166,20 @@ impl ReleaseService {
         if !supported {
             return Err(UiInstallationError::InvalidOrUnsupported.into());
         }
-        let already_active =
-            active_installation(&mut tx, owner.project, owner.repository, &command.ui_key)
-                .await
-                .map_err(|_| UiInstallationError::Unavailable)?;
+        let organization_id = matches!(
+            command.target,
+            release_domain::UiInstallationTarget::Organization(_)
+        )
+        .then_some(owner.organization);
+        let already_active = active_installation(
+            &mut tx,
+            organization_id,
+            owner.project,
+            owner.repository,
+            &command.ui_key,
+        )
+        .await
+        .map_err(|_| UiInstallationError::Unavailable)?;
         if already_active {
             return Err(UiInstallationError::AlreadyInstalled.into());
         }
@@ -171,8 +190,10 @@ impl ReleaseService {
             &mut tx,
             installation_id,
             generation_id,
-            ProjectId::from_uuid(owner.project),
+            organization_id,
+            owner.project,
             owner.repository,
+            command.target.scope_name(),
             &command.ui_key,
             identity.user_id.as_uuid(),
         )
@@ -244,8 +265,20 @@ async fn append_owner_event(
     occurrence_id: Uuid,
     owner: &OwnerRow,
 ) -> Result<(), sqlx::Error> {
-    match owner.repository {
-        None => sqlx::query(
+    match (owner.project, owner.repository) {
+        (None, None) => sqlx::query(
+            "SELECT event_id
+                 FROM append_application_event(
+                     $1, 'organization', $2, 'organization', $2,
+                     'organization.changed', 'updated', NULL, NULL, NULL
+                 )",
+        )
+        .bind(occurrence_id)
+        .bind(owner.organization)
+        .fetch_one(&mut **tx)
+        .await
+        .map(|_| ()),
+        (Some(project_id), None) => sqlx::query(
             "SELECT event_id
                  FROM append_application_event(
                      $1, 'project', $2, 'project', $2,
@@ -253,12 +286,12 @@ async fn append_owner_event(
                  )",
         )
         .bind(occurrence_id)
-        .bind(owner.project)
+        .bind(project_id)
         .bind(owner.organization)
         .fetch_one(&mut **tx)
         .await
         .map(|_| ()),
-        Some(repository_id) => sqlx::query(
+        (Some(project_id), Some(repository_id)) => sqlx::query(
             "SELECT event_id
                  FROM append_application_event(
                      $1, 'project', $2, 'repository', $3,
@@ -266,11 +299,14 @@ async fn append_owner_event(
                  )",
         )
         .bind(occurrence_id)
-        .bind(owner.project)
+        .bind(project_id)
         .bind(repository_id)
         .fetch_one(&mut **tx)
         .await
         .map(|_| ()),
+        (None, Some(_)) => Err(sqlx::Error::Protocol(
+            "repository owner is missing its project".into(),
+        )),
     }
 }
 
@@ -304,7 +340,18 @@ async fn lock_owner(
             .fetch_optional(&mut **tx)
             .await
         }
-        release_domain::UiInstallationTarget::Organization(_) => Ok(None),
+        release_domain::UiInstallationTarget::Organization(organization_id) => {
+            sqlx::query_as(
+                "SELECT NULL::uuid AS project_id, organization.id AS organization_id,
+                        NULL::uuid AS repository_id
+                 FROM organizations AS organization
+                 WHERE organization.id = $1
+                 FOR NO KEY UPDATE OF organization",
+            )
+            .bind(organization_id.as_uuid())
+            .fetch_optional(&mut **tx)
+            .await
+        }
     }
 }
 
@@ -350,17 +397,21 @@ fn replay_or_conflict(
 
 async fn active_installation(
     tx: &mut Transaction<'_, Postgres>,
-    project_id: Uuid,
+    organization_id: Option<Uuid>,
+    project_id: Option<Uuid>,
     repository_id: Option<Uuid>,
     ui_key: &release_domain::ui::UiKey,
 ) -> Result<bool, sqlx::Error> {
     Ok(sqlx::query_scalar::<_, Option<Uuid>>(
         "SELECT id
          FROM ui_installations
-         WHERE project_id = $1 AND repository_id IS NOT DISTINCT FROM $2
-           AND ui_key = $3 AND lifecycle <> 'removed'
+         WHERE organization_id IS NOT DISTINCT FROM $1
+           AND project_id IS NOT DISTINCT FROM $2
+           AND repository_id IS NOT DISTINCT FROM $3
+           AND ui_key = $4 AND lifecycle <> 'removed'
          FOR UPDATE",
     )
+    .bind(organization_id)
     .bind(project_id)
     .bind(repository_id)
     .bind(ui_key.as_str())
@@ -373,14 +424,9 @@ async fn ensure_static_zero_api_ui(
     tx: &mut Transaction<'_, Postgres>,
     release_id: ReleaseId,
     target_organization_id: Uuid,
-    repository_id: Option<Uuid>,
+    target_scope: &str,
     ui_key: &release_domain::ui::UiKey,
 ) -> Result<bool, sqlx::Error> {
-    let scope = if repository_id.is_some() {
-        "repository"
-    } else {
-        "project"
-    };
     let valid: Option<i64> = sqlx::query_scalar(
         "SELECT 1::bigint
          FROM release_ui_descriptors AS descriptor
@@ -412,36 +458,38 @@ async fn ensure_static_zero_api_ui(
     )
     .bind(release_id.as_uuid())
     .bind(ui_key.as_str())
-    .bind(scope)
+    .bind(target_scope)
     .bind(target_organization_id)
     .fetch_optional(&mut **tx)
     .await?;
     Ok(valid.is_some())
 }
 
+// Keep the owner columns explicit so each target shape is visible at the SQL
+// boundary; grouping them would hide the global/project/repository invariant.
+#[allow(clippy::too_many_arguments)]
 async fn insert_installation(
     tx: &mut Transaction<'_, Postgres>,
     installation_id: UiInstallationId,
     generation_id: UiInstallationGenerationId,
-    project_id: ProjectId,
+    organization_id: Option<Uuid>,
+    project_id: Option<Uuid>,
     repository_id: Option<Uuid>,
+    scope: &str,
     ui_key: &release_domain::ui::UiKey,
     actor_id: Uuid,
 ) -> Result<(), AttemptError> {
     sqlx::query(
         "INSERT INTO ui_installations
-         (id, project_id, repository_id, scope, ui_key, lifecycle,
+         (id, organization_id, project_id, repository_id, scope, ui_key, lifecycle,
           current_generation_id, created_by)
-         VALUES ($1, $2, $3, $4, $5, 'enabled', $6, $7)",
+         VALUES ($1, $2, $3, $4, $5, $6, 'enabled', $7, $8)",
     )
     .bind(installation_id.as_uuid())
-    .bind(project_id.as_uuid())
+    .bind(organization_id)
+    .bind(project_id)
     .bind(repository_id)
-    .bind(if repository_id.is_some() {
-        "repository"
-    } else {
-        "project"
-    })
+    .bind(scope)
     .bind(ui_key.as_str())
     .bind(generation_id.as_uuid())
     .bind(actor_id)
