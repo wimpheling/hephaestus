@@ -29,7 +29,7 @@ use serial_test::serial;
 use sqlx::postgres::{PgConnectOptions, PgPoolOptions};
 use std::{
     collections::BTreeMap,
-    env,
+    env, fmt,
     path::PathBuf,
     str::FromStr,
     sync::{
@@ -3797,6 +3797,77 @@ struct IsolatedStartupDatabase {
     name: String,
 }
 
+#[derive(Clone, Copy)]
+struct PoolTeardownState {
+    size: u32,
+    idle: usize,
+    closed: bool,
+}
+
+impl fmt::Debug for PoolTeardownState {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("PoolTeardownState")
+            .field("size", &self.size)
+            .field("idle", &self.idle)
+            .field("closed", &self.closed)
+            .finish()
+    }
+}
+
+struct IsolatedPoolTeardownState {
+    control: PoolTeardownState,
+    worker: PoolTeardownState,
+    admin: PoolTeardownState,
+}
+
+impl fmt::Debug for IsolatedPoolTeardownState {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("IsolatedPoolTeardownState")
+            .field("control", &self.control)
+            .field("worker", &self.worker)
+            .field("admin", &self.admin)
+            .finish()
+    }
+}
+
+#[derive(sqlx::FromRow)]
+struct IsolatedSessionDiagnostic {
+    pid: i32,
+    application_name: String,
+    state: String,
+    backend_type: String,
+    backend_start: Option<OffsetDateTime>,
+    state_change: Option<OffsetDateTime>,
+    wait_event_type: Option<String>,
+    wait_event: Option<String>,
+}
+
+impl fmt::Debug for IsolatedSessionDiagnostic {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("IsolatedSessionDiagnostic")
+            .field("pid", &self.pid)
+            .field("application_name", &self.application_name)
+            .field("state", &self.state)
+            .field("backend_type", &self.backend_type)
+            .field("backend_start", &self.backend_start)
+            .field("state_change", &self.state_change)
+            .field("wait_event_type", &self.wait_event_type)
+            .field("wait_event", &self.wait_event)
+            .finish()
+    }
+}
+
+fn pool_teardown_state(pool: &sqlx::PgPool) -> PoolTeardownState {
+    PoolTeardownState {
+        size: pool.size(),
+        idle: pool.num_idle(),
+        closed: pool.is_closed(),
+    }
+}
+
 fn assert_safe_isolated_database_name(name: &str) {
     assert!(name.starts_with("hephaestus_startup_"));
     assert!(name.len() > "hephaestus_startup_".len());
@@ -3811,7 +3882,12 @@ async fn isolated_startup_database() -> Option<IsolatedStartupDatabase> {
     let options = PgConnectOptions::from_str(&database_url).expect("parse test database URL");
     let admin = PgPoolOptions::new()
         .max_connections(2)
-        .connect_with(options.clone().database("postgres"))
+        .connect_with(
+            options
+                .clone()
+                .database("postgres")
+                .application_name("gateway-recovery-admin"),
+        )
         .await
         .expect("connect PostgreSQL maintenance database");
     let name = format!("hephaestus_startup_{}", Uuid::new_v4().simple());
@@ -3822,7 +3898,12 @@ async fn isolated_startup_database() -> Option<IsolatedStartupDatabase> {
         .expect("create isolated startup database");
     let control = PgPoolOptions::new()
         .max_connections(8)
-        .connect_with(options.clone().database(&name))
+        .connect_with(
+            options
+                .clone()
+                .database(&name)
+                .application_name("gateway-recovery-control"),
+        )
         .await
         .expect("connect isolated startup database");
     sqlx::migrate!("../../migrations")
@@ -3848,22 +3929,36 @@ async fn isolated_startup_database() -> Option<IsolatedStartupDatabase> {
 }
 
 async fn drop_isolated_startup_database(database: IsolatedStartupDatabase) {
+    let before_close = IsolatedPoolTeardownState {
+        control: pool_teardown_state(&database.control),
+        worker: pool_teardown_state(&database.worker),
+        admin: pool_teardown_state(&database.admin),
+    };
     database.control.close().await;
     database.worker.close().await;
+    let after_close = IsolatedPoolTeardownState {
+        control: pool_teardown_state(&database.control),
+        worker: pool_teardown_state(&database.worker),
+        admin: pool_teardown_state(&database.admin),
+    };
     // Pool::close completes client-side shutdown, but PostgreSQL can report a
     // terminated backend as idle briefly while it processes termination. Keep
     // this bounded timing-sensitive grace and the session diagnostic so the
     // fixture still asserts that the database becomes session-free.
     let deadline = tokio::time::Instant::now() + StdDuration::from_secs(10);
-    let mut last_sessions = Vec::new();
+    let mut last_sessions: Vec<IsolatedSessionDiagnostic> = Vec::new();
     loop {
-        let sessions: Vec<(i32, String, String, String)> = match tokio::time::timeout_at(
+        let sessions: Vec<IsolatedSessionDiagnostic> = match tokio::time::timeout_at(
             deadline,
             sqlx::query_as(
-                "SELECT pid, coalesce(application_name, ''), coalesce(state, ''),
-                        coalesce(backend_type, '')
+                "SELECT pid, coalesce(application_name, '') AS application_name,
+                        coalesce(state, '') AS state,
+                        coalesce(backend_type, '') AS backend_type,
+                        backend_start, state_change, wait_event_type, wait_event
                    FROM pg_stat_activity
-                  WHERE datname = $1 AND pid <> pg_backend_pid()",
+                  WHERE datname = $1 AND pid <> pg_backend_pid()
+                  ORDER BY pid
+                  LIMIT 32",
             )
             .bind(&database.name)
             .fetch_all(&database.admin),
@@ -3872,10 +3967,10 @@ async fn drop_isolated_startup_database(database: IsolatedStartupDatabase) {
         {
             Ok(Ok(sessions)) => sessions,
             Ok(Err(error)) => panic!(
-                "inspect isolated startup database sessions failed before teardown deadline: {error}; last sessions: {last_sessions:?}"
+                "inspect isolated startup database sessions failed before teardown deadline: {error}; pools before close: {before_close:?}; pools after close: {after_close:?}; last sessions: {last_sessions:?}"
             ),
             Err(error) => panic!(
-                "isolated startup database session inspection timed out: {error}; last sessions: {last_sessions:?}"
+                "isolated startup database session inspection timed out: {error}; pools before close: {before_close:?}; pools after close: {after_close:?}; last sessions: {last_sessions:?}"
             ),
         };
         if sessions.is_empty() {
@@ -3884,11 +3979,11 @@ async fn drop_isolated_startup_database(database: IsolatedStartupDatabase) {
         last_sessions = sessions;
         assert!(
             tokio::time::Instant::now() < deadline,
-            "isolated startup database still has sessions after pool shutdown: {last_sessions:?}"
+            "isolated startup database still has sessions after pool shutdown: {last_sessions:?}; pools before close: {before_close:?}; pools after close: {after_close:?}"
         );
         tokio::select! {
             () = tokio::time::sleep_until(deadline) => {
-                panic!("isolated startup database still has sessions after pool shutdown: {last_sessions:?}");
+                panic!("isolated startup database still has sessions after pool shutdown: {last_sessions:?}; pools before close: {before_close:?}; pools after close: {after_close:?}");
             }
             () = tokio::time::sleep(StdDuration::from_millis(25)) => {}
         }

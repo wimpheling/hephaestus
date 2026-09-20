@@ -30,6 +30,25 @@ quality v4 remains valid historical evidence. The current branch final gate
 and UI capture/publication work remain pending; source-parser validation has
 focused evidence below, with no capture or publication result claimed here.
 
+The recovery teardown diagnostic instrumentation labels fixture pools and
+captures bounded pool/backend metadata while preserving the 10-second deadline
+and zero-session assertion; it records no raw queries or credentials. The exact
+restore scenario passed 20/20 times against fresh PostgreSQL with migration 81
+in `/home/a/heph-gateway-recovery-diagnostic-20260920.log`; compilation and
+strict app Clippy passed in the corresponding `compile-v2` and `clippy-v2`
+logs. The CI cause remains unproven because it was not reproduced, so this is
+not a fixed-result claim. The earlier pending 17-test recovery-group
+verification subsequently passed in v2: all 17 tests passed against
+PostgreSQL migration 81 in 79.87 seconds; evidence is in
+`/home/a/heph-gateway-recovery-diagnostic-group-v2-20260920.log` and
+`/home/a/heph-gateway-recovery-diagnostic-group-postgres-v2.log`, with strict
+app Clippy and formatting also passing. The v1 group failure came from a
+diagnostic-only application-name rename changing an existing worker assertion;
+the existing gateway-recovery-test name was restored, while new labels remain
+limited to control/admin diagnostics. Cleanup completed without owned
+containers. The 20-pass and 17-pass results are verification evidence, not a
+claim that the original CI failure is fixed.
+
 ## Primitive declaration checkpoint (2026-09-20)
 
 The first bounded slice adds the release-domain UI primitives in `ui.rs`:
@@ -128,6 +147,35 @@ manifest can retain diagnostics without a build request. The gateway manifest
 is captured only when the UI references a managed gateway or APIs; a static UI
 without APIs does not require it. Existing `heph.images` behavior remains
 outside this UI scope. Implementation remains pending.
+
+### Reviewed capture schema boundary (planned, not implemented)
+
+The capture design uses two UI-specific append-only tables: one
+`source_manifest_revisions` row for each present `heph.ui.toml`, and one
+build-request link row. A missing `heph.ui.toml` creates no row and preserves
+legacy behavior. A present manifest with a missing or invalid referenced
+gateway creates an invalid manifest row with diagnostics but no UI-bearing
+build request. Gateway evidence remains inline optional snapshot fields on the
+UI revision; no generic manifest table is introduced.
+
+Each revision binds exactly to `repository_id`, `source_commit`, and the Git
+entry metadata. Invalid rows may retain the observed size even when it exceeds
+256 KiB; symlink, tree, or gitlink entries may have no size or SHA-256. No
+source bytes are stored. Valid rows require a regular blob, actual size at
+most 256 KiB, source SHA-256, normalized UI configuration, and its hash.
+Referenced gateway/API configurations additionally require a normalized
+gateway snapshot and hash. Diagnostics are bounded to 64 entries and 32 KiB;
+normalized UI and gateway JSON are bounded to 1 MiB and 2 MiB respectively.
+
+The build link uses exact repository/commit composite foreign keys and a
+constant-valid-status foreign key, preventing invalid or cross-repository
+links. Same-commit capture is immutable and conflicting replay evidence fails
+closed. Both tables use forced repository/build RLS, insert/read permissions
+following the existing patterns, and append-only immutability triggers; the
+trusted worker remains the only elevated writer. Existing receive transaction
+and outbox mechanisms can carry future capture effects without a new event
+framework. This is a reviewed schema boundary only; migration and adapter
+implementation remain pending.
 
 ## Outcome
 
