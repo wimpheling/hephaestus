@@ -23,9 +23,9 @@ if (controlDirectory !== "/run/heph-control") {
 }
 
 test("cooking installed UI TLS full-page and managed iframe smoke", async ({page}) => {
-  // Disable/reactivate control barriers and the Phoenix refresh interval need
-  // one bounded controller window; this remains below the runner's 240s gate.
-  test.setTimeout(240_000);
+  // Lifecycle barriers and the Phoenix refresh interval share the controller's
+  // bounded 360-second verification window.
+  test.setTimeout(360_000);
   const fixture = loadFixture();
   const installed = fixture.installed_reference_uis;
   await test.step("signin", async () => {
@@ -377,6 +377,7 @@ test("cooking installed UI TLS full-page and managed iframe smoke", async ({page
     managedContentFrameBeforeDisable.url(),
   ).toString();
   const stalePage = await page.context().newPage();
+  let logoutPage: import("@playwright/test").Page | null = null;
   let removedPage: import("@playwright/test").Page | null = null;
   try {
     let baselineStatusCode = 0;
@@ -636,6 +637,203 @@ test("cooking installed UI TLS full-page and managed iframe smoke", async ({page
         });
       });
 
+      const parentLogoutPage = await page.context().newPage();
+      logoutPage = parentLogoutPage;
+      let logoutBaselineStatusCode = 0;
+      let logoutBaselineUiCookiePresent = false;
+      await test.step("lifecycle-logout-baseline-response", async () => {
+        const response = await parentLogoutPage.goto(reactivatedFrameUrl, {
+          timeout: 30_000,
+          waitUntil: "networkidle",
+        });
+        logoutBaselineStatusCode = response?.status() ?? 0;
+        if (response) {
+          logoutBaselineUiCookiePresent = requestHasCookie(
+            await response.request().allHeaders(),
+            "__Host-hephaestus_ui",
+          );
+        }
+      });
+      await test.step(
+        logoutBaselineStatusCode === 200
+          ? "lifecycle-logout-baseline-200"
+          : "lifecycle-logout-baseline-other",
+        async () => {
+          expect(logoutBaselineStatusCode).toBe(200);
+        },
+      );
+      await test.step("lifecycle-logout-baseline-cookie", async () => {
+        expect(logoutBaselineUiCookiePresent).toBe(true);
+      });
+      await test.step("lifecycle-parent-revoke-ready", async () => {
+        writeFileSync(join(controlDirectory, "parent-revoke-ready"), "ready\n", {
+          encoding: "utf8",
+          mode: 0o600,
+          flag: "wx",
+        });
+      });
+      await test.step("lifecycle-parent-revoke-permitted", async () => {
+        await expect.poll(
+          () => existsSync(join(controlDirectory, "parent-revoke-permitted")),
+          {timeout: 30_000},
+        ).toBe(true);
+      });
+      await test.step("lifecycle-logout-click", async () => {
+        await page.getByRole("link", {name: "Sign out"}).click();
+      });
+      await test.step("lifecycle-logout-signed-out", async () => {
+        await expect(page).toHaveURL(/\/$/);
+        await expect(page.getByTestId("oidc-login")).toBeVisible();
+      });
+
+      let logoutStatusCode = 0;
+      let logoutRequestObserved = false;
+      let logoutUiCookiePresent = false;
+      await test.step("lifecycle-logout-fetch-response", async () => {
+        const [request, response] = await Promise.all([
+          parentLogoutPage.waitForRequest(
+            candidate => candidate.url() === reactivatedFrameUrl && candidate.resourceType() === "fetch",
+            {timeout: 30_000},
+          ),
+          parentLogoutPage.waitForResponse(
+            candidate => candidate.url() === reactivatedFrameUrl && candidate.request().resourceType() === "fetch",
+            {timeout: 30_000},
+          ),
+          parentLogoutPage.evaluate(async url => {
+            const candidate = await fetch(url, {cache: "no-store", credentials: "same-origin"});
+            return candidate.status;
+          }, reactivatedFrameUrl),
+        ]);
+        logoutStatusCode = response.status();
+        logoutRequestObserved = true;
+        logoutUiCookiePresent = requestHasCookie(
+          await request.allHeaders(),
+          "__Host-hephaestus_ui",
+        );
+      });
+      const logoutStatusStage = logoutStatusCode === 401 ? "lifecycle-logout-fetch-401" :
+        logoutStatusCode === 403 ? "lifecycle-logout-fetch-403" :
+          logoutStatusCode === 404 ? "lifecycle-logout-fetch-404" :
+            logoutStatusCode === 410 ? "lifecycle-logout-fetch-410" :
+              logoutStatusCode === 200 ? "lifecycle-logout-fetch-200" :
+                "lifecycle-logout-fetch-other";
+      await test.step("lifecycle-logout-request-observed", async () => {
+        expect(logoutRequestObserved).toBe(true);
+      });
+      await test.step("lifecycle-logout-cookie-present", async () => {
+        expect(logoutUiCookiePresent).toBe(true);
+      });
+      await test.step(logoutStatusStage, async () => {
+        expect(logoutStatusCode).toBe(401);
+      });
+      await test.step("lifecycle-parent-revoked-denied", async () => {
+        writeFileSync(join(controlDirectory, "parent-revoked-denied"), "denied\n", {
+          encoding: "utf8",
+          mode: 0o600,
+          flag: "wx",
+        });
+      });
+      await test.step("lifecycle-parent-revocation-verified", async () => {
+        await expect.poll(
+          () => existsSync(join(controlDirectory, "parent-revocation-verified")),
+          {timeout: 30_000},
+        ).toBe(true);
+      });
+
+      await test.step("lifecycle-reauth-launch", async () => {
+        await signIn(page, "reviewer");
+        await page.goto(`/projects/${installed.project_id}`);
+        await waitForLiveView(page);
+      });
+      const reauthCard = page.locator(`#installed-ui-${installed.managed_installation_id}`);
+      const reauthDocument = page.waitForResponse(response => {
+        try {
+          const url = new URL(response.url());
+          return url.hostname.startsWith("g-") &&
+            url.pathname === "/managed-reference/index.html" &&
+            response.request().resourceType() === "document";
+        } catch {
+          return false;
+        }
+      }, {timeout: 30_000});
+      await test.step("lifecycle-reauth-frame-visible", async () => {
+        await reauthCard.getByRole("button", {name: /Launch/}).click();
+        await expect(frame).toBeVisible();
+      });
+      let reauthenticatedFrameUrl = "";
+      await test.step("lifecycle-reauth-frame-route", async () => {
+        await expect.poll(async () => {
+          const frameHandle = await frame.elementHandle();
+          const childFrame = frameHandle ? await frameHandle.contentFrame() : null;
+          if (!childFrame) return false;
+          reauthenticatedFrameUrl = childFrame.url();
+          const url = new URL(reauthenticatedFrameUrl);
+          return /^g-[0-9a-f]{32}\./.test(url.hostname) &&
+            url.pathname === "/managed-reference/index.html";
+        }, {timeout: 30_000}).toBe(true);
+      });
+      await test.step("lifecycle-reauth-generation-same", async () => {
+        expect(new URL(reauthenticatedFrameUrl).hostname).toBe(new URL(reactivatedFrameUrl).hostname);
+      });
+      let reauthStatusCode = 0;
+      let reauthResponseUrl = "";
+      let reauthUiCookiePresent = false;
+      await test.step("lifecycle-reauth-document-response", async () => {
+        const response = await reauthDocument;
+        reauthStatusCode = response.status();
+        reauthResponseUrl = response.url();
+        reauthUiCookiePresent = requestHasCookie(
+          await response.request().allHeaders(),
+          "__Host-hephaestus_ui",
+        );
+      });
+      await test.step(
+        reauthStatusCode >= 200 && reauthStatusCode < 300
+          ? "lifecycle-reauth-document-2xx"
+          : "lifecycle-reauth-document-other",
+        async () => {
+          expect(reauthStatusCode).toBe(200);
+        },
+      );
+      await test.step("lifecycle-reauth-document-url", async () => {
+        expect(reauthResponseUrl === reauthenticatedFrameUrl).toBe(true);
+      });
+      await test.step("lifecycle-reauth-bootstrap-fragment", async () => {
+        expect(new URL(reauthenticatedFrameUrl).hash).toBe("");
+      });
+      await test.step("lifecycle-reauth-cookie-present", async () => {
+        expect(reauthUiCookiePresent).toBe(true);
+      });
+      await test.step("lifecycle-reauth-identity", async () => {
+        const identityIsValid = await frameContent.locator("body").evaluate(async () => {
+          const response = await fetch("/reference/identity", {
+            headers: {accept: "application/json"},
+            credentials: "same-origin",
+          });
+          if (!response.ok) return false;
+          const body: unknown = await response.json();
+          if (!body || typeof body !== "object") return false;
+          const value = body as {pid?: unknown; startup_id?: unknown};
+          const keys = Object.keys(value).sort();
+          return keys.length === 2 && keys[0] === "pid" && keys[1] === "startup_id" &&
+            typeof value.pid === "number" && Number.isInteger(value.pid) && value.pid > 0 &&
+            typeof value.startup_id === "string" && value.startup_id.length > 0;
+        });
+        expect(identityIsValid).toBe(true);
+      });
+      await test.step("lifecycle-reauth-frame-ready", async () => {
+        await expect(embed.locator("[data-ui-status]")).toHaveText("Ready");
+      });
+      // The release generation remains current across parent logout; the new
+      // bootstrap creates a fresh child session on the same generation host.
+      reactivatedFrameUrl = reauthenticatedFrameUrl;
+      await test.step("lifecycle-parent-new-child-ready", async () => {
+        writeFileSync(join(controlDirectory, "parent-new-child-ready"), "ready\n", {
+          encoding: "utf8",
+          mode: 0o600,
+          flag: "wx",
+        });
+      });
       await test.step("lifecycle-new-generation-verified", async () => {
         await expect.poll(
           () => existsSync(join(controlDirectory, "new-generation-verified")),
@@ -746,6 +944,7 @@ test("cooking installed UI TLS full-page and managed iframe smoke", async ({page
       });
     });
   } finally {
+    await (logoutPage as import("@playwright/test").Page | null)?.close();
     await (removedPage as import("@playwright/test").Page | null)?.close();
     await stalePage.close();
   }
