@@ -10,6 +10,9 @@ The service listens on `127.0.0.1:8080` and exposes `/readyz`, `/healthz`,
 `/reference/heph-ui-kit-v1.0.0.css`, `/reference/heph-ui-kit-v1.0.0.js`, and a
 bounded `/reference/identity` startup probe. The relative stylesheet and
 helper links in the HTML therefore stay inside the managed UI route.
+The executable uses the pinned image's `/usr/local/bin/python3` path because
+isolated guest commands start with a cleared environment and no inherited
+`PATH`.
 
 `build.sh` verifies the vendored kit manifest and CSS/helper hashes before
 copying the service, HTML, CSS, and helper into `bin/`. The vendored kit files

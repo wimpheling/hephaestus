@@ -1,4 +1,4 @@
-#!/usr/bin/env python3
+#!/usr/local/bin/python3
 """Dependency-free long-lived managed release UI service fixture."""
 
 from __future__ import annotations
