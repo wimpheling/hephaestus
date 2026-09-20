@@ -24,6 +24,27 @@ integrated quality gate remain incomplete. Global installation ownership is an
 open question sent to the user. Historical checkpoints below record the state
 at their time; later integration checkpoints supersede earlier pending notes.
 
+## Revocation command ledger checkpoint (2026-09-20)
+
+Migration 86 adds immutable worker-owned revocation command records. Each
+actor-bound command key binds one user and SID digest, including an absent-session
+no-op. New keys may target the same SID; a composite foreign key binds any matched
+session to that exact user and digest. Changed outcomes require a matched session.
+Forced RLS and explicit grants deny application access and worker update/delete.
+Restrictive foreign keys deliberately retain referenced audit parents rather than
+cascading away command evidence.
+
+Four real PostgreSQL matrices pass under migration 86: session schema, creation,
+authentication, and the new ledger. The focused ledger test also passes separately,
+including new-key SID reuse, absent-session rows, wrong owner/digest rejection,
+and immutable access. Production application-role bootstrap passes at version 86.
+Scoped Clippy/docs, app compilation, workspace formatting, and architecture pass.
+Evidence: `/home/a/heph-human-session-real-schema86-v2-20260920.log`,
+`/home/a/heph-human-session-revocation-schema-real-v2-20260920.log`, and
+`/home/a/heph-human-session-app-pool86-20260920.log`.
+The initial stale test binary lacked embedded migration 86; rebuilding resolved
+that fixture failure. The revocation adapter and user-facing logout remain pending.
+
 ## Application-role session verification checkpoint (2026-09-20)
 
 The PostgreSQL session adapter now has separate worker and application pools.

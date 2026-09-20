@@ -27,8 +27,8 @@ async fn connect_app_sets_role_on_two_connections_and_denies_worker_paths() {
     .expect("read migration marker")
     .expect("migration marker must exist");
     assert!(
-        max_migration >= 85,
-        "expected migration 85, got {max_migration}"
+        max_migration >= 86,
+        "expected migration 86, got {max_migration}"
     );
 
     let pool = connect_app(&database_url, 2)
