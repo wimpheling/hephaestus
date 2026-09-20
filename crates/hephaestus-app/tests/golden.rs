@@ -635,6 +635,153 @@ async fn assert_installed_ui_audit_success(
     rows.into_iter().map(|row| row.0).collect()
 }
 
+struct InstalledUiBrowserContext<'a> {
+    pool: &'a sqlx::PgPool,
+    running: &'a hephaestus_app::RunningHephaestus,
+    database_url: &'a str,
+    organization_id: OrganizationId,
+    installed_uis: cooking_builds::InstalledCookingReferenceUis,
+    actor_id: uuid::Uuid,
+    workload_phase_timing: bool,
+}
+
+/// Runs the installed-reference-UI browser phase while the service-proof
+/// daemon, Caddy, database, and managed gateway are still alive.  The
+/// service-proof branch otherwise tears those resources down before reaching
+/// the ordinary browser block below.
+async fn run_installed_ui_browser_phase(context: InstalledUiBrowserContext<'_>) {
+    let fixture_path = env::var("HEPHAESTUS_COOKING_BROWSER_FIXTURE_OUTPUT")
+        .expect("installed UI browser fixture output path");
+    let fixture = serde_json::json!({
+        "installed_reference_uis": {
+            "project_id": context.installed_uis.project_id,
+            "static_installation_id": context.installed_uis.static_ui.installation_id,
+            "managed_installation_id": context.installed_uis.managed_ui.installation_id
+        }
+    });
+    tokio::fs::write(
+        &fixture_path,
+        serde_json::to_vec_pretty(&fixture).expect("installed UI browser fixture JSON"),
+    )
+    .await
+    .expect("write installed UI browser fixture JSON");
+    let issuer = env::var("HEPHAESTUS_COOKING_BROWSER_OIDC_ISSUER")
+        .expect("installed UI browser OIDC issuer");
+    let script =
+        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../scripts/run-installed-ui-e2e.sh");
+    let browser_timer = WorkloadPhaseTimer::start("browser-initial", context.workload_phase_timing);
+    let status = tokio::process::Command::new(script)
+        .env("HEPHAESTUS_E2E_COOKING_FIXTURE", &fixture_path)
+        .env("HEPHAESTUS_E2E_EXTERNAL_DATABASE_URL", context.database_url)
+        .env(
+            "HEPHAESTUS_E2E_EXTERNAL_RPC_ENDPOINT",
+            context.running.http_addr().to_string(),
+        )
+        .env(
+            "HEPHAESTUS_E2E_EXTERNAL_RPC_SECRET",
+            "golden-internal-command-token-with-sufficient-entropy",
+        )
+        .env("HEPHAESTUS_E2E_EXTERNAL_OIDC_ISSUER", issuer)
+        .env("HEPHAESTUS_E2E_COOKING_PHASE", "initial")
+        .env(
+            "HEPHAESTUS_PLATFORM_HTTPS_ORIGIN",
+            installed_ui_platform_origin(),
+        )
+        .env("HEPHAESTUS_UI_NAMESPACE", installed_ui_namespace())
+        .env(
+            "HEPHAESTUS_CADDY_TEST_CA_CERT",
+            env::var("HEPHAESTUS_CADDY_TEST_CA_CERT")
+                .expect("joined Caddy CA certificate for installed UI"),
+        )
+        .status()
+        .await;
+    browser_timer.finish(status.as_ref().is_ok_and(std::process::ExitStatus::success));
+    let status = status.expect("run installed UI browser E2E");
+    assert!(
+        status.success(),
+        "installed UI browser E2E failed: {status}"
+    );
+
+    assert_installed_ui_browser_audit(&context).await;
+}
+
+async fn assert_installed_ui_browser_audit(context: &InstalledUiBrowserContext<'_>) {
+    let static_installation_id = context.installed_uis.static_ui.installation_id;
+    let static_generation_id = context.installed_uis.static_ui.generation_id;
+    for surface in [
+        UiRequestAuditSurface::HandoffIssue,
+        UiRequestAuditSurface::HandoffExchange,
+        UiRequestAuditSurface::Bootstrap,
+        UiRequestAuditSurface::Static,
+    ] {
+        assert_installed_ui_audit_success(
+            context.pool,
+            context.actor_id,
+            context.organization_id.as_uuid(),
+            static_installation_id,
+            static_generation_id,
+            surface,
+            surface != UiRequestAuditSurface::HandoffIssue,
+        )
+        .await;
+    }
+    let managed_installation_id = context.installed_uis.managed_ui.installation_id;
+    let managed_generation_id = context.installed_uis.managed_ui.generation_id;
+    for surface in [
+        UiRequestAuditSurface::HandoffIssue,
+        UiRequestAuditSurface::HandoffExchange,
+        UiRequestAuditSurface::Bootstrap,
+        UiRequestAuditSurface::Managed,
+        UiRequestAuditSurface::Embed,
+    ] {
+        assert_installed_ui_audit_success(
+            context.pool,
+            context.actor_id,
+            context.organization_id.as_uuid(),
+            managed_installation_id,
+            managed_generation_id,
+            surface,
+            !matches!(
+                surface,
+                UiRequestAuditSurface::HandoffIssue | UiRequestAuditSurface::Embed
+            ),
+        )
+        .await;
+    }
+    let api_request_ids = assert_installed_ui_audit_success(
+        context.pool,
+        context.actor_id,
+        context.organization_id.as_uuid(),
+        managed_installation_id,
+        managed_generation_id,
+        UiRequestAuditSurface::Api,
+        true,
+    )
+    .await;
+    let correlated_api_count: i64 = sqlx::query_scalar(
+        "SELECT count(*)
+           FROM gateway_invocations invocation
+           JOIN ui_request_audit_events audit
+             ON audit.request_id = invocation.request_id
+          WHERE audit.installation_id = $1
+            AND audit.generation_id = $2
+            AND audit.surface = $3
+            AND audit.request_id = ANY($4)",
+    )
+    .bind(managed_installation_id)
+    .bind(managed_generation_id)
+    .bind(UiRequestAuditSurface::Api.as_str())
+    .bind(&api_request_ids)
+    .fetch_one(context.pool)
+    .await
+    .expect("read installed UI gateway invocation correlation");
+    assert!(
+        correlated_api_count > 0,
+        "managed API audit must correlate to a gateway invocation"
+    );
+    println!("REAL_UI_INSTALLATION_AUDIT=1 static=1 managed=1 api=1 embed=1 gateway_correlation=1");
+}
+
 impl IsolatedGoldenDatabase {
     async fn create(parent_url: &str) -> Self {
         let database_name = format!("hephaestus_golden_{}", uuid::Uuid::new_v4().simple());
@@ -3611,6 +3758,14 @@ async fn bearer_push_starts_run_through_production_bootstrap() {
         Duration::from_secs(5 * 60)
     });
     if cooking_build_proof {
+        let installed_ui_fixture =
+            env::var("HEPHAESTUS_COOKING_INSTALLED_UI_FIXTURE").as_deref() == Ok("1");
+        if installed_ui_fixture {
+            assert!(
+                browser_e2e,
+                "installed UI fixture requires the browser E2E phase to be enabled"
+            );
+        }
         let source_root =
             PathBuf::from(env::var("HEPHAESTUS_COOKING_SOURCE_ROOT").expect("cooking source root"));
         let identity = AuthenticatedIdentity::new(
@@ -3722,9 +3877,7 @@ async fn bearer_push_starts_run_through_production_bootstrap() {
             },
             timeout: cooking_wait_timeout,
         };
-        let installed_reference_uis = if env::var("HEPHAESTUS_COOKING_INSTALLED_UI_FIXTURE").as_deref()
-            == Ok("1")
-        {
+        let installed_reference_uis = if installed_ui_fixture {
             Some(
                 cooking_builds::build_and_install_reference_uis(&cooking_context, organization_id)
                     .await
@@ -3853,6 +4006,18 @@ async fn bearer_push_starts_run_through_production_bootstrap() {
                 identity_after.pid, identity_after.startup_id
             );
             let identity_proof = identity_after;
+            if let Some(installed_uis) = installed_reference_uis {
+                run_installed_ui_browser_phase(InstalledUiBrowserContext {
+                    pool: &pool,
+                    running: &running,
+                    database_url: &database_url,
+                    organization_id,
+                    installed_uis,
+                    actor_id: user_id.as_uuid(),
+                    workload_phase_timing,
+                })
+                .await;
+            }
             let resource_paths = {
                 let vm_id = format!("gateway-service-{service_instance_id}");
                 let provider_runtime_root = PathBuf::from(

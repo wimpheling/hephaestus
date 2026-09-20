@@ -105,12 +105,12 @@ python3 - "${fixture}" <<'PY'
 import json, sys
 with open(sys.argv[1], encoding="utf-8") as stream:
     value = json.load(stream)
-required = ("project_id", "release_id", "release_agent_id", "instance_id", "mailbox_id", "gateway_id", "installed_reference_uis")
+required = ("installed_reference_uis",)
 missing = [key for key in required if key not in value or value[key] in (None, "")]
 if missing:
     raise SystemExit("fixture manifest missing installed UI fields: " + ", ".join(missing))
 installed = value["installed_reference_uis"]
-if not isinstance(installed, dict) or any(not isinstance(installed.get(key), str) or not installed[key] for key in ("organization_id", "project_id", "static_installation_id", "static_generation_id", "managed_installation_id", "managed_generation_id")):
+if not isinstance(installed, dict) or any(not isinstance(installed.get(key), str) or not installed[key] for key in ("project_id", "static_installation_id", "managed_installation_id")):
     raise SystemExit("fixture installed_reference_uis fields are invalid")
 PY
 
