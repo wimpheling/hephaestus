@@ -1388,10 +1388,14 @@ impl HephaestusApp {
                     authz_postgres::AUTHORIZATION_MODEL_VERSION,
                 ));
             let authority = PostgresGatewayEdgeAuthority::new(pool.clone(), gateway_limits())
-                .with_runtime_authority(issuer, Duration::from_secs(30))
+                .with_runtime_authority(Arc::clone(&issuer), Duration::from_secs(30))
                 .map_err(component("gateway runtime authority"))?;
             let recovery_authority =
                 PostgresGatewayEdgeAuthority::new(gateway_authority_pool.clone(), gateway_limits());
+            let ui_authority =
+                PostgresGatewayEdgeAuthority::new(gateway_authority_pool.clone(), gateway_limits())
+                    .with_runtime_authority(Arc::clone(&issuer), Duration::from_secs(30))
+                    .map_err(component("UI gateway runtime authority"))?;
             let gateway_release_materializer = Arc::new(gateway_release_runtime);
             let gateway_release_materializer_port: Arc<dyn GatewayReleaseMaterializer> =
                 gateway_release_materializer.clone();
@@ -1495,16 +1499,16 @@ impl HephaestusApp {
             let ui_dispatcher = gateway.ui_origin.as_ref().map(|ui| {
                 let ui_core = Arc::new(
                     GatewayDispatcher::new(
-                        recovery_authority.clone(),
+                        ui_authority.clone(),
                         Arc::clone(&handler),
-                        recovery_authority.clone(),
+                        ui_authority.clone(),
                     )
                     .with_inbound_secret_resolver(Arc::clone(&inbound))
                     .with_mailbox_publisher(Arc::clone(&mailbox)),
                 );
                 Arc::new(ui_origin_wiring::RealUiGatewayDispatcher::new(
                     ui_core,
-                    Arc::new(recovery_authority.clone()),
+                    Arc::new(ui_authority.clone()),
                     ui.namespace().clone(),
                     ui.public_port(),
                 )) as Arc<dyn ui_browser_content::UiGatewayDispatcher>

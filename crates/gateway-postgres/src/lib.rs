@@ -881,6 +881,7 @@ impl PostgresGatewayEdgeAuthority {
     ) -> Result<Uuid, GatewayEdgeError> {
         let Some(issuer) = &self.runtime_authority else {
             if accepted.handler_contract == "http.service.v1" {
+                warn_post_admission_setup(request_id, invocation_id, "runtime_authority_missing");
                 self.reject_invocation(invocation_id).await?;
                 return Err(GatewayEdgeError::Unavailable);
             }
@@ -908,12 +909,10 @@ impl PostgresGatewayEdgeAuthority {
             issuer.issue_gateway(request).await
         };
         let Ok(issued_session) = issued_result else {
-            tracing::warn!(
-                target: "gateway_postgres::ui_post_admission",
-                request_id = %request_id,
-                invocation_id = %invocation_id,
-                category = "runtime_authority_issuance_failed",
-                "gateway post-admission setup failed"
+            warn_post_admission_setup(
+                request_id,
+                invocation_id,
+                "runtime_authority_issuance_failed",
             );
             self.reject_invocation(invocation_id).await?;
             return Err(GatewayEdgeError::Unavailable);
@@ -922,13 +921,7 @@ impl PostgresGatewayEdgeAuthority {
             .create_gateway_secret_leases(invocation_id, issued_session.id.as_uuid())
             .await
         {
-            tracing::warn!(
-                target: "gateway_postgres::ui_post_admission",
-                request_id = %request_id,
-                invocation_id = %invocation_id,
-                category = "secret_lease_setup_failed",
-                "gateway post-admission setup failed"
-            );
+            warn_post_admission_setup(request_id, invocation_id, "secret_lease_setup_failed");
             let _ = self
                 .completed(invocation_id, GatewayInvocationOutcome::Rejected)
                 .await;
@@ -936,6 +929,16 @@ impl PostgresGatewayEdgeAuthority {
         }
         Ok(invocation_id)
     }
+}
+
+fn warn_post_admission_setup(request_id: Uuid, invocation_id: Uuid, category: &'static str) {
+    tracing::warn!(
+        target: "gateway_postgres::ui_post_admission",
+        request_id = %request_id,
+        invocation_id = %invocation_id,
+        category,
+        "gateway post-admission setup failed"
+    );
 }
 
 async fn recovery_candidates(
