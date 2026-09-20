@@ -23,6 +23,58 @@ integrated quality gate remain incomplete. Global installation ownership is an
 open question sent to the user. Historical checkpoints below record the state
 at their time; later integration checkpoints supersede earlier pending notes.
 
+## Browser and routing prerequisite decisions (2026-09-20)
+
+UI origins require an opt-in static namespace guard in the existing Caddy
+configuration owner, before generic platform/gateway routes. The guard forwards
+all namespace descendants (including malformed prefixes) to a private loopback
+UI upstream; that upstream must canonicalize Host and deny unknown generations.
+No per-install Caddy catalog or second configuration writer is needed. Explicit
+DNS/TLS provisioning and browser-authority proofs remain separate requirements.
+The routing foundation is implemented and validated as described below.
+
+Browser authority needs a durable human session bound to the verified OIDC
+identity, with current active-user, expiry, and revocation checks at the mediator
+boundary. Session creation will be a separate bootstrap-authorized operation;
+legacy cookies without a session ID must require login. Storage/domain design is
+in progress; no session RPC, cookie migration, logout revocation, or UI handoff is
+implemented yet.
+
+Project tabs currently repeat across six page components; repository tabs use
+`RepositoryRouteModel` and `RepositoryShell`. Installed entries will be projected
+under current owner authorization and appended through shared tab construction,
+with namespaced opaque identity so declarations cannot replace core routes.
+Installation generations must change on fresh activation, including reactivation
+of the same release; command replay alone reuses the prior result. Global entry
+ownership remains awaiting the user's answer.
+
+The intermittent retained-cleanup test still needs a proven isolation fix.
+Extending B's lease was rejected because its heartbeat can overwrite that value.
+Directly moving A's lease into the past violates ownership timestamp guards.
+Neither experiment is retained. The next fixture design pauses only A's renewal
+before database locking so healthy B can renew during natural A expiry; production
+lease semantics and cleanup behavior remain unchanged.
+
+## Caddy UI namespace foundation checkpoint (2026-09-20)
+
+`LocalCaddyConfigurationTemplate::with_ui_namespace` validates the configured DNS
+namespace and loopback upstream, requires a unique first `hephaestus.ui` slot,
+and renders a terminal namespace proxy through the existing configuration owner.
+Legacy templates remain supported. This is opt-in library support; application
+configuration, the authoritative UI listener, and session/installation wiring are
+still pending.
+
+The real pinned Caddy smoke uses the Rust-rendered full configuration and `/load`.
+An outside-host platform request succeeds; the same platform path on an unknown
+UI host returns the UI upstream's distinct 404. Known hosts and malformed deep
+namespace hosts remain on the UI path across gateway reconciliation, while the
+updated public gateway works. Both real ingress tests pass in
+`/home/a/heph-gateway-ui-caddy-smoke-final-20260920.log`; 182 edge unit tests pass
+in `/home/a/heph-gateway-ui-edge-unit-final-20260920.log`. Strict scoped Clippy,
+rustdoc with warnings denied, formatting, and all 61 enabled architecture rules
+pass. The disposable Caddy container was removed. This is HTTP routing evidence,
+not TLS, browser authentication, or authoritative generation resolution evidence.
+
 ## Public gateway exposure checkpoint (2026-09-20)
 
 Reserved `heph_authenticated` revisions are excluded from public route lookup

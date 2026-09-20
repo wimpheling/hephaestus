@@ -10,7 +10,12 @@ pub use gateway_domain::{Exposure, GatewayInboundSecretResolver, InboundGatewayS
 use http::{HeaderMap, HeaderName, Method, StatusCode};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
-use std::{collections::BTreeSet, net::IpAddr, sync::Arc, time::Duration};
+use std::{
+    collections::BTreeSet,
+    net::{IpAddr, SocketAddr},
+    sync::Arc,
+    time::Duration,
+};
 use subtle::ConstantTimeEq;
 use tokio::time::timeout;
 use uuid::Uuid;
@@ -1034,6 +1039,13 @@ fn ensure_unique_routes(routes: &[GatewayRouteBinding]) -> Result<(), GatewayEdg
 pub struct LocalCaddyConfigurationTemplate {
     base: Value,
     server: String,
+    ui_namespace: Option<UiNamespaceConfiguration>,
+}
+
+#[derive(Clone)]
+struct UiNamespaceConfiguration {
+    namespace: String,
+    upstream: SocketAddr,
 }
 
 impl LocalCaddyConfigurationTemplate {
@@ -1053,9 +1065,69 @@ impl LocalCaddyConfigurationTemplate {
         }
         let base: Value = serde_json::from_slice(configuration)
             .map_err(|_| GatewayEdgeError::InvalidCaddyConfiguration)?;
-        let template = Self { base, server };
+        let template = Self {
+            base,
+            server,
+            ui_namespace: None,
+        };
         template.gateway_subroute_index()?;
         Ok(template)
+    }
+
+    /// Enables the optional terminal UI namespace route.
+    ///
+    /// The operator baseline must reserve exactly one top-level
+    /// `group = "hephaestus.ui"` route at index zero. The private upstream is
+    /// restricted to a loopback socket; the UI service remains responsible for
+    /// canonical host-to-generation resolution and unknown-host denial.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the namespace, reserved Caddy slot, or upstream
+    /// socket is invalid.
+    pub fn with_ui_namespace(
+        mut self,
+        namespace: &str,
+        upstream: SocketAddr,
+    ) -> Result<Self, GatewayEdgeError> {
+        let namespace = namespace.to_ascii_lowercase();
+        validate_ui_namespace(&namespace)?;
+        if !upstream.ip().is_loopback() || upstream.port() == 0 {
+            return Err(GatewayEdgeError::InvalidCaddyConfiguration);
+        }
+        self.ui_namespace_slot_index()?;
+        self.ui_namespace = Some(UiNamespaceConfiguration {
+            namespace,
+            upstream,
+        });
+        Ok(self)
+    }
+
+    fn ui_namespace_slot_index(&self) -> Result<usize, GatewayEdgeError> {
+        let routes = self.server_routes()?;
+        let indices: Vec<_> = routes
+            .iter()
+            .enumerate()
+            .filter_map(|(index, route)| {
+                (route.get("group").and_then(Value::as_str) == Some("hephaestus.ui"))
+                    .then_some(index)
+            })
+            .collect();
+        let [index] = indices.as_slice() else {
+            return Err(GatewayEdgeError::InvalidCaddyConfiguration);
+        };
+        if *index != 0 {
+            return Err(GatewayEdgeError::InvalidCaddyConfiguration);
+        }
+        let handler = routes[*index]
+            .get("handle")
+            .and_then(Value::as_array)
+            .and_then(|handlers| handlers.first())
+            .filter(|handler| handler.get("handler").and_then(Value::as_str) == Some("subroute"));
+        if handler.is_none() {
+            return Err(GatewayEdgeError::InvalidCaddyConfiguration);
+        }
+        Ok(*index)
     }
 
     fn gateway_subroute_index(&self) -> Result<usize, GatewayEdgeError> {
@@ -1098,6 +1170,15 @@ impl LocalCaddyConfigurationTemplate {
             return Err(GatewayEdgeError::Unavailable);
         }
         let mut configuration = self.base.clone();
+        if let Some(ui_namespace) = &self.ui_namespace {
+            let slot = self.ui_namespace_slot_index()?;
+            let pointer = format!("/apps/http/servers/{}/routes", self.server);
+            let target = configuration
+                .pointer_mut(&pointer)
+                .and_then(Value::as_array_mut)
+                .ok_or(GatewayEdgeError::InvalidCaddyConfiguration)?;
+            target[slot] = caddy_ui_namespace_route(ui_namespace);
+        }
         let slot = self.gateway_subroute_index()?;
         let routes = caddy_gateway_routes(desired, dispatcher_upstream);
         let pointer = format!(
@@ -1110,6 +1191,44 @@ impl LocalCaddyConfigurationTemplate {
         *target = Value::Array(routes);
         serde_json::to_vec(&configuration).map_err(|_| GatewayEdgeError::Unavailable)
     }
+}
+
+fn validate_ui_namespace(namespace: &str) -> Result<(), GatewayEdgeError> {
+    if namespace.is_empty() || namespace.len() > 253 || namespace.ends_with('.') {
+        return Err(GatewayEdgeError::InvalidCaddyConfiguration);
+    }
+    for label in namespace.split('.') {
+        if label.is_empty()
+            || label.len() > 63
+            || label.starts_with('-')
+            || label.ends_with('-')
+            || !label
+                .bytes()
+                .all(|byte| byte.is_ascii_lowercase() || byte.is_ascii_digit() || byte == b'-')
+        {
+            return Err(GatewayEdgeError::InvalidCaddyConfiguration);
+        }
+    }
+    Ok(())
+}
+
+fn caddy_ui_namespace_route(configuration: &UiNamespaceConfiguration) -> Value {
+    let suffix = configuration.namespace.replace('.', "[.]");
+    let pattern = format!("(?i)^(?:.*[.])?{suffix}[.]?(?::[0-9]{{1,5}})?$");
+    serde_json::json!({
+        "group": "hephaestus.ui",
+        "match": [{
+            "expression": {
+                "name": "ui_namespace",
+                "expr": format!("header_regexp('Host', '{pattern}')")
+            }
+        }],
+        "handle": [{
+            "handler": "reverse_proxy",
+            "upstreams": [{ "dial": configuration.upstream.to_string() }]
+        }],
+        "terminal": true
+    })
 }
 
 fn caddy_gateway_routes(
@@ -1358,6 +1477,136 @@ mod tests {
             String::from("shared"),
         )
         .expect("valid shared Caddy template")
+    }
+
+    fn caddy_template_with_ui_slot() -> LocalCaddyConfigurationTemplate {
+        LocalCaddyConfigurationTemplate::new(
+            serde_json::json!({
+                "apps": { "http": { "servers": { "shared": {
+                    "listen": ["127.0.0.1:443"],
+                    "routes": [
+                        { "group": "hephaestus.ui", "handle": [{ "handler": "subroute", "routes": [] }] },
+                        { "match": [{ "path": ["/platform/*"] }], "handle": [{ "handler": "static_response", "body": "platform" }] },
+                        { "group": "hephaestus.gateway", "handle": [{ "handler": "subroute", "routes": [] }] },
+                        { "handle": [{ "handler": "static_response", "status_code": 404 }] }
+                    ]
+                } } } }
+            })
+            .to_string()
+            .as_bytes(),
+            String::from("shared"),
+        )
+        .expect("valid shared Caddy template with UI slot")
+    }
+
+    #[test]
+    fn ui_namespace_replaces_first_slot_and_preserves_gateway_routes() {
+        let template = caddy_template_with_ui_slot()
+            .with_ui_namespace(
+                "ui.example",
+                "127.0.0.1:19091".parse().expect("loopback upstream"),
+            )
+            .expect("valid UI namespace configuration");
+        let rendered = template
+            .render(
+                &GatewayDesiredConfiguration {
+                    revision: GatewayConfigRevision::new(),
+                    routes: vec![route()],
+                },
+                "127.0.0.1:19090",
+            )
+            .expect("render UI and gateway routes");
+        let configuration: Value = serde_json::from_slice(&rendered).expect("rendered JSON");
+        let routes = configuration
+            .pointer("/apps/http/servers/shared/routes")
+            .and_then(Value::as_array)
+            .expect("shared routes");
+        assert_eq!(routes[0]["group"], "hephaestus.ui");
+        assert_eq!(routes[0]["terminal"], true);
+        assert_eq!(routes[0]["handle"][0]["handler"], "reverse_proxy");
+        assert_eq!(
+            routes[0]["handle"][0]["upstreams"][0]["dial"],
+            "127.0.0.1:19091"
+        );
+        assert_eq!(routes[2]["group"], "hephaestus.gateway");
+        assert_eq!(
+            routes[2]["handle"][0]["routes"][0]["match"][0]["path"][0],
+            "/gateway/echo"
+        );
+        assert_eq!(routes[0]["match"][0]["expression"]["name"], "ui_namespace");
+        assert!(
+            routes[0]["match"][0]["expression"]["expr"]
+                .as_str()
+                .expect("UI expression")
+                .contains("header_regexp('Host'")
+        );
+    }
+
+    #[test]
+    fn ui_namespace_requires_unique_first_slot_and_loopback_upstream() {
+        let mut duplicate = serde_json::json!({
+            "apps": { "http": { "servers": { "shared": {
+                "routes": [
+                    { "group": "hephaestus.ui", "handle": [{ "handler": "subroute", "routes": [] }] },
+                    { "group": "hephaestus.ui", "handle": [{ "handler": "subroute", "routes": [] }] },
+                    { "group": "hephaestus.gateway", "handle": [{ "handler": "subroute", "routes": [] }] }
+                ]
+            } } } }
+        });
+        assert!(
+            LocalCaddyConfigurationTemplate::new(
+                duplicate.to_string().as_bytes(),
+                String::from("shared")
+            )
+            .expect("gateway slot")
+            .with_ui_namespace("ui.example", "127.0.0.1:19091".parse().expect("address"))
+            .is_err()
+        );
+
+        duplicate["apps"]["http"]["servers"]["shared"]["routes"] = serde_json::json!([
+            { "group": "hephaestus.gateway", "handle": [{ "handler": "subroute", "routes": [] }] },
+            { "group": "hephaestus.ui", "handle": [{ "handler": "subroute", "routes": [] }] }
+        ]);
+        assert!(
+            LocalCaddyConfigurationTemplate::new(
+                duplicate.to_string().as_bytes(),
+                String::from("shared")
+            )
+            .expect("gateway slot")
+            .with_ui_namespace("ui.example", "127.0.0.1:19091".parse().expect("address"))
+            .is_err()
+        );
+
+        assert!(
+            caddy_template()
+                .with_ui_namespace("ui.example", "127.0.0.1:19091".parse().expect("address"))
+                .is_err()
+        );
+
+        let template = caddy_template_with_ui_slot();
+        assert!(
+            template
+                .clone()
+                .with_ui_namespace("ui..example", "127.0.0.1:19091".parse().expect("address"))
+                .is_err()
+        );
+        assert!(
+            template
+                .clone()
+                .with_ui_namespace("-ui.example", "127.0.0.1:19091".parse().expect("address"))
+                .is_err()
+        );
+        assert!(
+            template
+                .clone()
+                .with_ui_namespace("ui.example", "0.0.0.0:19091".parse().expect("address"))
+                .is_err()
+        );
+        assert!(
+            template
+                .with_ui_namespace("ui.example", "[::1]:19091".parse().expect("IPv6 loopback"))
+                .is_ok()
+        );
     }
 
     #[test]
