@@ -518,6 +518,11 @@ impl PgForgeRepository {
                 })?,
             });
         }
+        sqlx::query("SELECT id FROM repositories WHERE id = $1 FOR NO KEY UPDATE")
+            .bind(repository.id.as_uuid())
+            .fetch_one(&mut *transaction)
+            .await
+            .map_err(storage)?;
         let repository_path = self.storage.validate_existing(repository.id).await?;
         let inspected = inspect_updates(&repository_path, updates)?;
         for (index, update) in updates.iter().enumerate() {

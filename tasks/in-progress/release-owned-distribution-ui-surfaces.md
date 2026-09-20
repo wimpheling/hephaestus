@@ -15,10 +15,12 @@ implementations are reviewed.
 
 The source cross-manifest validator is now implemented and focused-validated.
 The persistence schema and receive-side Git capture/build-link wiring are
-implemented with focused PostgreSQL evidence below. Manual-build integration,
-publication, serving, browser integration, and aggregate acceptance remain
-incomplete. Earlier helper-only checkpoints below describe their state at the
-time; the receive integration checkpoint supersedes their pending-wiring notes.
+implemented with focused PostgreSQL evidence below. Manual-build integration
+now passes its basic application-role matrix; receive/manual ordering and
+historical compatibility still need focused regression evidence. Publication,
+serving, browser integration, and aggregate acceptance remain incomplete.
+Earlier helper-only checkpoints below describe their state at the time;
+the receive and manual integration checkpoints supersede pending-wiring notes.
 
 ## Current CI context (2026-09-20)
 
@@ -318,7 +320,7 @@ Formatting passed; strict scoped Clippy and rustdoc passed in the corresponding
 after the Git helper fixture correction. Receive capture and adapter wiring
 remain unimplemented.
 
-### Build identity compatibility decision (implementation pending)
+### Build identity compatibility decision (historical design checkpoint)
 
 A captured valid UI snapshot must participate in build identity. UI-bearing
 builds will use a domain-separated SHA-256 over the existing build-definition
@@ -436,6 +438,30 @@ acceptance tests remain outstanding.
 
 ## Implementation checklist
 
+### Manual-build integration checkpoint (2026-09-20)
+
+Manual requests now read the exact immutable UI capture, reject invalid captures,
+accept either the recomputed base or derived hash for valid UI, and persist the
+derived hash in the build and its outbox event. Missing captures preserve the
+legacy hash. Both manual and receive paths acquire the same repository
+`FOR NO KEY UPDATE` lock, compatible with receive foreign-key key-share locks.
+
+Real application-role testing exposed two existing permissions issues. Migration
+83 grants catalog SELECT to the application under the existing forced-RLS public
+catalog policy, and application startup expects schema 83. Manual insertion now
+preselects under the repository lock, inserts without `ON CONFLICT`/`RETURNING`,
+then reads after the build authorization tuple exists. This preserves RLS.
+
+The real PostgreSQL basic matrix passed (1/1), covering base/derived deduplication,
+exact capture linking, invalid rejection without build or outbox insertion,
+legacy absence, and wrong-hash rejection. Production bootstrap passed (1/1,
+35 filtered). Concurrent receive capture passed separately (1/1). Scoped
+control-plane/forge/app Clippy, rustdoc, formatting, and architecture checks
+passed; logs use `/home/a/heph-manual-ui-build-` with `realpg-20260920.log`
+and `{control-clippy,forge-clippy,app-clippy,doc,fmt,architecture}-v2-20260920.log`.
+The receive writer's application-role reusable-build path, manual/receive
+ordering, and historical no-retrofit regression remain to be verified.
+
 ### UI-kit package checkpoint (2026-09-20)
 
 `web/assets/release_ui_kit` now provides the standalone CSS package
@@ -452,7 +478,7 @@ and dark styles, overflow/insets, keyboard focus, and asset loading. Primary
 button text contrast measured 5.44/6.63 in light default/hover and 7.79/5.45
 in dark default/hover. The final CSS hash is
 `79a23f981523db70c39e07be76830be59f419d2b7d3336485fe56b8a09af5c1d`.
-The smoke script is `/tmp/heph-ui-kit-browser-smoke-20260920.mjs`; reviewed
+The smoke script is `/home/a/heph-ui-kit-browser-smoke-20260920.mjs`; reviewed
 screenshots are `/home/a/heph-ui-kit-smoke-light-20260920.png` and
 `/home/a/heph-ui-kit-smoke-dark-20260920.png`. These checks do not replace
 the reference-release browser flow or a complete accessibility audit.
