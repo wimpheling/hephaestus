@@ -119,6 +119,28 @@ browser behavior, and aggregate acceptance remain unchecked.
 
 ## Reviewed declaration architecture (planned, not implemented)
 
+### Git inspection helper checkpoint (2026-09-20)
+
+The bounded `forge-postgres` Git inspection helper is implemented and currently
+registered under `cfg(test)` pending receive integration. It checks entry mode
+and object headers before loading blobs, enforces the 256 KiB UI and 1 MiB
+required-gateway caps, and preserves observed OIDs, sizes, and source hashes.
+Missing UI preserves legacy behavior; invalid source entries and declarations
+produce bounded redacted diagnostics. Corrupt regular objects remain fatal.
+Valid gateway snapshots use canonical typed configurations with the existing
+canonical TOML hash. Invalid snapshots retain observations without authoritative
+normalized configurations.
+
+Nine focused tests passed in
+`/home/a/heph-forge-ui-manifest-tests-20260920-v4.log`. Strict scoped Clippy,
+rustdoc, formatting, and architecture passed in the corresponding
+`clippy-20260920-v5`, `doc-20260920`, `fmt-20260920-v4`, and
+`architecture-20260920` logs. Production receive wiring and persistence adapter
+integration remain pending; this checkpoint does not yet capture pushed UI
+manifests.
+
+### Publication design
+
 The reviewed v1 model optionally reads a repository sibling `heph.ui.toml`,
 captured from the exact Git commit during receive/build-request creation
 alongside the referenced `heph.gateways.toml`. An immutable build-request

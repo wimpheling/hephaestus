@@ -26,6 +26,9 @@ use crate::{
     BUILD_REQUESTED_SUBJECT, GitStorage, INSTANCE_RUN_REQUESTED_SUBJECT, RUN_START_SUBJECT,
 };
 
+#[cfg(test)]
+mod ui_manifest;
+
 /// `PostgreSQL` forge metadata and receive repository.
 #[derive(Clone)]
 pub struct PgForgeRepository {
