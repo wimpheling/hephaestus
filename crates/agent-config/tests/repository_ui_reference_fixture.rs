@@ -11,6 +11,9 @@ const HTML: &[u8] = include_bytes!("../../../examples/cooking/cooking-reference-
 const CSS: &[u8] = include_bytes!(
     "../../../examples/cooking/cooking-reference-ui/vendor/release-ui-kit/v1.0.0/dist/heph-ui-kit-v1.0.0.css"
 );
+const JS: &[u8] = include_bytes!(
+    "../../../examples/cooking/cooking-reference-ui/vendor/release-ui-kit/v1.0.0/dist/heph-ui-kit-v1.0.0.js"
+);
 
 #[test]
 fn reference_fixture_agent_and_static_ui_bind_the_declared_file_artifacts() {
@@ -35,7 +38,7 @@ fn reference_fixture_agent_and_static_ui_bind_the_declared_file_artifacts() {
         .iter()
         .filter(|artifact| artifact.path.starts_with("dist/"))
         .collect::<Vec<_>>();
-    assert_eq!(declared.len(), 2, "fixture has exactly two UI artifacts");
+    assert_eq!(declared.len(), 3, "fixture has exactly three UI artifacts");
     let mut declared_paths = declared
         .iter()
         .map(|artifact| artifact.path.as_str())
@@ -43,7 +46,11 @@ fn reference_fixture_agent_and_static_ui_bind_the_declared_file_artifacts() {
     declared_paths.sort_unstable();
     assert_eq!(
         declared_paths,
-        ["dist/heph-ui-kit-v1.0.0.css", "dist/index.html"]
+        [
+            "dist/heph-ui-kit-v1.0.0.css",
+            "dist/heph-ui-kit-v1.0.0.js",
+            "dist/index.html",
+        ]
     );
     let candidates = declared
         .iter()
@@ -52,6 +59,7 @@ fn reference_fixture_agent_and_static_ui_bind_the_declared_file_artifacts() {
             let size_bytes = match artifact.path.as_str() {
                 "dist/index.html" => HTML.len(),
                 "dist/heph-ui-kit-v1.0.0.css" => CSS.len(),
+                "dist/heph-ui-kit-v1.0.0.js" => JS.len(),
                 _ => panic!("unexpected reference UI artifact path"),
             };
             StaticArtifactCandidate {
@@ -73,7 +81,7 @@ fn reference_fixture_agent_and_static_ui_bind_the_declared_file_artifacts() {
     assert_eq!(resolved.uis.len(), 1);
     let resolved_ui = &resolved.uis[0];
     assert_eq!(resolved_ui.key.as_str(), "release-reference");
-    assert_eq!(resolved_ui.files.len(), 2);
+    assert_eq!(resolved_ui.files.len(), 3);
     let html = resolved_ui
         .files
         .iter()
@@ -86,4 +94,10 @@ fn reference_fixture_agent_and_static_ui_bind_the_declared_file_artifacts() {
         .find(|file| file.route.as_str() == "heph-ui-kit-v1.0.0.css")
         .expect("CSS route binding");
     assert_eq!(css.media_type.as_str(), "text/css");
+    let js = resolved_ui
+        .files
+        .iter()
+        .find(|file| file.route.as_str() == "heph-ui-kit-v1.0.0.js")
+        .expect("JavaScript route binding");
+    assert_eq!(js.media_type.as_str(), "text/javascript");
 }

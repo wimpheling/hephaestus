@@ -38,6 +38,18 @@ integrated quality gate remain incomplete. The user approved organization-owned
 global installations and organization isolation. Historical checkpoints record the state
 at their time; later integration checkpoints supersede earlier pending notes.
 
+## Reference fixture contract follow-up (2026-09-20)
+
+CI caught a stale Rust fixture assertion after the optional JavaScript helper
+was added: it still expected only HTML and CSS. The semantic fixture now checks
+all three exact artifact paths, resolves all three files, and verifies the
+helper's JavaScript MIME type. The focused agent-config fixture test passes;
+strict all-target/all-feature Clippy and documentation checks also pass for
+agent-config, release-service, and release-postgres. Evidence is in
+`/tmp/heph-ui-audit-quality-clippy.log` and
+`/tmp/heph-ui-audit-quality-doc.log`. The separate browser fixture digest fix
+and request audit remain under validation.
+
 ## UI quality-runner integration checkpoint (2026-09-20)
 
 CI now invokes the existing isolated UI installation RPC runner after ordinary
