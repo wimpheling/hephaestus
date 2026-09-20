@@ -42,19 +42,30 @@ The service runtime has concrete evidence for the following slices:
 
 The live security proofs now cover the published HTTPS listener, fixed
 authority, forwarded-header stripping, guest listener/egress/mount isolation,
-and exact service execution binding. The full quality gate remains pending
-while architecture diagnostics are resolved; the
-release UI has not begun. Checklist
+and exact service execution binding. The platform diagnostic/request-metadata
+redaction audit is complete; application-owned log capture remains explicitly
+opt-in and default-off. The full quality gate remains pending while
+architecture diagnostics are resolved; the release UI has not begun. Checklist
 reconciliation is in progress; unchecked historical claims are not evidence of
 failure, and later source and test evidence must be matched to each subitem
 before its status changes. The currently identified security check still
-pending is the platform diagnostic/request-metadata redaction audit; the
-published live proofs are covered by the checkpoints below. Existing
-checked subitems remain valid where their own evidence is cited.
+pending is the full quality gate; the published live proofs are covered by the
+checkpoints below. Existing checked subitems remain valid where their own
+evidence is cited.
 
 The CI teardown fix is `2680329`: the affected real-PostgreSQL recovery group
 passed 17/17 against migration 81, with the prior failure retained at
-`/tmp/gh-run-35474992344-job-105982597476.log`; current CI is still pending.
+`/tmp/gh-run-35474992344-job-105982597476.log`. The historical all-green CI
+run for `431127d` is `35476825988`; its three jobs passed.
+
+The initial quality-gate run (2026-09-20, session `28746`) stopped at the
+architecture diagnostics recorded in `/home/a/heph-quality-20260920.log`,
+before the Rust, Phoenix, and UI stages. Quality retry v2 (session `69347`)
+also stopped in architecture on the golden `CREATE DATABASE` and `DROP
+DATABASE` SQL despite the exact declarations; its log is
+`/home/a/heph-quality-20260920-v2.log`. Its disposable PostgreSQL and NATS
+fixtures were cleaned. The architecture checker investigation remains in
+progress; Rust, Phoenix, and UI were not reached.
 
 ## Outcome
 
@@ -737,7 +748,7 @@ recovery scheduling, Caddy routing, and release UI remain pending.
       `crates/gateway-postgres/tests/service_execution.rs`, and the 35-test
       golden suite in the real workflow logs.
 
-- [ ] **5. Security and authority boundaries**
+- [x] **5. Security and authority boundaries**
   - [x] Define and enforce host-header validation, client identity, TLS
     termination, internal endpoint protection, and release/project route
     isolation for the published path.
@@ -758,10 +769,24 @@ recovery scheduling, Caddy routing, and release UI remain pending.
       `execution_target_rejects_wrong_binding_and_exact_identity`,
       `execution_target_rejects_terminal_session_expiry_and_release_revocation`,
       and `execution_target_rejects_revoked_exact_inbound_secret_lease`.
-  - [ ] Keep platform diagnostics and request-only metadata bounded and
+  - [x] Keep platform diagnostics and request-only metadata bounded and
     redacted while retaining audit and failure evidence. Application log
     redaction remains application-owned and default-off; the platform does not
     claim universal redaction of arbitrary guest output.
+    - Evidence: `crates/gateway-edge/src/service_diagnostics.rs` retains only
+      lifecycle milestones, stdout/stderr byte counts, lag counts, and channel
+      closure; `records_only_lifecycle_and_saturating_byte_counts` feeds
+      authorization/body sentinels and verifies they are absent from debug
+      output. `crates/gateway-edge/src/service_instance.rs` covers
+      `disabled_log_capture_has_no_raw_queue` and
+      `malformed_exit_metadata_is_redacted`; `service_logs.rs` covers
+      `read_record_debug_redacts_application_bytes`. Failure persistence stores
+      only bounded category/exit metadata, and migration 0036 stores request
+      correlation and lifecycle outcome without headers, bodies, credentials,
+      or responses. Secret substitution is constant-time and placeholder-only;
+      private transport challenges use the redacted `PrivateServiceChallenge`
+      debug representation. Application payload capture remains the deliberate
+      default-off, opt-in, project-scoped boundary.
 
 - [x] **6. Development workflow**
   - [x] Document local service execution, configuration, live-reload
@@ -2473,3 +2498,33 @@ Focused source evidence for this slice is retained in
 `/home/a/heph-https-metadata-golden-check-20260920-v2.log`, and
 `/home/a/heph-https-metadata-golden-clippy-20260920-v2.log`; the formatting
 check is `/home/a/heph-https-metadata-cargo-fmt-20260920.log`.
+
+Recovered golden RPC extraction checkpoint (2026-09-20): the restored
+`golden.rs` and `tests/composition/gateway_service_log.rs` compile passed with
+Rust 1.88, the shared target directory, incremental compilation disabled, and
+two build jobs. The compile command was
+`cargo test -p hephaestus-app --test golden --features test-fixtures --no-run --locked`,
+with evidence in `/home/a/heph-golden-rpc-recovered-check-20260920.log`.
+Strict all-feature golden Clippy with `-- -D warnings` passed under the same
+settings; its log is
+`/home/a/heph-golden-rpc-recovered-clippy-20260920.log` (earlier mechanical
+diagnostics remain preserved before the final passing run). The guest
+service-log workflow rerun passed 35 golden tests (one ignored) and eight
+PostgreSQL tests, emitted
+`REAL_GATEWAY_SERVICE_LOG_GUEST_E2E=1 instance=4ea152f0-38f1-4469-9351-a743ea14a763 fence=1 retained_after_shutdown=true`,
+and verified runtime/cgroup cleanup in
+`/home/a/heph-rpc-extraction-guest-log-20260920.log`. The seeded authorization
+rerun then completed under session `62534`: it emitted
+`REAL_GATEWAY_SERVICE_LOG_RPC=1 app_role=hephaestus_app payload_cursor=1
+denied=outsider+revoked+unauthenticated`, passed 35 golden tests (one ignored)
+and eight PostgreSQL tests, and verified runtime/cgroup cleanup. Its evidence
+is `/home/a/heph-rpc-extraction-log-rpc-20260920.log`, with diagnostics in
+`/home/a/heph-rpc-extraction-log-rpc-20260920-diagnostics` and phase timing in
+`/home/a/heph-rpc-extraction-log-rpc-20260920-phase.json`. The seeded rows in
+this mode remain fixture data; the guest-output proof is the separate
+checkpoint above. Repository-wide `cargo dev quality` retry v2 (session
+`69347`) then stopped in architecture on the golden `CREATE DATABASE` and
+`DROP DATABASE` SQL despite the exact declarations; evidence is
+`/home/a/heph-quality-20260920-v2.log`. Its disposable PostgreSQL and NATS
+fixtures were cleaned, and Rust, Phoenix, and UI were not reached. Checker
+investigation remains ongoing; no passing full-quality result is claimed.
