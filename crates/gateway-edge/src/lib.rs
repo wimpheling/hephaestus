@@ -823,6 +823,44 @@ pub enum GatewayInvocationOutcome {
     Rejected,
 }
 
+/// Detailed disposition of one UI-origin dispatch.  This is an audit-facing
+/// semantic result; HTTP status is deliberately not used to infer admission.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum UiDispatchDisposition {
+    /// The durable UI authority provider rejected the request.
+    ProviderDenied,
+    /// The provider found no current declaration/route for the request.
+    ProviderNotFound,
+    /// The provider could not read current authority or gateway state.
+    ProviderUnavailable,
+    /// The typed request or selected admission violated the edge contract.
+    StructuralInvalid,
+    /// Durable `accepted_ui` could not record the invocation.
+    AcceptedUiFailure,
+    /// The invocation was admitted and its existing terminal outcome is known.
+    Admitted {
+        /// Existing invocation terminal outcome.
+        outcome: GatewayInvocationOutcome,
+        /// Whether the terminal outcome was durably persisted.
+        completion_persisted: bool,
+    },
+}
+
+/// Response plus the authoritative UI dispatch disposition.
+#[derive(Clone)]
+pub struct UiDispatchResult {
+    /// Safe response returned by the edge.
+    pub response: GatewayProviderResponse,
+    /// Typed admission/execution disposition for audit and response policy.
+    pub disposition: UiDispatchDisposition,
+}
+
+impl UiDispatchResult {
+    fn into_response(self) -> GatewayProviderResponse {
+        self.response
+    }
+}
+
 /// A synchronous dispatcher with deliberate response fallbacks.
 pub struct GatewayDispatcher<R, H, I> {
     resolver: R,
@@ -898,6 +936,7 @@ where
         };
         self.dispatch_admitted(route, request, invocation_id, false)
             .await
+            .into_response()
     }
 }
 
@@ -915,20 +954,55 @@ impl<R, H, I> GatewayDispatcher<R, H, I> {
         I: GatewayInvocationRecorder,
         A: UiGatewayAdmissionProvider + ?Sized,
     {
-        let fallback = |response| GatewayProviderResponse {
-            response,
-            invocation_id: Uuid::nil(),
-        };
+        self.dispatch_ui_detailed(request, authority)
+            .await
+            .into_response()
+    }
+
+    /// Dispatches one trusted UI request and retains the authoritative
+    /// admission/execution disposition for audit. The response-only
+    /// [`Self::dispatch_ui`] wrapper remains the compatibility surface.
+    pub async fn dispatch_ui_detailed<A>(
+        &self,
+        request: UiGatewayRequest,
+        authority: &A,
+    ) -> UiDispatchResult
+    where
+        R: GatewayRouteResolver,
+        H: GatewayVmHandler,
+        I: GatewayInvocationRecorder,
+        A: UiGatewayAdmissionProvider + ?Sized,
+    {
         let admission = match authority.admit(&request).await {
             Ok(admission) => admission,
-            Err(error) => return fallback(admission_failure_response(error)),
+            Err(error) => {
+                return UiDispatchResult {
+                    response: GatewayProviderResponse {
+                        response: admission_failure_response(error),
+                        invocation_id: Uuid::nil(),
+                    },
+                    disposition: error.dispatch_disposition(),
+                };
+            }
         };
         let request_authority = request.authority.clone();
         let Ok(request) = prepare_gateway_request(&request, &admission) else {
-            return fallback(empty_response(StatusCode::BAD_REQUEST));
+            return UiDispatchResult {
+                response: GatewayProviderResponse {
+                    response: empty_response(StatusCode::BAD_REQUEST),
+                    invocation_id: Uuid::nil(),
+                },
+                disposition: UiDispatchDisposition::StructuralInvalid,
+            };
         };
         if validate_ui_request(&admission.route, &request).is_err() {
-            return fallback(empty_response(StatusCode::BAD_REQUEST));
+            return UiDispatchResult {
+                response: GatewayProviderResponse {
+                    response: empty_response(StatusCode::BAD_REQUEST),
+                    invocation_id: Uuid::nil(),
+                },
+                disposition: UiDispatchDisposition::StructuralInvalid,
+            };
         }
         let Ok(invocation_id) = self
             .recorder
@@ -939,7 +1013,13 @@ impl<R, H, I> GatewayDispatcher<R, H, I> {
             )
             .await
         else {
-            return fallback(empty_response(StatusCode::SERVICE_UNAVAILABLE));
+            return UiDispatchResult {
+                response: GatewayProviderResponse {
+                    response: empty_response(StatusCode::SERVICE_UNAVAILABLE),
+                    invocation_id: Uuid::nil(),
+                },
+                disposition: UiDispatchDisposition::AcceptedUiFailure,
+            };
         };
         self.dispatch_admitted(admission.route, request, invocation_id, true)
             .await
@@ -953,7 +1033,7 @@ impl<R: Sync, H: Sync, I: Sync> GatewayDispatcher<R, H, I> {
         request: GatewayRequest,
         invocation_id: Uuid,
         ui_response_policy: bool,
-    ) -> GatewayProviderResponse
+    ) -> UiDispatchResult
     where
         H: GatewayVmHandler,
         I: GatewayInvocationRecorder,
@@ -962,19 +1042,26 @@ impl<R: Sync, H: Sync, I: Sync> GatewayDispatcher<R, H, I> {
             .rewrite_inbound_secrets(invocation_id, &route, request)
             .await
         else {
-            let _ = self
+            let completion_persisted = self
                 .recorder
                 .completed(invocation_id, GatewayInvocationOutcome::Rejected)
-                .await;
+                .await
+                .is_ok();
             // Missing, repeated, mismatched, revoked, and expired values
             // share a bounded authentication failure without exposing which
             // credential check failed. Unknown routes remain 404.
-            return GatewayProviderResponse {
-                response: empty_response(StatusCode::UNAUTHORIZED),
-                invocation_id: if ui_response_policy {
-                    invocation_id
-                } else {
-                    Uuid::nil()
+            return UiDispatchResult {
+                response: GatewayProviderResponse {
+                    response: empty_response(StatusCode::UNAUTHORIZED),
+                    invocation_id: if ui_response_policy {
+                        invocation_id
+                    } else {
+                        Uuid::nil()
+                    },
+                },
+                disposition: UiDispatchDisposition::Admitted {
+                    outcome: GatewayInvocationOutcome::Rejected,
+                    completion_persisted,
                 },
             };
         };
@@ -1019,20 +1106,24 @@ impl<R: Sync, H: Sync, I: Sync> GatewayDispatcher<R, H, I> {
         // caller can safely retry: mailbox acceptance is deduplicated by the
         // bound producer/key, while this invocation remains visibly pending
         // for operator recovery rather than being silently forgotten.
-        if self
+        let completion_persisted = self
             .recorder
             .completed(invocation_id, outcome)
             .await
-            .is_err()
-        {
-            return GatewayProviderResponse {
-                response: empty_response(StatusCode::SERVICE_UNAVAILABLE),
+            .is_ok();
+        UiDispatchResult {
+            response: GatewayProviderResponse {
+                response: if completion_persisted {
+                    response
+                } else {
+                    empty_response(StatusCode::SERVICE_UNAVAILABLE)
+                },
                 invocation_id,
-            };
-        }
-        GatewayProviderResponse {
-            response,
-            invocation_id,
+            },
+            disposition: UiDispatchDisposition::Admitted {
+                outcome,
+                completion_persisted,
+            },
         }
     }
 
@@ -1867,6 +1958,15 @@ mod tests {
             Ok(Uuid::new_v4())
         }
 
+        async fn accepted_ui(
+            &self,
+            _: &GatewayRouteBinding,
+            _: &UiGatewayAuthority,
+            _: Uuid,
+        ) -> Result<Uuid, GatewayEdgeError> {
+            Ok(Uuid::new_v4())
+        }
+
         async fn completed(
             &self,
             _: Uuid,
@@ -2351,6 +2451,18 @@ mod tests {
         }
     }
 
+    struct ErrorUiProvider(UiGatewayAdmissionError);
+
+    #[async_trait]
+    impl UiGatewayAdmissionProvider for ErrorUiProvider {
+        async fn admit(
+            &self,
+            _: &UiGatewayRequest,
+        ) -> Result<UiGatewayAdmission, UiGatewayAdmissionError> {
+            Err(self.0)
+        }
+    }
+
     struct UiRecorder {
         accepted: Arc<AtomicUsize>,
         completed: Arc<Mutex<Vec<GatewayInvocationOutcome>>>,
@@ -2433,6 +2545,25 @@ mod tests {
         }
     }
 
+    struct ForbiddenHandler;
+
+    #[async_trait]
+    impl GatewayVmHandler for ForbiddenHandler {
+        async fn invoke(
+            &self,
+            _: &GatewayRouteBinding,
+            _: Uuid,
+            _: GatewayRequest,
+        ) -> Result<GatewayResponse, GatewayEdgeError> {
+            Ok(GatewayResponse {
+                status: StatusCode::FORBIDDEN,
+                headers: HeaderMap::new(),
+                body: Bytes::from_static(b"denied"),
+                mailbox_publication: None,
+            })
+        }
+    }
+
     fn ui_request(path: &str) -> UiGatewayRequest {
         UiGatewayRequest {
             authority: UiGatewayAuthority {
@@ -2483,15 +2614,22 @@ mod tests {
         };
         let dispatcher =
             GatewayDispatcher::new(Resolver(ui_admission().route), SetCookieHandler, recorder);
-        let response = dispatcher
-            .dispatch_ui(
+        let result = dispatcher
+            .dispatch_ui_detailed(
                 ui_request("echo/index.html"),
                 &UiProvider {
                     admission: ui_admission(),
                 },
             )
             .await;
-        assert_eq!(response.response.status, StatusCode::BAD_GATEWAY);
+        assert_eq!(result.response.response.status, StatusCode::BAD_GATEWAY);
+        assert_eq!(
+            result.disposition,
+            UiDispatchDisposition::Admitted {
+                outcome: GatewayInvocationOutcome::Failed,
+                completion_persisted: true,
+            }
+        );
         assert_eq!(accepted.load(Ordering::SeqCst), 1);
         assert_eq!(
             completed.lock().expect("completion lock").as_slice(),
@@ -2509,15 +2647,16 @@ mod tests {
         };
         let dispatcher =
             GatewayDispatcher::new(Resolver(ui_admission().route), SetCookieHandler, recorder);
-        let response = dispatcher
-            .dispatch_ui(
+        let result = dispatcher
+            .dispatch_ui_detailed(
                 ui_request("echo/other.html"),
                 &UiProvider {
                     admission: ui_admission(),
                 },
             )
             .await;
-        assert_eq!(response.response.status, StatusCode::BAD_REQUEST);
+        assert_eq!(result.response.response.status, StatusCode::BAD_REQUEST);
+        assert_eq!(result.disposition, UiDispatchDisposition::StructuralInvalid);
         assert_eq!(accepted.load(Ordering::SeqCst), 0);
         assert!(completed.lock().expect("completion lock").is_empty());
     }
@@ -2530,15 +2669,19 @@ mod tests {
             CountingHandler(Arc::clone(&calls)),
             Recorder,
         );
-        let response = dispatcher
-            .dispatch_ui(
+        let result = dispatcher
+            .dispatch_ui_detailed(
                 ui_request("echo/index.html"),
                 &UiProvider {
                     admission: ui_admission(),
                 },
             )
             .await;
-        assert_eq!(response.response.status, StatusCode::SERVICE_UNAVAILABLE);
+        assert_eq!(
+            result.response.response.status,
+            StatusCode::SERVICE_UNAVAILABLE
+        );
+        assert_eq!(result.disposition, UiDispatchDisposition::AcceptedUiFailure);
         assert_eq!(calls.load(Ordering::SeqCst), 0);
     }
 
@@ -2551,16 +2694,161 @@ mod tests {
             CountingHandler(Arc::clone(&handler_calls)),
             Recorder,
         );
-        let response = dispatcher
-            .dispatch_ui(
+        let result = dispatcher
+            .dispatch_ui_detailed(
                 ui_request("echo/index.html"),
                 &DenyingUiProvider {
                     calls: Arc::clone(&provider_calls),
                 },
             )
             .await;
-        assert_eq!(response.response.status, StatusCode::UNAUTHORIZED);
+        assert_eq!(result.response.response.status, StatusCode::UNAUTHORIZED);
+        assert_eq!(result.disposition, UiDispatchDisposition::ProviderDenied);
         assert_eq!(provider_calls.load(Ordering::SeqCst), 1);
         assert_eq!(handler_calls.load(Ordering::SeqCst), 0);
+    }
+
+    #[tokio::test]
+    async fn ui_provider_classes_are_preserved_without_status_inference() {
+        let dispatcher = GatewayDispatcher::new(
+            Resolver(ui_admission().route),
+            CountingHandler(Arc::new(AtomicUsize::new(0))),
+            Recorder,
+        );
+        for (error, expected) in [
+            (
+                UiGatewayAdmissionError::NotFound,
+                UiDispatchDisposition::ProviderNotFound,
+            ),
+            (
+                UiGatewayAdmissionError::Unavailable,
+                UiDispatchDisposition::ProviderUnavailable,
+            ),
+        ] {
+            let result = dispatcher
+                .dispatch_ui_detailed(ui_request("echo/index.html"), &ErrorUiProvider(error))
+                .await;
+            assert_eq!(result.disposition, expected);
+        }
+    }
+
+    #[tokio::test]
+    async fn ui_guest_forbidden_is_completed_not_provider_denied() {
+        let completed = Arc::new(Mutex::new(Vec::new()));
+        let recorder = UiRecorder {
+            accepted: Arc::new(AtomicUsize::new(0)),
+            completed: Arc::clone(&completed),
+        };
+        let dispatcher =
+            GatewayDispatcher::new(Resolver(ui_admission().route), ForbiddenHandler, recorder);
+        let result = dispatcher
+            .dispatch_ui_detailed(
+                ui_request("echo/index.html"),
+                &UiProvider {
+                    admission: ui_admission(),
+                },
+            )
+            .await;
+        assert_eq!(result.response.response.status, StatusCode::FORBIDDEN);
+        assert_eq!(
+            result.disposition,
+            UiDispatchDisposition::Admitted {
+                outcome: GatewayInvocationOutcome::Completed,
+                completion_persisted: true,
+            }
+        );
+    }
+
+    #[tokio::test]
+    async fn ui_rejected_inbound_secret_is_admitted_and_completed_as_rejected() {
+        let completed = Arc::new(Mutex::new(Vec::new()));
+        let recorder = UiRecorder {
+            accepted: Arc::new(AtomicUsize::new(0)),
+            completed: Arc::clone(&completed),
+        };
+        let dispatcher =
+            GatewayDispatcher::new(Resolver(ui_admission().route), EchoHandler, recorder)
+                .with_inbound_secret_resolver(Arc::new(InboundRules));
+        let mut request = ui_request("echo/index.html");
+        request
+            .headers
+            .insert("x-hook-secret", HeaderValue::from_static("wrong-secret"));
+        let result = dispatcher
+            .dispatch_ui_detailed(
+                request,
+                &UiProvider {
+                    admission: ui_admission(),
+                },
+            )
+            .await;
+        assert_eq!(result.response.response.status, StatusCode::UNAUTHORIZED);
+        assert_eq!(
+            result.disposition,
+            UiDispatchDisposition::Admitted {
+                outcome: GatewayInvocationOutcome::Rejected,
+                completion_persisted: true,
+            }
+        );
+        assert_eq!(
+            completed.lock().expect("completion lock").as_slice(),
+            &[GatewayInvocationOutcome::Rejected]
+        );
+    }
+
+    #[tokio::test]
+    async fn ui_completion_store_failure_is_admitted_but_not_persisted() {
+        let recorder = CompletionFailureRecorder {
+            completions: AtomicUsize::new(0),
+        };
+        let dispatcher =
+            GatewayDispatcher::new(Resolver(ui_admission().route), EchoHandler, recorder);
+        let result = dispatcher
+            .dispatch_ui_detailed(
+                ui_request("echo/index.html"),
+                &UiProvider {
+                    admission: ui_admission(),
+                },
+            )
+            .await;
+        assert_eq!(
+            result.response.response.status,
+            StatusCode::SERVICE_UNAVAILABLE
+        );
+        assert_eq!(
+            result.disposition,
+            UiDispatchDisposition::Admitted {
+                outcome: GatewayInvocationOutcome::Completed,
+                completion_persisted: false,
+            }
+        );
+    }
+
+    #[tokio::test]
+    async fn ui_success_exposes_safe_admitted_metadata() {
+        let dispatcher = GatewayDispatcher::new(
+            Resolver(ui_admission().route),
+            EchoHandler,
+            UiRecorder {
+                accepted: Arc::new(AtomicUsize::new(0)),
+                completed: Arc::new(Mutex::new(Vec::new())),
+            },
+        );
+        let result = dispatcher
+            .dispatch_ui_detailed(
+                ui_request("echo/index.html"),
+                &UiProvider {
+                    admission: ui_admission(),
+                },
+            )
+            .await;
+        assert_eq!(result.response.response.status, StatusCode::ACCEPTED);
+        assert_ne!(result.response.invocation_id, Uuid::nil());
+        assert_eq!(
+            result.disposition,
+            UiDispatchDisposition::Admitted {
+                outcome: GatewayInvocationOutcome::Completed,
+                completion_persisted: true,
+            }
+        );
     }
 }

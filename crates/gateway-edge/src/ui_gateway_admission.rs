@@ -229,6 +229,18 @@ pub enum UiGatewayAdmissionError {
     Unavailable,
 }
 
+impl UiGatewayAdmissionError {
+    /// Maps the redacted provider class to the detailed edge disposition.
+    /// HTTP status remains a separate response concern.
+    pub(crate) const fn dispatch_disposition(self) -> crate::UiDispatchDisposition {
+        match self {
+            Self::Denied => crate::UiDispatchDisposition::ProviderDenied,
+            Self::NotFound => crate::UiDispatchDisposition::ProviderNotFound,
+            Self::Unavailable => crate::UiDispatchDisposition::ProviderUnavailable,
+        }
+    }
+}
+
 /// Maps a UI authority failure to the safe browser response.
 #[must_use]
 pub fn admission_failure_response(error: UiGatewayAdmissionError) -> GatewayResponse {

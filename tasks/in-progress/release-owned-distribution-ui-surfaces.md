@@ -12,8 +12,8 @@ and application-role request authentication have passed focused verification.
 Activation/rollback and explicit-organization navigation also pass focused
 verification. The UI RPC transport checkpoint now passes its expanded real
 matrix. Gateway admission, host/resource projection, Phoenix navigation, and
-reference theme helpers pass focused checks. Current work integrates the HTTP
-listener, request audit, and final installed-browser acceptance.
+reference theme helpers pass focused checks. The bounded HTTP listener is committed. Current work integrates request-wide
+audit and verifies installed-browser acceptance.
 The handoff remains the record of the stopped session; new evidence is recorded
 below as each resumed slice passes review and verification.
 
@@ -32,11 +32,27 @@ implemented; reference-release integration remains open.
 
 Verified static-byte loading and read-only release-page metadata display are
 implemented. Durable browser sessions are integrated through RPC and Phoenix.
-UI installation is the current slice; static/managed hosting, browser
-navigation/authorization/isolation, real Caddy/VM/browser proofs, and the final
-integrated quality gate remain incomplete. The user approved organization-owned
+Installation lifecycle and the static/managed HTTP serving baseline are committed.
+Request-wide audit, installed browser navigation/authorization/isolation, real
+Caddy/VM/browser proofs, and the final integrated quality gate remain incomplete. The user approved organization-owned
 global installations and organization isolation. Historical checkpoints record the state
 at their time; later integration checkpoints supersede earlier pending notes.
+
+## Gateway UI audit outcome checkpoint (2026-09-20)
+
+`dispatch_ui_detailed` preserves provider denial/not-found/unavailability,
+structural rejection, acceptance-record failure, and the existing terminal
+invocation outcome plus whether its completion record persisted. The existing
+response-only dispatch API remains available. A guest HTTP 403 is an admitted
+completed response; permission denial is a separate typed result. Payload-bearing
+results do not derive `Debug`.
+
+Sixteen focused UI cases and the full gateway-edge package passed (196 library
+and two Caddy integration tests), including inbound-secret rejection, forbidden
+guest cookies, and failed completion persistence. Strict Clippy, documentation,
+formatting, and diff checks passed. Logs: `/tmp/heph-ui-gateway-edge-outcome-*.log`.
+This exposes authoritative outcomes for the HTTP audit integration; it does not
+yet establish request-wide audit persistence or installed VM/browser behavior.
 
 ## UI route collision checkpoint (2026-09-20)
 
