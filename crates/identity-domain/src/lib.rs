@@ -1,5 +1,14 @@
 //! Provider-neutral authenticated identity values.
 
+mod session;
+
+pub use session::{
+    BrowserSessionDigest, BrowserSessionId, BrowserSessionIdentityBindingDigest,
+    BrowserSessionMetadata, BrowserSessionRevocationReason, BrowserSessionSid,
+    DEFAULT_BROWSER_SESSION_TTL_SECONDS, MAX_BROWSER_SESSION_TTL_SECONDS,
+    browser_session_identity_binding_digest, browser_session_sid_digest,
+};
+
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use sha2::{Digest, Sha256};

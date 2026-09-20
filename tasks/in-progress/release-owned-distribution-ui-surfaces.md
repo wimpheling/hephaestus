@@ -37,9 +37,8 @@ The routing foundation is implemented and validated as described below.
 Browser authority needs a durable human session bound to the verified OIDC
 identity, with current active-user, expiry, and revocation checks at the mediator
 boundary. Session creation will be a separate bootstrap-authorized operation;
-legacy cookies without a session ID must require login. Storage/domain design is
-in progress; no session RPC, cookie migration, logout revocation, or UI handoff is
-implemented yet.
+legacy cookies without a session ID must require login. Storage/domain support is implemented and validated below; no session RPC,
+cookie migration, logout revocation, or UI handoff is implemented yet.
 
 Project tabs currently repeat across six page components; repository tabs use
 `RepositoryRouteModel` and `RepositoryShell`. Installed entries will be projected
@@ -51,6 +50,40 @@ ownership remains awaiting the user's answer.
 
 The retained-cleanup fixture isolation follow-up is implemented below. Production
 lease semantics and cleanup behavior remain unchanged.
+
+## Durable human-session foundation checkpoint (2026-09-20)
+
+Migration 85 adds durable session rows with separate internal identity and opaque
+browser SID, storing only a domain-separated SID digest. Immutable creation
+idempotency/request IDs and a length-delimited issuer/subject binding support
+exact replay without storing the raw SID. Expiry is immutable (12-hour default,
+24-hour maximum); revocation is one-way. Worker mutation grants are explicit,
+application table access is denied, and forced RLS remains enabled.
+
+The narrow application-role verifier requires an exact user/digest match, active
+user, issued time reached, unexpired session, and no revocation. Qualified table
+references and a hardened search path prevent temporary-table substitution.
+Domain types redact SID and digest formatting and expose only explicit protocol
+serialization. App schema expectation and the bootstrap gate advance to 85.
+
+The real restricted-role schema matrix passes 1/1 with its execution marker in
+`/home/a/heph-browser-session-schema-20260920-v5.log`. It covers role grants,
+expiry/revocation/inactive users, wrong identities, immutable fields, duplicate
+SID/idempotency, bounds, and a fake temporary row on the pinned verifier
+connection. Domain tests pass 5/5 in
+`/home/a/heph-human-session-final-tests-20260920.log`; the production application
+pool bootstrap passes 1/1 at migration 85 in
+`/home/a/heph-human-session-app-pool-20260920.log`. Scoped Clippy/docs, downstream
+app all-feature compilation, formatting, and architecture pass. The final domain
+review removed an unnecessary lint allowance by exporting both TTL constants.
+
+This checkpoint does not create sessions during login or enforce them on RPCs.
+Creation/replay, verification/revocation adapters, exact bootstrap/self-logout
+RPC boundaries, Phoenix cookies/logout, and browser UI handoffs remain pending.
+Creation will use a Phoenix-generated SID in a sensitive request, verified OIDC
+issuer/subject (no actor selector), and existing actor-bound idempotency. Expired
+or revoked creation replays must fail; logout must clear the cookie and revoke
+only the signed mediator user's own SID, including an inactive-session no-op.
 
 ## Recovery fixture isolation checkpoint (2026-09-20)
 
