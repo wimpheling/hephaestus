@@ -4,29 +4,22 @@ Owner: Astra orchestration / Luna bounded subtasks
 
 ## Current status
 
-Persistent-service work is a completed prerequisite on the same feature branch
-and PR 51 at source checkpoint `8c1fb51`; repository-wide quality v4 passed.
-This UI task is now active. The first slices cover primitive release-UI
-declaration model validation and source-level declaration parsing. Capture,
-persistence, exact-ID resolution, authorized inspection, serving, browser
-navigation, managed UI services, authority handoff, UI-kit publication, and
-acceptance evidence remain unchecked until their bounded designs and
-implementations are reviewed.
+Persistent services are a completed prerequisite on the same branch and PR 51;
+service checkpoint `8c1fb51` passed repository-wide quality. Its later SQLx
+cancellation fix has focused runtime and CI evidence in the completed task.
 
-The source cross-manifest validator is now implemented and focused-validated.
-The persistence schema and receive-side Git capture/build-link wiring are
-implemented with focused PostgreSQL evidence below. Manual-build integration
-now passes its application-role and historical compatibility matrix. Receive
-application-role insertion and reuse also pass. Deterministic receive/manual
-ordering is verified for valid and invalid captures. Build completion now writes
-resolved UI bindings in the release transaction, with worker-role static and
-legacy compatibility evidence. Managed/API exact bindings, replay, invalid-input
-rejections, and rollback after a release insert also pass real worker-role
-coverage. Authorized inspection is now exposed through the generated release
-RPC, backed by the restricted application-role matrix. Serving, browser
-integration, and aggregate acceptance remain incomplete.
-Earlier helper-only checkpoints below describe their state at the time;
-the receive and manual integration checkpoints supersede pending-wiring notes.
+Release UI declaration, immutable capture, receive/manual build identities,
+exact artifact/agent resolution, transactional publication, and authorized
+inspection through `GetRelease` are implemented and focused-validated. Checklist
+section 1 is complete. The versioned CSS kit and its local/CI checks are also
+implemented; reference-release integration remains open.
+
+Verified static-byte loading is implemented; read-only release-page metadata
+display is the current bounded slice. UI installation, static/managed hosting, browser
+navigation/authorization/isolation, real Caddy/VM/browser proofs, and the final
+integrated quality gate remain incomplete. Global installation ownership is an
+open question sent to the user. Historical checkpoints below record the state
+at their time; later integration checkpoints supersede earlier pending notes.
 
 ## Build-completion publication checkpoint (2026-09-20)
 
@@ -129,6 +122,29 @@ architecture rules passed. Evidence:
 This completes declaration/publication/authorized-inspection scope. Release-page
 metadata display, UI installation, hosting, and browser authority are still
 separate incomplete work.
+
+## Verified static-byte storage prerequisite (2026-09-20)
+
+`LocalArtifactStore::read_verified` accepts an opaque storage key, expected hash
+and length, and a caller-supplied hard limit. It opens the object once with
+portable `libc::O_NOFOLLOW | libc::O_NONBLOCK`, rejects nonregular/hard-linked
+objects, bounds allocation and reading, and checks exact length and SHA-256
+before returning owned bytes. Returned content cannot change if the stored file
+is modified later. Fallible allocation returns a bounded error. Existing generic
+download behavior is unchanged; this helper is not an HTTP serving endpoint.
+The only dependency change is the existing workspace libc package edge.
+
+All 9 artifact-store tests pass, including hash/length/limit mismatches,
+symlink/hard-link rejection, a FIFO without a writer, and owned-buffer behavior:
+`/home/a/heph-verified-artifact-read-tests-v3-20260920.log`.
+Scoped Clippy, format, docs, and downstream control-plane compilation pass in
+`/home/a/heph-verified-artifact-read-clippy-v3-20260920.log`,
+`/home/a/heph-verified-artifact-read-fmt-v3-20260920.log`,
+`/home/a/heph-verified-artifact-read-doc-v3-20260920.log`, and
+`/home/a/heph-verified-artifact-read-control-plane-check-v3-20260920.log`.
+The future asynchronous serving adapter must run this synchronous operation off
+the executor, apply the UI limits, and enforce installation/browser authority.
+No serving or browser acceptance is claimed by this storage checkpoint.
 
 ## Current CI context (2026-09-20)
 

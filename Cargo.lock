@@ -3932,6 +3932,7 @@ dependencies = [
 name = "release-artifact-store"
 version = "0.1.0"
 dependencies = [
+ "libc",
  "release-domain",
  "sha2",
  "tempfile",
