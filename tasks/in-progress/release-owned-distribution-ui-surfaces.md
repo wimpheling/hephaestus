@@ -8,8 +8,8 @@ Persistent services are a completed prerequisite on the same branch and PR 51;
 service checkpoint `8c1fb51` passed repository-wide quality. Its later SQLx
 cancellation fix has focused runtime and CI evidence in the completed task.
 The retained-cleanup CI follow-up now has a focused-validated fixture isolation
-fix. Its final CI and integrated quality evidence remain required; the original
-CI lock sequence was not captured directly.
+fix. CI passed at `9c0c0ac` (`35495099582`); final integrated quality remains
+required. The original CI lock sequence was not captured directly.
 
 Release UI declaration, immutable capture, receive/manual build identities,
 exact artifact/agent resolution, transactional publication, and authorized
@@ -84,6 +84,32 @@ Creation will use a Phoenix-generated SID in a sensitive request, verified OIDC
 issuer/subject (no actor selector), and existing actor-bound idempotency. Expired
 or revoked creation replays must fail; logout must clear the cookie and revoke
 only the signed mediator user's own SID, including an inactive-session no-op.
+
+## Browser-session creation checkpoint (2026-09-20)
+
+The identity application now defines narrow session commands/results and an
+opaque-error persistence port. `PostgresBrowserSessionStore` implements creation
+as an inherent method; the full port is not implemented until authentication and
+self-revocation are added. Creation locks the exact verified OIDC mapping and
+user, requires active status, derives the existing actor-bound idempotency ID,
+and stores only SID/identity digests with a server-selected 12-hour lifetime.
+The session and safe identity-profile invalidation commit in one transaction.
+
+An exact active retry returns the original metadata and preserves the creation
+request ID even if the transport request ID changes. Changed SID or identity,
+SID reuse under another key, and expired/revoked replay are rejected. Conflict
+lookup locks only the creation key; it does not inspect another user's session.
+Events carry the current user state and safe IDs, without OIDC or SID material.
+
+The real worker-role matrix passes 1/1 in
+`/home/a/heph-browser-session-create-real-v4-20260920.log`, covering successful
+creation, exact replay, conflicts, inactive/unmapped users, expiry/revocation,
+concurrent identical calls, one committed outbox event, lifetime, and event
+redaction. Scoped application/adapter Clippy and rustdoc, workspace formatting,
+and architecture pass; final Clippy is
+`/home/a/heph-browser-session-create-clippy-v4-20260920.log` and workspace format
+is `/home/a/heph-browser-session-create-workspace-fmt-final-20260920.log`.
+Authentication/revocation persistence and RPC/Phoenix integration remain open.
 
 ## Recovery fixture isolation checkpoint (2026-09-20)
 
