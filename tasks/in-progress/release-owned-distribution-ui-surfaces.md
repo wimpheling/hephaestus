@@ -22,6 +22,10 @@ time; the receive integration checkpoint supersedes their pending-wiring notes.
 
 ## Current CI context (2026-09-20)
 
+CI for schema fix `cd4690b` passed in run `35483937134`: Rust/authorization,
+browser golden path, and Cooking applications all succeeded. This is the
+latest completed CI evidence; it does not cover subsequent receive wiring.
+
 CI at `e052a2c` (`35482989628`) exposed an application bootstrap version
 mismatch: the database reached migration 82 while `EXPECTED_DATABASE_MIGRATION`
 still required 81. Both Rust golden bootstrap and the browser golden path
@@ -199,6 +203,26 @@ before inspection/lookup. This lock mode is compatible with foreign-key key
 share locks and avoids concurrent receive lock-upgrade deadlocks. The ordering
 must be proved with real concurrent PostgreSQL tests; no concurrency result is
 claimed at this checkpoint.
+
+### Exact-ID resolver checkpoint (2026-09-20)
+
+The public pure resolvers in `agent-config::ui::{static_resolution,
+gateway_resolution}` now bind validated declarations to caller-supplied
+immutable IDs. Static resolution requires unique candidate paths/IDs, ordinary
+file artifacts, and exact MIME equality. Gateway resolution requires unique
+agent keys/IDs and exact gateway-agent key lookup after the existing
+authenticated-exposure, service, method, and route validation. One release
+agent may serve multiple declared gateways. Errors contain indexes rather
+than source paths, MIME values, or agent names.
+
+The full agent-config suite passed 55 tests (38 unit, one Cooking manifest,
+six cross-manifest, ten UI parser) in
+`/home/a/agent-config-ui-resolvers-test-20260920-v4.log`. Strict Clippy,
+formatting, rustdoc with warnings denied, and architecture passed in
+`/home/a/agent-config-ui-resolvers-clippy-20260920.log`,
+`/home/a/agent-config-ui-resolvers-fmt-doc-20260920.log`, and
+`/home/a/agent-config-ui-resolvers-architecture-20260920.log`.
+These are resolution helpers; release publication does not invoke them yet.
 
 ### Publication contract (planned)
 

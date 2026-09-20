@@ -1,6 +1,8 @@
 //! Repository-owned release UI manifest parsing and validation.
 
 mod cross_manifest;
+pub mod gateway_resolution;
+pub mod static_resolution;
 mod validation;
 
 use gateway_domain::{GatewayName, HttpMethod, RoutePath};
