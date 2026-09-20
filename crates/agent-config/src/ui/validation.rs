@@ -55,7 +55,98 @@ pub(super) fn validate(config: &RepositoryUisConfig) -> Vec<Diagnostic> {
         validate_api_bindings(&mut diagnostics, index, ui);
         validate_content(&mut diagnostics, index, ui);
     }
+    diagnostics.extend(route_collision_diagnostics(config));
     diagnostics
+}
+
+/// Finds platform-reserved and GET/HEAD serving-route collisions.
+pub(super) fn route_collision_diagnostics(config: &RepositoryUisConfig) -> Vec<Diagnostic> {
+    let mut diagnostics = Vec::new();
+    for (ui_index, ui) in config.uis.iter().enumerate() {
+        let ui_path = format!("uis[{ui_index}]");
+        if reserved_relative_route(ui.route_base.as_str()) {
+            diagnostic(
+                &mut diagnostics,
+                "reserved_repository_ui_route_namespace",
+                format!("{ui_path}.route_base"),
+                "UI route bases under _heph are reserved for platform bootstrap routes",
+            );
+        }
+        for (api_index, api) in ui.apis.iter().enumerate() {
+            let api_path = format!("{ui_path}.apis[{api_index}].route");
+            if reserved_absolute_route(api.route.as_str()) {
+                diagnostic(
+                    &mut diagnostics,
+                    "reserved_repository_ui_route_namespace",
+                    api_path.clone(),
+                    "UI API routes under /_heph are reserved for platform bootstrap routes",
+                );
+            }
+            if !matches!(
+                api.method,
+                gateway_domain::HttpMethod::Get | gateway_domain::HttpMethod::Head
+            ) {
+                continue;
+            }
+            match &ui.content {
+                UiContent::Static { entrypoint, files } => {
+                    if static_served_paths(ui.route_base.as_str(), entrypoint.as_str(), files)
+                        .contains(api.route.as_str())
+                    {
+                        diagnostic(
+                            &mut diagnostics,
+                            "repository_ui_api_static_route_collision",
+                            api_path,
+                            "GET and HEAD UI APIs cannot collide with a served static document or file",
+                        );
+                    }
+                }
+                UiContent::ManagedService { .. }
+                    if managed_served_path(ui.route_base.as_str(), api.route.as_str()) =>
+                {
+                    diagnostic(
+                        &mut diagnostics,
+                        "repository_ui_api_managed_route_collision",
+                        api_path,
+                        "GET and HEAD UI APIs cannot collide with a managed UI document or descendant",
+                    );
+                }
+                UiContent::ManagedService { .. } => {}
+            }
+        }
+    }
+    diagnostics
+}
+
+fn static_served_paths(
+    route_base: &str,
+    entrypoint: &str,
+    files: &[super::UiStaticFile],
+) -> HashSet<String> {
+    let mut paths = HashSet::new();
+    for file in files {
+        paths.insert(format!("/{route_base}/{}", file.route.as_str()));
+        if file.route.as_str() == entrypoint {
+            paths.insert(format!("/{route_base}"));
+        }
+    }
+    paths
+}
+
+fn managed_served_path(route_base: &str, api_route: &str) -> bool {
+    let base = format!("/{route_base}");
+    api_route == base
+        || api_route
+            .strip_prefix(&base)
+            .is_some_and(|suffix| suffix.starts_with('/'))
+}
+
+fn reserved_relative_route(route: &str) -> bool {
+    route == "_heph" || route.starts_with("_heph/")
+}
+
+fn reserved_absolute_route(route: &str) -> bool {
+    route == "/_heph" || route.starts_with("/_heph/")
 }
 
 pub(super) fn normalized(mut config: RepositoryUisConfig) -> RepositoryUisConfig {

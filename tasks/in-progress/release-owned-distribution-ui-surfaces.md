@@ -38,6 +38,26 @@ integrated quality gate remain incomplete. The user approved organization-owned
 global installations and organization isolation. Historical checkpoints record the state
 at their time; later integration checkpoints supersede earlier pending notes.
 
+## UI route collision checkpoint (2026-09-20)
+
+Declaration validation now reserves `_heph` and its descendants for bootstrap,
+and rejects GET/HEAD APIs overlapping static aliases/files or managed route
+bases/descendants. Other methods may share paths; sibling prefixes remain valid.
+Publication repeats this validation before inserting immutable UI metadata.
+
+Validation passed: 11 manifest cases, six cross-manifest cases, the reference
+fixture, fresh PostgreSQL valid publication and invalid-config atomicity tests,
+strict agent-config/release-postgres Clippy and docs, formatting, and architecture
+(61 enabled rules, two migration-gated). Logs are
+`/tmp/heph-ui-route-collision-*.log`. Direct malformed typed-publication adapter
+coverage remains pending; the PostgreSQL invalid-config test exercises the
+normal parser/publication path, not a bypass of the parser.
+
+CI passed audit/fixture checkpoint `78824f1` in
+[run 35523449383](https://github.com/wimpheling/hephaestus/actions/runs/35523449383).
+The HTTP baseline is committed at `1ba5df2`; installed-browser and final quality
+acceptance remain incomplete.
+
 ## UI HTTP listener and bridge baseline (2026-09-20)
 
 The optional loopback UI listener is wired into the existing daemon and Caddy

@@ -20,7 +20,10 @@ use std::{collections::HashSet, fmt::Write as _, path::Path};
 
 pub mod build_identity;
 pub mod ui;
-pub use ui::{ParsedRepositoryUis, parse_repository_uis, validate_repository_uis_against_gateways};
+pub use ui::{
+    ParsedRepositoryUis, parse_repository_uis, validate_repository_uis_against_gateways,
+    validate_ui_route_collisions,
+};
 
 /// Reusable release and typed-instance configuration version.
 pub const REUSABLE_RELEASE_VERSION: u32 = 2;

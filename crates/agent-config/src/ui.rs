@@ -134,6 +134,13 @@ pub struct ParsedRepositoryUis {
 
 pub use cross_manifest::validate_repository_uis_against_gateways;
 
+/// Revalidates reserved UI and GET/HEAD serving-route collisions at trusted
+/// publication boundaries.
+#[must_use]
+pub fn validate_ui_route_collisions(config: &RepositoryUisConfig) -> Vec<super::Diagnostic> {
+    validation::route_collision_diagnostics(config)
+}
+
 /// Parses and validates a repository's root-level `heph.ui.toml`.
 ///
 /// This function validates only bounded declarative source intent. Artifact

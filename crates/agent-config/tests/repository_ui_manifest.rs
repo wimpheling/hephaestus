@@ -260,6 +260,59 @@ fn rejects_static_route_duplicates_and_bad_entrypoints() {
 }
 
 #[test]
+fn rejects_reserved_bootstrap_routes_and_get_head_collisions() {
+    let reserved =
+        VALID_STATIC.replace("route_base = \"assistant\"", "route_base = \"_heph/panel\"");
+    assert_code(
+        &parse_repository_uis(reserved.as_bytes()),
+        "reserved_repository_ui_route_namespace",
+    );
+
+    let reserved_api =
+        VALID_STATIC.replace("route = \"/releases\"", "route = \"/_heph/bootstrap\"");
+    assert_code(
+        &parse_repository_uis(reserved_api.as_bytes()),
+        "reserved_repository_ui_route_namespace",
+    );
+
+    let static_get = VALID_STATIC.replace("route = \"/releases\"", "route = \"/assistant\"");
+    assert_code(
+        &parse_repository_uis(static_get.as_bytes()),
+        "repository_ui_api_static_route_collision",
+    );
+
+    let static_head = VALID_STATIC
+        .replace("method = \"GET\"", "method = \"HEAD\"")
+        .replace("route = \"/releases\"", "route = \"/assistant/index.html\"");
+    assert_code(
+        &parse_repository_uis(static_head.as_bytes()),
+        "repository_ui_api_static_route_collision",
+    );
+
+    let managed_get = VALID_STATIC.replace(
+        "[uis.content]\nkind = \"managed_service\"\ngateway_name = \"ops-service\"\nroute = \"/ops\"",
+        "[[uis.apis]]\nkey = \"ops-read\"\ngateway_name = \"ops-service\"\nmethod = \"GET\"\nroute = \"/ops/panel\"\n\n[uis.content]\nkind = \"managed_service\"\ngateway_name = \"ops-service\"\nroute = \"/ops\"",
+    );
+    assert_code(
+        &parse_repository_uis(managed_get.as_bytes()),
+        "repository_ui_api_managed_route_collision",
+    );
+
+    let managed_sibling = VALID_STATIC.replace(
+        "[uis.content]\nkind = \"managed_service\"\ngateway_name = \"ops-service\"\nroute = \"/ops\"",
+        "[[uis.apis]]\nkey = \"ops-read\"\ngateway_name = \"ops-service\"\nmethod = \"GET\"\nroute = \"/ops2\"\n\n[uis.content]\nkind = \"managed_service\"\ngateway_name = \"ops-service\"\nroute = \"/ops\"",
+    );
+    let parsed = parse_repository_uis(managed_sibling.as_bytes());
+    assert!(parsed.diagnostics.is_empty(), "{:?}", parsed.diagnostics);
+
+    let post_same_path = VALID_STATIC
+        .replace("method = \"GET\"", "method = \"POST\"")
+        .replace("route = \"/releases\"", "route = \"/assistant\"");
+    let parsed = parse_repository_uis(post_same_path.as_bytes());
+    assert!(parsed.diagnostics.is_empty(), "{:?}", parsed.diagnostics);
+}
+
+#[test]
 fn rejects_ui_route_and_artifact_traversal_or_url_forms() {
     let unsafe_route_base = VALID_STATIC.replace(
         "route_base = \"assistant\"",

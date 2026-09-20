@@ -16,7 +16,7 @@ use agent_config::ui::static_resolution::{
 use agent_config::ui::{UiCachePolicy, UiContent};
 use agent_config::{
     RepositoryGatewaysConfig, canonical_repository_gateways,
-    validate_repository_uis_against_gateways,
+    validate_repository_uis_against_gateways, validate_ui_route_collisions,
 };
 use forge_domain::RepositoryId;
 use release_domain::ui::{UiIcon, UiPresentation, UiScope};
@@ -265,6 +265,9 @@ pub async fn persist_ui_publication(
     build_request_id: BuildRequestId,
     publication: &ResolvedUiPublication,
 ) -> Result<(), ReleaseServiceError> {
+    if !validate_ui_route_collisions(&publication.config).is_empty() {
+        return Err(invalid_ui_storage());
+    }
     sqlx::query(
         "INSERT INTO release_ui_source_snapshots
          (release_id, build_request_id, source_manifest_revision_id)
