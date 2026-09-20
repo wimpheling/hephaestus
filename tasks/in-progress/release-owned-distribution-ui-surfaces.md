@@ -7,9 +7,10 @@ Owner: Astra orchestration / Luna bounded subtasks
 Work resumed on 2026-09-20 from the
 [session handoff](release-ui-session-handoff-2026-09-20.md). Isolated-database
 CI execution, organization-owned static installations, disable/remove lifecycle,
-and browser credential storage have passed focused verification. Current work
-validates handoff issuance and prepares exchange, request authentication,
-managed/API installation, and activation/rollback before the hosting slices.
+browser credential storage, and handoff issuance/exchange have passed focused
+verification. Current work validates managed/API installation and prepares
+request authentication, activation/rollback, and navigation before the hosting
+slices.
 The handoff remains the record of the stopped session; new evidence is recorded
 below as each resumed slice passes review and verification.
 
@@ -33,6 +34,36 @@ navigation/authorization/isolation, real Caddy/VM/browser proofs, and the final
 integrated quality gate remain incomplete. The user approved organization-owned
 global installations and organization isolation. Historical checkpoints record the state
 at their time; later integration checkpoints supersede earlier pending notes.
+
+## General UI installation checkpoint (2026-09-20)
+
+The general installer supports static and managed UIs with declared APIs. It
+pins preexisting enabled gateways and their exact active release-agent revisions,
+authenticated exposure, methods, and segment-covered published routes. Source
+and target remain in one organization; cross-project/global reuse requires
+current source-project read and release/agent use. Gateway read authority derives
+from its project. Installation does not create or retarget gateways or services.
+Owner authorization precedes durable exact replay; replay returns its receipt
+without re-resolving mutable source or gateway state. The static zero-API entry
+point remains a compatibility wrapper.
+
+Thirteen installer/regression tests and four schema/RLS tests pass in
+`/home/a/heph-general-install-final3-20260920.log` and
+`/home/a/heph-general-install-schema-20260920.log`. Nine additional real
+PostgreSQL denial cases pass in
+`/home/a/heph-general-install-negatives-success-20260920.log`: wrong release,
+wrong agent, public exposure, paused gateway, inactive revision, disabled route,
+wrong method, revoked source-project read, and revoked release-agent use. Each
+denial retains baseline installation/generation/binding/command/event/outbox
+counts. The resolver now locks source parents before insertion, so the tenant
+move test observes that earlier lock and rejects before insertion; the historical
+post-insert rollback proof describes the older static implementation.
+Scoped formatting, Clippy, and docs pass in the general-install final logs.
+Activation/rollback, navigation, and browser verifier integration remain separate
+uncommitted slices at this checkpoint.
+
+Exchange commit `5796b46` passes all CI jobs in run `35510440397`; this result
+predates general installation and does not replace final integrated quality.
 
 ## Browser handoff exchange checkpoint (2026-09-20)
 

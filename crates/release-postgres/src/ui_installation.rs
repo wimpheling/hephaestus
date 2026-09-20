@@ -8,8 +8,8 @@ use release_domain::{
     UiInstallationId, UiInstallationInputDigest, UiInstallationOperation, UiInstallationState,
 };
 use release_service::{
-    DisableUiInstallation, InstallStaticUi, InstallStaticUiResult, RemoveUiInstallation,
-    UiInstallationError, UiInstallationLifecycleResult,
+    DisableUiInstallation, InstallStaticUi, InstallStaticUiResult, InstallUi, InstallUiResult,
+    RemoveUiInstallation, UiInstallationError, UiInstallationLifecycleResult,
 };
 use sqlx::{FromRow, Postgres, Transaction};
 use uuid::Uuid;
@@ -72,7 +72,44 @@ impl From<UiInstallationError> for AttemptError {
 }
 
 impl ReleaseService {
-    /// Installs one published static UI with no API bindings.
+    /// Installs one published UI and pins every declared gateway binding.
+    ///
+    /// The owner row is locked before authorization, replay lookup, or
+    /// generation creation. Gateway rows and source parent rows are then
+    /// resolved under the same transaction, so an invalid binding rolls back
+    /// the complete installation receipt.
+    ///
+    /// # Errors
+    ///
+    /// Returns a redacted failure for authorization, unsupported publication
+    /// content, unavailable gateway bindings, idempotency conflict, an
+    /// existing active installation, or unavailable persistence.
+    pub async fn install_ui(
+        &self,
+        identity: &AuthenticatedIdentity,
+        command: InstallUi,
+    ) -> Result<InstallUiResult, UiInstallationError> {
+        for attempt in 0..2 {
+            match self.install_ui_once(identity, &command, false).await {
+                Err(AttemptError::RetryLedgerRace) if attempt == 0 => {}
+                Err(AttemptError::RetryLedgerRace) => return Err(UiInstallationError::Unavailable),
+                Err(AttemptError::Public(error)) => return Err(error),
+                Ok(result) => return Ok(result),
+            }
+        }
+        Err(UiInstallationError::Unavailable)
+    }
+
+    /// Installs one published static UI with no API or managed bindings.
+    ///
+    /// This compatibility wrapper delegates to the generalized installation
+    /// transaction while retaining the original static zero-binding contract.
+    ///
+    /// # Errors
+    ///
+    /// Returns a redacted, transport-neutral failure for authorization,
+    /// unsupported publication content, idempotency conflict, an existing
+    /// active installation, or unavailable persistence.
     ///
     /// The owner row is locked before authorization, command replay, or
     /// installation lookup. A second bounded attempt handles a same-actor
@@ -89,12 +126,25 @@ impl ReleaseService {
         identity: &AuthenticatedIdentity,
         command: InstallStaticUi,
     ) -> Result<InstallStaticUiResult, UiInstallationError> {
+        let command = InstallUi {
+            caller_key: command.caller_key,
+            target: command.target,
+            release_id: command.release_id,
+            ui_key: command.ui_key,
+        };
         for attempt in 0..2 {
-            match self.install_static_ui_once(identity, &command).await {
+            match self.install_ui_once(identity, &command, true).await {
                 Err(AttemptError::RetryLedgerRace) if attempt == 0 => {}
                 Err(AttemptError::RetryLedgerRace) => return Err(UiInstallationError::Unavailable),
                 Err(AttemptError::Public(error)) => return Err(error),
-                Ok(result) => return Ok(result),
+                Ok(result) => {
+                    return Ok(InstallStaticUiResult {
+                        installation_id: result.installation_id,
+                        generation_id: result.generation_id,
+                        state: result.state,
+                        idempotency_id: result.idempotency_id,
+                    });
+                }
             }
         }
         Err(UiInstallationError::Unavailable)
@@ -318,12 +368,15 @@ impl ReleaseService {
 
     // Keep the ordered transaction in one function so its rollback and
     // bounded idempotency retry boundary remain directly auditable.
-    #[allow(clippy::too_many_lines)]
-    async fn install_static_ui_once(
+    // The nested transaction deliberately keeps all owner and binding checks
+    // together; splitting it would obscure its rollback boundary.
+    #[allow(clippy::cognitive_complexity, clippy::too_many_lines)]
+    async fn install_ui_once(
         &self,
         identity: &AuthenticatedIdentity,
-        command: &InstallStaticUi,
-    ) -> Result<InstallStaticUiResult, AttemptError> {
+        command: &InstallUi,
+        static_zero_api_only: bool,
+    ) -> Result<InstallUiResult, AttemptError> {
         let mut tx = authz_postgres::begin_actor_transaction(&self.pool, identity)
             .await
             .map_err(|_| UiInstallationError::Unavailable)?;
@@ -374,6 +427,9 @@ impl ReleaseService {
         let command_key = command_identity.command_key();
         let input_hash =
             UiInstallationInputDigest::install(command.target, command.release_id, &command.ui_key);
+        // The target owner is the current authority for replay. A stored receipt
+        // remains durable even when its source gateway or release permissions
+        // later change; serving admission rechecks those mutable bindings.
         if let Some(existing) = find_existing_command(
             &mut tx,
             identity.user_id.as_uuid(),
@@ -391,6 +447,8 @@ impl ReleaseService {
             );
         }
 
+        // No receipt exists, so all source and serving permissions are current
+        // requirements for this new installation.
         self.require(
             &mut tx,
             identity,
@@ -399,17 +457,29 @@ impl ReleaseService {
         )
         .await
         .map_err(|error| map_authorization_error(&error))?;
-        let supported = ensure_static_zero_api_ui(
+        let bindings = resolve_ui_bindings(
             &mut tx,
+            identity.user_id.as_uuid(),
             command.release_id,
             owner.organization,
             command.target.scope_name(),
             &command.ui_key,
+            static_zero_api_only,
         )
         .await
-        .map_err(|_| UiInstallationError::Unavailable)?;
-        if !supported {
-            return Err(UiInstallationError::InvalidOrUnsupported.into());
+        .map_err(|error| match error {
+            UiBindingResolutionError::Persistence => UiInstallationError::Unavailable,
+            UiBindingResolutionError::Invalid => UiInstallationError::InvalidOrUnsupported,
+        })?;
+        for binding in &bindings {
+            self.require(
+                &mut tx,
+                identity,
+                Permission::CanUse,
+                ObjectRef::new(ObjectType::ReleaseAgent, binding.release_agent_id),
+            )
+            .await
+            .map_err(|error| map_authorization_error(&error))?;
         }
         let organization_id = matches!(
             command.target,
@@ -456,6 +526,31 @@ impl ReleaseService {
         .execute(&mut *tx)
         .await
         .map_err(|_| UiInstallationError::Unavailable)?;
+        for binding in &bindings {
+            sqlx::query(
+                "INSERT INTO ui_installation_bindings
+                 (installation_id, generation_id, binding_kind, binding_key,
+                  release_id, ui_key, gateway_id, gateway_revision_id,
+                  release_agent_id, gateway_name, method, route, exposure)
+                 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12,
+                         'heph_authenticated')",
+            )
+            .bind(installation_id.as_uuid())
+            .bind(generation_id.as_uuid())
+            .bind(binding.binding_kind)
+            .bind(&binding.binding_key)
+            .bind(command.release_id.as_uuid())
+            .bind(command.ui_key.as_str())
+            .bind(binding.gateway_id)
+            .bind(binding.gateway_revision_id)
+            .bind(binding.release_agent_id)
+            .bind(&binding.gateway_name)
+            .bind(&binding.method)
+            .bind(&binding.route)
+            .execute(&mut *tx)
+            .await
+            .map_err(|_| UiInstallationError::Unavailable)?;
+        }
         let command_insert = sqlx::query(
             "INSERT INTO ui_installation_commands
              (command_key, caller_idempotency_key, operation, installation_id, actor_id,
@@ -496,7 +591,7 @@ impl ReleaseService {
         tx.commit()
             .await
             .map_err(|_| UiInstallationError::Unavailable)?;
-        Ok(InstallStaticUiResult {
+        Ok(InstallUiResult {
             installation_id,
             generation_id,
             state: UiInstallationState::Enabled,
@@ -777,7 +872,7 @@ fn replay_or_conflict(
     command_key: ReleaseCommandKey,
     input_hash: UiInstallationInputDigest,
     actor_id: Uuid,
-) -> Result<InstallStaticUiResult, AttemptError> {
+) -> Result<InstallUiResult, AttemptError> {
     if existing.command_key.as_slice() != command_key.as_bytes()
         || existing.input_hash.as_slice() != input_hash.as_bytes()
     {
@@ -786,7 +881,7 @@ fn replay_or_conflict(
     if existing.result_lifecycle != "enabled" {
         return Err(UiInstallationError::Unavailable.into());
     }
-    Ok(InstallStaticUiResult {
+    Ok(InstallUiResult {
         installation_id: UiInstallationId::from_uuid(existing.installation_id),
         generation_id: UiInstallationGenerationId::from_uuid(existing.result_generation_id),
         state: UiInstallationState::Enabled,
@@ -819,49 +914,245 @@ async fn active_installation(
     .is_some())
 }
 
-async fn ensure_static_zero_api_ui(
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum UiBindingResolutionError {
+    Invalid,
+    Persistence,
+}
+
+#[derive(Debug, sqlx::FromRow)]
+struct GatewayRouteCandidate {
+    gateway_id: Uuid,
+    gateway_revision_id: Uuid,
+    gateway_name: String,
+    handler_contract: String,
+    route_path: String,
+    route_methods: Vec<String>,
+}
+
+#[derive(Debug, Clone)]
+struct ResolvedUiBinding {
+    binding_kind: &'static str,
+    binding_key: String,
+    gateway_id: Uuid,
+    gateway_revision_id: Uuid,
+    release_agent_id: Uuid,
+    gateway_name: String,
+    method: String,
+    route: String,
+}
+
+// Keep target-shape, gateway, and binding validation together so every
+// installation scope follows the same publication and authorization path.
+#[allow(clippy::too_many_lines)]
+async fn resolve_ui_bindings(
     tx: &mut Transaction<'_, Postgres>,
+    actor_id: Uuid,
     release_id: ReleaseId,
     target_organization_id: Uuid,
     target_scope: &str,
     ui_key: &release_domain::ui::UiKey,
-) -> Result<bool, sqlx::Error> {
-    let valid: Option<i64> = sqlx::query_scalar(
-        "SELECT 1::bigint
+    static_zero_api_only: bool,
+) -> Result<Vec<ResolvedUiBinding>, UiBindingResolutionError> {
+    let publication: Option<(String, String, Uuid, Uuid)> = sqlx::query_as(
+        "SELECT descriptor.scope, descriptor.content_kind,
+                source_repository.id, source_project.id
          FROM release_ui_descriptors AS descriptor
          JOIN releases AS release ON release.id = descriptor.release_id
          JOIN repositories AS source_repository
            ON source_repository.id = release.repository_id
          JOIN projects AS source_project
            ON source_project.id = source_repository.project_id
-         WHERE descriptor.release_id = $1 AND descriptor.ui_key = $2
-           AND descriptor.scope = $3 AND descriptor.content_kind = 'static'
+         WHERE descriptor.release_id = $1
+           AND descriptor.ui_key = $2
+           AND descriptor.scope = $3
            AND source_project.organization_id = $4
            AND release.state = 'published'
-           AND EXISTS (
-               SELECT 1 FROM release_ui_static_files AS file
-               WHERE file.release_id = descriptor.release_id
-                 AND file.ui_key = descriptor.ui_key
-           )
-           AND NOT EXISTS (
-               SELECT 1 FROM release_ui_api_bindings AS api
-               WHERE api.release_id = descriptor.release_id
-                 AND api.ui_key = descriptor.ui_key
-           )
-           AND NOT EXISTS (
-               SELECT 1 FROM release_ui_managed_services AS service
-               WHERE service.release_id = descriptor.release_id
-                 AND service.ui_key = descriptor.ui_key
-           )
-           ",
+         FOR SHARE OF release, source_repository, source_project",
     )
     .bind(release_id.as_uuid())
     .bind(ui_key.as_str())
     .bind(target_scope)
     .bind(target_organization_id)
     .fetch_optional(&mut **tx)
-    .await?;
-    Ok(valid.is_some())
+    .await
+    .map_err(|_| UiBindingResolutionError::Persistence)?;
+    let Some((scope, content_kind, source_repository_id, source_project_id)) = publication else {
+        return Err(UiBindingResolutionError::Invalid);
+    };
+    if scope != target_scope {
+        return Err(UiBindingResolutionError::Invalid);
+    }
+
+    let managed: Option<(String, String, Uuid)> = sqlx::query_as(
+        "SELECT gateway_name, route, release_agent_id
+         FROM release_ui_managed_services
+         WHERE release_id = $1 AND ui_key = $2",
+    )
+    .bind(release_id.as_uuid())
+    .bind(ui_key.as_str())
+    .fetch_optional(&mut **tx)
+    .await
+    .map_err(|_| UiBindingResolutionError::Persistence)?;
+    let apis: Vec<(String, String, String, String, Uuid)> = sqlx::query_as(
+        "SELECT api_key, gateway_name, method, route, release_agent_id
+         FROM release_ui_api_bindings
+         WHERE release_id = $1 AND ui_key = $2
+         ORDER BY api_key",
+    )
+    .bind(release_id.as_uuid())
+    .bind(ui_key.as_str())
+    .fetch_all(&mut **tx)
+    .await
+    .map_err(|_| UiBindingResolutionError::Persistence)?;
+
+    if static_zero_api_only && (content_kind != "static" || managed.is_some() || !apis.is_empty()) {
+        return Err(UiBindingResolutionError::Invalid);
+    }
+    if content_kind == "static" {
+        let has_file: bool = sqlx::query_scalar(
+            "SELECT EXISTS (
+                 SELECT 1 FROM release_ui_static_files
+                 WHERE release_id = $1 AND ui_key = $2
+             )",
+        )
+        .bind(release_id.as_uuid())
+        .bind(ui_key.as_str())
+        .fetch_one(&mut **tx)
+        .await
+        .map_err(|_| UiBindingResolutionError::Persistence)?;
+        if !has_file || managed.is_some() {
+            return Err(UiBindingResolutionError::Invalid);
+        }
+    } else if content_kind == "managed_service" {
+        if managed.is_none() {
+            return Err(UiBindingResolutionError::Invalid);
+        }
+    } else {
+        return Err(UiBindingResolutionError::Invalid);
+    }
+
+    let mut bindings = Vec::with_capacity(usize::from(managed.is_some()) + apis.len());
+    if let Some((gateway_name, route, release_agent_id)) = managed {
+        let candidate = resolve_gateway_route(
+            tx,
+            actor_id,
+            source_repository_id,
+            source_project_id,
+            release_id,
+            &gateway_name,
+            release_agent_id,
+            "GET",
+            &route,
+            true,
+        )
+        .await?;
+        bindings.push(ResolvedUiBinding {
+            binding_kind: "managed_service",
+            binding_key: String::from("service"),
+            gateway_id: candidate.gateway_id,
+            gateway_revision_id: candidate.gateway_revision_id,
+            release_agent_id,
+            gateway_name: candidate.gateway_name,
+            method: String::from("GET"),
+            route,
+        });
+    }
+    for (binding_key, gateway_name, method, route, release_agent_id) in apis {
+        let candidate = resolve_gateway_route(
+            tx,
+            actor_id,
+            source_repository_id,
+            source_project_id,
+            release_id,
+            &gateway_name,
+            release_agent_id,
+            &method,
+            &route,
+            false,
+        )
+        .await?;
+        bindings.push(ResolvedUiBinding {
+            binding_kind: "api",
+            binding_key,
+            gateway_id: candidate.gateway_id,
+            gateway_revision_id: candidate.gateway_revision_id,
+            release_agent_id,
+            gateway_name: candidate.gateway_name,
+            method,
+            route,
+        });
+    }
+    Ok(bindings)
+}
+
+#[allow(clippy::too_many_arguments)]
+async fn resolve_gateway_route(
+    tx: &mut Transaction<'_, Postgres>,
+    actor_id: Uuid,
+    source_repository_id: Uuid,
+    source_project_id: Uuid,
+    release_id: ReleaseId,
+    gateway_name: &str,
+    release_agent_id: Uuid,
+    method: &str,
+    selected_route: &str,
+    managed_service: bool,
+) -> Result<GatewayRouteCandidate, UiBindingResolutionError> {
+    let candidates: Vec<GatewayRouteCandidate> = sqlx::query_as(
+        "SELECT gateway.id AS gateway_id, revision.id AS gateway_revision_id,
+                gateway.name AS gateway_name,
+                revision.handler_contract, route.path AS route_path,
+                route.methods AS route_methods
+         FROM gateways AS gateway
+         JOIN gateway_revisions AS revision
+           ON revision.gateway_id = gateway.id
+          AND revision.id = gateway.active_revision_id
+          AND revision.release_id = $3
+          AND revision.release_agent_id = $4
+          AND revision.exposure = 'heph_authenticated'
+         JOIN gateway_routes AS route
+           ON route.gateway_id = gateway.id
+          AND route.gateway_revision_id = revision.id
+          AND route.enabled
+         WHERE gateway.repository_id = $1
+           AND gateway.project_id = $2
+           AND gateway.name = $5
+           AND gateway.lifecycle = 'enabled'
+           AND check_permission(
+                 'user', $6, 'can_read', 'project', gateway.project_id::text
+               ) = 1
+         FOR UPDATE OF gateway",
+    )
+    .bind(source_repository_id)
+    .bind(source_project_id)
+    .bind(release_id.as_uuid())
+    .bind(release_agent_id)
+    .bind(gateway_name)
+    .bind(actor_id.to_string())
+    .fetch_all(&mut **tx)
+    .await
+    .map_err(|_| UiBindingResolutionError::Persistence)?;
+    candidates
+        .into_iter()
+        .find(|candidate| {
+            (!managed_service || candidate.handler_contract == "http.service.v1")
+                && (managed_service
+                    || matches!(
+                        candidate.handler_contract.as_str(),
+                        "http.v1" | "http.service.v1"
+                    ))
+                && candidate.route_methods.iter().any(|value| value == method)
+                && route_covers(&candidate.route_path, selected_route)
+        })
+        .ok_or(UiBindingResolutionError::Invalid)
+}
+
+fn route_covers(declared: &str, selected: &str) -> bool {
+    selected == declared
+        || selected
+            .strip_prefix(declared)
+            .is_some_and(|suffix| suffix.starts_with('/'))
 }
 
 // Keep the owner columns explicit so each target shape is visible at the SQL

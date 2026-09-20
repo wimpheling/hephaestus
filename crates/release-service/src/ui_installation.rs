@@ -1,4 +1,4 @@
-//! Provider-neutral static distribution UI installation commands.
+//! Provider-neutral distribution UI installation commands.
 
 use release_domain::{
     ReleaseId, UiInstallationCallerKey, UiInstallationGenerationId, UiInstallationId,
@@ -7,7 +7,33 @@ use release_domain::{
 use thiserror::Error;
 use uuid::Uuid;
 
-/// A command to install one published static UI with no API bindings.
+/// A command to install one published UI and all of its immutable bindings.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct InstallUi {
+    /// Actor-bound caller idempotency key.
+    pub caller_key: UiInstallationCallerKey,
+    /// Project, repository, or organization owner of the installation.
+    pub target: UiInstallationTarget,
+    /// Published release containing the UI declaration and artifacts.
+    pub release_id: ReleaseId,
+    /// Exact published UI declaration key.
+    pub ui_key: UiKey,
+}
+
+/// Result of a committed UI installation.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct InstallUiResult {
+    /// Stable installation identity.
+    pub installation_id: UiInstallationId,
+    /// Immutable first-generation identity.
+    pub generation_id: UiInstallationGenerationId,
+    /// Committed lifecycle state.
+    pub state: UiInstallationState,
+    /// Actor-bound occurrence/idempotency identity used by the event ledger.
+    pub idempotency_id: Uuid,
+}
+
+/// A compatibility command for one published static UI with no API bindings.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct InstallStaticUi {
     /// Actor-bound caller idempotency key.
@@ -68,7 +94,7 @@ pub struct UiInstallationLifecycleResult {
     pub idempotency_id: Uuid,
 }
 
-/// Stable, transport-neutral failures for static UI installation.
+/// Stable, transport-neutral failures for UI installation.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Error)]
 #[non_exhaustive]
 pub enum UiInstallationError {
