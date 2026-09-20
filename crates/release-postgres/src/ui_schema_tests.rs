@@ -1,8 +1,8 @@
-//! Opt-in PostgreSQL coverage for the release-owned UI publication schema.
+//! Opt-in `PostgreSQL` coverage for the release-owned UI publication schema.
 //!
 //! This module covers the release-owned UI publication schema introduced by
 //! migration 0084. It uses only bound SQL and the existing disposable
-//! PostgreSQL fixture.
+//! `PostgreSQL` fixture.
 
 use serde_json::json;
 use serial_test::serial;
@@ -269,6 +269,8 @@ async fn admin_pool(url: &str) -> PgPool {
         .expect("connect PostgreSQL test database")
 }
 
+// Keep the disposable SQL fixture setup together for readable schema coverage.
+#[allow(clippy::too_many_lines)]
 async fn seed_fixture(pool: &PgPool) -> ReleaseFixture {
     let owner = Uuid::new_v4();
     let outsider = Uuid::new_v4();
@@ -381,6 +383,8 @@ async fn seed_fixture(pool: &PgPool) -> ReleaseFixture {
 }
 
 #[allow(clippy::too_many_arguments)]
+// Keep the release identity fixture together so its FK relationships are clear.
+#[allow(clippy::too_many_lines)]
 async fn seed_release_inputs(
     pool: &PgPool,
     owner: Uuid,
@@ -585,6 +589,8 @@ async fn assert_valid_rows(pool: &PgPool, fixture: &ReleaseFixture) {
     assert_eq!(counts, (1, 2, 1, 1, 1));
 }
 
+// Keep the negative SQL assertions together to show the complete constraint set.
+#[allow(clippy::too_many_lines)]
 async fn assert_shape_constraints(pool: &PgPool, fixture: &ReleaseFixture) {
     let cross_artifact = sqlx::query(
         "INSERT INTO release_ui_static_files

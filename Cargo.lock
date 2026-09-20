@@ -3966,6 +3966,7 @@ dependencies = [
  "event-postgres",
  "forge-domain",
  "futures-util",
+ "gateway-domain",
  "git-capability-domain",
  "identity-domain",
  "mailbox-dispatch",
@@ -3986,6 +3987,7 @@ dependencies = [
  "thiserror 2.0.19",
  "time",
  "tokio",
+ "toml",
  "tracing",
  "uuid",
 ]

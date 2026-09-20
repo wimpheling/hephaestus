@@ -18,14 +18,48 @@ The persistence schema and receive-side Git capture/build-link wiring are
 implemented with focused PostgreSQL evidence below. Manual-build integration
 now passes its application-role and historical compatibility matrix. Receive
 application-role insertion and reuse also pass. Deterministic receive/manual
-ordering is verified for valid and invalid captures. Publication, serving,
-browser integration, and aggregate acceptance remain incomplete.
+ordering is verified for valid and invalid captures. Build completion now writes
+resolved UI bindings in the release transaction, with worker-role static and
+legacy compatibility evidence. Managed/API publication and rollback coverage,
+authorized inspection, serving, browser integration, and aggregate acceptance
+remain incomplete.
 Earlier helper-only checkpoints below describe their state at the time;
 the receive and manual integration checkpoints supersede pending-wiring notes.
 
+## Build-completion publication checkpoint (2026-09-20)
+
+`CompleteBuild` loads the immutable capture linked to its locked build request,
+verifies canonical UI/gateway hashes and the derived build identity, and resolves
+references to the supplied exact artifact and exported-agent IDs. Resolution
+precedes release writes. UI bindings are inserted after artifact/agent rows and
+before build success and command-inbox completion, in the same transaction.
+Legacy builds with no UI link retain their behavior, including stored agent
+configurations that omit a build declaration. No Git checkout is needed.
+
+The real worker-role integration case verifies the exact static artifact and
+source-capture IDs and successful legacy no-UI completion. The final complete
+release package run passed 9 library tests and 5 integration tests with real
+PostgreSQL/NATS in `/home/a/heph-release-complete-build-ui-20260920.log`.
+Earlier attempts in that log include a database-readiness failure and a unit
+fixture that incorrectly depended on UI ordering; both are corrected in the
+final passing run. Strict scoped Clippy, documentation, and architecture passed
+in `/home/a/heph-release-complete-build-clippy-20260920-v3.log`,
+`/home/a/heph-release-complete-build-doc-20260920-v2.log`, and
+`/home/a/heph-release-complete-build-architecture-20260920.log`.
+Managed/API persistence, transactional failure/replay cases, and authorized
+inspection are the next bounded slices; this is not hosting or browser evidence.
+
 ## Current CI context (2026-09-20)
 
-CI passed through checkpoint `17d6dbc` in run `35487956392`:
+CI passed at `f2dbfbf` and `b6b86e2` (runs `35488587270` and
+`35488863317`). Schema checkpoint `02080ac` failed only workspace Clippy
+on two documentation-markdown and three long-test-helper diagnostics in
+`ui_schema_tests.rs`; tests/docs were skipped, while browser and Cooking passed.
+The publication slice corrects these with documentation backticks and narrow,
+explained fixture allowances. Failure evidence:
+`/home/a/heph-schema84-ci-failure-20260920.log`.
+
+Earlier CI passed through checkpoint `17d6dbc` in run `35487956392`:
 Rust/authorization, browser golden path, and Cooking applications all succeeded.
 Receive fix `52bbbf7`, historical/kit gate `d51449d`, size limits `ed96408`, and
 manual-build integration `1f3f76a` also have passing CI runs.
