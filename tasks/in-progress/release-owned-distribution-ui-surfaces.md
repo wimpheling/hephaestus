@@ -38,6 +38,26 @@ Caddy/VM/browser proofs, and the final integrated quality gate remain incomplete
 global installations and organization isolation. Historical checkpoints record the state
 at their time; later integration checkpoints supersede earlier pending notes.
 
+## Production platform-origin consistency checkpoint (2026-09-20)
+
+Phoenix production `Endpoint.url` now derives its host, HTTPS scheme, and port
+from the validated explicit `HEPHAESTUS_PLATFORM_HTTPS_ORIGIN`. This keeps
+endpoint URLs consistent with the origin used for UI handoff and embedding,
+including custom TLS ports. Without an explicit origin, the existing
+`PHX_HOST`/`example.com` and port-443 fallback is preserved.
+
+Four Config.Reader regressions pass for mixed-case/custom-port origins,
+canonical default port, malformed origins, and the legacy fallback. Formatter
+checks pass. Validation used the pinned Elixir container; log:
+`/tmp/heph-runtime-config-validation.log`. Browser verification remains pending.
+
+The package/build/serving guide is committed at `29fefa2` in
+[`docs/release-ui.md`](../../docs/release-ui.md). CI passed the HTTP baseline
+`1ba5df2` (run 35524492128) and gateway outcome checkpoint `eb09bf8`
+(run 35524777640). The intervening `175fc35` failure was an existing
+future-assertion fixture's wall-clock boundary race; the later green run did
+not itself fix that test. A fixture-margin correction is under validation.
+
 ## Gateway UI audit outcome checkpoint (2026-09-20)
 
 `dispatch_ui_detailed` preserves provider denial/not-found/unavailability,

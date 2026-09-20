@@ -148,12 +148,20 @@ if config_env() == :prod do
       You can generate one by calling: mix phx.gen.secret
       """
 
-  host = System.get_env("PHX_HOST") || "example.com"
+  endpoint_url =
+    case platform_origin_env do
+      nil ->
+        [host: System.get_env("PHX_HOST") || "example.com", port: 443, scheme: "https"]
+
+      _explicit_origin ->
+        %URI{scheme: scheme, host: host, port: port} = URI.parse(platform_origin)
+        [host: host, port: port || 443, scheme: scheme]
+    end
 
   config :hephaestus_web, :dns_cluster_query, System.get_env("DNS_CLUSTER_QUERY")
 
   config :hephaestus_web, HephaestusWebWeb.Endpoint,
-    url: [host: host, port: 443, scheme: "https"],
+    url: endpoint_url,
     http: [
       # Enable IPv6 and bind on all interfaces.
       # Set it to  {0, 0, 0, 0, 0, 0, 0, 1} for local network only access.
