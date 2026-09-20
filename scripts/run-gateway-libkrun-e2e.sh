@@ -76,7 +76,11 @@ reserve_port() {
 }
 
 admin_port="$(reserve_port)"
-public_port="$(reserve_port)"
+public_port="${HEPHAESTUS_CADDY_TEST_PUBLIC_PORT:-$(reserve_port)}"
+[[ "${public_port}" =~ ^[1-9][0-9]{0,4}$ && "${public_port}" -le 65535 ]] || {
+    printf 'HEPHAESTUS_CADDY_TEST_PUBLIC_PORT must be a valid TCP port\n' >&2
+    exit 1
+}
 tls_enabled="${HEPHAESTUS_CADDY_TEST_TLS:-0}"
 case "${tls_enabled}" in
     0|1) ;;
