@@ -1,6 +1,15 @@
 # Release-owned distribution UI surfaces
 
-Owner: unassigned
+Owner: Astra orchestration / Luna bounded subtasks
+
+## Current status
+
+Persistent-service work is a completed prerequisite on the same feature branch
+and PR 51 at source checkpoint `8c1fb51`; repository-wide quality v4 passed.
+This UI task is now active. The first slice is limited to primitive release-UI
+declaration model validation. Serving, browser navigation, managed UI services,
+authority handoff, UI-kit publication, and acceptance evidence remain
+unchecked until their bounded designs and implementations are reviewed.
 
 ## Outcome
 
@@ -21,9 +30,13 @@ escape hatch for custom HTML in core pages.
 
 | Area | Decision |
 | --- | --- |
+| Declaration compatibility | The first declaration schema is version 1; unsupported versions are rejected. |
 | UI ownership | A release owns its routes, markup, client behavior, and domain semantics. Hephaestus owns publication, serving, authorization, lifecycle, gateway mediation, and the bounded host shell. |
 | Artifact kinds | A release may declare a static UI artifact or a UI service executed in a Hephaestus-managed VM. Both are immutable release inputs and are served only after the ordinary release/runtime checks succeed. |
-| Origin and routing | Hephaestus serves a release UI through a gateway-owned same-site route. Direct arbitrary third-party iframe URLs are unsupported. |
+| Origin and routing | Deployment routes are platform-owned under the exact installation, release, and project binding. Hephaestus serves a release UI through a gateway-owned same-site route. Direct arbitrary third-party iframe URLs are unsupported. |
+| Declaration paths | UI declaration paths are relative path components; they are not arbitrary URLs. |
+| Browser origin | UI JavaScript never runs on the Phoenix host origin. A dedicated same-site origin is required for full-page presentations and sandboxed embeds; the exact serving design remains to be specified. |
+| Artifact references | Source references resolve to immutable artifact or agent IDs before publication; authorized inspection omits opaque storage keys. |
 | Embedding | A bounded tab or global-interface declaration can select a scope, label, icon, route, and initial presentation (`iframe` or full page). The host rejects undeclared routes and does not let arbitrary project content alter core navigation. |
 | API access | A UI reaches APIs only through explicitly declared gateway routes/capabilities. It receives no ambient database access, platform bearer token, raw secret, or authority greater than its release declaration. |
 | Authentication | The host establishes the human browser session. The UI does not receive reusable human credentials; any browser-to-service identity handoff is audience-bound, short-lived, revocable, and scoped to the exact release UI route/API. |
