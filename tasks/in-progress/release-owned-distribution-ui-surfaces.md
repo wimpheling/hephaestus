@@ -11,8 +11,9 @@ browser credential storage, handoff issuance/exchange, managed/API installation,
 and application-role request authentication have passed focused verification.
 Activation/rollback and explicit-organization navigation also pass focused
 verification. The UI RPC transport checkpoint now passes its expanded real
-matrix. Current work verifies gateway admission and prepares hosting and
-Phoenix integration.
+matrix. Gateway admission, host/resource projection, Phoenix navigation, and
+reference theme helpers pass focused checks. Current work integrates the HTTP
+listener, request audit, and final installed-browser acceptance.
 The handoff remains the record of the stopped session; new evidence is recorded
 below as each resumed slice passes review and verification.
 
@@ -36,6 +37,23 @@ navigation/authorization/isolation, real Caddy/VM/browser proofs, and the final
 integrated quality gate remain incomplete. The user approved organization-owned
 global installations and organization isolation. Historical checkpoints record the state
 at their time; later integration checkpoints supersede earlier pending notes.
+
+## UI quality-runner integration checkpoint (2026-09-20)
+
+CI now invokes the existing isolated UI installation RPC runner after ordinary
+workspace tests. The repository Rust gate invokes it when
+`REAL_UI_INSTALLATION_RPC=1`, clearing that flag for the shared workspace pass.
+Container-mode PostgreSQL selection follows the existing isolated browser-session
+runner. Both CI and the UI quality gate execute the installed-navigation and
+bootstrap Node harnesses with named-test reporting.
+
+The production bootstrap script clears its fragment before validating theme
+hints or exchanging the one-time secret. It validates the returned local route
+and exact platform-origin hint before navigation. Eleven bootstrap cases and
+four navigation cases passed together. Scoped hephaestus-dev formatting, strict
+Clippy, tests, documentation, CI YAML parsing, and diff checks passed. This is
+runner integration and script evidence; the final integrated Rust/HTTP/browser
+gate has not run.
 
 ## Reference UI theme helper checkpoint (2026-09-20)
 

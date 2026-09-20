@@ -78,6 +78,7 @@ fn protobuf(context: &DevContext) -> Result<()> {
 fn rust(context: &DevContext) -> Result<()> {
     let root = &context.repository_root;
     let browser_session_rpc = env::var("REAL_APP_BROWSER_SESSION_RPC").as_deref() == Ok("1");
+    let ui_installation_rpc_enabled = env::var("REAL_UI_INSTALLATION_RPC").as_deref() == Ok("1");
     phase("Rust formatting");
     cargo(root, &["fmt", "--all", "--", "--check"])?;
     phase("Rust Clippy");
@@ -86,14 +87,19 @@ fn rust(context: &DevContext) -> Result<()> {
         &["clippy", "--workspace", "--all-targets", "--all-features"],
     )?;
     phase("Rust tests");
-    workspace_tests(root, browser_session_rpc)?;
+    workspace_tests(root, browser_session_rpc, ui_installation_rpc_enabled)?;
     browser_session_lifecycle(context, browser_session_rpc)?;
+    ui_installation_rpc(context, ui_installation_rpc_enabled)?;
     phase("Rust documentation");
     cargo(root, &["doc", "--workspace", "--all-features", "--no-deps"])?;
     cooking_service(context)
 }
 
-fn workspace_tests(root: &Path, browser_session_rpc: bool) -> Result<()> {
+fn workspace_tests(
+    root: &Path,
+    browser_session_rpc: bool,
+    ui_installation_rpc: bool,
+) -> Result<()> {
     let mut command = Command::new("cargo");
     command
         .args(["test", "--workspace", "--all-features"])
@@ -102,6 +108,11 @@ fn workspace_tests(root: &Path, browser_session_rpc: bool) -> Result<()> {
         // Run the opt-in proof after this shared pass against its disposable
         // database instead of the caller's potentially contaminated database.
         command.env_remove("REAL_APP_BROWSER_SESSION_RPC");
+    }
+    if ui_installation_rpc {
+        // Run the opt-in proof after this shared pass against its disposable
+        // database instead of the caller's potentially contaminated database.
+        command.env_remove("REAL_UI_INSTALLATION_RPC");
     }
     run_process(&mut command)
 }
@@ -123,6 +134,32 @@ fn browser_session_lifecycle(context: &DevContext, enabled: bool) -> Result<()> 
     let mut command = Command::new(script);
     command.current_dir(&context.repository_root);
     if env::var("HEPHAESTUS_BROWSER_SESSION_POSTGRES_MODE").as_deref() == Ok("container") {
+        command.env(
+            "HEPHAESTUS_POSTGRES_CONTAINER",
+            env::var("HEPHAESTUS_POSTGRES_CONTAINER")
+                .unwrap_or_else(|_| context.postgres_container()),
+        );
+    }
+    run_process(&mut command)
+}
+
+fn ui_installation_rpc(context: &DevContext, enabled: bool) -> Result<()> {
+    if !enabled {
+        return Ok(());
+    }
+    let script = context
+        .repository_root
+        .join("scripts/test-ui-installation-rpc.sh");
+    if !script.is_file() {
+        return Err(DevError::Invalid(format!(
+            "UI installation RPC runner is missing at {}",
+            script.display()
+        )));
+    }
+    phase("UI installation RPC integration (isolated database)");
+    let mut command = Command::new(script);
+    command.current_dir(&context.repository_root);
+    if env::var("HEPHAESTUS_UI_RPC_POSTGRES_MODE").as_deref() == Ok("container") {
         command.env(
             "HEPHAESTUS_POSTGRES_CONTAINER",
             env::var("HEPHAESTUS_POSTGRES_CONTAINER")
@@ -190,8 +227,24 @@ fn ui(context: &DevContext) -> Result<()> {
     let web = context.repository_root.join("web");
     require_mix_project(&web)?;
     release_ui_kit(context)?;
+    ui_node_tests(context)?;
     phase("UI architecture and focused tests (pinned Elixir container)");
     run_process(&mut web_mix_command(context, UI_CHECKS))
+}
+
+fn ui_node_tests(context: &DevContext) -> Result<()> {
+    phase("Installed UI navigation and bootstrap Node checks");
+    run_process(
+        Command::new("node")
+            .args([
+                "--test",
+                "--test-isolation=none",
+                "--test-reporter=tap",
+                "web/assets/js/design_system/hooks/installed_ui_navigation_test.mjs",
+                "crates/hephaestus-app/tests/ui_bootstrap_script.mjs",
+            ])
+            .current_dir(&context.repository_root),
+    )
 }
 
 fn release_ui_kit(context: &DevContext) -> Result<()> {

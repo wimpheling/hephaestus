@@ -57,6 +57,9 @@ jobs:
       - name: Browser-session RPC lifecycle integration
         timeout-minutes: 5
         run: scripts/test-browser-session-lifecycle.sh
+      - name: UI installation RPC integration
+        timeout-minutes: 5
+        run: scripts/test-ui-installation-rpc.sh
       - name: Deferred update admission and reconciler race
         timeout-minutes: 15
         env:
@@ -131,6 +134,11 @@ jobs:
       - name: Test release UI kit
         working-directory: web/assets/release_ui_kit
         run: npm test
+      - name: Installed UI navigation and bootstrap Node tests
+        run: |
+          node --test --test-isolation=none --test-reporter=tap \
+            web/assets/js/design_system/hooks/installed_ui_navigation_test.mjs \
+            crates/hephaestus-app/tests/ui_bootstrap_script.mjs
       - name: Phoenix and browser golden path
         env:
           HEPHAESTUS_PLAYWRIGHT_SKIP_BROWSER_INSTALL: "1"
