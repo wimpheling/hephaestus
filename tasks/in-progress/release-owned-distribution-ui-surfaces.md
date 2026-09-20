@@ -22,9 +22,9 @@ ordering is verified for valid and invalid captures. Build completion now writes
 resolved UI bindings in the release transaction, with worker-role static and
 legacy compatibility evidence. Managed/API exact bindings, replay, invalid-input
 rejections, and rollback after a release insert also pass real worker-role
-coverage. The authorized database inspection adapter also passes its real
-application-role matrix; generated RPC exposure is the next slice. Serving,
-browser integration, and aggregate acceptance remain incomplete.
+coverage. Authorized inspection is now exposed through the generated release
+RPC, backed by the restricted application-role matrix. Serving, browser
+integration, and aggregate acceptance remain incomplete.
 Earlier helper-only checkpoints below describe their state at the time;
 the receive and manual integration checkpoints supersede pending-wiring notes.
 
@@ -102,6 +102,33 @@ Scoped all-target/all-feature Clippy, documentation, and formatting passed in
 The disposable database passed readiness before testing and was removed.
 This checkpoint is the database adapter only: protobuf generation, RPC mapping,
 and browser-facing presentation remain subsequent slices.
+
+## Authorized inspection RPC checkpoint (2026-09-20)
+
+The existing authenticated `GetRelease` response now includes additive field 22,
+`ui_descriptors`, with typed scope/icon/presentation/cache enums, static versus
+managed content, exact artifact/agent IDs, and explicit API metadata. Existing
+fields and authorization remain unchanged. Gateway route fields are declaration
+metadata, not authorized browser URLs. Rust and Elixir bindings are regenerated;
+the transport converts the validated application DTO at the RPC boundary.
+
+Generation, generated consistency, and Buf breaking checks passed. Descriptor
+policy passed 15 tests, protocol interoperability passed 1, and focused mapper
+coverage passed 2 tests for static/API and managed identities (including empty
+UI-list mapping). Scoped app Clippy, formatting, rustdoc, and all 61 enabled
+architecture rules passed. Evidence:
+`/home/a/heph-release-ui-rpc-generation-20260920.log`,
+`/home/a/heph-release-ui-generated-check-20260920.log`,
+`/home/a/heph-release-ui-protobuf-breaking-20260920.log`,
+`/home/a/heph-release-ui-rpc-descriptor-20260920.log`,
+`/home/a/heph-release-ui-rpc-interop-20260920.log`,
+`/home/a/heph-release-ui-rpc-mapper-test-v3-20260920.log`,
+`/home/a/heph-release-ui-rpc-app-clippy-v3-20260920.log`,
+`/home/a/heph-release-ui-rpc-app-doc-20260920.log`, and
+`/home/a/heph-release-ui-rpc-architecture-20260920.log`.
+This completes declaration/publication/authorized-inspection scope. Release-page
+metadata display, UI installation, hosting, and browser authority are still
+separate incomplete work.
 
 ## Current CI context (2026-09-20)
 
@@ -708,14 +735,14 @@ rustdoc, and architecture checks passed. Rust evidence is recorded in
 `/home/a/heph-kit-gate-{clippy,doc}-20260920.log` and
 `/home/a/heph-architecture-final-20260920.log`.
 
-- [ ] **1. Specify the distribution UI declaration and publication model**
-  - [ ] Define a versioned release declaration for UI artifact kind, immutable
+- [x] **1. Specify the distribution UI declaration and publication model**
+  - [x] Define a versioned release declaration for UI artifact kind, immutable
     artifact reference, scope (`project`, `repository`, or explicitly installed
     `global`), bounded route base, tab label/icon, presentation mode, declared
     gateway APIs, and compatibility behavior.
-  - [ ] Validate names, paths, route ownership, icon allowlist, MIME types,
+  - [x] Validate names, paths, route ownership, icon allowlist, MIME types,
     artifact size, entrypoint, cache policy, and duplicate/conflicting tabs.
-  - [ ] Persist an immutable published UI declaration tied to the release and
+  - [x] Persist an immutable published UI declaration tied to the release and
     expose only redacted, authorized inspection projections.
 
 - [ ] **2. Serve static artifacts and managed UI services**

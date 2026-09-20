@@ -117,7 +117,86 @@ message Release {
   hephaestus.build.v1.Build build = 19;
   repeated hephaestus.artifact.v1.Artifact artifacts = 20;
   repeated ReleaseAgent agents = 21;
+  // Immutable, authorized inspection metadata for release-owned UIs. Gateway
+  // routes here are declaration metadata, never authorized browser URLs.
+  repeated ReleaseUiDescriptor ui_descriptors = 22;
 }
+
+enum ReleaseUiScope {
+  RELEASE_UI_SCOPE_UNSPECIFIED = 0;
+  RELEASE_UI_SCOPE_PROJECT = 1;
+  RELEASE_UI_SCOPE_REPOSITORY = 2;
+  RELEASE_UI_SCOPE_GLOBAL = 3;
+}
+
+enum ReleaseUiIcon {
+  RELEASE_UI_ICON_UNSPECIFIED = 0;
+  RELEASE_UI_ICON_APP = 1;
+  RELEASE_UI_ICON_CHAT = 2;
+  RELEASE_UI_ICON_CODE = 3;
+  RELEASE_UI_ICON_BOOK = 4;
+  RELEASE_UI_ICON_CHART = 5;
+}
+
+enum ReleaseUiPresentation {
+  RELEASE_UI_PRESENTATION_UNSPECIFIED = 0;
+  RELEASE_UI_PRESENTATION_IFRAME = 1;
+  RELEASE_UI_PRESENTATION_FULL_PAGE = 2;
+}
+
+enum ReleaseUiCachePolicy {
+  RELEASE_UI_CACHE_POLICY_UNSPECIFIED = 0;
+  RELEASE_UI_CACHE_POLICY_NO_STORE = 1;
+}
+
+message ReleaseUiDescriptor {
+  string key = 1;
+  ReleaseUiScope scope = 2;
+  string label = 3;
+  ReleaseUiIcon icon = 4;
+  ReleaseUiPresentation presentation = 5;
+  // Validated platform-relative route metadata; this is not a browser URL.
+  string route_base = 6;
+  // Validated UI-relative entrypoint metadata; this is not a browser URL.
+  string entrypoint = 7;
+  uint32 ui_kit_version = 8;
+  ReleaseUiCachePolicy cache = 9;
+  oneof content {
+    ReleaseUiStaticContent static_content = 10;
+    ReleaseUiManagedService managed_service = 11;
+  }
+  repeated ReleaseUiApiBinding apis = 12;
+}
+
+message ReleaseUiStaticContent {
+  repeated ReleaseUiStaticFile files = 1;
+}
+
+message ReleaseUiStaticFile {
+  // Validated UI-relative route metadata; this is not a browser URL.
+  string route = 1;
+  hephaestus.common.v1.OpaqueId artifact_id = 2;
+  string media_type = 3;
+}
+
+message ReleaseUiManagedService {
+  // Repository gateway declaration name, not an origin or browser URL.
+  string gateway_name = 1;
+  // Validated gateway route metadata; this is not an authorized browser URL.
+  string route = 2;
+  hephaestus.common.v1.OpaqueId release_agent_id = 3;
+}
+
+message ReleaseUiApiBinding {
+  string key = 1;
+  // Repository gateway declaration name, not an origin or browser URL.
+  string gateway_name = 2;
+  string method = 3;
+  // Validated gateway route metadata; this is not an authorized browser URL.
+  string route = 4;
+  hephaestus.common.v1.OpaqueId release_agent_id = 5;
+}
+
 message ListRepositoryReleasesRequest {
   hephaestus.common.v1.OpaqueId repository_id = 1;
   hephaestus.common.v1.PageRequest page = 2;

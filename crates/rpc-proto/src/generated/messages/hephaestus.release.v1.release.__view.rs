@@ -1406,6 +1406,14 @@ pub struct ReleaseView<'a> {
         'a,
         super::super::__buffa::view::ReleaseAgentView<'a>,
     >,
+    /// Immutable, authorized inspection metadata for release-owned UIs. Gateway
+    /// routes here are declaration metadata, never authorized browser URLs.
+    ///
+    /// Field 22: `ui_descriptors`
+    pub ui_descriptors: ::buffa::RepeatedView<
+        'a,
+        super::super::__buffa::view::ReleaseUiDescriptorView<'a>,
+    >,
     pub __buffa_unknown_fields: ::buffa::UnknownFieldsView<'a>,
 }
 impl<'a> ::buffa::MessageView<'a> for ReleaseView<'a> {
@@ -1726,6 +1734,21 @@ impl<'a> ::buffa::MessageView<'a> for ReleaseView<'a> {
                         )?,
                     );
             }
+            22u32 => {
+                ::buffa::encoding::check_wire_type(
+                    tag,
+                    ::buffa::encoding::WireType::LengthDelimited,
+                )?;
+                let __sub_ctx = ctx.descend()?;
+                let sub = ::buffa::types::borrow_bytes(&mut cur)?;
+                view.ui_descriptors
+                    .push(
+                        <super::super::__buffa::view::ReleaseUiDescriptorView as ::buffa::MessageView>::decode_view_ctx(
+                            sub,
+                            __sub_ctx,
+                        )?,
+                    );
+            }
             _ => {
                 ::buffa::encoding::skip_field_depth(tag, &mut cur, ctx.depth())?;
                 let span_len = before_tag.len() - cur.len();
@@ -1837,6 +1860,11 @@ impl<'a> ::buffa::MessageView<'a> for ReleaseView<'a> {
                 .collect::<::core::result::Result<_, ::buffa::DecodeError>>()?,
             agents: self
                 .agents
+                .iter()
+                .map(|v| v.to_owned_from_source(__buffa_src))
+                .collect::<::core::result::Result<_, ::buffa::DecodeError>>()?,
+            ui_descriptors: self
+                .ui_descriptors
                 .iter()
                 .map(|v| v.to_owned_from_source(__buffa_src))
                 .collect::<::core::result::Result<_, ::buffa::DecodeError>>()?,
@@ -1984,6 +2012,14 @@ impl<'a> ::buffa::ViewEncode<'a> for ReleaseView<'a> {
                 += 2u32 + ::buffa::encoding::varint_len(inner_size as u64) as u32
                     + inner_size;
         }
+        for v in &self.ui_descriptors {
+            let __slot = __cache.reserve();
+            let inner_size = v.compute_size(__cache);
+            __cache.set(__slot, inner_size);
+            size
+                += 2u32 + ::buffa::encoding::varint_len(inner_size as u64) as u32
+                    + inner_size;
+        }
         size += self.__buffa_unknown_fields.encoded_len() as u32;
         size
     }
@@ -2070,6 +2106,10 @@ impl<'a> ::buffa::ViewEncode<'a> for ReleaseView<'a> {
         }
         for v in &self.agents {
             ::buffa::types::put_len_delimited_header(21u32, __cache.consume_next(), buf);
+            v.write_to(__cache, buf);
+        }
+        for v in &self.ui_descriptors {
+            ::buffa::types::put_len_delimited_header(22u32, __cache.consume_next(), buf);
             v.write_to(__cache, buf);
         }
         self.__buffa_unknown_fields.write_to(buf);
@@ -2174,6 +2214,9 @@ impl<'__a> ::serde::Serialize for ReleaseView<'__a> {
         }
         if !self.agents.is_empty() {
             __map.serialize_entry("agents", &*self.agents)?;
+        }
+        if !self.ui_descriptors.is_empty() {
+            __map.serialize_entry("uiDescriptors", &*self.ui_descriptors)?;
         }
         __map.end()
     }
@@ -2410,6 +2453,19 @@ impl ReleaseOwnedView {
     ) -> &::buffa::RepeatedView<'_, super::super::__buffa::view::ReleaseAgentView<'_>> {
         &self.0.reborrow().agents
     }
+    /// Immutable, authorized inspection metadata for release-owned UIs. Gateway
+    /// routes here are declaration metadata, never authorized browser URLs.
+    ///
+    /// Field 22: `ui_descriptors`
+    #[must_use]
+    pub fn ui_descriptors(
+        &self,
+    ) -> &::buffa::RepeatedView<
+        '_,
+        super::super::__buffa::view::ReleaseUiDescriptorView<'_>,
+    > {
+        &self.0.reborrow().ui_descriptors
+    }
 }
 impl ::core::convert::From<::buffa::OwnedView<ReleaseView<'static>>>
 for ReleaseOwnedView {
@@ -2434,6 +2490,2068 @@ impl ::buffa::HasMessageView for super::super::Release {
     type ViewHandle = ReleaseOwnedView;
 }
 impl ::serde::Serialize for ReleaseOwnedView {
+    fn serialize<__S: ::serde::Serializer>(
+        &self,
+        __s: __S,
+    ) -> ::core::result::Result<__S::Ok, __S::Error> {
+        ::serde::Serialize::serialize(&self.0, __s)
+    }
+}
+#[derive(Clone, Debug, Default)]
+pub struct ReleaseUiDescriptorView<'a> {
+    /// Field 1: `key`
+    pub key: &'a str,
+    /// Field 2: `scope`
+    pub scope: ::buffa::EnumValue<super::super::ReleaseUiScope>,
+    /// Field 3: `label`
+    pub label: &'a str,
+    /// Field 4: `icon`
+    pub icon: ::buffa::EnumValue<super::super::ReleaseUiIcon>,
+    /// Field 5: `presentation`
+    pub presentation: ::buffa::EnumValue<super::super::ReleaseUiPresentation>,
+    /// Validated platform-relative route metadata; this is not a browser URL.
+    ///
+    /// Field 6: `route_base`
+    pub route_base: &'a str,
+    /// Validated UI-relative entrypoint metadata; this is not a browser URL.
+    ///
+    /// Field 7: `entrypoint`
+    pub entrypoint: &'a str,
+    /// Field 8: `ui_kit_version`
+    pub ui_kit_version: u32,
+    /// Field 9: `cache`
+    pub cache: ::buffa::EnumValue<super::super::ReleaseUiCachePolicy>,
+    /// Field 12: `apis`
+    pub apis: ::buffa::RepeatedView<
+        'a,
+        super::super::__buffa::view::ReleaseUiApiBindingView<'a>,
+    >,
+    pub content: ::core::option::Option<
+        super::super::__buffa::view::oneof::release_ui_descriptor::Content<'a>,
+    >,
+    pub __buffa_unknown_fields: ::buffa::UnknownFieldsView<'a>,
+}
+impl<'a> ::buffa::MessageView<'a> for ReleaseUiDescriptorView<'a> {
+    type Owned = super::super::ReleaseUiDescriptor;
+    fn decode_view(buf: &'a [u8]) -> ::core::result::Result<Self, ::buffa::DecodeError> {
+        let __limit = ::core::cell::Cell::new(::buffa::DEFAULT_UNKNOWN_FIELD_LIMIT);
+        <Self as ::buffa::MessageView>::decode_view_ctx(
+            buf,
+            ::buffa::DecodeContext::new(::buffa::RECURSION_LIMIT, &__limit),
+        )
+    }
+    fn decode_view_with_ctx(
+        buf: &'a [u8],
+        ctx: ::buffa::DecodeContext<'_>,
+    ) -> ::core::result::Result<Self, ::buffa::DecodeError> {
+        <Self as ::buffa::MessageView>::decode_view_ctx(buf, ctx)
+    }
+    fn merge_view_field(
+        &mut self,
+        tag: ::buffa::encoding::Tag,
+        cur: &'a [u8],
+        before_tag: &'a [u8],
+        ctx: ::buffa::DecodeContext<'_>,
+    ) -> ::core::result::Result<&'a [u8], ::buffa::DecodeError> {
+        let _ = ctx;
+        #[allow(unused_variables)]
+        let view = self;
+        let mut cur = cur;
+        match tag.field_number() {
+            1u32 => {
+                ::buffa::encoding::check_wire_type(
+                    tag,
+                    ::buffa::encoding::WireType::LengthDelimited,
+                )?;
+                view.key = ::buffa::types::borrow_str(&mut cur)?;
+            }
+            2u32 => {
+                ::buffa::encoding::check_wire_type(
+                    tag,
+                    ::buffa::encoding::WireType::Varint,
+                )?;
+                view.scope = ::buffa::EnumValue::from(
+                    ::buffa::types::decode_int32(&mut cur)?,
+                );
+            }
+            3u32 => {
+                ::buffa::encoding::check_wire_type(
+                    tag,
+                    ::buffa::encoding::WireType::LengthDelimited,
+                )?;
+                view.label = ::buffa::types::borrow_str(&mut cur)?;
+            }
+            4u32 => {
+                ::buffa::encoding::check_wire_type(
+                    tag,
+                    ::buffa::encoding::WireType::Varint,
+                )?;
+                view.icon = ::buffa::EnumValue::from(
+                    ::buffa::types::decode_int32(&mut cur)?,
+                );
+            }
+            5u32 => {
+                ::buffa::encoding::check_wire_type(
+                    tag,
+                    ::buffa::encoding::WireType::Varint,
+                )?;
+                view.presentation = ::buffa::EnumValue::from(
+                    ::buffa::types::decode_int32(&mut cur)?,
+                );
+            }
+            6u32 => {
+                ::buffa::encoding::check_wire_type(
+                    tag,
+                    ::buffa::encoding::WireType::LengthDelimited,
+                )?;
+                view.route_base = ::buffa::types::borrow_str(&mut cur)?;
+            }
+            7u32 => {
+                ::buffa::encoding::check_wire_type(
+                    tag,
+                    ::buffa::encoding::WireType::LengthDelimited,
+                )?;
+                view.entrypoint = ::buffa::types::borrow_str(&mut cur)?;
+            }
+            8u32 => {
+                ::buffa::encoding::check_wire_type(
+                    tag,
+                    ::buffa::encoding::WireType::Varint,
+                )?;
+                view.ui_kit_version = ::buffa::types::decode_uint32(&mut cur)?;
+            }
+            9u32 => {
+                ::buffa::encoding::check_wire_type(
+                    tag,
+                    ::buffa::encoding::WireType::Varint,
+                )?;
+                view.cache = ::buffa::EnumValue::from(
+                    ::buffa::types::decode_int32(&mut cur)?,
+                );
+            }
+            12u32 => {
+                ::buffa::encoding::check_wire_type(
+                    tag,
+                    ::buffa::encoding::WireType::LengthDelimited,
+                )?;
+                let __sub_ctx = ctx.descend()?;
+                let sub = ::buffa::types::borrow_bytes(&mut cur)?;
+                view.apis
+                    .push(
+                        <super::super::__buffa::view::ReleaseUiApiBindingView as ::buffa::MessageView>::decode_view_ctx(
+                            sub,
+                            __sub_ctx,
+                        )?,
+                    );
+            }
+            10u32 => {
+                ::buffa::encoding::check_wire_type(
+                    tag,
+                    ::buffa::encoding::WireType::LengthDelimited,
+                )?;
+                let __sub_ctx = ctx.descend()?;
+                let sub = ::buffa::types::borrow_bytes(&mut cur)?;
+                if let Some(
+                    super::super::__buffa::view::oneof::release_ui_descriptor::Content::StaticContent(
+                        ref mut existing,
+                    ),
+                ) = view.content
+                {
+                    ::buffa::MessageView::merge_into_view(
+                        &mut **existing,
+                        sub,
+                        __sub_ctx,
+                    )?;
+                } else {
+                    view.content = Some(
+                        super::super::__buffa::view::oneof::release_ui_descriptor::Content::StaticContent(
+                            ::buffa::alloc::boxed::Box::new(
+                                <super::super::__buffa::view::ReleaseUiStaticContentView as ::buffa::MessageView>::decode_view_ctx(
+                                    sub,
+                                    __sub_ctx,
+                                )?,
+                            ),
+                        ),
+                    );
+                }
+            }
+            11u32 => {
+                ::buffa::encoding::check_wire_type(
+                    tag,
+                    ::buffa::encoding::WireType::LengthDelimited,
+                )?;
+                let __sub_ctx = ctx.descend()?;
+                let sub = ::buffa::types::borrow_bytes(&mut cur)?;
+                if let Some(
+                    super::super::__buffa::view::oneof::release_ui_descriptor::Content::ManagedService(
+                        ref mut existing,
+                    ),
+                ) = view.content
+                {
+                    ::buffa::MessageView::merge_into_view(
+                        &mut **existing,
+                        sub,
+                        __sub_ctx,
+                    )?;
+                } else {
+                    view.content = Some(
+                        super::super::__buffa::view::oneof::release_ui_descriptor::Content::ManagedService(
+                            ::buffa::alloc::boxed::Box::new(
+                                <super::super::__buffa::view::ReleaseUiManagedServiceView as ::buffa::MessageView>::decode_view_ctx(
+                                    sub,
+                                    __sub_ctx,
+                                )?,
+                            ),
+                        ),
+                    );
+                }
+            }
+            _ => {
+                ::buffa::encoding::skip_field_depth(tag, &mut cur, ctx.depth())?;
+                let span_len = before_tag.len() - cur.len();
+                view.__buffa_unknown_fields.push_record(before_tag, span_len, ctx)?;
+            }
+        }
+        ::core::result::Result::Ok(cur)
+    }
+    fn to_owned_message(
+        &self,
+    ) -> ::core::result::Result<
+        super::super::ReleaseUiDescriptor,
+        ::buffa::DecodeError,
+    > {
+        self.to_owned_from_source(None)
+    }
+    #[allow(clippy::useless_conversion, clippy::needless_update)]
+    fn to_owned_from_source(
+        &self,
+        __buffa_src: ::core::option::Option<&::buffa::bytes::Bytes>,
+    ) -> ::core::result::Result<
+        super::super::ReleaseUiDescriptor,
+        ::buffa::DecodeError,
+    > {
+        #[allow(unused_imports)]
+        use ::buffa::alloc::string::ToString as _;
+        let _ = __buffa_src;
+        ::core::result::Result::Ok(super::super::ReleaseUiDescriptor {
+            key: self.key.to_string(),
+            scope: self.scope,
+            label: self.label.to_string(),
+            icon: self.icon,
+            presentation: self.presentation,
+            route_base: self.route_base.to_string(),
+            entrypoint: self.entrypoint.to_string(),
+            ui_kit_version: self.ui_kit_version,
+            cache: self.cache,
+            apis: self
+                .apis
+                .iter()
+                .map(|v| v.to_owned_from_source(__buffa_src))
+                .collect::<::core::result::Result<_, ::buffa::DecodeError>>()?,
+            content: match self.content.as_ref() {
+                ::core::option::Option::Some(v) => {
+                    ::core::option::Option::Some(
+                        match v {
+                            super::super::__buffa::view::oneof::release_ui_descriptor::Content::StaticContent(
+                                v,
+                            ) => {
+                                super::super::__buffa::oneof::release_ui_descriptor::Content::StaticContent(
+                                    ::buffa::alloc::boxed::Box::new(
+                                        v.to_owned_from_source(__buffa_src)?,
+                                    ),
+                                )
+                            }
+                            super::super::__buffa::view::oneof::release_ui_descriptor::Content::ManagedService(
+                                v,
+                            ) => {
+                                super::super::__buffa::oneof::release_ui_descriptor::Content::ManagedService(
+                                    ::buffa::alloc::boxed::Box::new(
+                                        v.to_owned_from_source(__buffa_src)?,
+                                    ),
+                                )
+                            }
+                        },
+                    )
+                }
+                ::core::option::Option::None => ::core::option::Option::None,
+            },
+            __buffa_unknown_fields: self.__buffa_unknown_fields.to_owned()?.into(),
+            ..::core::default::Default::default()
+        })
+    }
+}
+impl<'a> ::buffa::ViewEncode<'a> for ReleaseUiDescriptorView<'a> {
+    #[allow(clippy::needless_borrow, clippy::let_and_return)]
+    fn compute_size(&self, __cache: &mut ::buffa::SizeCache) -> u32 {
+        #[allow(unused_imports)]
+        use ::buffa::Enumeration as _;
+        let mut size = 0u32;
+        if !self.key.is_empty() {
+            size += 1u32 + ::buffa::types::string_encoded_len(&self.key) as u32;
+        }
+        {
+            let val = self.scope.to_i32();
+            if val != 0 {
+                size += 1u32 + ::buffa::types::int32_encoded_len(val) as u32;
+            }
+        }
+        if !self.label.is_empty() {
+            size += 1u32 + ::buffa::types::string_encoded_len(&self.label) as u32;
+        }
+        {
+            let val = self.icon.to_i32();
+            if val != 0 {
+                size += 1u32 + ::buffa::types::int32_encoded_len(val) as u32;
+            }
+        }
+        {
+            let val = self.presentation.to_i32();
+            if val != 0 {
+                size += 1u32 + ::buffa::types::int32_encoded_len(val) as u32;
+            }
+        }
+        if !self.route_base.is_empty() {
+            size += 1u32 + ::buffa::types::string_encoded_len(&self.route_base) as u32;
+        }
+        if !self.entrypoint.is_empty() {
+            size += 1u32 + ::buffa::types::string_encoded_len(&self.entrypoint) as u32;
+        }
+        if self.ui_kit_version != 0u32 {
+            size
+                += 1u32 + ::buffa::types::uint32_encoded_len(self.ui_kit_version) as u32;
+        }
+        {
+            let val = self.cache.to_i32();
+            if val != 0 {
+                size += 1u32 + ::buffa::types::int32_encoded_len(val) as u32;
+            }
+        }
+        if let ::core::option::Option::Some(ref v) = self.content {
+            match v {
+                super::super::__buffa::view::oneof::release_ui_descriptor::Content::StaticContent(
+                    x,
+                ) => {
+                    let __slot = __cache.reserve();
+                    let inner = x.compute_size(__cache);
+                    __cache.set(__slot, inner);
+                    size
+                        += 1u32 + ::buffa::encoding::varint_len(inner as u64) as u32
+                            + inner;
+                }
+                super::super::__buffa::view::oneof::release_ui_descriptor::Content::ManagedService(
+                    x,
+                ) => {
+                    let __slot = __cache.reserve();
+                    let inner = x.compute_size(__cache);
+                    __cache.set(__slot, inner);
+                    size
+                        += 1u32 + ::buffa::encoding::varint_len(inner as u64) as u32
+                            + inner;
+                }
+            }
+        }
+        for v in &self.apis {
+            let __slot = __cache.reserve();
+            let inner_size = v.compute_size(__cache);
+            __cache.set(__slot, inner_size);
+            size
+                += 1u32 + ::buffa::encoding::varint_len(inner_size as u64) as u32
+                    + inner_size;
+        }
+        size += self.__buffa_unknown_fields.encoded_len() as u32;
+        size
+    }
+    #[allow(clippy::needless_borrow)]
+    fn write_to(
+        &self,
+        __cache: &mut ::buffa::SizeCache,
+        buf: &mut impl ::buffa::bytes::BufMut,
+    ) {
+        #[allow(unused_imports)]
+        use ::buffa::Enumeration as _;
+        if !self.key.is_empty() {
+            ::buffa::types::put_string_field(1u32, &self.key, buf);
+        }
+        {
+            let val = self.scope.to_i32();
+            if val != 0 {
+                ::buffa::types::put_int32_field(2u32, val, buf);
+            }
+        }
+        if !self.label.is_empty() {
+            ::buffa::types::put_string_field(3u32, &self.label, buf);
+        }
+        {
+            let val = self.icon.to_i32();
+            if val != 0 {
+                ::buffa::types::put_int32_field(4u32, val, buf);
+            }
+        }
+        {
+            let val = self.presentation.to_i32();
+            if val != 0 {
+                ::buffa::types::put_int32_field(5u32, val, buf);
+            }
+        }
+        if !self.route_base.is_empty() {
+            ::buffa::types::put_string_field(6u32, &self.route_base, buf);
+        }
+        if !self.entrypoint.is_empty() {
+            ::buffa::types::put_string_field(7u32, &self.entrypoint, buf);
+        }
+        if self.ui_kit_version != 0u32 {
+            ::buffa::types::put_uint32_field(8u32, self.ui_kit_version, buf);
+        }
+        {
+            let val = self.cache.to_i32();
+            if val != 0 {
+                ::buffa::types::put_int32_field(9u32, val, buf);
+            }
+        }
+        if let ::core::option::Option::Some(ref v) = self.content {
+            match v {
+                super::super::__buffa::view::oneof::release_ui_descriptor::Content::StaticContent(
+                    x,
+                ) => {
+                    ::buffa::types::put_len_delimited_header(
+                        10u32,
+                        __cache.consume_next(),
+                        buf,
+                    );
+                    x.write_to(__cache, buf);
+                }
+                super::super::__buffa::view::oneof::release_ui_descriptor::Content::ManagedService(
+                    x,
+                ) => {
+                    ::buffa::types::put_len_delimited_header(
+                        11u32,
+                        __cache.consume_next(),
+                        buf,
+                    );
+                    x.write_to(__cache, buf);
+                }
+            }
+        }
+        for v in &self.apis {
+            ::buffa::types::put_len_delimited_header(12u32, __cache.consume_next(), buf);
+            v.write_to(__cache, buf);
+        }
+        self.__buffa_unknown_fields.write_to(buf);
+    }
+}
+/// Serializes this view as protobuf JSON.
+///
+/// Implicit-presence fields with default values are omitted, `required`
+/// fields are always emitted, explicit-presence (`optional`) fields are
+/// emitted only when set, bytes fields are base64-encoded, and enum
+/// values are their proto name strings.
+///
+/// This impl uses `serialize_map(None)` because the number of emitted
+/// fields depends on default-omission rules; serializers that require
+/// known map lengths (e.g. `bincode`) will return a runtime error.
+/// Use the owned message type for those formats.
+impl<'__a> ::serde::Serialize for ReleaseUiDescriptorView<'__a> {
+    fn serialize<__S: ::serde::Serializer>(
+        &self,
+        __s: __S,
+    ) -> ::core::result::Result<__S::Ok, __S::Error> {
+        use ::serde::ser::SerializeMap as _;
+        let mut __map = __s.serialize_map(::core::option::Option::None)?;
+        if !::buffa::json_helpers::skip_if::is_empty_str(self.key) {
+            __map.serialize_entry("key", self.key)?;
+        }
+        if !::buffa::json_helpers::skip_if::is_default_enum_value(&self.scope) {
+            __map.serialize_entry("scope", &self.scope)?;
+        }
+        if !::buffa::json_helpers::skip_if::is_empty_str(self.label) {
+            __map.serialize_entry("label", self.label)?;
+        }
+        if !::buffa::json_helpers::skip_if::is_default_enum_value(&self.icon) {
+            __map.serialize_entry("icon", &self.icon)?;
+        }
+        if !::buffa::json_helpers::skip_if::is_default_enum_value(&self.presentation) {
+            __map.serialize_entry("presentation", &self.presentation)?;
+        }
+        if !::buffa::json_helpers::skip_if::is_empty_str(self.route_base) {
+            __map.serialize_entry("routeBase", self.route_base)?;
+        }
+        if !::buffa::json_helpers::skip_if::is_empty_str(self.entrypoint) {
+            __map.serialize_entry("entrypoint", self.entrypoint)?;
+        }
+        if !::buffa::json_helpers::skip_if::is_zero_u32(&self.ui_kit_version) {
+            __map
+                .serialize_entry(
+                    "uiKitVersion",
+                    &::buffa::json_helpers::ProtoJson(&self.ui_kit_version),
+                )?;
+        }
+        if !::buffa::json_helpers::skip_if::is_default_enum_value(&self.cache) {
+            __map.serialize_entry("cache", &self.cache)?;
+        }
+        if !self.apis.is_empty() {
+            __map.serialize_entry("apis", &*self.apis)?;
+        }
+        if let ::core::option::Option::Some(ref __ov) = self.content {
+            match __ov {
+                super::super::__buffa::view::oneof::release_ui_descriptor::Content::StaticContent(
+                    v,
+                ) => {
+                    __map.serialize_entry("staticContent", v)?;
+                }
+                super::super::__buffa::view::oneof::release_ui_descriptor::Content::ManagedService(
+                    v,
+                ) => {
+                    __map.serialize_entry("managedService", v)?;
+                }
+            }
+        }
+        __map.end()
+    }
+}
+impl<'a> ::buffa::MessageName for ReleaseUiDescriptorView<'a> {
+    const PACKAGE: &'static str = "hephaestus.release.v1";
+    const NAME: &'static str = "ReleaseUiDescriptor";
+    const FULL_NAME: &'static str = "hephaestus.release.v1.ReleaseUiDescriptor";
+    const TYPE_URL: &'static str = "type.googleapis.com/hephaestus.release.v1.ReleaseUiDescriptor";
+}
+::buffa::impl_default_view_instance!(ReleaseUiDescriptorView);
+::buffa::impl_view_reborrow!(ReleaseUiDescriptorView);
+/** Self-contained, `'static` owned view of a `ReleaseUiDescriptor` message.
+
+ Wraps [`::buffa::OwnedView`]`<`[`ReleaseUiDescriptorView`]`<'static>>`: the decoded view and the [`::buffa::bytes::Bytes`] buffer it borrows from travel together, so the handle is `'static` and `Send + Sync` — suitable for async handlers, spawned tasks, and anywhere a `'static` bound is required.
+
+ Field accessors return borrows tied to `&self`. Use [`Self::view`] to get the full [`ReleaseUiDescriptorView`] when you need struct patterns, iteration helpers, or to pass the view to lifetime-parameterised code.*/
+#[derive(Clone, Debug)]
+pub struct ReleaseUiDescriptorOwnedView(
+    ::buffa::OwnedView<ReleaseUiDescriptorView<'static>>,
+);
+impl ReleaseUiDescriptorOwnedView {
+    /// Decode an owned view from a [`::buffa::bytes::Bytes`] buffer.
+    ///
+    /// The view borrows directly from the buffer's data; the buffer is
+    /// retained inside the returned handle.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`::buffa::DecodeError`] if the buffer contains invalid
+    /// protobuf data.
+    pub fn decode(
+        bytes: ::buffa::bytes::Bytes,
+    ) -> ::core::result::Result<Self, ::buffa::DecodeError> {
+        ::core::result::Result::Ok(
+            ReleaseUiDescriptorOwnedView(::buffa::OwnedView::decode(bytes)?),
+        )
+    }
+    /// Decode with custom [`::buffa::DecodeOptions`] (recursion limit,
+    /// max message size).
+    ///
+    /// # Errors
+    ///
+    /// Returns [`::buffa::DecodeError`] if the buffer is invalid or
+    /// exceeds the configured limits.
+    pub fn decode_with_options(
+        bytes: ::buffa::bytes::Bytes,
+        opts: &::buffa::DecodeOptions,
+    ) -> ::core::result::Result<Self, ::buffa::DecodeError> {
+        ::core::result::Result::Ok(
+            ReleaseUiDescriptorOwnedView(
+                ::buffa::OwnedView::decode_with_options(bytes, opts)?,
+            ),
+        )
+    }
+    /// Build from an owned message via an encode → decode round-trip.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`::buffa::DecodeError`] if the re-encoded bytes are
+    /// somehow invalid (should not happen for well-formed messages).
+    pub fn from_owned(
+        msg: &super::super::ReleaseUiDescriptor,
+    ) -> ::core::result::Result<Self, ::buffa::DecodeError> {
+        ::core::result::Result::Ok(
+            ReleaseUiDescriptorOwnedView(::buffa::OwnedView::from_owned(msg)?),
+        )
+    }
+    /// Borrow the full [`ReleaseUiDescriptorView`] with its lifetime tied to `&self`.
+    #[must_use]
+    pub fn view(&self) -> &ReleaseUiDescriptorView<'_> {
+        self.0.reborrow()
+    }
+    /// Convert to the owned message type.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if re-materializing preserved unknown fields
+    /// fails (e.g. the unknown-field limit is exceeded).
+    pub fn to_owned_message(
+        &self,
+    ) -> ::core::result::Result<
+        super::super::ReleaseUiDescriptor,
+        ::buffa::DecodeError,
+    > {
+        self.0.to_owned_message()
+    }
+    /// The underlying bytes buffer.
+    #[must_use]
+    pub fn bytes(&self) -> &::buffa::bytes::Bytes {
+        self.0.bytes()
+    }
+    /// Consume the handle, returning the underlying bytes buffer.
+    #[must_use]
+    pub fn into_bytes(self) -> ::buffa::bytes::Bytes {
+        self.0.into_bytes()
+    }
+    /// Field 1: `key`
+    #[must_use]
+    pub fn key(&self) -> &'_ str {
+        self.0.reborrow().key
+    }
+    /// Field 2: `scope`
+    #[must_use]
+    pub fn scope(&self) -> ::buffa::EnumValue<super::super::ReleaseUiScope> {
+        self.0.reborrow().scope
+    }
+    /// Field 3: `label`
+    #[must_use]
+    pub fn label(&self) -> &'_ str {
+        self.0.reborrow().label
+    }
+    /// Field 4: `icon`
+    #[must_use]
+    pub fn icon(&self) -> ::buffa::EnumValue<super::super::ReleaseUiIcon> {
+        self.0.reborrow().icon
+    }
+    /// Field 5: `presentation`
+    #[must_use]
+    pub fn presentation(
+        &self,
+    ) -> ::buffa::EnumValue<super::super::ReleaseUiPresentation> {
+        self.0.reborrow().presentation
+    }
+    /// Validated platform-relative route metadata; this is not a browser URL.
+    ///
+    /// Field 6: `route_base`
+    #[must_use]
+    pub fn route_base(&self) -> &'_ str {
+        self.0.reborrow().route_base
+    }
+    /// Validated UI-relative entrypoint metadata; this is not a browser URL.
+    ///
+    /// Field 7: `entrypoint`
+    #[must_use]
+    pub fn entrypoint(&self) -> &'_ str {
+        self.0.reborrow().entrypoint
+    }
+    /// Field 8: `ui_kit_version`
+    #[must_use]
+    pub fn ui_kit_version(&self) -> u32 {
+        self.0.reborrow().ui_kit_version
+    }
+    /// Field 9: `cache`
+    #[must_use]
+    pub fn cache(&self) -> ::buffa::EnumValue<super::super::ReleaseUiCachePolicy> {
+        self.0.reborrow().cache
+    }
+    /// Field 12: `apis`
+    #[must_use]
+    pub fn apis(
+        &self,
+    ) -> &::buffa::RepeatedView<
+        '_,
+        super::super::__buffa::view::ReleaseUiApiBindingView<'_>,
+    > {
+        &self.0.reborrow().apis
+    }
+    /// Oneof `content`.
+    #[must_use]
+    pub fn content(
+        &self,
+    ) -> ::core::option::Option<
+        &super::super::__buffa::view::oneof::release_ui_descriptor::Content<'_>,
+    > {
+        self.0.reborrow().content.as_ref()
+    }
+}
+impl ::core::convert::From<::buffa::OwnedView<ReleaseUiDescriptorView<'static>>>
+for ReleaseUiDescriptorOwnedView {
+    fn from(inner: ::buffa::OwnedView<ReleaseUiDescriptorView<'static>>) -> Self {
+        ReleaseUiDescriptorOwnedView(inner)
+    }
+}
+impl ::core::convert::From<ReleaseUiDescriptorOwnedView>
+for ::buffa::OwnedView<ReleaseUiDescriptorView<'static>> {
+    fn from(wrapper: ReleaseUiDescriptorOwnedView) -> Self {
+        wrapper.0
+    }
+}
+impl ::core::convert::AsRef<::buffa::OwnedView<ReleaseUiDescriptorView<'static>>>
+for ReleaseUiDescriptorOwnedView {
+    fn as_ref(&self) -> &::buffa::OwnedView<ReleaseUiDescriptorView<'static>> {
+        &self.0
+    }
+}
+impl ::buffa::HasMessageView for super::super::ReleaseUiDescriptor {
+    type View<'a> = ReleaseUiDescriptorView<'a>;
+    type ViewHandle = ReleaseUiDescriptorOwnedView;
+}
+impl ::serde::Serialize for ReleaseUiDescriptorOwnedView {
+    fn serialize<__S: ::serde::Serializer>(
+        &self,
+        __s: __S,
+    ) -> ::core::result::Result<__S::Ok, __S::Error> {
+        ::serde::Serialize::serialize(&self.0, __s)
+    }
+}
+#[derive(Clone, Debug, Default)]
+pub struct ReleaseUiStaticContentView<'a> {
+    /// Field 1: `files`
+    pub files: ::buffa::RepeatedView<
+        'a,
+        super::super::__buffa::view::ReleaseUiStaticFileView<'a>,
+    >,
+    pub __buffa_unknown_fields: ::buffa::UnknownFieldsView<'a>,
+}
+impl<'a> ::buffa::MessageView<'a> for ReleaseUiStaticContentView<'a> {
+    type Owned = super::super::ReleaseUiStaticContent;
+    fn decode_view(buf: &'a [u8]) -> ::core::result::Result<Self, ::buffa::DecodeError> {
+        let __limit = ::core::cell::Cell::new(::buffa::DEFAULT_UNKNOWN_FIELD_LIMIT);
+        <Self as ::buffa::MessageView>::decode_view_ctx(
+            buf,
+            ::buffa::DecodeContext::new(::buffa::RECURSION_LIMIT, &__limit),
+        )
+    }
+    fn decode_view_with_ctx(
+        buf: &'a [u8],
+        ctx: ::buffa::DecodeContext<'_>,
+    ) -> ::core::result::Result<Self, ::buffa::DecodeError> {
+        <Self as ::buffa::MessageView>::decode_view_ctx(buf, ctx)
+    }
+    fn merge_view_field(
+        &mut self,
+        tag: ::buffa::encoding::Tag,
+        cur: &'a [u8],
+        before_tag: &'a [u8],
+        ctx: ::buffa::DecodeContext<'_>,
+    ) -> ::core::result::Result<&'a [u8], ::buffa::DecodeError> {
+        let _ = ctx;
+        #[allow(unused_variables)]
+        let view = self;
+        let mut cur = cur;
+        match tag.field_number() {
+            1u32 => {
+                ::buffa::encoding::check_wire_type(
+                    tag,
+                    ::buffa::encoding::WireType::LengthDelimited,
+                )?;
+                let __sub_ctx = ctx.descend()?;
+                let sub = ::buffa::types::borrow_bytes(&mut cur)?;
+                view.files
+                    .push(
+                        <super::super::__buffa::view::ReleaseUiStaticFileView as ::buffa::MessageView>::decode_view_ctx(
+                            sub,
+                            __sub_ctx,
+                        )?,
+                    );
+            }
+            _ => {
+                ::buffa::encoding::skip_field_depth(tag, &mut cur, ctx.depth())?;
+                let span_len = before_tag.len() - cur.len();
+                view.__buffa_unknown_fields.push_record(before_tag, span_len, ctx)?;
+            }
+        }
+        ::core::result::Result::Ok(cur)
+    }
+    fn to_owned_message(
+        &self,
+    ) -> ::core::result::Result<
+        super::super::ReleaseUiStaticContent,
+        ::buffa::DecodeError,
+    > {
+        self.to_owned_from_source(None)
+    }
+    #[allow(clippy::useless_conversion, clippy::needless_update)]
+    fn to_owned_from_source(
+        &self,
+        __buffa_src: ::core::option::Option<&::buffa::bytes::Bytes>,
+    ) -> ::core::result::Result<
+        super::super::ReleaseUiStaticContent,
+        ::buffa::DecodeError,
+    > {
+        #[allow(unused_imports)]
+        use ::buffa::alloc::string::ToString as _;
+        let _ = __buffa_src;
+        ::core::result::Result::Ok(super::super::ReleaseUiStaticContent {
+            files: self
+                .files
+                .iter()
+                .map(|v| v.to_owned_from_source(__buffa_src))
+                .collect::<::core::result::Result<_, ::buffa::DecodeError>>()?,
+            __buffa_unknown_fields: self.__buffa_unknown_fields.to_owned()?.into(),
+            ..::core::default::Default::default()
+        })
+    }
+}
+impl<'a> ::buffa::ViewEncode<'a> for ReleaseUiStaticContentView<'a> {
+    #[allow(clippy::needless_borrow, clippy::let_and_return)]
+    fn compute_size(&self, __cache: &mut ::buffa::SizeCache) -> u32 {
+        #[allow(unused_imports)]
+        use ::buffa::Enumeration as _;
+        let mut size = 0u32;
+        for v in &self.files {
+            let __slot = __cache.reserve();
+            let inner_size = v.compute_size(__cache);
+            __cache.set(__slot, inner_size);
+            size
+                += 1u32 + ::buffa::encoding::varint_len(inner_size as u64) as u32
+                    + inner_size;
+        }
+        size += self.__buffa_unknown_fields.encoded_len() as u32;
+        size
+    }
+    #[allow(clippy::needless_borrow)]
+    fn write_to(
+        &self,
+        __cache: &mut ::buffa::SizeCache,
+        buf: &mut impl ::buffa::bytes::BufMut,
+    ) {
+        #[allow(unused_imports)]
+        use ::buffa::Enumeration as _;
+        for v in &self.files {
+            ::buffa::types::put_len_delimited_header(1u32, __cache.consume_next(), buf);
+            v.write_to(__cache, buf);
+        }
+        self.__buffa_unknown_fields.write_to(buf);
+    }
+}
+/// Serializes this view as protobuf JSON.
+///
+/// Implicit-presence fields with default values are omitted, `required`
+/// fields are always emitted, explicit-presence (`optional`) fields are
+/// emitted only when set, bytes fields are base64-encoded, and enum
+/// values are their proto name strings.
+///
+/// This impl uses `serialize_map(None)` because the number of emitted
+/// fields depends on default-omission rules; serializers that require
+/// known map lengths (e.g. `bincode`) will return a runtime error.
+/// Use the owned message type for those formats.
+impl<'__a> ::serde::Serialize for ReleaseUiStaticContentView<'__a> {
+    fn serialize<__S: ::serde::Serializer>(
+        &self,
+        __s: __S,
+    ) -> ::core::result::Result<__S::Ok, __S::Error> {
+        use ::serde::ser::SerializeMap as _;
+        let mut __map = __s.serialize_map(::core::option::Option::None)?;
+        if !self.files.is_empty() {
+            __map.serialize_entry("files", &*self.files)?;
+        }
+        __map.end()
+    }
+}
+impl<'a> ::buffa::MessageName for ReleaseUiStaticContentView<'a> {
+    const PACKAGE: &'static str = "hephaestus.release.v1";
+    const NAME: &'static str = "ReleaseUiStaticContent";
+    const FULL_NAME: &'static str = "hephaestus.release.v1.ReleaseUiStaticContent";
+    const TYPE_URL: &'static str = "type.googleapis.com/hephaestus.release.v1.ReleaseUiStaticContent";
+}
+::buffa::impl_default_view_instance!(ReleaseUiStaticContentView);
+::buffa::impl_view_reborrow!(ReleaseUiStaticContentView);
+/** Self-contained, `'static` owned view of a `ReleaseUiStaticContent` message.
+
+ Wraps [`::buffa::OwnedView`]`<`[`ReleaseUiStaticContentView`]`<'static>>`: the decoded view and the [`::buffa::bytes::Bytes`] buffer it borrows from travel together, so the handle is `'static` and `Send + Sync` — suitable for async handlers, spawned tasks, and anywhere a `'static` bound is required.
+
+ Field accessors return borrows tied to `&self`. Use [`Self::view`] to get the full [`ReleaseUiStaticContentView`] when you need struct patterns, iteration helpers, or to pass the view to lifetime-parameterised code.*/
+#[derive(Clone, Debug)]
+pub struct ReleaseUiStaticContentOwnedView(
+    ::buffa::OwnedView<ReleaseUiStaticContentView<'static>>,
+);
+impl ReleaseUiStaticContentOwnedView {
+    /// Decode an owned view from a [`::buffa::bytes::Bytes`] buffer.
+    ///
+    /// The view borrows directly from the buffer's data; the buffer is
+    /// retained inside the returned handle.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`::buffa::DecodeError`] if the buffer contains invalid
+    /// protobuf data.
+    pub fn decode(
+        bytes: ::buffa::bytes::Bytes,
+    ) -> ::core::result::Result<Self, ::buffa::DecodeError> {
+        ::core::result::Result::Ok(
+            ReleaseUiStaticContentOwnedView(::buffa::OwnedView::decode(bytes)?),
+        )
+    }
+    /// Decode with custom [`::buffa::DecodeOptions`] (recursion limit,
+    /// max message size).
+    ///
+    /// # Errors
+    ///
+    /// Returns [`::buffa::DecodeError`] if the buffer is invalid or
+    /// exceeds the configured limits.
+    pub fn decode_with_options(
+        bytes: ::buffa::bytes::Bytes,
+        opts: &::buffa::DecodeOptions,
+    ) -> ::core::result::Result<Self, ::buffa::DecodeError> {
+        ::core::result::Result::Ok(
+            ReleaseUiStaticContentOwnedView(
+                ::buffa::OwnedView::decode_with_options(bytes, opts)?,
+            ),
+        )
+    }
+    /// Build from an owned message via an encode → decode round-trip.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`::buffa::DecodeError`] if the re-encoded bytes are
+    /// somehow invalid (should not happen for well-formed messages).
+    pub fn from_owned(
+        msg: &super::super::ReleaseUiStaticContent,
+    ) -> ::core::result::Result<Self, ::buffa::DecodeError> {
+        ::core::result::Result::Ok(
+            ReleaseUiStaticContentOwnedView(::buffa::OwnedView::from_owned(msg)?),
+        )
+    }
+    /// Borrow the full [`ReleaseUiStaticContentView`] with its lifetime tied to `&self`.
+    #[must_use]
+    pub fn view(&self) -> &ReleaseUiStaticContentView<'_> {
+        self.0.reborrow()
+    }
+    /// Convert to the owned message type.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if re-materializing preserved unknown fields
+    /// fails (e.g. the unknown-field limit is exceeded).
+    pub fn to_owned_message(
+        &self,
+    ) -> ::core::result::Result<
+        super::super::ReleaseUiStaticContent,
+        ::buffa::DecodeError,
+    > {
+        self.0.to_owned_message()
+    }
+    /// The underlying bytes buffer.
+    #[must_use]
+    pub fn bytes(&self) -> &::buffa::bytes::Bytes {
+        self.0.bytes()
+    }
+    /// Consume the handle, returning the underlying bytes buffer.
+    #[must_use]
+    pub fn into_bytes(self) -> ::buffa::bytes::Bytes {
+        self.0.into_bytes()
+    }
+    /// Field 1: `files`
+    #[must_use]
+    pub fn files(
+        &self,
+    ) -> &::buffa::RepeatedView<
+        '_,
+        super::super::__buffa::view::ReleaseUiStaticFileView<'_>,
+    > {
+        &self.0.reborrow().files
+    }
+}
+impl ::core::convert::From<::buffa::OwnedView<ReleaseUiStaticContentView<'static>>>
+for ReleaseUiStaticContentOwnedView {
+    fn from(inner: ::buffa::OwnedView<ReleaseUiStaticContentView<'static>>) -> Self {
+        ReleaseUiStaticContentOwnedView(inner)
+    }
+}
+impl ::core::convert::From<ReleaseUiStaticContentOwnedView>
+for ::buffa::OwnedView<ReleaseUiStaticContentView<'static>> {
+    fn from(wrapper: ReleaseUiStaticContentOwnedView) -> Self {
+        wrapper.0
+    }
+}
+impl ::core::convert::AsRef<::buffa::OwnedView<ReleaseUiStaticContentView<'static>>>
+for ReleaseUiStaticContentOwnedView {
+    fn as_ref(&self) -> &::buffa::OwnedView<ReleaseUiStaticContentView<'static>> {
+        &self.0
+    }
+}
+impl ::buffa::HasMessageView for super::super::ReleaseUiStaticContent {
+    type View<'a> = ReleaseUiStaticContentView<'a>;
+    type ViewHandle = ReleaseUiStaticContentOwnedView;
+}
+impl ::serde::Serialize for ReleaseUiStaticContentOwnedView {
+    fn serialize<__S: ::serde::Serializer>(
+        &self,
+        __s: __S,
+    ) -> ::core::result::Result<__S::Ok, __S::Error> {
+        ::serde::Serialize::serialize(&self.0, __s)
+    }
+}
+#[derive(Clone, Debug, Default)]
+pub struct ReleaseUiStaticFileView<'a> {
+    /// Validated UI-relative route metadata; this is not a browser URL.
+    ///
+    /// Field 1: `route`
+    pub route: &'a str,
+    /// Field 2: `artifact_id`
+    pub artifact_id: ::buffa::MessageFieldView<
+        super::super::super::super::common::v1::__buffa::view::OpaqueIdView<'a>,
+    >,
+    /// Field 3: `media_type`
+    pub media_type: &'a str,
+    pub __buffa_unknown_fields: ::buffa::UnknownFieldsView<'a>,
+}
+impl<'a> ::buffa::MessageView<'a> for ReleaseUiStaticFileView<'a> {
+    type Owned = super::super::ReleaseUiStaticFile;
+    fn decode_view(buf: &'a [u8]) -> ::core::result::Result<Self, ::buffa::DecodeError> {
+        let __limit = ::core::cell::Cell::new(::buffa::DEFAULT_UNKNOWN_FIELD_LIMIT);
+        <Self as ::buffa::MessageView>::decode_view_ctx(
+            buf,
+            ::buffa::DecodeContext::new(::buffa::RECURSION_LIMIT, &__limit),
+        )
+    }
+    fn decode_view_with_ctx(
+        buf: &'a [u8],
+        ctx: ::buffa::DecodeContext<'_>,
+    ) -> ::core::result::Result<Self, ::buffa::DecodeError> {
+        <Self as ::buffa::MessageView>::decode_view_ctx(buf, ctx)
+    }
+    fn merge_view_field(
+        &mut self,
+        tag: ::buffa::encoding::Tag,
+        cur: &'a [u8],
+        before_tag: &'a [u8],
+        ctx: ::buffa::DecodeContext<'_>,
+    ) -> ::core::result::Result<&'a [u8], ::buffa::DecodeError> {
+        let _ = ctx;
+        #[allow(unused_variables)]
+        let view = self;
+        let mut cur = cur;
+        match tag.field_number() {
+            1u32 => {
+                ::buffa::encoding::check_wire_type(
+                    tag,
+                    ::buffa::encoding::WireType::LengthDelimited,
+                )?;
+                view.route = ::buffa::types::borrow_str(&mut cur)?;
+            }
+            2u32 => {
+                ::buffa::encoding::check_wire_type(
+                    tag,
+                    ::buffa::encoding::WireType::LengthDelimited,
+                )?;
+                let __sub_ctx = ctx.descend()?;
+                let sub = ::buffa::types::borrow_bytes(&mut cur)?;
+                match view.artifact_id.as_mut() {
+                    Some(existing) => {
+                        ::buffa::MessageView::merge_into_view(existing, sub, __sub_ctx)?
+                    }
+                    None => {
+                        view.artifact_id = ::buffa::MessageFieldView::set(
+                            <super::super::super::super::common::v1::__buffa::view::OpaqueIdView as ::buffa::MessageView>::decode_view_ctx(
+                                sub,
+                                __sub_ctx,
+                            )?,
+                        );
+                    }
+                }
+            }
+            3u32 => {
+                ::buffa::encoding::check_wire_type(
+                    tag,
+                    ::buffa::encoding::WireType::LengthDelimited,
+                )?;
+                view.media_type = ::buffa::types::borrow_str(&mut cur)?;
+            }
+            _ => {
+                ::buffa::encoding::skip_field_depth(tag, &mut cur, ctx.depth())?;
+                let span_len = before_tag.len() - cur.len();
+                view.__buffa_unknown_fields.push_record(before_tag, span_len, ctx)?;
+            }
+        }
+        ::core::result::Result::Ok(cur)
+    }
+    fn to_owned_message(
+        &self,
+    ) -> ::core::result::Result<
+        super::super::ReleaseUiStaticFile,
+        ::buffa::DecodeError,
+    > {
+        self.to_owned_from_source(None)
+    }
+    #[allow(clippy::useless_conversion, clippy::needless_update)]
+    fn to_owned_from_source(
+        &self,
+        __buffa_src: ::core::option::Option<&::buffa::bytes::Bytes>,
+    ) -> ::core::result::Result<
+        super::super::ReleaseUiStaticFile,
+        ::buffa::DecodeError,
+    > {
+        #[allow(unused_imports)]
+        use ::buffa::alloc::string::ToString as _;
+        let _ = __buffa_src;
+        ::core::result::Result::Ok(super::super::ReleaseUiStaticFile {
+            route: self.route.to_string(),
+            artifact_id: match self.artifact_id.as_option() {
+                Some(v) => {
+                    ::buffa::MessageField::<
+                        super::super::super::super::common::v1::OpaqueId,
+                    >::some(v.to_owned_from_source(__buffa_src)?)
+                }
+                None => ::buffa::MessageField::none(),
+            },
+            media_type: self.media_type.to_string(),
+            __buffa_unknown_fields: self.__buffa_unknown_fields.to_owned()?.into(),
+            ..::core::default::Default::default()
+        })
+    }
+}
+impl<'a> ::buffa::ViewEncode<'a> for ReleaseUiStaticFileView<'a> {
+    #[allow(clippy::needless_borrow, clippy::let_and_return)]
+    fn compute_size(&self, __cache: &mut ::buffa::SizeCache) -> u32 {
+        #[allow(unused_imports)]
+        use ::buffa::Enumeration as _;
+        let mut size = 0u32;
+        if !self.route.is_empty() {
+            size += 1u32 + ::buffa::types::string_encoded_len(&self.route) as u32;
+        }
+        if self.artifact_id.is_set() {
+            let __slot = __cache.reserve();
+            let inner_size = self.artifact_id.compute_size(__cache);
+            __cache.set(__slot, inner_size);
+            size
+                += 1u32 + ::buffa::encoding::varint_len(inner_size as u64) as u32
+                    + inner_size;
+        }
+        if !self.media_type.is_empty() {
+            size += 1u32 + ::buffa::types::string_encoded_len(&self.media_type) as u32;
+        }
+        size += self.__buffa_unknown_fields.encoded_len() as u32;
+        size
+    }
+    #[allow(clippy::needless_borrow)]
+    fn write_to(
+        &self,
+        __cache: &mut ::buffa::SizeCache,
+        buf: &mut impl ::buffa::bytes::BufMut,
+    ) {
+        #[allow(unused_imports)]
+        use ::buffa::Enumeration as _;
+        if !self.route.is_empty() {
+            ::buffa::types::put_string_field(1u32, &self.route, buf);
+        }
+        if self.artifact_id.is_set() {
+            ::buffa::types::put_len_delimited_header(2u32, __cache.consume_next(), buf);
+            self.artifact_id.write_to(__cache, buf);
+        }
+        if !self.media_type.is_empty() {
+            ::buffa::types::put_string_field(3u32, &self.media_type, buf);
+        }
+        self.__buffa_unknown_fields.write_to(buf);
+    }
+}
+/// Serializes this view as protobuf JSON.
+///
+/// Implicit-presence fields with default values are omitted, `required`
+/// fields are always emitted, explicit-presence (`optional`) fields are
+/// emitted only when set, bytes fields are base64-encoded, and enum
+/// values are their proto name strings.
+///
+/// This impl uses `serialize_map(None)` because the number of emitted
+/// fields depends on default-omission rules; serializers that require
+/// known map lengths (e.g. `bincode`) will return a runtime error.
+/// Use the owned message type for those formats.
+impl<'__a> ::serde::Serialize for ReleaseUiStaticFileView<'__a> {
+    fn serialize<__S: ::serde::Serializer>(
+        &self,
+        __s: __S,
+    ) -> ::core::result::Result<__S::Ok, __S::Error> {
+        use ::serde::ser::SerializeMap as _;
+        let mut __map = __s.serialize_map(::core::option::Option::None)?;
+        if !::buffa::json_helpers::skip_if::is_empty_str(self.route) {
+            __map.serialize_entry("route", self.route)?;
+        }
+        {
+            if let ::core::option::Option::Some(__v) = self.artifact_id.as_option() {
+                __map.serialize_entry("artifactId", __v)?;
+            }
+        }
+        if !::buffa::json_helpers::skip_if::is_empty_str(self.media_type) {
+            __map.serialize_entry("mediaType", self.media_type)?;
+        }
+        __map.end()
+    }
+}
+impl<'a> ::buffa::MessageName for ReleaseUiStaticFileView<'a> {
+    const PACKAGE: &'static str = "hephaestus.release.v1";
+    const NAME: &'static str = "ReleaseUiStaticFile";
+    const FULL_NAME: &'static str = "hephaestus.release.v1.ReleaseUiStaticFile";
+    const TYPE_URL: &'static str = "type.googleapis.com/hephaestus.release.v1.ReleaseUiStaticFile";
+}
+::buffa::impl_default_view_instance!(ReleaseUiStaticFileView);
+::buffa::impl_view_reborrow!(ReleaseUiStaticFileView);
+/** Self-contained, `'static` owned view of a `ReleaseUiStaticFile` message.
+
+ Wraps [`::buffa::OwnedView`]`<`[`ReleaseUiStaticFileView`]`<'static>>`: the decoded view and the [`::buffa::bytes::Bytes`] buffer it borrows from travel together, so the handle is `'static` and `Send + Sync` — suitable for async handlers, spawned tasks, and anywhere a `'static` bound is required.
+
+ Field accessors return borrows tied to `&self`. Use [`Self::view`] to get the full [`ReleaseUiStaticFileView`] when you need struct patterns, iteration helpers, or to pass the view to lifetime-parameterised code.*/
+#[derive(Clone, Debug)]
+pub struct ReleaseUiStaticFileOwnedView(
+    ::buffa::OwnedView<ReleaseUiStaticFileView<'static>>,
+);
+impl ReleaseUiStaticFileOwnedView {
+    /// Decode an owned view from a [`::buffa::bytes::Bytes`] buffer.
+    ///
+    /// The view borrows directly from the buffer's data; the buffer is
+    /// retained inside the returned handle.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`::buffa::DecodeError`] if the buffer contains invalid
+    /// protobuf data.
+    pub fn decode(
+        bytes: ::buffa::bytes::Bytes,
+    ) -> ::core::result::Result<Self, ::buffa::DecodeError> {
+        ::core::result::Result::Ok(
+            ReleaseUiStaticFileOwnedView(::buffa::OwnedView::decode(bytes)?),
+        )
+    }
+    /// Decode with custom [`::buffa::DecodeOptions`] (recursion limit,
+    /// max message size).
+    ///
+    /// # Errors
+    ///
+    /// Returns [`::buffa::DecodeError`] if the buffer is invalid or
+    /// exceeds the configured limits.
+    pub fn decode_with_options(
+        bytes: ::buffa::bytes::Bytes,
+        opts: &::buffa::DecodeOptions,
+    ) -> ::core::result::Result<Self, ::buffa::DecodeError> {
+        ::core::result::Result::Ok(
+            ReleaseUiStaticFileOwnedView(
+                ::buffa::OwnedView::decode_with_options(bytes, opts)?,
+            ),
+        )
+    }
+    /// Build from an owned message via an encode → decode round-trip.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`::buffa::DecodeError`] if the re-encoded bytes are
+    /// somehow invalid (should not happen for well-formed messages).
+    pub fn from_owned(
+        msg: &super::super::ReleaseUiStaticFile,
+    ) -> ::core::result::Result<Self, ::buffa::DecodeError> {
+        ::core::result::Result::Ok(
+            ReleaseUiStaticFileOwnedView(::buffa::OwnedView::from_owned(msg)?),
+        )
+    }
+    /// Borrow the full [`ReleaseUiStaticFileView`] with its lifetime tied to `&self`.
+    #[must_use]
+    pub fn view(&self) -> &ReleaseUiStaticFileView<'_> {
+        self.0.reborrow()
+    }
+    /// Convert to the owned message type.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if re-materializing preserved unknown fields
+    /// fails (e.g. the unknown-field limit is exceeded).
+    pub fn to_owned_message(
+        &self,
+    ) -> ::core::result::Result<
+        super::super::ReleaseUiStaticFile,
+        ::buffa::DecodeError,
+    > {
+        self.0.to_owned_message()
+    }
+    /// The underlying bytes buffer.
+    #[must_use]
+    pub fn bytes(&self) -> &::buffa::bytes::Bytes {
+        self.0.bytes()
+    }
+    /// Consume the handle, returning the underlying bytes buffer.
+    #[must_use]
+    pub fn into_bytes(self) -> ::buffa::bytes::Bytes {
+        self.0.into_bytes()
+    }
+    /// Validated UI-relative route metadata; this is not a browser URL.
+    ///
+    /// Field 1: `route`
+    #[must_use]
+    pub fn route(&self) -> &'_ str {
+        self.0.reborrow().route
+    }
+    /// Field 2: `artifact_id`
+    #[must_use]
+    pub fn artifact_id(
+        &self,
+    ) -> &::buffa::MessageFieldView<
+        super::super::super::super::common::v1::__buffa::view::OpaqueIdView<'_>,
+    > {
+        &self.0.reborrow().artifact_id
+    }
+    /// Field 3: `media_type`
+    #[must_use]
+    pub fn media_type(&self) -> &'_ str {
+        self.0.reborrow().media_type
+    }
+}
+impl ::core::convert::From<::buffa::OwnedView<ReleaseUiStaticFileView<'static>>>
+for ReleaseUiStaticFileOwnedView {
+    fn from(inner: ::buffa::OwnedView<ReleaseUiStaticFileView<'static>>) -> Self {
+        ReleaseUiStaticFileOwnedView(inner)
+    }
+}
+impl ::core::convert::From<ReleaseUiStaticFileOwnedView>
+for ::buffa::OwnedView<ReleaseUiStaticFileView<'static>> {
+    fn from(wrapper: ReleaseUiStaticFileOwnedView) -> Self {
+        wrapper.0
+    }
+}
+impl ::core::convert::AsRef<::buffa::OwnedView<ReleaseUiStaticFileView<'static>>>
+for ReleaseUiStaticFileOwnedView {
+    fn as_ref(&self) -> &::buffa::OwnedView<ReleaseUiStaticFileView<'static>> {
+        &self.0
+    }
+}
+impl ::buffa::HasMessageView for super::super::ReleaseUiStaticFile {
+    type View<'a> = ReleaseUiStaticFileView<'a>;
+    type ViewHandle = ReleaseUiStaticFileOwnedView;
+}
+impl ::serde::Serialize for ReleaseUiStaticFileOwnedView {
+    fn serialize<__S: ::serde::Serializer>(
+        &self,
+        __s: __S,
+    ) -> ::core::result::Result<__S::Ok, __S::Error> {
+        ::serde::Serialize::serialize(&self.0, __s)
+    }
+}
+#[derive(Clone, Debug, Default)]
+pub struct ReleaseUiManagedServiceView<'a> {
+    /// Repository gateway declaration name, not an origin or browser URL.
+    ///
+    /// Field 1: `gateway_name`
+    pub gateway_name: &'a str,
+    /// Validated gateway route metadata; this is not an authorized browser URL.
+    ///
+    /// Field 2: `route`
+    pub route: &'a str,
+    /// Field 3: `release_agent_id`
+    pub release_agent_id: ::buffa::MessageFieldView<
+        super::super::super::super::common::v1::__buffa::view::OpaqueIdView<'a>,
+    >,
+    pub __buffa_unknown_fields: ::buffa::UnknownFieldsView<'a>,
+}
+impl<'a> ::buffa::MessageView<'a> for ReleaseUiManagedServiceView<'a> {
+    type Owned = super::super::ReleaseUiManagedService;
+    fn decode_view(buf: &'a [u8]) -> ::core::result::Result<Self, ::buffa::DecodeError> {
+        let __limit = ::core::cell::Cell::new(::buffa::DEFAULT_UNKNOWN_FIELD_LIMIT);
+        <Self as ::buffa::MessageView>::decode_view_ctx(
+            buf,
+            ::buffa::DecodeContext::new(::buffa::RECURSION_LIMIT, &__limit),
+        )
+    }
+    fn decode_view_with_ctx(
+        buf: &'a [u8],
+        ctx: ::buffa::DecodeContext<'_>,
+    ) -> ::core::result::Result<Self, ::buffa::DecodeError> {
+        <Self as ::buffa::MessageView>::decode_view_ctx(buf, ctx)
+    }
+    fn merge_view_field(
+        &mut self,
+        tag: ::buffa::encoding::Tag,
+        cur: &'a [u8],
+        before_tag: &'a [u8],
+        ctx: ::buffa::DecodeContext<'_>,
+    ) -> ::core::result::Result<&'a [u8], ::buffa::DecodeError> {
+        let _ = ctx;
+        #[allow(unused_variables)]
+        let view = self;
+        let mut cur = cur;
+        match tag.field_number() {
+            1u32 => {
+                ::buffa::encoding::check_wire_type(
+                    tag,
+                    ::buffa::encoding::WireType::LengthDelimited,
+                )?;
+                view.gateway_name = ::buffa::types::borrow_str(&mut cur)?;
+            }
+            2u32 => {
+                ::buffa::encoding::check_wire_type(
+                    tag,
+                    ::buffa::encoding::WireType::LengthDelimited,
+                )?;
+                view.route = ::buffa::types::borrow_str(&mut cur)?;
+            }
+            3u32 => {
+                ::buffa::encoding::check_wire_type(
+                    tag,
+                    ::buffa::encoding::WireType::LengthDelimited,
+                )?;
+                let __sub_ctx = ctx.descend()?;
+                let sub = ::buffa::types::borrow_bytes(&mut cur)?;
+                match view.release_agent_id.as_mut() {
+                    Some(existing) => {
+                        ::buffa::MessageView::merge_into_view(existing, sub, __sub_ctx)?
+                    }
+                    None => {
+                        view.release_agent_id = ::buffa::MessageFieldView::set(
+                            <super::super::super::super::common::v1::__buffa::view::OpaqueIdView as ::buffa::MessageView>::decode_view_ctx(
+                                sub,
+                                __sub_ctx,
+                            )?,
+                        );
+                    }
+                }
+            }
+            _ => {
+                ::buffa::encoding::skip_field_depth(tag, &mut cur, ctx.depth())?;
+                let span_len = before_tag.len() - cur.len();
+                view.__buffa_unknown_fields.push_record(before_tag, span_len, ctx)?;
+            }
+        }
+        ::core::result::Result::Ok(cur)
+    }
+    fn to_owned_message(
+        &self,
+    ) -> ::core::result::Result<
+        super::super::ReleaseUiManagedService,
+        ::buffa::DecodeError,
+    > {
+        self.to_owned_from_source(None)
+    }
+    #[allow(clippy::useless_conversion, clippy::needless_update)]
+    fn to_owned_from_source(
+        &self,
+        __buffa_src: ::core::option::Option<&::buffa::bytes::Bytes>,
+    ) -> ::core::result::Result<
+        super::super::ReleaseUiManagedService,
+        ::buffa::DecodeError,
+    > {
+        #[allow(unused_imports)]
+        use ::buffa::alloc::string::ToString as _;
+        let _ = __buffa_src;
+        ::core::result::Result::Ok(super::super::ReleaseUiManagedService {
+            gateway_name: self.gateway_name.to_string(),
+            route: self.route.to_string(),
+            release_agent_id: match self.release_agent_id.as_option() {
+                Some(v) => {
+                    ::buffa::MessageField::<
+                        super::super::super::super::common::v1::OpaqueId,
+                    >::some(v.to_owned_from_source(__buffa_src)?)
+                }
+                None => ::buffa::MessageField::none(),
+            },
+            __buffa_unknown_fields: self.__buffa_unknown_fields.to_owned()?.into(),
+            ..::core::default::Default::default()
+        })
+    }
+}
+impl<'a> ::buffa::ViewEncode<'a> for ReleaseUiManagedServiceView<'a> {
+    #[allow(clippy::needless_borrow, clippy::let_and_return)]
+    fn compute_size(&self, __cache: &mut ::buffa::SizeCache) -> u32 {
+        #[allow(unused_imports)]
+        use ::buffa::Enumeration as _;
+        let mut size = 0u32;
+        if !self.gateway_name.is_empty() {
+            size += 1u32 + ::buffa::types::string_encoded_len(&self.gateway_name) as u32;
+        }
+        if !self.route.is_empty() {
+            size += 1u32 + ::buffa::types::string_encoded_len(&self.route) as u32;
+        }
+        if self.release_agent_id.is_set() {
+            let __slot = __cache.reserve();
+            let inner_size = self.release_agent_id.compute_size(__cache);
+            __cache.set(__slot, inner_size);
+            size
+                += 1u32 + ::buffa::encoding::varint_len(inner_size as u64) as u32
+                    + inner_size;
+        }
+        size += self.__buffa_unknown_fields.encoded_len() as u32;
+        size
+    }
+    #[allow(clippy::needless_borrow)]
+    fn write_to(
+        &self,
+        __cache: &mut ::buffa::SizeCache,
+        buf: &mut impl ::buffa::bytes::BufMut,
+    ) {
+        #[allow(unused_imports)]
+        use ::buffa::Enumeration as _;
+        if !self.gateway_name.is_empty() {
+            ::buffa::types::put_string_field(1u32, &self.gateway_name, buf);
+        }
+        if !self.route.is_empty() {
+            ::buffa::types::put_string_field(2u32, &self.route, buf);
+        }
+        if self.release_agent_id.is_set() {
+            ::buffa::types::put_len_delimited_header(3u32, __cache.consume_next(), buf);
+            self.release_agent_id.write_to(__cache, buf);
+        }
+        self.__buffa_unknown_fields.write_to(buf);
+    }
+}
+/// Serializes this view as protobuf JSON.
+///
+/// Implicit-presence fields with default values are omitted, `required`
+/// fields are always emitted, explicit-presence (`optional`) fields are
+/// emitted only when set, bytes fields are base64-encoded, and enum
+/// values are their proto name strings.
+///
+/// This impl uses `serialize_map(None)` because the number of emitted
+/// fields depends on default-omission rules; serializers that require
+/// known map lengths (e.g. `bincode`) will return a runtime error.
+/// Use the owned message type for those formats.
+impl<'__a> ::serde::Serialize for ReleaseUiManagedServiceView<'__a> {
+    fn serialize<__S: ::serde::Serializer>(
+        &self,
+        __s: __S,
+    ) -> ::core::result::Result<__S::Ok, __S::Error> {
+        use ::serde::ser::SerializeMap as _;
+        let mut __map = __s.serialize_map(::core::option::Option::None)?;
+        if !::buffa::json_helpers::skip_if::is_empty_str(self.gateway_name) {
+            __map.serialize_entry("gatewayName", self.gateway_name)?;
+        }
+        if !::buffa::json_helpers::skip_if::is_empty_str(self.route) {
+            __map.serialize_entry("route", self.route)?;
+        }
+        {
+            if let ::core::option::Option::Some(__v) = self.release_agent_id.as_option()
+            {
+                __map.serialize_entry("releaseAgentId", __v)?;
+            }
+        }
+        __map.end()
+    }
+}
+impl<'a> ::buffa::MessageName for ReleaseUiManagedServiceView<'a> {
+    const PACKAGE: &'static str = "hephaestus.release.v1";
+    const NAME: &'static str = "ReleaseUiManagedService";
+    const FULL_NAME: &'static str = "hephaestus.release.v1.ReleaseUiManagedService";
+    const TYPE_URL: &'static str = "type.googleapis.com/hephaestus.release.v1.ReleaseUiManagedService";
+}
+::buffa::impl_default_view_instance!(ReleaseUiManagedServiceView);
+::buffa::impl_view_reborrow!(ReleaseUiManagedServiceView);
+/** Self-contained, `'static` owned view of a `ReleaseUiManagedService` message.
+
+ Wraps [`::buffa::OwnedView`]`<`[`ReleaseUiManagedServiceView`]`<'static>>`: the decoded view and the [`::buffa::bytes::Bytes`] buffer it borrows from travel together, so the handle is `'static` and `Send + Sync` — suitable for async handlers, spawned tasks, and anywhere a `'static` bound is required.
+
+ Field accessors return borrows tied to `&self`. Use [`Self::view`] to get the full [`ReleaseUiManagedServiceView`] when you need struct patterns, iteration helpers, or to pass the view to lifetime-parameterised code.*/
+#[derive(Clone, Debug)]
+pub struct ReleaseUiManagedServiceOwnedView(
+    ::buffa::OwnedView<ReleaseUiManagedServiceView<'static>>,
+);
+impl ReleaseUiManagedServiceOwnedView {
+    /// Decode an owned view from a [`::buffa::bytes::Bytes`] buffer.
+    ///
+    /// The view borrows directly from the buffer's data; the buffer is
+    /// retained inside the returned handle.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`::buffa::DecodeError`] if the buffer contains invalid
+    /// protobuf data.
+    pub fn decode(
+        bytes: ::buffa::bytes::Bytes,
+    ) -> ::core::result::Result<Self, ::buffa::DecodeError> {
+        ::core::result::Result::Ok(
+            ReleaseUiManagedServiceOwnedView(::buffa::OwnedView::decode(bytes)?),
+        )
+    }
+    /// Decode with custom [`::buffa::DecodeOptions`] (recursion limit,
+    /// max message size).
+    ///
+    /// # Errors
+    ///
+    /// Returns [`::buffa::DecodeError`] if the buffer is invalid or
+    /// exceeds the configured limits.
+    pub fn decode_with_options(
+        bytes: ::buffa::bytes::Bytes,
+        opts: &::buffa::DecodeOptions,
+    ) -> ::core::result::Result<Self, ::buffa::DecodeError> {
+        ::core::result::Result::Ok(
+            ReleaseUiManagedServiceOwnedView(
+                ::buffa::OwnedView::decode_with_options(bytes, opts)?,
+            ),
+        )
+    }
+    /// Build from an owned message via an encode → decode round-trip.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`::buffa::DecodeError`] if the re-encoded bytes are
+    /// somehow invalid (should not happen for well-formed messages).
+    pub fn from_owned(
+        msg: &super::super::ReleaseUiManagedService,
+    ) -> ::core::result::Result<Self, ::buffa::DecodeError> {
+        ::core::result::Result::Ok(
+            ReleaseUiManagedServiceOwnedView(::buffa::OwnedView::from_owned(msg)?),
+        )
+    }
+    /// Borrow the full [`ReleaseUiManagedServiceView`] with its lifetime tied to `&self`.
+    #[must_use]
+    pub fn view(&self) -> &ReleaseUiManagedServiceView<'_> {
+        self.0.reborrow()
+    }
+    /// Convert to the owned message type.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if re-materializing preserved unknown fields
+    /// fails (e.g. the unknown-field limit is exceeded).
+    pub fn to_owned_message(
+        &self,
+    ) -> ::core::result::Result<
+        super::super::ReleaseUiManagedService,
+        ::buffa::DecodeError,
+    > {
+        self.0.to_owned_message()
+    }
+    /// The underlying bytes buffer.
+    #[must_use]
+    pub fn bytes(&self) -> &::buffa::bytes::Bytes {
+        self.0.bytes()
+    }
+    /// Consume the handle, returning the underlying bytes buffer.
+    #[must_use]
+    pub fn into_bytes(self) -> ::buffa::bytes::Bytes {
+        self.0.into_bytes()
+    }
+    /// Repository gateway declaration name, not an origin or browser URL.
+    ///
+    /// Field 1: `gateway_name`
+    #[must_use]
+    pub fn gateway_name(&self) -> &'_ str {
+        self.0.reborrow().gateway_name
+    }
+    /// Validated gateway route metadata; this is not an authorized browser URL.
+    ///
+    /// Field 2: `route`
+    #[must_use]
+    pub fn route(&self) -> &'_ str {
+        self.0.reborrow().route
+    }
+    /// Field 3: `release_agent_id`
+    #[must_use]
+    pub fn release_agent_id(
+        &self,
+    ) -> &::buffa::MessageFieldView<
+        super::super::super::super::common::v1::__buffa::view::OpaqueIdView<'_>,
+    > {
+        &self.0.reborrow().release_agent_id
+    }
+}
+impl ::core::convert::From<::buffa::OwnedView<ReleaseUiManagedServiceView<'static>>>
+for ReleaseUiManagedServiceOwnedView {
+    fn from(inner: ::buffa::OwnedView<ReleaseUiManagedServiceView<'static>>) -> Self {
+        ReleaseUiManagedServiceOwnedView(inner)
+    }
+}
+impl ::core::convert::From<ReleaseUiManagedServiceOwnedView>
+for ::buffa::OwnedView<ReleaseUiManagedServiceView<'static>> {
+    fn from(wrapper: ReleaseUiManagedServiceOwnedView) -> Self {
+        wrapper.0
+    }
+}
+impl ::core::convert::AsRef<::buffa::OwnedView<ReleaseUiManagedServiceView<'static>>>
+for ReleaseUiManagedServiceOwnedView {
+    fn as_ref(&self) -> &::buffa::OwnedView<ReleaseUiManagedServiceView<'static>> {
+        &self.0
+    }
+}
+impl ::buffa::HasMessageView for super::super::ReleaseUiManagedService {
+    type View<'a> = ReleaseUiManagedServiceView<'a>;
+    type ViewHandle = ReleaseUiManagedServiceOwnedView;
+}
+impl ::serde::Serialize for ReleaseUiManagedServiceOwnedView {
+    fn serialize<__S: ::serde::Serializer>(
+        &self,
+        __s: __S,
+    ) -> ::core::result::Result<__S::Ok, __S::Error> {
+        ::serde::Serialize::serialize(&self.0, __s)
+    }
+}
+#[derive(Clone, Debug, Default)]
+pub struct ReleaseUiApiBindingView<'a> {
+    /// Field 1: `key`
+    pub key: &'a str,
+    /// Repository gateway declaration name, not an origin or browser URL.
+    ///
+    /// Field 2: `gateway_name`
+    pub gateway_name: &'a str,
+    /// Field 3: `method`
+    pub method: &'a str,
+    /// Validated gateway route metadata; this is not an authorized browser URL.
+    ///
+    /// Field 4: `route`
+    pub route: &'a str,
+    /// Field 5: `release_agent_id`
+    pub release_agent_id: ::buffa::MessageFieldView<
+        super::super::super::super::common::v1::__buffa::view::OpaqueIdView<'a>,
+    >,
+    pub __buffa_unknown_fields: ::buffa::UnknownFieldsView<'a>,
+}
+impl<'a> ::buffa::MessageView<'a> for ReleaseUiApiBindingView<'a> {
+    type Owned = super::super::ReleaseUiApiBinding;
+    fn decode_view(buf: &'a [u8]) -> ::core::result::Result<Self, ::buffa::DecodeError> {
+        let __limit = ::core::cell::Cell::new(::buffa::DEFAULT_UNKNOWN_FIELD_LIMIT);
+        <Self as ::buffa::MessageView>::decode_view_ctx(
+            buf,
+            ::buffa::DecodeContext::new(::buffa::RECURSION_LIMIT, &__limit),
+        )
+    }
+    fn decode_view_with_ctx(
+        buf: &'a [u8],
+        ctx: ::buffa::DecodeContext<'_>,
+    ) -> ::core::result::Result<Self, ::buffa::DecodeError> {
+        <Self as ::buffa::MessageView>::decode_view_ctx(buf, ctx)
+    }
+    fn merge_view_field(
+        &mut self,
+        tag: ::buffa::encoding::Tag,
+        cur: &'a [u8],
+        before_tag: &'a [u8],
+        ctx: ::buffa::DecodeContext<'_>,
+    ) -> ::core::result::Result<&'a [u8], ::buffa::DecodeError> {
+        let _ = ctx;
+        #[allow(unused_variables)]
+        let view = self;
+        let mut cur = cur;
+        match tag.field_number() {
+            1u32 => {
+                ::buffa::encoding::check_wire_type(
+                    tag,
+                    ::buffa::encoding::WireType::LengthDelimited,
+                )?;
+                view.key = ::buffa::types::borrow_str(&mut cur)?;
+            }
+            2u32 => {
+                ::buffa::encoding::check_wire_type(
+                    tag,
+                    ::buffa::encoding::WireType::LengthDelimited,
+                )?;
+                view.gateway_name = ::buffa::types::borrow_str(&mut cur)?;
+            }
+            3u32 => {
+                ::buffa::encoding::check_wire_type(
+                    tag,
+                    ::buffa::encoding::WireType::LengthDelimited,
+                )?;
+                view.method = ::buffa::types::borrow_str(&mut cur)?;
+            }
+            4u32 => {
+                ::buffa::encoding::check_wire_type(
+                    tag,
+                    ::buffa::encoding::WireType::LengthDelimited,
+                )?;
+                view.route = ::buffa::types::borrow_str(&mut cur)?;
+            }
+            5u32 => {
+                ::buffa::encoding::check_wire_type(
+                    tag,
+                    ::buffa::encoding::WireType::LengthDelimited,
+                )?;
+                let __sub_ctx = ctx.descend()?;
+                let sub = ::buffa::types::borrow_bytes(&mut cur)?;
+                match view.release_agent_id.as_mut() {
+                    Some(existing) => {
+                        ::buffa::MessageView::merge_into_view(existing, sub, __sub_ctx)?
+                    }
+                    None => {
+                        view.release_agent_id = ::buffa::MessageFieldView::set(
+                            <super::super::super::super::common::v1::__buffa::view::OpaqueIdView as ::buffa::MessageView>::decode_view_ctx(
+                                sub,
+                                __sub_ctx,
+                            )?,
+                        );
+                    }
+                }
+            }
+            _ => {
+                ::buffa::encoding::skip_field_depth(tag, &mut cur, ctx.depth())?;
+                let span_len = before_tag.len() - cur.len();
+                view.__buffa_unknown_fields.push_record(before_tag, span_len, ctx)?;
+            }
+        }
+        ::core::result::Result::Ok(cur)
+    }
+    fn to_owned_message(
+        &self,
+    ) -> ::core::result::Result<
+        super::super::ReleaseUiApiBinding,
+        ::buffa::DecodeError,
+    > {
+        self.to_owned_from_source(None)
+    }
+    #[allow(clippy::useless_conversion, clippy::needless_update)]
+    fn to_owned_from_source(
+        &self,
+        __buffa_src: ::core::option::Option<&::buffa::bytes::Bytes>,
+    ) -> ::core::result::Result<
+        super::super::ReleaseUiApiBinding,
+        ::buffa::DecodeError,
+    > {
+        #[allow(unused_imports)]
+        use ::buffa::alloc::string::ToString as _;
+        let _ = __buffa_src;
+        ::core::result::Result::Ok(super::super::ReleaseUiApiBinding {
+            key: self.key.to_string(),
+            gateway_name: self.gateway_name.to_string(),
+            method: self.method.to_string(),
+            route: self.route.to_string(),
+            release_agent_id: match self.release_agent_id.as_option() {
+                Some(v) => {
+                    ::buffa::MessageField::<
+                        super::super::super::super::common::v1::OpaqueId,
+                    >::some(v.to_owned_from_source(__buffa_src)?)
+                }
+                None => ::buffa::MessageField::none(),
+            },
+            __buffa_unknown_fields: self.__buffa_unknown_fields.to_owned()?.into(),
+            ..::core::default::Default::default()
+        })
+    }
+}
+impl<'a> ::buffa::ViewEncode<'a> for ReleaseUiApiBindingView<'a> {
+    #[allow(clippy::needless_borrow, clippy::let_and_return)]
+    fn compute_size(&self, __cache: &mut ::buffa::SizeCache) -> u32 {
+        #[allow(unused_imports)]
+        use ::buffa::Enumeration as _;
+        let mut size = 0u32;
+        if !self.key.is_empty() {
+            size += 1u32 + ::buffa::types::string_encoded_len(&self.key) as u32;
+        }
+        if !self.gateway_name.is_empty() {
+            size += 1u32 + ::buffa::types::string_encoded_len(&self.gateway_name) as u32;
+        }
+        if !self.method.is_empty() {
+            size += 1u32 + ::buffa::types::string_encoded_len(&self.method) as u32;
+        }
+        if !self.route.is_empty() {
+            size += 1u32 + ::buffa::types::string_encoded_len(&self.route) as u32;
+        }
+        if self.release_agent_id.is_set() {
+            let __slot = __cache.reserve();
+            let inner_size = self.release_agent_id.compute_size(__cache);
+            __cache.set(__slot, inner_size);
+            size
+                += 1u32 + ::buffa::encoding::varint_len(inner_size as u64) as u32
+                    + inner_size;
+        }
+        size += self.__buffa_unknown_fields.encoded_len() as u32;
+        size
+    }
+    #[allow(clippy::needless_borrow)]
+    fn write_to(
+        &self,
+        __cache: &mut ::buffa::SizeCache,
+        buf: &mut impl ::buffa::bytes::BufMut,
+    ) {
+        #[allow(unused_imports)]
+        use ::buffa::Enumeration as _;
+        if !self.key.is_empty() {
+            ::buffa::types::put_string_field(1u32, &self.key, buf);
+        }
+        if !self.gateway_name.is_empty() {
+            ::buffa::types::put_string_field(2u32, &self.gateway_name, buf);
+        }
+        if !self.method.is_empty() {
+            ::buffa::types::put_string_field(3u32, &self.method, buf);
+        }
+        if !self.route.is_empty() {
+            ::buffa::types::put_string_field(4u32, &self.route, buf);
+        }
+        if self.release_agent_id.is_set() {
+            ::buffa::types::put_len_delimited_header(5u32, __cache.consume_next(), buf);
+            self.release_agent_id.write_to(__cache, buf);
+        }
+        self.__buffa_unknown_fields.write_to(buf);
+    }
+}
+/// Serializes this view as protobuf JSON.
+///
+/// Implicit-presence fields with default values are omitted, `required`
+/// fields are always emitted, explicit-presence (`optional`) fields are
+/// emitted only when set, bytes fields are base64-encoded, and enum
+/// values are their proto name strings.
+///
+/// This impl uses `serialize_map(None)` because the number of emitted
+/// fields depends on default-omission rules; serializers that require
+/// known map lengths (e.g. `bincode`) will return a runtime error.
+/// Use the owned message type for those formats.
+impl<'__a> ::serde::Serialize for ReleaseUiApiBindingView<'__a> {
+    fn serialize<__S: ::serde::Serializer>(
+        &self,
+        __s: __S,
+    ) -> ::core::result::Result<__S::Ok, __S::Error> {
+        use ::serde::ser::SerializeMap as _;
+        let mut __map = __s.serialize_map(::core::option::Option::None)?;
+        if !::buffa::json_helpers::skip_if::is_empty_str(self.key) {
+            __map.serialize_entry("key", self.key)?;
+        }
+        if !::buffa::json_helpers::skip_if::is_empty_str(self.gateway_name) {
+            __map.serialize_entry("gatewayName", self.gateway_name)?;
+        }
+        if !::buffa::json_helpers::skip_if::is_empty_str(self.method) {
+            __map.serialize_entry("method", self.method)?;
+        }
+        if !::buffa::json_helpers::skip_if::is_empty_str(self.route) {
+            __map.serialize_entry("route", self.route)?;
+        }
+        {
+            if let ::core::option::Option::Some(__v) = self.release_agent_id.as_option()
+            {
+                __map.serialize_entry("releaseAgentId", __v)?;
+            }
+        }
+        __map.end()
+    }
+}
+impl<'a> ::buffa::MessageName for ReleaseUiApiBindingView<'a> {
+    const PACKAGE: &'static str = "hephaestus.release.v1";
+    const NAME: &'static str = "ReleaseUiApiBinding";
+    const FULL_NAME: &'static str = "hephaestus.release.v1.ReleaseUiApiBinding";
+    const TYPE_URL: &'static str = "type.googleapis.com/hephaestus.release.v1.ReleaseUiApiBinding";
+}
+::buffa::impl_default_view_instance!(ReleaseUiApiBindingView);
+::buffa::impl_view_reborrow!(ReleaseUiApiBindingView);
+/** Self-contained, `'static` owned view of a `ReleaseUiApiBinding` message.
+
+ Wraps [`::buffa::OwnedView`]`<`[`ReleaseUiApiBindingView`]`<'static>>`: the decoded view and the [`::buffa::bytes::Bytes`] buffer it borrows from travel together, so the handle is `'static` and `Send + Sync` — suitable for async handlers, spawned tasks, and anywhere a `'static` bound is required.
+
+ Field accessors return borrows tied to `&self`. Use [`Self::view`] to get the full [`ReleaseUiApiBindingView`] when you need struct patterns, iteration helpers, or to pass the view to lifetime-parameterised code.*/
+#[derive(Clone, Debug)]
+pub struct ReleaseUiApiBindingOwnedView(
+    ::buffa::OwnedView<ReleaseUiApiBindingView<'static>>,
+);
+impl ReleaseUiApiBindingOwnedView {
+    /// Decode an owned view from a [`::buffa::bytes::Bytes`] buffer.
+    ///
+    /// The view borrows directly from the buffer's data; the buffer is
+    /// retained inside the returned handle.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`::buffa::DecodeError`] if the buffer contains invalid
+    /// protobuf data.
+    pub fn decode(
+        bytes: ::buffa::bytes::Bytes,
+    ) -> ::core::result::Result<Self, ::buffa::DecodeError> {
+        ::core::result::Result::Ok(
+            ReleaseUiApiBindingOwnedView(::buffa::OwnedView::decode(bytes)?),
+        )
+    }
+    /// Decode with custom [`::buffa::DecodeOptions`] (recursion limit,
+    /// max message size).
+    ///
+    /// # Errors
+    ///
+    /// Returns [`::buffa::DecodeError`] if the buffer is invalid or
+    /// exceeds the configured limits.
+    pub fn decode_with_options(
+        bytes: ::buffa::bytes::Bytes,
+        opts: &::buffa::DecodeOptions,
+    ) -> ::core::result::Result<Self, ::buffa::DecodeError> {
+        ::core::result::Result::Ok(
+            ReleaseUiApiBindingOwnedView(
+                ::buffa::OwnedView::decode_with_options(bytes, opts)?,
+            ),
+        )
+    }
+    /// Build from an owned message via an encode → decode round-trip.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`::buffa::DecodeError`] if the re-encoded bytes are
+    /// somehow invalid (should not happen for well-formed messages).
+    pub fn from_owned(
+        msg: &super::super::ReleaseUiApiBinding,
+    ) -> ::core::result::Result<Self, ::buffa::DecodeError> {
+        ::core::result::Result::Ok(
+            ReleaseUiApiBindingOwnedView(::buffa::OwnedView::from_owned(msg)?),
+        )
+    }
+    /// Borrow the full [`ReleaseUiApiBindingView`] with its lifetime tied to `&self`.
+    #[must_use]
+    pub fn view(&self) -> &ReleaseUiApiBindingView<'_> {
+        self.0.reborrow()
+    }
+    /// Convert to the owned message type.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if re-materializing preserved unknown fields
+    /// fails (e.g. the unknown-field limit is exceeded).
+    pub fn to_owned_message(
+        &self,
+    ) -> ::core::result::Result<
+        super::super::ReleaseUiApiBinding,
+        ::buffa::DecodeError,
+    > {
+        self.0.to_owned_message()
+    }
+    /// The underlying bytes buffer.
+    #[must_use]
+    pub fn bytes(&self) -> &::buffa::bytes::Bytes {
+        self.0.bytes()
+    }
+    /// Consume the handle, returning the underlying bytes buffer.
+    #[must_use]
+    pub fn into_bytes(self) -> ::buffa::bytes::Bytes {
+        self.0.into_bytes()
+    }
+    /// Field 1: `key`
+    #[must_use]
+    pub fn key(&self) -> &'_ str {
+        self.0.reborrow().key
+    }
+    /// Repository gateway declaration name, not an origin or browser URL.
+    ///
+    /// Field 2: `gateway_name`
+    #[must_use]
+    pub fn gateway_name(&self) -> &'_ str {
+        self.0.reborrow().gateway_name
+    }
+    /// Field 3: `method`
+    #[must_use]
+    pub fn method(&self) -> &'_ str {
+        self.0.reborrow().method
+    }
+    /// Validated gateway route metadata; this is not an authorized browser URL.
+    ///
+    /// Field 4: `route`
+    #[must_use]
+    pub fn route(&self) -> &'_ str {
+        self.0.reborrow().route
+    }
+    /// Field 5: `release_agent_id`
+    #[must_use]
+    pub fn release_agent_id(
+        &self,
+    ) -> &::buffa::MessageFieldView<
+        super::super::super::super::common::v1::__buffa::view::OpaqueIdView<'_>,
+    > {
+        &self.0.reborrow().release_agent_id
+    }
+}
+impl ::core::convert::From<::buffa::OwnedView<ReleaseUiApiBindingView<'static>>>
+for ReleaseUiApiBindingOwnedView {
+    fn from(inner: ::buffa::OwnedView<ReleaseUiApiBindingView<'static>>) -> Self {
+        ReleaseUiApiBindingOwnedView(inner)
+    }
+}
+impl ::core::convert::From<ReleaseUiApiBindingOwnedView>
+for ::buffa::OwnedView<ReleaseUiApiBindingView<'static>> {
+    fn from(wrapper: ReleaseUiApiBindingOwnedView) -> Self {
+        wrapper.0
+    }
+}
+impl ::core::convert::AsRef<::buffa::OwnedView<ReleaseUiApiBindingView<'static>>>
+for ReleaseUiApiBindingOwnedView {
+    fn as_ref(&self) -> &::buffa::OwnedView<ReleaseUiApiBindingView<'static>> {
+        &self.0
+    }
+}
+impl ::buffa::HasMessageView for super::super::ReleaseUiApiBinding {
+    type View<'a> = ReleaseUiApiBindingView<'a>;
+    type ViewHandle = ReleaseUiApiBindingOwnedView;
+}
+impl ::serde::Serialize for ReleaseUiApiBindingOwnedView {
     fn serialize<__S: ::serde::Serializer>(
         &self,
         __s: __S,

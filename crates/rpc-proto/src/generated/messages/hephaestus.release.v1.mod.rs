@@ -35,6 +35,11 @@ pub mod __buffa {
         reg.register_json_any(super::__RELEASE_SUMMARY_JSON_ANY);
         reg.register_json_any(super::__RELEASE_AGENT_JSON_ANY);
         reg.register_json_any(super::__RELEASE_JSON_ANY);
+        reg.register_json_any(super::__RELEASE_UI_DESCRIPTOR_JSON_ANY);
+        reg.register_json_any(super::__RELEASE_UI_STATIC_CONTENT_JSON_ANY);
+        reg.register_json_any(super::__RELEASE_UI_STATIC_FILE_JSON_ANY);
+        reg.register_json_any(super::__RELEASE_UI_MANAGED_SERVICE_JSON_ANY);
+        reg.register_json_any(super::__RELEASE_UI_API_BINDING_JSON_ANY);
         reg.register_json_any(super::__LIST_REPOSITORY_RELEASES_REQUEST_JSON_ANY);
         reg.register_json_any(super::__LIST_REPOSITORY_RELEASES_RESPONSE_JSON_ANY);
         reg.register_json_any(super::__GET_RELEASE_REQUEST_JSON_ANY);
@@ -60,6 +65,26 @@ pub use self::__buffa::view::ReleaseAgentOwnedView;
 pub use self::__buffa::view::ReleaseView;
 #[doc(inline)]
 pub use self::__buffa::view::ReleaseOwnedView;
+#[doc(inline)]
+pub use self::__buffa::view::ReleaseUiDescriptorView;
+#[doc(inline)]
+pub use self::__buffa::view::ReleaseUiDescriptorOwnedView;
+#[doc(inline)]
+pub use self::__buffa::view::ReleaseUiStaticContentView;
+#[doc(inline)]
+pub use self::__buffa::view::ReleaseUiStaticContentOwnedView;
+#[doc(inline)]
+pub use self::__buffa::view::ReleaseUiStaticFileView;
+#[doc(inline)]
+pub use self::__buffa::view::ReleaseUiStaticFileOwnedView;
+#[doc(inline)]
+pub use self::__buffa::view::ReleaseUiManagedServiceView;
+#[doc(inline)]
+pub use self::__buffa::view::ReleaseUiManagedServiceOwnedView;
+#[doc(inline)]
+pub use self::__buffa::view::ReleaseUiApiBindingView;
+#[doc(inline)]
+pub use self::__buffa::view::ReleaseUiApiBindingOwnedView;
 #[doc(inline)]
 pub use self::__buffa::view::ListRepositoryReleasesRequestView;
 #[doc(inline)]
