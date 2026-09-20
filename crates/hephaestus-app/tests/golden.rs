@@ -1199,6 +1199,8 @@ async fn assert_installed_ui_relogin_child(
         new_parent.1.is_none() && new_parent.2.is_none(),
         "re-login parent must be active"
     );
+    // Browser content audits intentionally omit gateway references; the
+    // request-ID join and invocation binding below provide the gateway proof.
     let new_child_surfaces: Vec<String> = sqlx::query_scalar(
         "SELECT DISTINCT audit.surface
            FROM ui_request_audit_events AS audit
@@ -1209,8 +1211,6 @@ async fn assert_installed_ui_relogin_child(
             AND audit.installation_id = $3
             AND audit.generation_id = $4
             AND audit.child_session_id = $5
-            AND audit.gateway_id = $6
-            AND audit.gateway_revision_id = $7
             AND audit.occurred_at >= $8
             AND audit.decision = 'allowed'
             AND audit.outcome = 'succeeded'
