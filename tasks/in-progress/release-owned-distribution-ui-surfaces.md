@@ -24,9 +24,17 @@ the receive and manual integration checkpoints supersede pending-wiring notes.
 
 ## Current CI context (2026-09-20)
 
-CI for schema fix `cd4690b` passed in run `35483937134`: Rust/authorization,
-browser golden path, and Cooking applications all succeeded. This is the
-latest completed CI evidence; it does not cover subsequent receive wiring.
+CI for manual-build checkpoint `1f3f76a` passed in run `35486471113`:
+Rust/authorization, browser golden path, and Cooking applications all succeeded.
+Size-limit checkpoint `ed96408` is still running in `35486716206`.
+The preceding kit checkpoint `6c6a9c6` failed one Rust recovery-test teardown
+while browser and Cooking passed. An idle `gateway-recovery-control` PostgreSQL
+backend remained beyond the unchanged ten-second deadline. The exact owner is
+unproven; a local Caddy future is dropped with its parent, and SQLx connection
+return after cancellation is under investigation. No deadline or assertion has
+been weakened. Bounded evidence is in
+`/home/a/heph-kit-ci-teardown-failure-20260920.log` and
+`/home/a/heph-kit-ci-teardown-sqlx-analysis-20260920.log`.
 
 CI at `e052a2c` (`35482989628`) exposed an application bootstrap version
 mismatch: the database reached migration 82 while `EXPECTED_DATABASE_MIGRATION`
@@ -496,6 +504,14 @@ The smoke script is `/home/a/heph-ui-kit-browser-smoke-20260920.mjs`; reviewed
 screenshots are `/home/a/heph-ui-kit-smoke-light-20260920.png` and
 `/home/a/heph-ui-kit-smoke-dark-20260920.png`. These checks do not replace
 the reference-release browser flow or a complete accessibility audit.
+
+`cargo dev check ui` and `cargo dev quality` now run the kit's `npm test`
+before the existing Phoenix UI checks. The existing Node 24 browser CI job
+runs the same command without an additional dependency installation. Direct
+kit tests, workflow YAML parsing, formatting, strict hephaestus-dev Clippy,
+rustdoc, and architecture checks passed. Rust evidence is recorded in
+`/home/a/heph-kit-gate-{clippy,doc}-20260920.log` and
+`/home/a/heph-architecture-final-20260920.log`.
 
 - [ ] **1. Specify the distribution UI declaration and publication model**
   - [ ] Define a versioned release declaration for UI artifact kind, immutable

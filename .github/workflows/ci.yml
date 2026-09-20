@@ -125,6 +125,9 @@ jobs:
         run: |
           npm ci
           npx playwright install --with-deps chromium
+      - name: Test release UI kit
+        working-directory: web/assets/release_ui_kit
+        run: npm test
       - name: Phoenix and browser golden path
         env:
           HEPHAESTUS_PLAYWRIGHT_SKIP_BROWSER_INSTALL: "1"

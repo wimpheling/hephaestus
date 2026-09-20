@@ -10,6 +10,7 @@ mod architecture;
 const UI_CHECKS: &str = "mix hephaestus.architecture --family ui && mix test test/mix/tasks/hephaestus_architecture_test.exs test/hephaestus_web_web/components test/hephaestus_web_web/design_system";
 const QUALITY_FAMILIES: [&str; 5] = ["protobuf", "architecture", "rust", "phoenix", "ui"];
 const COOKING_SERVICE_MANIFEST: &str = "examples/cooking/cooking-service/Cargo.toml";
+const RELEASE_UI_KIT_DIRECTORY: &str = "web/assets/release_ui_kit";
 
 pub fn run(context: &DevContext, command: CheckCommand) -> Result<()> {
     match command {
@@ -147,8 +148,21 @@ fn phoenix(context: &DevContext) -> Result<()> {
 fn ui(context: &DevContext) -> Result<()> {
     let web = context.repository_root.join("web");
     require_mix_project(&web)?;
+    release_ui_kit(context)?;
     phase("UI architecture and focused tests (pinned Elixir container)");
     run_process(&mut web_mix_command(context, UI_CHECKS))
+}
+
+fn release_ui_kit(context: &DevContext) -> Result<()> {
+    let kit = context.repository_root.join(RELEASE_UI_KIT_DIRECTORY);
+    if !kit.join("package.json").is_file() {
+        return Err(DevError::Invalid(format!(
+            "release UI kit package is missing at {}",
+            kit.display()
+        )));
+    }
+    phase("Release UI kit Node checks");
+    run_process(Command::new("npm").arg("test").current_dir(kit))
 }
 
 fn full(context: &DevContext) -> Result<()> {
