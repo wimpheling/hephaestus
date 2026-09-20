@@ -363,67 +363,115 @@ test("cooking installed UI TLS full-page and managed iframe smoke", async ({page
   });
   await expect(page.locator("#installed-ui-terminal-status-project")).toBeHidden();
   await page.screenshot({path: screenshotPath("installed-ui-managed-iframe.png"), fullPage: true});
-  await test.step("lifecycle-disable", async () => {
-    await test.step("lifecycle-managed-ready", async () => {
-      writeFileSync(join(controlDirectory, "managed-ready"), "ready\n", {
-        encoding: "utf8",
-        mode: 0o600,
-        flag: "wx",
+  const managedFrameBeforeDisable = await frame.elementHandle();
+  const managedContentFrameBeforeDisable = managedFrameBeforeDisable
+    ? await managedFrameBeforeDisable.contentFrame()
+    : null;
+  expect(managedContentFrameBeforeDisable).not.toBeNull();
+  if (managedContentFrameBeforeDisable === null) return;
+  const managedDocumentUrl = new URL(
+    "/managed-reference/index.html",
+    managedContentFrameBeforeDisable.url(),
+  ).toString();
+  const stalePage = await page.context().newPage();
+  try {
+    let baselineStatusCode = 0;
+    let baselineUiCookiePresent = false;
+    await test.step("lifecycle-stale-baseline-response", async () => {
+      const response = await stalePage.goto(managedDocumentUrl, {
+        timeout: 30_000,
+        waitUntil: "networkidle",
       });
+      baselineStatusCode = response?.status() ?? 0;
+      if (response) {
+        baselineUiCookiePresent = requestHasCookie(
+          await response.request().allHeaders(),
+          "__Host-hephaestus_ui",
+        );
+      }
     });
-    await test.step("lifecycle-disable-complete", async () => {
-      await expect.poll(
-        () => existsSync(join(controlDirectory, "disable-complete")),
-        {timeout: 30_000},
-      ).toBe(true);
+    await test.step(
+      baselineStatusCode === 200 ? "lifecycle-stale-baseline-200" : "lifecycle-stale-baseline-other",
+      async () => {
+        expect(baselineStatusCode).toBe(200);
+      },
+    );
+    await test.step("lifecycle-stale-baseline-cookie", async () => {
+      expect(baselineUiCookiePresent).toBe(true);
     });
-    await test.step("lifecycle-stale-cookie-denied", async () => {
-      const frameHandle = await frame.elementHandle();
-      const managedFrame = frameHandle ? await frameHandle.contentFrame() : null;
-      expect(managedFrame).not.toBeNull();
-      if (managedFrame === null) return;
-      const managedHostname = new URL(managedFrame.url()).hostname;
-      const staleRequest = page.waitForRequest(request => {
-        try {
-          const requestUrl = new URL(request.url());
-          return requestUrl.hostname === managedHostname &&
-            request.method() === "GET" &&
-            request.resourceType() === "fetch" &&
-            requestUrl.pathname === "/managed-reference/index.html";
-        } catch {
-          return false;
-        }
-      }, {timeout: 30_000}).catch(() => null);
-      const staleStatus = await frameContent.locator("body").evaluate(async () => {
-        const response = await fetch("/managed-reference/index.html", {
-          cache: "no-store",
-          credentials: "same-origin",
+    await test.step("close", async () => {
+      await embed.getByRole("button", {name: "Close"}).click();
+      await expect(embed).toBeHidden();
+      await expect(frame).not.toHaveAttribute("src");
+      await expect(embed.locator("[data-ui-status]")).toHaveText("Closed");
+      await expect(page.locator("#installed-ui-terminal-status-project")).toBeHidden();
+      const launchButton = managedCardAfterReturn.getByRole("button", {name: /Launch/});
+      const launchButtonFocused = await launchButton.evaluate(element => document.activeElement === element);
+      expect(launchButtonFocused).toBe(true);
+    });
+    await test.step("lifecycle-disable", async () => {
+      await test.step("lifecycle-managed-ready", async () => {
+        writeFileSync(join(controlDirectory, "managed-ready"), "ready\n", {
+          encoding: "utf8",
+          mode: 0o600,
+          flag: "wx",
         });
-        return response.status;
       });
-      const request = await staleRequest;
-      expect(request).not.toBeNull();
-      if (request === null) return;
-      const requestHeaders = await request.allHeaders();
-      expect(staleStatus).toBe(401);
-      expect(requestHasCookie(requestHeaders, "__Host-hephaestus_ui")).toBe(true);
-      writeFileSync(join(controlDirectory, "stale-cookie-denied"), "denied\n", {
-        encoding: "utf8",
-        mode: 0o600,
-        flag: "wx",
+      await test.step("lifecycle-disable-complete", async () => {
+        await expect.poll(
+          () => existsSync(join(controlDirectory, "disable-complete")),
+          {timeout: 30_000},
+        ).toBe(true);
+      });
+      let staleStatusCode = 0;
+      let staleRequestObserved = false;
+      let staleUiCookiePresent = false;
+      let staleRequestHeaders: Record<string, string> = {};
+      await test.step("lifecycle-stale-fetch-response", async () => {
+        const [request, response] = await Promise.all([
+          stalePage.waitForRequest(
+            candidate => candidate.url() === managedDocumentUrl && candidate.resourceType() === "fetch",
+            {timeout: 30_000},
+          ),
+          stalePage.waitForResponse(
+            candidate => candidate.url() === managedDocumentUrl && candidate.request().resourceType() === "fetch",
+            {timeout: 30_000},
+          ),
+          stalePage.evaluate(async url => {
+            const candidate = await fetch(url, {cache: "no-store", credentials: "same-origin"});
+            return candidate.status;
+          }, managedDocumentUrl),
+        ]);
+        staleStatusCode = response.status();
+        staleRequestObserved = true;
+        staleRequestHeaders = await request.allHeaders();
+      });
+      const staleStatusStage = staleStatusCode === 401 ? "lifecycle-stale-fetch-401" :
+        staleStatusCode === 403 ? "lifecycle-stale-fetch-403" :
+          staleStatusCode === 404 ? "lifecycle-stale-fetch-404" :
+            staleStatusCode === 410 ? "lifecycle-stale-fetch-410" :
+              staleStatusCode === 200 ? "lifecycle-stale-fetch-200" : "lifecycle-stale-fetch-other";
+      await test.step(staleStatusStage, async () => {
+        expect(staleStatusCode).toBe(401);
+      });
+      await test.step("lifecycle-stale-request-observed", async () => {
+        expect(staleRequestObserved).toBe(true);
+      });
+      await test.step("lifecycle-stale-cookie-present", async () => {
+        staleUiCookiePresent = requestHasCookie(staleRequestHeaders, "__Host-hephaestus_ui");
+        expect(staleUiCookiePresent).toBe(true);
+      });
+      await test.step("lifecycle-stale-cookie-denied", async () => {
+        writeFileSync(join(controlDirectory, "stale-cookie-denied"), "denied\n", {
+          encoding: "utf8",
+          mode: 0o600,
+          flag: "wx",
+        });
       });
     });
-  });
-  await test.step("close", async () => {
-    await embed.getByRole("button", {name: "Close"}).click();
-    await expect(embed).toBeHidden();
-    await expect(frame).not.toHaveAttribute("src");
-    await expect(embed.locator("[data-ui-status]")).toHaveText("Closed");
-    await expect(page.locator("#installed-ui-terminal-status-project")).toBeHidden();
-    const launchButton = managedCardAfterReturn.getByRole("button", {name: /Launch/});
-    const launchButtonFocused = await launchButton.evaluate(element => document.activeElement === element);
-    expect(launchButtonFocused).toBe(true);
-  });
+  } finally {
+    await stalePage.close();
+  }
 });
 
 function screenshotPath(name: string): string {
