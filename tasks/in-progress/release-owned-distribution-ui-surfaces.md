@@ -38,6 +38,48 @@ proofs, and the final integrated quality gate remain incomplete. The user approv
 global installations and organization isolation. Historical checkpoints record the state
 at their time; later integration checkpoints supersede earlier pending notes.
 
+## First complete installed UI runtime proof (2026-09-20)
+
+The twenty-first installed Cooking run passed at `008be7e` and emitted:
+
+```text
+REAL_UI_INSTALLATION_AUDIT=1 static=1 managed=1 api=1 embed=1 gateway_correlation=1
+```
+
+Evidence is retained under
+`/home/a/heph-installed-ui-twentyfirst-runtime-diag-20260920/`, with execution log
+`cooking-execution.aahf6w.log`. Golden results: 35 passed, zero failed, one
+ignored; gateway PostgreSQL results: eight passed. The evidence scan and runtime/
+cgroup cleanup passed. The unrelated PID 10841 and existing runtime assets were
+preserved. This is actual installed TLS/Caddy/libkrun/Phoenix/OIDC/browser evidence,
+not the earlier source checks or optional skipped integration branches.
+
+The browser verifies static full-page and managed iframe launch, fragment removal,
+UI and platform cookie attributes, and actual document-request cookie isolation.
+It covers static OS theme fallback, managed host theme propagation, accessibility,
+CSP, blocked undeclared fetch and parent navigation, declared managed identity API,
+and Close/focus behavior. Actual scoped handoff, bootstrap, serving, embed-intent,
+and API audit rows pass, including API-to-gateway request correlation.
+
+Runtime integration found and fixed substantive composition gaps: `e3d1334`
+executes the browser before service-proof teardown; `f3a1f5c` maps the browser user
+to the private fixture owner; `849b700` aligns OIDC's registered callback with the
+reserved Caddy HTTPS origin; `ef98e3d` makes the reference service honor forwarded
+gateway-prefixed routes; `82e34f3` waits for the managed service after restart;
+and `eb4d0b7` supplies the worker-backed UI gateway with its runtime authority
+issuer while preserving the separate recovery authority.
+
+Browser checks now use actual request headers for cookie isolation because
+Playwright's URL-filtered inventory does not preserve host-only domain semantics
+(`3238da3`). `079efcd` forwards the exact namespace into CSP verification.
+`008be7e` removes disposable npm dependencies before the unchanged evidence scan;
+a copied evidence tree passed and an unrelated symlink still failed that scan.
+
+This checkpoint does not complete release UI. Cross-runtime disable/reactivation/
+removal and stale-child behavior, parent/account revocation, additional guest
+boundary and owner-navigation proofs, and the final repository-wide quality gate
+remain to be completed. Earlier pending runtime notes below are historical.
+
 ## Managed reference runtime and browser reachability findings (2026-09-20)
 
 `4489e1a` starts the initial gateway supervisor in installed-UI fixture mode.
