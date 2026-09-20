@@ -217,6 +217,14 @@ pub enum UiPresentation {
     FullPage,
 }
 
+/// Published cache behavior for release-owned UI content.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum UiCachePolicy {
+    /// Revalidate every request and forbid browser/intermediary storage.
+    NoStore,
+}
+
 /// Allowlisted icon family for a release UI tab.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]

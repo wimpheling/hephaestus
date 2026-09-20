@@ -37,6 +37,33 @@ integrated quality gate remain incomplete. The user approved organization-owned
 global installations and organization isolation. Historical checkpoints record the state
 at their time; later integration checkpoints supersede earlier pending notes.
 
+## UI host/resource projection checkpoint (2026-09-20)
+
+Migration 92 adds narrowly granted application-role functions for active
+generation-host existence and authenticated resource projection. The host read
+returns only the generation ID. The resource function invokes migration 90's
+canonical verifier and selects the exact current declaration in one SQL
+statement; it does not duplicate permission predicates. Both functions pin
+their search path and revoke public execution. Application-role direct access
+to the underlying private tables remains denied.
+
+The application port accepts a checked raw HTTP path and method. It rejects
+zero or ambiguous authorized matches, preserves ordinary managed/API paths,
+and returns an explicit authenticated Redirect for static or managed document
+base aliases. Static results carry immutable hash/size/MIME/cache metadata for
+the later verified-byte reader; no artifact bytes or HTTP behavior are claimed
+by this projection checkpoint.
+
+Two real restricted-role tests pass in
+`/home/a/heph-resource-real-v17-20260920.log`, covering both redirects, static
+GET/HEAD, long managed paths, app table denial, gateway/account/lifecycle
+revocation, and an exact two-candidate legacy ambiguity that fails closed.
+Seven host/path units pass in
+`/home/a/heph-resource-host-path-unit-v2-20260920.log`; the app-pool test at
+migration 92 passes in `/home/a/heph-app-pool-floor92-20260920.log`. Scoped
+Clippy, rustdoc, architecture, formatting, and diff checks pass. Disposable
+containers were cleaned.
+
 ## Phoenix installed-navigation checkpoint (2026-09-20)
 
 Organization workspace, project, and repository-files pages now render the
@@ -479,9 +506,9 @@ CSP for static and managed content, including the exact platform
 
 The HTTP handler supplies only a canonical raw path and method to the serving
 port. The adapter requires exactly one authorized static, managed, or API
-declaration; ambiguous legacy declarations fail closed. After deriving the RLS
-actor from child authentication, the final verifier and resource projection run
-in the same SQL statement. Query strings remain opaque and never participate
+declaration; ambiguous legacy declarations fail closed. The narrow
+security-definer resource function performs canonical child verification and
+resource projection in the same SQL statement. Query strings remain opaque and never participate
 in authority matching. Static reads verify the full artifact before conditional
 or range responses and retain the published cache policy. These contracts still
 require runtime and browser proof.
@@ -498,8 +525,8 @@ Authenticated document-base requests redirect to the descriptor's canonical
 relative CSS/JS resolution in the reference releases without rewriting artifact
 bytes. The redirect retains the opaque query, including theme metadata, and
 uses the serving path's 514-byte bound rather than widening stored handoff
-routes. API requests do not receive this redirect. This projection and handler
-follow-up is pending integration.
+routes. API requests do not receive this redirect. The projection is verified;
+the handler integration remains pending.
 
 Bootstrap propagates only the validated initial theme to its POST. The final
 document receives `heph_theme` and `heph_theme_origin`, with the latter derived

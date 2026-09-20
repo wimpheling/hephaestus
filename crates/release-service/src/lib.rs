@@ -1,6 +1,8 @@
 //! Provider-neutral release command DTOs and workflow ports.
 
 mod ui_browser;
+pub mod ui_browser_host;
+pub mod ui_browser_serving;
 mod ui_installation;
 mod ui_installation_navigation;
 
@@ -19,10 +21,21 @@ use runtime_types::RunId;
 use std::collections::BTreeMap;
 use uuid::Uuid;
 
+pub use release_domain::ui::UiCachePolicy;
 pub use ui_browser::{
     AuthenticateUiBrowserSession, CreateUiBrowserHandoff, CreatedUiBrowserHandoff,
     CreatedUiBrowserSession, ExchangeUiBrowserHandoff, UiBrowserHandoffError,
     UiBrowserRequestRoute, UiBrowserSessionContext, UiBrowserSessionError, UiBrowserSessionStore,
+};
+pub use ui_browser_host::{
+    UI_BOOTSTRAP_PATH, UI_CHILD_COOKIE, UI_HANDOFF_FRAGMENT_LENGTH, UI_RESERVED_PREFIX,
+    UiGenerationHost, UiHostError, UiNamespace, UiPublicPort,
+};
+pub use ui_browser_serving::{
+    ActiveUiGenerationHost, UiBrowserHttpPath, UiBrowserHttpPathError, UiBrowserHttpRequest,
+    UiBrowserHttpServingProjection, UiGatewayRequestKind, UiGatewayRequestProjection,
+    UiGenerationHostResolver, UiHostLookupError, UiServingError, UiServingProjection,
+    UiStaticArtifactProjection,
 };
 pub use ui_installation::{
     ActivateUiInstallation, DisableUiInstallation, InstallStaticUi, InstallStaticUiResult,
