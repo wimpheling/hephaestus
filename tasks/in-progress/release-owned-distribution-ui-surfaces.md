@@ -11,6 +11,25 @@ declaration model validation. Serving, browser navigation, managed UI services,
 authority handoff, UI-kit publication, and acceptance evidence remain
 unchecked until their bounded designs and implementations are reviewed.
 
+## Primitive declaration checkpoint (2026-09-20)
+
+The first bounded slice adds the release-domain UI primitives in `ui.rs`:
+`UiKey`, `UiRoutePath`, and `UiLabel` use checked Serde representations and
+private fields. It also defines the scope, presentation, icon, and MIME enums,
+plus a version-1 declaration helper. Label validation rejects control
+characters, bidi controls, U+2028, and U+2029 before trimming spaces; the
+validated boundaries are 64 bytes for keys, 256 bytes for route paths, and 80
+Unicode characters for labels.
+
+The release-domain test suite passed 14 tests, with formatting, strict Clippy,
+and rustdoc passing in the v2 logs:
+`/home/a/heph-release-domain-ui-fmt-v2-20260920.log`,
+`/home/a/heph-release-domain-ui-test-v2-20260920.log`,
+`/home/a/heph-release-domain-ui-clippy-v2-20260920.log`, and
+`/home/a/heph-release-domain-ui-doc-v2-20260920.log`. Aggregate declaration
+publication, serving, browser, authority, UI-kit, and end-to-end acceptance
+checklist items remain unchecked.
+
 ## Outcome
 
 Let a published release provide a user interface that Hephaestus can mount as

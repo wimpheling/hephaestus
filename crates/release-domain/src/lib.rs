@@ -16,6 +16,8 @@ use std::{collections::BTreeMap, fmt, path::Path, str::FromStr};
 use time::OffsetDateTime;
 use uuid::Uuid;
 
+pub mod ui;
+
 macro_rules! identifier {
     ($name:ident, $documentation:literal) => {
         #[doc = $documentation]
@@ -1153,6 +1155,21 @@ pub enum ReleaseValueError {
     /// Attachment repository belongs to another project.
     #[error("agent attachment repository belongs to a different project")]
     CrossProjectAttachment,
+    /// UI key is malformed.
+    #[error("UI key is invalid")]
+    InvalidUiKey,
+    /// UI route path is malformed.
+    #[error("UI route path is invalid")]
+    InvalidUiRoutePath,
+    /// UI label is empty, oversized, or contains a control character.
+    #[error("UI label is invalid")]
+    InvalidUiLabel,
+    /// UI declaration schema version is unsupported.
+    #[error("UI schema version is unsupported")]
+    UnsupportedUiSchemaVersion,
+    /// UI media type is outside the explicit safe allowlist.
+    #[error("UI media type is unsupported")]
+    UnsupportedUiMediaType,
 }
 
 #[cfg(test)]
