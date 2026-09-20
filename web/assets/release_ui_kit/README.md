@@ -9,6 +9,10 @@ The kit has no Phoenix, LiveView, HEEx, Tailwind runtime, authentication,
 session, navigation, or platform-authority behavior. It is suitable for a
 release UI rendered on its isolated origin. Its component classes use the
 `heph-ui-` prefix to avoid class-name collisions within that document.
+The package contract and daemon serving boundary are documented in
+[`docs/release-ui.md`](../../../docs/release-ui.md). The host owns release
+authorization, session exchange, navigation, and artifact serving; the kit
+remains a versioned presentation dependency.
 The kit follows the operating system dark preference when the document root
 does not have a valid theme attribute. An explicit `data-theme="light"` or
 `data-theme="dark"` always overrides that preference:
@@ -95,6 +99,12 @@ and copy it into `/workspace/output`. Static UIs declare the CSS as a release
 artifact; managed UI services can serve the same CSS from their declared
 content route. MIME declarations must remain separate for HTML and CSS files;
 a directory artifact uses one declaration MIME for all expanded files.
+
+Keep existing versioned files immutable when upgrading. Publish a new
+versioned filename and manifest, update the release declaration and vendored
+copy, and retain the old package for releases that still reference it. The
+current declaration value `ui_kit_version = 1` refers to this 1.0.0 package;
+it is not a promise that future major versions are byte- or message-compatible.
 
 The Node checks validate deterministic bytes, token-source inclusion, manifest
 hashes, version/export naming, absence of Phoenix/Tailwind imports, and basic

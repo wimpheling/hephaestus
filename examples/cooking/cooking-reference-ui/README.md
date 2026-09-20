@@ -13,4 +13,22 @@ output.
 
 The fixture is intended for the existing Cooking Git/build/release path. Its
 published-service integration is pending; it is not a direct database or
-artifact-store fixture.
+artifact-store fixture. The release declaration is a full-page static UI with
+route base `reference`, entrypoint `index.html`, `ui_kit_version = 1`, and
+`no_store` caching. The CSS and helper are separate `text/css` and
+`text/javascript` artifacts.
+
+Build it into a disposable absolute directory from the repository root:
+
+```sh
+static_output=$(mktemp -d)
+HEPHAESTUS_REFERENCE_UI_OUTPUT="$static_output" \
+  examples/cooking/cooking-reference-ui/build.sh
+"$static_output/bin/reference-ui-check"
+```
+
+The build verifies the vendored manifest and source hashes before materializing
+`dist/index.html` and the versioned kit assets. This local check does not prove
+publication through Caddy, an authenticated session, or installed browser
+serving. See [`docs/release-ui.md`](../../../docs/release-ui.md) for the
+package upgrade and daemon-origin boundary.
