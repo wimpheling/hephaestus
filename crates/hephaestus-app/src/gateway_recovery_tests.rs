@@ -96,6 +96,9 @@ struct DestroyGate {
     block_retry: Arc<std::sync::atomic::AtomicBool>,
     hold_after_first_failure: Arc<std::sync::atomic::AtomicBool>,
     first_failure_release: Arc<tokio::sync::Notify>,
+    renewal_pause_entered: Arc<tokio::sync::Notify>,
+    renewal_pause_release: Arc<tokio::sync::Notify>,
+    renewal_pause_armed: Arc<std::sync::atomic::AtomicBool>,
     retry_target_id: Arc<Mutex<Option<VmId>>>,
     attempts: Arc<AtomicUsize>,
     attempt_ids: Arc<Mutex<Vec<VmId>>>,
@@ -112,6 +115,9 @@ impl DestroyGate {
             block_retry: Arc::new(std::sync::atomic::AtomicBool::new(false)),
             hold_after_first_failure: Arc::new(std::sync::atomic::AtomicBool::new(false)),
             first_failure_release: Arc::new(tokio::sync::Notify::new()),
+            renewal_pause_entered: Arc::new(tokio::sync::Notify::new()),
+            renewal_pause_release: Arc::new(tokio::sync::Notify::new()),
+            renewal_pause_armed: Arc::new(std::sync::atomic::AtomicBool::new(false)),
             retry_target_id: Arc::new(Mutex::new(None)),
             attempts: Arc::new(AtomicUsize::new(0)),
             attempt_ids: Arc::new(Mutex::new(Vec::new())),
@@ -132,6 +138,32 @@ impl DestroyGate {
 
     fn release_first_failure(&self) {
         self.first_failure_release.notify_one();
+    }
+
+    fn arm_renewal_pause(&self) {
+        self.renewal_pause_armed.store(true, Ordering::Release);
+    }
+
+    fn renewal_pause_entered(&self) -> Arc<tokio::sync::Notify> {
+        Arc::clone(&self.renewal_pause_entered)
+    }
+
+    fn release_renewal_pause(&self) {
+        self.renewal_pause_armed.store(false, Ordering::Release);
+        self.renewal_pause_release.notify_one();
+    }
+
+    async fn pause_renewal_if_armed(&self, vm_id: &str) {
+        let is_retry_target = self
+            .retry_target_id
+            .lock()
+            .expect("retry target id")
+            .as_ref()
+            .is_some_and(|target| target.0 == vm_id);
+        if is_retry_target && self.renewal_pause_armed.load(Ordering::Acquire) {
+            self.renewal_pause_entered.notify_one();
+            self.renewal_pause_release.notified().await;
+        }
     }
 }
 
@@ -265,6 +297,7 @@ impl VmInstance for ServiceTransportVm {
             if is_retry_target && gate.fail_once.swap(false, Ordering::AcqRel) {
                 gate.entered.notify_one();
                 if gate.hold_after_first_failure.load(Ordering::Acquire) {
+                    gate.arm_renewal_pause();
                     gate.first_failure_release.notified().await;
                 }
                 return Err(VmError::Unavailable {
@@ -314,6 +347,7 @@ struct ObservingOwnership {
     draining_entered: Arc<tokio::sync::Notify>,
     draining_returned: Arc<tokio::sync::Notify>,
     draining_error: Arc<Mutex<Option<GatewayServiceOwnershipError>>>,
+    renewal_gate: Option<Arc<DestroyGate>>,
 }
 
 impl ObservingOwnership {
@@ -328,7 +362,13 @@ impl ObservingOwnership {
             draining_entered: Arc::new(tokio::sync::Notify::new()),
             draining_returned: Arc::new(tokio::sync::Notify::new()),
             draining_error: Arc::new(Mutex::new(None)),
+            renewal_gate: None,
         }
+    }
+
+    fn with_renewal_gate(mut self, gate: Arc<DestroyGate>) -> Self {
+        self.renewal_gate = Some(gate);
+        self
     }
 
     fn lose_claim_ack_for_revision(&self, revision_id: Uuid) {
@@ -407,6 +447,9 @@ impl GatewayServiceOwnership for ObservingOwnership {
         owner: &GatewayServiceOwner,
         lease_duration: StdDuration,
     ) -> Result<GatewayServiceInstanceLease, GatewayServiceOwnershipError> {
+        if let Some(gate) = &self.renewal_gate {
+            gate.pause_renewal_if_armed(&lease.vm_id).await;
+        }
         self.inner.renew(lease, owner, lease_duration).await
     }
 
@@ -2457,6 +2500,12 @@ async fn daemon_loop_retries_retained_cleanup_case(expire_before_retry: bool) {
     let resolver = Arc::new(RecordingLaunchResolver {
         cleanup_calls: Arc::clone(&cleanup_calls),
     });
+    let ownership_override = expire_before_retry.then(|| {
+        Arc::new(
+            ObservingOwnership::new(database.worker.clone())
+                .with_renewal_gate(destroy_gate.clone()),
+        ) as Arc<dyn GatewayServiceOwnership>
+    });
     let (task, cancellation, caddy_started, caddy_release, _destroyed, provisioned) =
         spawn_automatic_start_with_worker(
             &pool,
@@ -2466,7 +2515,7 @@ async fn daemon_loop_retries_retained_cleanup_case(expire_before_retry: bool) {
             false,
             Some(desired_revision),
             None,
-            None,
+            ownership_override,
             Some(observing_targets.clone() as Arc<dyn GatewayServiceTargetStore>),
             Some(destroy_gate.clone()),
             Some(resolver),
@@ -2563,23 +2612,15 @@ async fn daemon_loop_retries_retained_cleanup_case(expire_before_retry: bool) {
         Some(active_instance.2.as_str()),
     );
     if expire_before_retry {
-        // Hold the durable row while the first failure is still suspended so
-        // the heartbeat cannot renew it.  The expiry assertion below observes
-        // PostgreSQL time, and the lock is released only after that boundary.
-        let mut expiry_barrier = pool
-            .begin()
-            .await
-            .expect("begin deterministic expiry barrier");
-        sqlx::query(
-            "SELECT id
-               FROM gateway_service_instances
-              WHERE id = $1
-              FOR UPDATE",
+        tokio::time::timeout(
+            StdDuration::from_secs(5),
+            destroy_gate.renewal_pause_entered().notified(),
         )
-        .bind(active_instance.0)
-        .fetch_one(&mut *expiry_barrier)
         .await
-        .expect("lock retained cleanup row before expiry");
+        .expect("A renewal pauses before database access");
+        // The ownership wrapper pauses only A's renewal before it can acquire
+        // the gateway lock, so B remains independently renewable.
+        // Wait for the durable row to expire while the first failure is held.
         tokio::time::timeout(StdDuration::from_secs(5), async {
             loop {
                 let expired: bool = sqlx::query_scalar(
@@ -2598,12 +2639,33 @@ async fn daemon_loop_retries_retained_cleanup_case(expire_before_retry: bool) {
             }
         })
         .await
-        .expect("retained cleanup lease expires while first failure is held");
+        .expect("retained cleanup lease expires while A renewal is paused");
+        let (replacement_state, replacement_lease_live): (String, bool) = sqlx::query_as(
+            "SELECT state, lease_expires_at > clock_timestamp()
+               FROM gateway_service_instances
+              WHERE id = $1",
+        )
+        .bind(replacement_instance)
+        .fetch_one(&pool)
+        .await
+        .expect("read healthy B state after A expiry");
+        assert_eq!(replacement_state, "ready");
+        assert!(
+            replacement_lease_live,
+            "B lease must remain live while A expires"
+        );
+        let active_revision: Uuid = sqlx::query_scalar(
+            "SELECT active_revision_id
+               FROM gateways
+              WHERE id = $1",
+        )
+        .bind(fixture.gateway)
+        .fetch_one(&pool)
+        .await
+        .expect("read active B revision after A expiry");
+        assert_eq!(active_revision, desired_revision);
         destroy_gate.release_first_failure();
-        expiry_barrier
-            .commit()
-            .await
-            .expect("release deterministic expiry barrier");
+        destroy_gate.release_renewal_pause();
     }
     tokio::time::timeout(StdDuration::from_secs(10), destroy_gate.entered.notified())
         .await
@@ -2795,6 +2857,32 @@ async fn daemon_loop_retries_retained_cleanup_case(expire_before_retry: bool) {
     assert!(
         candidate_created_at >= cleaned_at,
         "candidate must be created after original instance is durably cleaned",
+    );
+    tokio::time::timeout(StdDuration::from_secs(15), async {
+        loop {
+            let state: String =
+                sqlx::query_scalar("SELECT state FROM gateway_service_instances WHERE id = $1")
+                    .bind(replacement_instance)
+                    .fetch_one(&pool)
+                    .await
+                    .expect("read cleaned replacement service");
+            if state == "cleaned" {
+                break;
+            }
+            tokio::time::sleep(StdDuration::from_millis(50)).await;
+        }
+    })
+    .await
+    .expect("replacement service cleans after next candidate becomes active");
+    let replacement_destroyed = destroy_gate
+        .attempt_ids
+        .lock()
+        .expect("destroy attempt ids")
+        .iter()
+        .any(|id| id.0 == replacement_vm_id);
+    assert!(
+        replacement_destroyed,
+        "replacement VM must reach physical cleanup after candidate promotion",
     );
 
     cancellation.cancel();
@@ -3517,7 +3605,8 @@ async fn spawn_automatic_start_with_worker_config(
     let destroyed = Arc::new(AtomicUsize::new(0));
     let provisioned = Arc::new(AtomicUsize::new(0));
     let postgres_ownership = Arc::new(PostgresGatewayServiceOwnership::new(recovery_pool.clone()));
-    let use_postgres_recovery = ownership_override.is_none();
+    // The observer wraps ordinary ownership calls only; exact expired-claim
+    // takeover must continue using the real Postgres recovery adapter.
     let ownership: Arc<dyn GatewayServiceOwnership> =
         ownership_override.unwrap_or_else(|| postgres_ownership.clone());
     let failure_store = Arc::new(PostgresGatewayServiceFailureStore::new(
@@ -3601,9 +3690,9 @@ async fn spawn_automatic_start_with_worker_config(
         supervisor_context,
         boot,
         Some(claim_resolution),
-        use_postgres_recovery.then(|| {
+        Some(
             postgres_ownership.clone() as Arc<dyn gateway_edge::GatewayServiceExpiredClaimRecovery>
-        }),
+        ),
         log_writer,
         targets,
         caddy,

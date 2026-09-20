@@ -7,8 +7,9 @@ Owner: Astra orchestration / Luna bounded subtasks
 Persistent services are a completed prerequisite on the same branch and PR 51;
 service checkpoint `8c1fb51` passed repository-wide quality. Its later SQLx
 cancellation fix has focused runtime and CI evidence in the completed task.
-A newly observed retained-cleanup CI invariant failure is under investigation;
-that follow-up must be resolved before final runtime acceptance.
+The retained-cleanup CI follow-up now has a focused-validated fixture isolation
+fix. Its final CI and integrated quality evidence remain required; the original
+CI lock sequence was not captured directly.
 
 Release UI declaration, immutable capture, receive/manual build identities,
 exact artifact/agent resolution, transactional publication, and authorized
@@ -48,12 +49,32 @@ Installation generations must change on fresh activation, including reactivation
 of the same release; command replay alone reuses the prior result. Global entry
 ownership remains awaiting the user's answer.
 
-The intermittent retained-cleanup test still needs a proven isolation fix.
-Extending B's lease was rejected because its heartbeat can overwrite that value.
-Directly moving A's lease into the past violates ownership timestamp guards.
-Neither experiment is retained. The next fixture design pauses only A's renewal
-before database locking so healthy B can renew during natural A expiry; production
+The retained-cleanup fixture isolation follow-up is implemented below. Production
 lease semantics and cleanup behavior remain unchanged.
+
+## Recovery fixture isolation checkpoint (2026-09-20)
+
+The old expiry fixture held A's instance row until its lease expired. Production
+renewal locks the gateway before the instance, so that barrier could also block
+B's renewal and violate the fixture's healthy-B premise. This is a source-based
+explanation; the original failing CI lock sequence was not captured or replayed.
+The replacement pauses only A's renewal through the existing ownership observer,
+before any database lock, and observes natural PostgreSQL lease expiry. It asserts
+B remains ready, active, and unexpired. Exact expired-claim recovery retains the
+real PostgreSQL adapter even when ordinary ownership is observed; the initial
+observer experiment accidentally disabled that adapter and is superseded.
+
+The test proves A's exact VM retries with fencing incremented once, C has no
+instance before A is durably cleaned, C then becomes active/ready, and B reaches
+physical and durable cleanup. No production lifecycle code changed. Five isolated
+expiry runs pass in
+`/home/a/heph-gateway-recovery-diagnostic-focused-v10-20260920.log`; all 17 recovery
+tests pass against real PostgreSQL in
+`/home/a/heph-gateway-recovery-diagnostic-group-v11-20260920.log`. After adding the
+final B-cleanup assertion, both affected variants pass in the retained-v12 and
+expired-v13 logs with the same prefix/date. Scoped app Clippy, formatting,
+documentation, and architecture pass; post-assertion Clippy/format also pass in
+`/home/a/heph-gateway-recovery-postassert-checks-20260920.log`.
 
 ## Caddy UI namespace foundation checkpoint (2026-09-20)
 
@@ -239,6 +260,9 @@ embedding, loading/revocation states, and actual browser hosting remain open.
 
 ## Current CI context (2026-09-20)
 
+CI also passed public-admission checkpoint `46f54e0` (`35493223081`) and Caddy
+namespace checkpoint `937f9af` (`35494134171`).
+
 CI passed the publication matrix `8ab3dca` (`35490762779`), inspection adapter
 `83659e1` (`35490987211`), verified reads `94cdf99` (`35491439692`), and release
 page `60992c5` (`35491550325`). These later passes did not change lifecycle code
@@ -249,8 +273,9 @@ observed healthy B destruction while A cleanup was held (`[A, B, A]`). The exact
 cause is unproven. B was awaited active/ready before C became desired, and the
 ordinary current-revision reconciliation branch already preserves B, so a
 capacity-based retirement change is not justified without further evidence.
-Focused lifecycle/lease investigation is open; runtime hosting integration must
-not treat this as resolved merely because a later run passes. Evidence:
+The later fixture-isolation checkpoint removes the identified lock coupling
+and preserves exact expired-claim recovery, with focused/full recovery evidence.
+Final CI and integrated quality are still required. Historical failure evidence:
 `/home/a/heph-release-ui-rpc-ci-failure-20260920.log`.
 
 
