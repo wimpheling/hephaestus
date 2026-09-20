@@ -25,6 +25,31 @@ integrated quality gate remain incomplete. Global installation ownership is an
 open question sent to the user. Historical checkpoints below record the state
 at their time; later integration checkpoints supersede earlier pending notes.
 
+## UI installation schema checkpoint (2026-09-20)
+
+Migration 87 adds project/repository installation identities, immutable activation
+generations, exact managed/API binding records, and immutable command outcomes.
+Each committed installation retains a current generation through a deferred
+composite foreign key. Owner/key uniqueness includes disabled entries and excludes
+removed identities; removal is terminal. Identity/creation metadata cannot change.
+Worker grants permit installation updates but only append to evidence tables;
+the application role has authorized read access under forced RLS.
+
+The real PostgreSQL matrix passes owner-key duplicates, reuse across repositories
+and after removal, immutable metadata/grants, cross-installation pointers,
+scope/key and genuine foreign-release binding failures, terminal removal, forced
+RLS on all four tables, authorized history reads, and zero outsider visibility.
+Log: `/home/a/heph-release-ui-installation-schema-20260920-v2.log`.
+Production app-pool bootstrap passes at migration 87, as do scoped release
+Clippy/docs, app all-feature compilation, workspace formatting, and architecture.
+Related logs use `heph-app-pool-migration87`, `heph-ui-installation-app-check`,
+`heph-release-ui-installation-schema-clippy`, and `heph-ui-installation-architecture`
+under `/home/a`, dated 20260920.
+
+This is storage enforcement only. Authorized installation commands, generation
+lifecycle adapters, transactional owner events, navigation, and serving are not
+implemented by this migration. Global ownership remains unresolved.
+
 ## Reference UI automatic-theme checkpoint (2026-09-20)
 
 The kit now derives a dark system-preference fallback from the canonical dark
