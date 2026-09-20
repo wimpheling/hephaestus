@@ -6,7 +6,15 @@
 use super::{RepositoryUisConfig, UiContent};
 use release_domain::ui::{UiKey, UiMediaType, UiRoutePath};
 use release_domain::{ArtifactKind, ArtifactPath, ReleaseArtifactId};
-use std::{collections::BTreeMap, fmt};
+use std::{
+    collections::{BTreeMap, BTreeSet},
+    fmt,
+};
+
+/// Maximum size of one referenced static UI artifact.
+pub const MAX_STATIC_UI_FILE_BYTES: u64 = 16 * 1024 * 1024;
+/// Maximum size of distinct referenced static UI artifacts in one release.
+pub const MAX_STATIC_UI_TOTAL_BYTES: u64 = 64 * 1024 * 1024;
 
 /// One trusted artifact candidate supplied by release publication.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -19,6 +27,8 @@ pub struct StaticArtifactCandidate {
     pub kind: ArtifactKind,
     /// MIME type recorded by the build output declaration.
     pub media_type: String,
+    /// Exact immutable artifact byte length.
+    pub size_bytes: u64,
 }
 
 /// One resolved static file binding.
@@ -98,6 +108,24 @@ pub enum StaticResolutionError {
         /// Index of the supplied candidate.
         candidate_index: usize,
     },
+    /// A referenced static artifact exceeds the per-file bound.
+    StaticArtifactTooLarge {
+        /// Index of the UI declaration.
+        ui_index: usize,
+        /// Index of the file declaration within the UI.
+        file_index: usize,
+        /// Index of the supplied candidate.
+        candidate_index: usize,
+    },
+    /// Distinct referenced static artifacts exceed the release aggregate bound.
+    StaticArtifactTotalTooLarge {
+        /// Index of the UI declaration that crossed the bound.
+        ui_index: usize,
+        /// Index of the file declaration that crossed the bound.
+        file_index: usize,
+        /// Index of the supplied candidate that crossed the bound.
+        candidate_index: usize,
+    },
 }
 
 impl fmt::Display for StaticResolutionError {
@@ -143,6 +171,22 @@ impl fmt::Display for StaticResolutionError {
             } => write!(
                 formatter,
                 "static artifact MIME does not match at uis[{ui_index}].content.files[{file_index}] (candidate {candidate_index})"
+            ),
+            Self::StaticArtifactTooLarge {
+                ui_index,
+                file_index,
+                candidate_index,
+            } => write!(
+                formatter,
+                "static artifact exceeds the per-file size bound at uis[{ui_index}].content.files[{file_index}] (candidate {candidate_index})"
+            ),
+            Self::StaticArtifactTotalTooLarge {
+                ui_index,
+                file_index,
+                candidate_index,
+            } => write!(
+                formatter,
+                "static UI artifacts exceed the aggregate size bound at uis[{ui_index}].content.files[{file_index}] (candidate {candidate_index})"
             ),
         }
     }
@@ -190,6 +234,8 @@ pub fn resolve_static_uis(
     }
 
     let mut resolved = Vec::new();
+    let mut referenced_ids = BTreeSet::new();
+    let mut referenced_bytes = 0_u64;
     for (ui_index, ui) in config.uis.iter().enumerate() {
         let UiContent::Static { files, .. } = &ui.content else {
             continue;
@@ -217,6 +263,29 @@ pub fn resolve_static_uis(
                     candidate_index,
                 });
             }
+            if candidate.size_bytes > MAX_STATIC_UI_FILE_BYTES {
+                return Err(StaticResolutionError::StaticArtifactTooLarge {
+                    ui_index,
+                    file_index,
+                    candidate_index,
+                });
+            }
+            if referenced_ids.insert(candidate.id) {
+                referenced_bytes = referenced_bytes.checked_add(candidate.size_bytes).ok_or(
+                    StaticResolutionError::StaticArtifactTotalTooLarge {
+                        ui_index,
+                        file_index,
+                        candidate_index,
+                    },
+                )?;
+                if referenced_bytes > MAX_STATIC_UI_TOTAL_BYTES {
+                    return Err(StaticResolutionError::StaticArtifactTotalTooLarge {
+                        ui_index,
+                        file_index,
+                        candidate_index,
+                    });
+                }
+            }
             resolved_files.push(ResolvedStaticFile {
                 route: file.route.clone(),
                 artifact_id: candidate.id,
@@ -234,7 +303,8 @@ pub fn resolve_static_uis(
 #[cfg(test)]
 mod tests {
     use super::{
-        ResolvedStaticUis, StaticArtifactCandidate, StaticResolutionError, resolve_static_uis,
+        MAX_STATIC_UI_FILE_BYTES, MAX_STATIC_UI_TOTAL_BYTES, ResolvedStaticUis,
+        StaticArtifactCandidate, StaticResolutionError, resolve_static_uis,
     };
     use crate::parse_repository_uis;
     use release_domain::{ArtifactKind, ArtifactPath, ReleaseArtifactId};
@@ -261,6 +331,23 @@ mod tests {
             id: id(value),
             kind,
             media_type: media_type.to_owned(),
+            size_bytes: 1,
+        }
+    }
+
+    fn candidate_with_size(
+        path: &str,
+        value: u128,
+        kind: ArtifactKind,
+        media_type: &str,
+        size_bytes: u64,
+    ) -> StaticArtifactCandidate {
+        StaticArtifactCandidate {
+            path: ArtifactPath::parse(path).expect("test path"),
+            id: id(value),
+            kind,
+            media_type: media_type.to_owned(),
+            size_bytes,
         }
     }
 
@@ -348,6 +435,199 @@ mod tests {
             error,
             StaticResolutionError::MediaTypeMismatch { .. }
         ));
+    }
+
+    #[test]
+    fn per_file_size_bound_accepts_exact_limit_and_rejects_next_byte() {
+        let config = static_config(
+            "[[uis.content.files]]\nroute = \"index.html\"\nartifact = \"dist/index.html\"\nmedia_type = \"text/html\"\n",
+        );
+        resolve_static_uis(
+            &config,
+            &[candidate_with_size(
+                "dist/index.html",
+                1,
+                ArtifactKind::File,
+                "text/html",
+                MAX_STATIC_UI_FILE_BYTES,
+            )],
+        )
+        .expect("exact per-file limit is accepted");
+
+        let error = resolve_static_uis(
+            &config,
+            &[candidate_with_size(
+                "dist/index.html",
+                1,
+                ArtifactKind::File,
+                "text/html",
+                MAX_STATIC_UI_FILE_BYTES + 1,
+            )],
+        )
+        .expect_err("the next byte exceeds the per-file limit");
+        assert_eq!(
+            error,
+            StaticResolutionError::StaticArtifactTooLarge {
+                ui_index: 0,
+                file_index: 0,
+                candidate_index: 0,
+            }
+        );
+        assert!(!error.to_string().contains("16777217"));
+    }
+
+    #[test]
+    fn aggregate_size_bound_accepts_exact_limit_and_rejects_next_byte() {
+        let exact_files = [
+            "[[uis.content.files]]\nroute = \"index.html\"\nartifact = \"dist/index.html\"\nmedia_type = \"text/html\"",
+            "[[uis.content.files]]\nroute = \"one.js\"\nartifact = \"dist/one.js\"\nmedia_type = \"text/javascript\"",
+            "[[uis.content.files]]\nroute = \"two.js\"\nartifact = \"dist/two.js\"\nmedia_type = \"text/javascript\"",
+            "[[uis.content.files]]\nroute = \"three.js\"\nartifact = \"dist/three.js\"\nmedia_type = \"text/javascript\"",
+        ]
+        .join("\n\n");
+        let exact_config = static_config(&exact_files);
+        let file_size = MAX_STATIC_UI_TOTAL_BYTES / 4;
+        resolve_static_uis(
+            &exact_config,
+            &[
+                candidate_with_size(
+                    "dist/index.html",
+                    1,
+                    ArtifactKind::File,
+                    "text/html",
+                    file_size,
+                ),
+                candidate_with_size(
+                    "dist/one.js",
+                    2,
+                    ArtifactKind::File,
+                    "text/javascript",
+                    file_size,
+                ),
+                candidate_with_size(
+                    "dist/two.js",
+                    3,
+                    ArtifactKind::File,
+                    "text/javascript",
+                    file_size,
+                ),
+                candidate_with_size(
+                    "dist/three.js",
+                    4,
+                    ArtifactKind::File,
+                    "text/javascript",
+                    file_size,
+                ),
+            ],
+        )
+        .expect("exact aggregate limit is accepted");
+
+        let over_files = format!(
+            "{exact_files}\n\n[[uis.content.files]]\nroute = \"four.js\"\nartifact = \"dist/four.js\"\nmedia_type = \"text/javascript\""
+        );
+        let error = resolve_static_uis(
+            &static_config(&over_files),
+            &[
+                candidate_with_size(
+                    "dist/index.html",
+                    1,
+                    ArtifactKind::File,
+                    "text/html",
+                    file_size,
+                ),
+                candidate_with_size(
+                    "dist/one.js",
+                    2,
+                    ArtifactKind::File,
+                    "text/javascript",
+                    file_size,
+                ),
+                candidate_with_size(
+                    "dist/two.js",
+                    3,
+                    ArtifactKind::File,
+                    "text/javascript",
+                    file_size,
+                ),
+                candidate_with_size(
+                    "dist/three.js",
+                    4,
+                    ArtifactKind::File,
+                    "text/javascript",
+                    file_size,
+                ),
+                candidate_with_size("dist/four.js", 5, ArtifactKind::File, "text/javascript", 1),
+            ],
+        )
+        .expect_err("the next aggregate byte is rejected");
+        assert!(matches!(
+            error,
+            StaticResolutionError::StaticArtifactTotalTooLarge { .. }
+        ));
+    }
+
+    #[test]
+    fn shared_ids_count_once_and_unreferenced_kinds_or_bytes_are_excluded() {
+        let config = static_config(
+            "[[uis.content.files]]\nroute = \"index.html\"\nartifact = \"dist/index.html\"\nmedia_type = \"text/html\"\n\n[[uis.content.files]]\nroute = \"app.js\"\nartifact = \"dist/shared-a.js\"\nmedia_type = \"text/javascript\"\n\n[[uis.content.files]]\nroute = \"vendor.js\"\nartifact = \"dist/shared-a.js\"\nmedia_type = \"text/javascript\"\n\n[[uis.content.files]]\nroute = \"feature.js\"\nartifact = \"dist/shared-b.js\"\nmedia_type = \"text/javascript\"\n\n[[uis.content.files]]\nroute = \"feature-vendor.js\"\nartifact = \"dist/shared-b.js\"\nmedia_type = \"text/javascript\"\n\n[[uis.content.files]]\nroute = \"runtime.js\"\nartifact = \"dist/shared-c.js\"\nmedia_type = \"text/javascript\"\n\n[[uis.content.files]]\nroute = \"runtime-vendor.js\"\nartifact = \"dist/shared-c.js\"\nmedia_type = \"text/javascript\"\n",
+        );
+        let shared_size = MAX_STATIC_UI_TOTAL_BYTES / 4;
+        let result = resolve_static_uis(
+            &config,
+            &[
+                candidate_with_size(
+                    "dist/index.html",
+                    1,
+                    ArtifactKind::File,
+                    "text/html",
+                    shared_size,
+                ),
+                candidate_with_size(
+                    "dist/shared-a.js",
+                    2,
+                    ArtifactKind::File,
+                    "text/javascript",
+                    shared_size,
+                ),
+                candidate_with_size(
+                    "dist/shared-b.js",
+                    3,
+                    ArtifactKind::File,
+                    "text/javascript",
+                    shared_size,
+                ),
+                candidate_with_size(
+                    "dist/shared-c.js",
+                    4,
+                    ArtifactKind::File,
+                    "text/javascript",
+                    shared_size,
+                ),
+                candidate_with_size(
+                    "dist/unused.bin",
+                    5,
+                    ArtifactKind::File,
+                    "application/octet-stream",
+                    MAX_STATIC_UI_FILE_BYTES + 1,
+                ),
+                candidate_with_size(
+                    "dist/tool",
+                    6,
+                    ArtifactKind::Executable,
+                    "application/octet-stream",
+                    MAX_STATIC_UI_TOTAL_BYTES,
+                ),
+                candidate_with_size(
+                    "dist/build.log",
+                    7,
+                    ArtifactKind::BuildLog,
+                    "text/plain",
+                    MAX_STATIC_UI_TOTAL_BYTES,
+                ),
+            ],
+        )
+        .expect("shared and unreferenced candidates do not exceed UI limits");
+        assert_eq!(result.uis[0].files.len(), 7);
     }
 
     #[test]

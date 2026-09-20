@@ -438,6 +438,20 @@ acceptance tests remain outstanding.
 
 ## Implementation checklist
 
+### Static asset size checkpoint (2026-09-20)
+
+Static resolution now consumes the importer's immutable byte length and rejects
+referenced files above 16 MiB or total unique referenced artifacts above 64 MiB
+per release. Shared IDs count once across declarations; unrelated build outputs
+do not consume the UI budget. Exact path, file-kind, and MIME checks precede
+size accounting. The existing declaration bounds already limit references to
+4,096 files. Static HTTP streaming and concurrency limits remain unimplemented.
+
+All 41 agent-config unit tests and 17 integration tests passed, including ten
+focused resolver tests. Exact size boundaries, one-byte overflow, repeated
+references, and unrelated oversized outputs are covered. Scoped strict Clippy,
+rustdoc, formatting, and architecture also passed.
+
 ### Manual-build integration checkpoint (2026-09-20)
 
 Manual requests now read the exact immutable UI capture, reject invalid captures,
