@@ -38,6 +38,16 @@ proofs, and the final integrated quality gate remain incomplete. The user approv
 global installations and organization isolation. Historical checkpoints record the state
 at their time; later integration checkpoints supersede earlier pending notes.
 
+## Installed harness deterministic-gate integration (2026-09-20)
+
+CI and `cargo dev quality` now run the installed bridge protocol script and
+safe reporter tests alongside the existing navigation/bootstrap checks. The
+combined Node suite passes 17 cases, the bridge script passes, and CI YAML
+parses. The dev runner's strict Clippy/docs and tests pass (68 passed, one
+ignored); workspace formatting and diff checks pass. Logs:
+`/tmp/heph-ui-dev-quality-*.log`. These gates exercise deterministic harness
+behavior; actual installed-browser acceptance remains a separate opt-in run.
+
 ## Installed UI fixture and safe browser harness checkpoint (2026-09-20)
 
 The opt-in Cooking fixture now builds and publishes both reference releases

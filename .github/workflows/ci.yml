@@ -138,7 +138,10 @@ jobs:
         run: |
           node --test --test-isolation=none --test-reporter=tap \
             web/assets/js/design_system/hooks/installed_ui_navigation_test.mjs \
-            crates/hephaestus-app/tests/ui_bootstrap_script.mjs
+            crates/hephaestus-app/tests/ui_bootstrap_script.mjs \
+            e2e/playwright/reporter-tests/safe-installed-ui-reporter.test.mjs
+      - name: Installed UI bridge protocol
+        run: scripts/test-ui-e2e-installed-bridge.sh
       - name: Phoenix and browser golden path
         env:
           HEPHAESTUS_PLAYWRIGHT_SKIP_BROWSER_INSTALL: "1"

@@ -228,6 +228,7 @@ fn ui(context: &DevContext) -> Result<()> {
     require_mix_project(&web)?;
     release_ui_kit(context)?;
     ui_node_tests(context)?;
+    installed_ui_harness_checks(context)?;
     phase("UI architecture and focused tests (pinned Elixir container)");
     run_process(&mut web_mix_command(context, UI_CHECKS))
 }
@@ -242,8 +243,21 @@ fn ui_node_tests(context: &DevContext) -> Result<()> {
                 "--test-reporter=tap",
                 "web/assets/js/design_system/hooks/installed_ui_navigation_test.mjs",
                 "crates/hephaestus-app/tests/ui_bootstrap_script.mjs",
+                "e2e/playwright/reporter-tests/safe-installed-ui-reporter.test.mjs",
             ])
             .current_dir(&context.repository_root),
+    )
+}
+
+fn installed_ui_harness_checks(context: &DevContext) -> Result<()> {
+    phase("Installed UI bridge protocol checks");
+    run_process(
+        Command::new(
+            context
+                .repository_root
+                .join("scripts/test-ui-e2e-installed-bridge.sh"),
+        )
+        .current_dir(&context.repository_root),
     )
 }
 
