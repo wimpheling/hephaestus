@@ -15,8 +15,8 @@ matrix. Gateway admission, host/resource projection, Phoenix navigation, and
 reference theme helpers pass focused checks. The bounded HTTP listener and request-wide audit now pass focused verification.
 Project-owned static/managed installed-browser smoke and the live
 disable/stale-cookie path now pass in the bounded runtime. Owner navigation,
-guest-boundary coverage, reactivation, removal, parent/account revocation, and
-the final repository-wide quality gate remain open.
+guest-boundary coverage, removal, parent/account revocation, and the final
+repository-wide quality gate remain open.
 The handoff remains the record of the stopped session; new evidence is recorded
 below as each resumed slice passes review and verification.
 
@@ -37,9 +37,9 @@ Verified static-byte loading and read-only release-page metadata display are
 implemented. Durable browser sessions are integrated through RPC and Phoenix.
 Installation lifecycle and the static/managed HTTP serving baseline are committed.
 Project-owned static/managed installed-browser smoke and real Caddy/VM/browser
-proofs pass, including the live disable path; owner-navigation and guest-boundary
-proofs, the remaining lifecycle proofs, and the final integrated quality gate
-are open. The user approved organization-owned
+proofs pass, including live disable and reactivation; owner-navigation and
+guest-boundary proofs, removal and revocation, and the final integrated quality
+gate are open. The user approved organization-owned
 global installations and organization isolation. Historical checkpoints record the state
 at their time; later integration checkpoints supersede earlier pending notes.
 
@@ -114,6 +114,37 @@ audit counts are not treated as proof of the post-disable request by themselves.
 This proves the live disable and stale-cookie path only. It does not establish
 reactivation, removal, parent/account revocation, or the other remaining
 lifecycle and final quality gates.
+
+## Live reactivation lifecycle runtime proof (2026-09-20)
+
+The reactivation runtime at `41ea87c` passed with outer exit code zero. Its
+execution log is
+`/home/a/heph-installed-ui-twentyfifth-runtime-diag-20260920/cooking-execution.yXI9NR.log`;
+the safe Playwright report is
+`/home/a/heph-installed-ui-twentyfifth-runtime-diag-20260920/browser.CEtAwo/playwright.log`.
+The report records one passed test with zero failures. Golden results were 35
+passed, zero failed, one ignored; gateway PostgreSQL results were eight passed.
+Runtime and cgroup cleanup was verified, with the unrelated PID 10841 preserved.
+
+The run emitted:
+
+```text
+REAL_UI_INSTALLATION_AUDIT=1 static=1 managed=1 api=1 embed=1 gateway_correlation=1
+REAL_UI_INSTALLATION_DISABLE_LIFECYCLE=1 stale_cookie_denied=1 old_generation_denied=1 gateway_invocation_unchanged=1 reactivated_generation=1 new_generation_audit=1 gateway_invocation_increased=1
+```
+
+The browser observed the disabled card as unavailable with no launch control,
+verified the old generation returned 404 with its actual cookie still present,
+and verified that the stale request did not create a new gateway invocation.
+It then launched the fresh Phoenix generation, confirmed the new generation,
+identity response, bootstrap fragment removal, cookie, readiness, and the
+increased gateway/audit results. These are runtime assertions from the passing
+run; aggregate audit counts are not treated as proof of the stale request by
+themselves.
+
+This proves live disable and reactivation only. Removal, parent/account
+revocation, owner-navigation and guest-boundary coverage, and the final quality
+gate remain open.
 
 ## Managed reference runtime and browser reachability findings (2026-09-20)
 
