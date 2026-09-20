@@ -19,6 +19,13 @@ use std::{
 use subtle::ConstantTimeEq;
 use tokio::time::timeout;
 use uuid::Uuid;
+
+mod ui_gateway_admission;
+pub use ui_gateway_admission::{
+    UiGatewayAdmission, UiGatewayAdmissionError, UiGatewayAdmissionProvider, UiGatewayAuthority,
+    UiGatewayRequest, UiGatewayRequestKind, admission_failure_response, prepare_gateway_request,
+    reject_ui_set_cookie, strip_ui_guest_headers, validate_ui_response,
+};
 use vm_trait::{PrivateHttpRequest, PrivateHttpResponse, PrivateMailboxPublication, VmInstance};
 
 mod integration;
@@ -762,6 +769,26 @@ pub trait GatewayInvocationRecorder: Send + Sync {
         route: &GatewayRouteBinding,
         request_id: Uuid,
     ) -> Result<Uuid, GatewayEdgeError>;
+    /// Records a UI-origin invocation only after the adapter has rechecked
+    /// the child authority and exact derived route in the same transaction as
+    /// the accepted invocation row. Existing recorders deny this path until
+    /// they implement that durable check.
+    ///
+    /// # Errors
+    ///
+    /// Returns a contract error when the recorder has not implemented the
+    /// durable UI authority check.
+    async fn accepted_ui(
+        &self,
+        route: &GatewayRouteBinding,
+        authority: &UiGatewayAuthority,
+        request_id: Uuid,
+    ) -> Result<Uuid, GatewayEdgeError> {
+        let _ = (route, authority, request_id);
+        Err(GatewayEdgeError::Contract(
+            "UI invocation acceptance is unsupported",
+        ))
+    }
     /// Records the terminal safe outcome.
     async fn completed(
         &self,
@@ -869,6 +896,68 @@ where
         else {
             return fallback(StatusCode::SERVICE_UNAVAILABLE);
         };
+        self.dispatch_admitted(route, request, invocation_id, false)
+            .await
+    }
+}
+
+impl<R, H, I> GatewayDispatcher<R, H, I> {
+    /// Dispatches a request from the trusted UI origin after durable UI
+    /// admission. Public dispatch remains restricted to `Exposure::Public`.
+    pub async fn dispatch_ui<A>(
+        &self,
+        request: UiGatewayRequest,
+        authority: &A,
+    ) -> GatewayProviderResponse
+    where
+        R: GatewayRouteResolver,
+        H: GatewayVmHandler,
+        I: GatewayInvocationRecorder,
+        A: UiGatewayAdmissionProvider + ?Sized,
+    {
+        let fallback = |response| GatewayProviderResponse {
+            response,
+            invocation_id: Uuid::nil(),
+        };
+        let admission = match authority.admit(&request).await {
+            Ok(admission) => admission,
+            Err(error) => return fallback(admission_failure_response(error)),
+        };
+        let request_authority = request.authority.clone();
+        let Ok(request) = prepare_gateway_request(&request, &admission) else {
+            return fallback(empty_response(StatusCode::BAD_REQUEST));
+        };
+        if validate_ui_request(&admission.route, &request).is_err() {
+            return fallback(empty_response(StatusCode::BAD_REQUEST));
+        }
+        let Ok(invocation_id) = self
+            .recorder
+            .accepted_ui(
+                &admission.route,
+                &request_authority,
+                request.trusted.request_id,
+            )
+            .await
+        else {
+            return fallback(empty_response(StatusCode::SERVICE_UNAVAILABLE));
+        };
+        self.dispatch_admitted(admission.route, request, invocation_id, true)
+            .await
+    }
+}
+
+impl<R: Sync, H: Sync, I: Sync> GatewayDispatcher<R, H, I> {
+    async fn dispatch_admitted(
+        &self,
+        route: GatewayRouteBinding,
+        request: GatewayRequest,
+        invocation_id: Uuid,
+        ui_response_policy: bool,
+    ) -> GatewayProviderResponse
+    where
+        H: GatewayVmHandler,
+        I: GatewayInvocationRecorder,
+    {
         let Ok(request) = self
             .rewrite_inbound_secrets(invocation_id, &route, request)
             .await
@@ -880,7 +969,14 @@ where
             // Missing, repeated, mismatched, revoked, and expired values
             // share a bounded authentication failure without exposing which
             // credential check failed. Unknown routes remain 404.
-            return fallback(StatusCode::UNAUTHORIZED);
+            return GatewayProviderResponse {
+                response: empty_response(StatusCode::UNAUTHORIZED),
+                invocation_id: if ui_response_policy {
+                    invocation_id
+                } else {
+                    Uuid::nil()
+                },
+            };
         };
         let result = timeout(
             route.limits.execution_timeout,
@@ -888,7 +984,10 @@ where
         )
         .await;
         let (response, outcome) = match result {
-            Ok(Ok(mut response)) if validate_response(&route, &response).is_ok() => {
+            Ok(Ok(mut response))
+                if validate_response(&route, &response).is_ok()
+                    && (!ui_response_policy || validate_ui_response(&response).is_ok()) =>
+            {
                 if let Some(publication) = response.mailbox_publication.take() {
                     let publication_result = match &self.mailbox_publisher {
                         Some(publisher) => publisher.publish(invocation_id, publication).await,
@@ -936,9 +1035,7 @@ where
             invocation_id,
         }
     }
-}
 
-impl<R: Sync, H: Sync, I: Sync> GatewayDispatcher<R, H, I> {
     async fn rewrite_inbound_secrets(
         &self,
         invocation_id: Uuid,
@@ -1258,9 +1355,24 @@ fn validate_request(
     route: &GatewayRouteBinding,
     request: &GatewayRequest,
 ) -> Result<(), GatewayEdgeError> {
-    if route.exposure != Exposure::Public {
+    validate_request_for_exposure(route, request, Exposure::Public)
+}
+
+fn validate_ui_request(
+    route: &GatewayRouteBinding,
+    request: &GatewayRequest,
+) -> Result<(), GatewayEdgeError> {
+    validate_request_for_exposure(route, request, Exposure::HephAuthenticated)
+}
+
+fn validate_request_for_exposure(
+    route: &GatewayRouteBinding,
+    request: &GatewayRequest,
+    expected_exposure: Exposure,
+) -> Result<(), GatewayEdgeError> {
+    if route.exposure != expected_exposure {
         return Err(GatewayEdgeError::Contract(
-            "reserved gateway exposure is not publicly admitted",
+            "gateway exposure does not match dispatcher boundary",
         ));
     }
     if !request.path_and_query.starts_with('/')
@@ -2208,5 +2320,253 @@ mod tests {
         })
         .await
         .expect("timed-out gateway VM was cleaned up");
+    }
+
+    struct UiProvider {
+        admission: UiGatewayAdmission,
+    }
+
+    #[async_trait]
+    impl UiGatewayAdmissionProvider for UiProvider {
+        async fn admit(
+            &self,
+            _: &UiGatewayRequest,
+        ) -> Result<UiGatewayAdmission, UiGatewayAdmissionError> {
+            Ok(self.admission.clone())
+        }
+    }
+
+    struct DenyingUiProvider {
+        calls: Arc<AtomicUsize>,
+    }
+
+    #[async_trait]
+    impl UiGatewayAdmissionProvider for DenyingUiProvider {
+        async fn admit(
+            &self,
+            _: &UiGatewayRequest,
+        ) -> Result<UiGatewayAdmission, UiGatewayAdmissionError> {
+            self.calls.fetch_add(1, Ordering::SeqCst);
+            Err(UiGatewayAdmissionError::Denied)
+        }
+    }
+
+    struct UiRecorder {
+        accepted: Arc<AtomicUsize>,
+        completed: Arc<Mutex<Vec<GatewayInvocationOutcome>>>,
+    }
+
+    #[async_trait]
+    impl GatewayInvocationRecorder for UiRecorder {
+        async fn accepted(
+            &self,
+            _: &GatewayRouteBinding,
+            _: Uuid,
+        ) -> Result<Uuid, GatewayEdgeError> {
+            Ok(Uuid::new_v4())
+        }
+
+        async fn accepted_ui(
+            &self,
+            route: &GatewayRouteBinding,
+            authority: &UiGatewayAuthority,
+            _: Uuid,
+        ) -> Result<Uuid, GatewayEdgeError> {
+            assert_eq!(route.exposure, Exposure::HephAuthenticated);
+            assert!(!authority.child_session_id.is_nil());
+            self.accepted.fetch_add(1, Ordering::SeqCst);
+            Ok(Uuid::new_v4())
+        }
+
+        async fn completed(
+            &self,
+            _: Uuid,
+            outcome: GatewayInvocationOutcome,
+        ) -> Result<(), GatewayEdgeError> {
+            self.completed
+                .lock()
+                .expect("completion lock")
+                .push(outcome);
+            Ok(())
+        }
+    }
+
+    struct SetCookieHandler;
+
+    #[async_trait]
+    impl GatewayVmHandler for SetCookieHandler {
+        async fn invoke(
+            &self,
+            _: &GatewayRouteBinding,
+            _: Uuid,
+            request: GatewayRequest,
+        ) -> Result<GatewayResponse, GatewayEdgeError> {
+            for name in [
+                "authorization",
+                "cookie",
+                "host",
+                "proxy-authorization",
+                "x-api-key",
+                "x-auth-token",
+                "x-access-token",
+                "forwarded",
+                "x-forwarded-for",
+                "x-forwarded-host",
+                "x-forwarded-proto",
+                "x-forwarded-port",
+                "x-forwarded-prefix",
+                "x-forwarded-server",
+            ] {
+                assert!(
+                    !request.headers.contains_key(name),
+                    "leaked UI header: {name}"
+                );
+            }
+            let mut headers = HeaderMap::new();
+            headers.insert("set-cookie", HeaderValue::from_static("sid=guest"));
+            Ok(GatewayResponse {
+                status: StatusCode::OK,
+                headers,
+                body: Bytes::new(),
+                mailbox_publication: None,
+            })
+        }
+    }
+
+    fn ui_request(path: &str) -> UiGatewayRequest {
+        UiGatewayRequest {
+            authority: UiGatewayAuthority {
+                child_session_id: Uuid::new_v4(),
+                actor_id: Uuid::new_v4(),
+                organization_id: Uuid::new_v4(),
+                installation_id: Uuid::new_v4(),
+                generation_id: Uuid::new_v4(),
+                canonical_request_path: "echo/index.html".to_owned(),
+                request_kind: UiGatewayRequestKind::Managed,
+                method: Method::GET,
+            },
+            method: Method::GET,
+            request_path_and_query: path.to_owned(),
+            headers: {
+                let mut headers = HeaderMap::new();
+                headers.insert("authorization", HeaderValue::from_static("secret"));
+                headers.insert("cookie", HeaderValue::from_static("sid=secret"));
+                headers
+            },
+            body: Bytes::new(),
+            trusted: TrustedRequestMetadata {
+                scheme: GatewayScheme::Https,
+                authority: "ui.heph.test".to_owned(),
+                client_address: "127.0.0.1".parse().expect("address"),
+                request_id: Uuid::new_v4(),
+            },
+        }
+    }
+
+    fn ui_admission() -> UiGatewayAdmission {
+        let mut route = route();
+        route.exposure = Exposure::HephAuthenticated;
+        route.methods = BTreeSet::from([Method::GET]);
+        UiGatewayAdmission {
+            route,
+            gateway_path_and_query: "/gateway/echo/index.html".to_owned(),
+        }
+    }
+
+    #[tokio::test]
+    async fn ui_set_cookie_is_failed_and_completed_after_ui_acceptance() {
+        let accepted = Arc::new(AtomicUsize::new(0));
+        let completed = Arc::new(Mutex::new(Vec::new()));
+        let recorder = UiRecorder {
+            accepted: Arc::clone(&accepted),
+            completed: Arc::clone(&completed),
+        };
+        let dispatcher = GatewayDispatcher::new(
+            Resolver(ui_admission().route.clone()),
+            SetCookieHandler,
+            recorder,
+        );
+        let response = dispatcher
+            .dispatch_ui(
+                ui_request("echo/index.html"),
+                &UiProvider {
+                    admission: ui_admission(),
+                },
+            )
+            .await;
+        assert_eq!(response.response.status, StatusCode::BAD_GATEWAY);
+        assert_eq!(accepted.load(Ordering::SeqCst), 1);
+        assert_eq!(
+            completed.lock().expect("completion lock").as_slice(),
+            &[GatewayInvocationOutcome::Failed]
+        );
+    }
+
+    #[tokio::test]
+    async fn ui_authority_path_mismatch_fails_before_ui_acceptance() {
+        let accepted = Arc::new(AtomicUsize::new(0));
+        let completed = Arc::new(Mutex::new(Vec::new()));
+        let recorder = UiRecorder {
+            accepted: Arc::clone(&accepted),
+            completed: Arc::clone(&completed),
+        };
+        let dispatcher = GatewayDispatcher::new(
+            Resolver(ui_admission().route.clone()),
+            SetCookieHandler,
+            recorder,
+        );
+        let response = dispatcher
+            .dispatch_ui(
+                ui_request("echo/other.html"),
+                &UiProvider {
+                    admission: ui_admission(),
+                },
+            )
+            .await;
+        assert_eq!(response.response.status, StatusCode::BAD_REQUEST);
+        assert_eq!(accepted.load(Ordering::SeqCst), 0);
+        assert!(completed.lock().expect("completion lock").is_empty());
+    }
+
+    #[tokio::test]
+    async fn ui_acceptance_is_default_deny_for_existing_recorders() {
+        let calls = Arc::new(AtomicUsize::new(0));
+        let dispatcher = GatewayDispatcher::new(
+            Resolver(ui_admission().route.clone()),
+            CountingHandler(Arc::clone(&calls)),
+            Recorder,
+        );
+        let response = dispatcher
+            .dispatch_ui(
+                ui_request("echo/index.html"),
+                &UiProvider {
+                    admission: ui_admission(),
+                },
+            )
+            .await;
+        assert_eq!(response.response.status, StatusCode::SERVICE_UNAVAILABLE);
+        assert_eq!(calls.load(Ordering::SeqCst), 0);
+    }
+
+    #[tokio::test]
+    async fn ui_denial_provider_is_called_once_before_handler() {
+        let provider_calls = Arc::new(AtomicUsize::new(0));
+        let handler_calls = Arc::new(AtomicUsize::new(0));
+        let dispatcher = GatewayDispatcher::new(
+            Resolver(ui_admission().route.clone()),
+            CountingHandler(Arc::clone(&handler_calls)),
+            Recorder,
+        );
+        let response = dispatcher
+            .dispatch_ui(
+                ui_request("echo/index.html"),
+                &DenyingUiProvider {
+                    calls: Arc::clone(&provider_calls),
+                },
+            )
+            .await;
+        assert_eq!(response.response.status, StatusCode::UNAUTHORIZED);
+        assert_eq!(provider_calls.load(Ordering::SeqCst), 1);
+        assert_eq!(handler_calls.load(Ordering::SeqCst), 0);
     }
 }

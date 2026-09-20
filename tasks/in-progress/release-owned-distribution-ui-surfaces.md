@@ -37,6 +37,39 @@ integrated quality gate remain incomplete. The user approved organization-owned
 global installations and organization isolation. Historical checkpoints record the state
 at their time; later integration checkpoints supersede earlier pending notes.
 
+## UI gateway admission checkpoint (2026-09-20)
+
+The edge now has a distinct UI admission path sharing the established VM
+execution and invocation accounting core. The public path remains public-only.
+The UI envelope contains safe child/actor/tenant/installation/generation
+identities and the exact request tuple, never a caller-selected gateway or
+revision. The worker derives current bindings and calls the canonical
+migration-90 verifier. Migration 91 grants that verifier's exact signature to
+the worker without broadening application table access.
+
+The recorder defaults to denial unless it implements UI admission. Its worker
+implementation locks the route and service authority, rechecks the child after
+all lock waits, and invokes the canonical verifier again in the final invocation
+INSERT. That same statement checks the safe identities, route/method, service
+readiness, fencing token, and fresh lease. Managed paths are mapped from the
+descriptor base, and query strings remain opaque, including an empty `?`.
+Browser credentials and forwarding headers are stripped before guest execution;
+guest Set-Cookie rejects the response before success accounting.
+
+The real restricted-role PostgreSQL matrix passes three tests in
+`/home/a/heph-gateway-authority-final-v8-20260920.log`, including observed
+service-lock waits followed by parent revocation or child expiry with no
+invocation row. All 191 edge unit tests pass in
+`/home/a/heph-gateway-edge-unit-final-v5-20260920.log`. Strict edge/adapter/test
+Clippy, both crates' rustdoc, workspace formatting, and architecture pass in
+the corresponding final gateway logs. Disposable runtime resources were
+cleaned. Actual HTTP bridge/listener wiring and request audit remain pending.
+
+CI at RPC checkpoint `cbbc026` failed an existing service-recovery teardown:
+an idle control-pool connection remained after pool closure. The failed log is
+`/tmp/heph-ci-cbbc026-failure.log`; investigation is in progress. This is not
+counted as a green whole-repository gate.
+
 ## Bootstrap script checkpoint (2026-09-20)
 
 The unregistered bootstrap handler now includes its production JavaScript from

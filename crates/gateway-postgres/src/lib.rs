@@ -58,6 +58,7 @@ mod service_log_reader;
 mod service_logs;
 pub(crate) mod service_ownership;
 mod service_targets;
+pub(crate) mod ui_browser;
 
 pub use service_execution::PostgresGatewayExecutionTargetResolver;
 pub use service_failure::PostgresGatewayServiceFailureStore;
@@ -867,6 +868,58 @@ impl PostgresGatewayEdgeAuthority {
             .map_err(|_| GatewayEdgeError::Unavailable)?;
         Ok(processed)
     }
+    async fn finish_accepted_invocation(
+        &self,
+        invocation_id: Uuid,
+        accepted: AcceptedInvocationRow,
+    ) -> Result<Uuid, GatewayEdgeError> {
+        let Some(issuer) = &self.runtime_authority else {
+            if accepted.handler_contract == "http.service.v1" {
+                self.reject_invocation(invocation_id).await?;
+                return Err(GatewayEdgeError::Unavailable);
+            }
+            return Ok(invocation_id);
+        };
+        let issued_at = OffsetDateTime::now_utc();
+        let Ok(ttl) = time::Duration::try_from(self.session_ttl) else {
+            self.reject_invocation(invocation_id).await?;
+            return Err(GatewayEdgeError::Unavailable);
+        };
+        let Some(expires_at) = issued_at.checked_add(ttl) else {
+            self.reject_invocation(invocation_id).await?;
+            return Err(GatewayEdgeError::Unavailable);
+        };
+        let request = GatewayRuntimeSessionRequest {
+            invocation_id: capability_domain::GatewayInvocationId::from_uuid(invocation_id),
+            gateway_id: accepted.gateway_id,
+            gateway_revision_id: accepted.gateway_revision_id,
+            issued_at,
+            expires_at,
+        };
+        let issued_result = if accepted.handler_contract == "http.service.v1" {
+            issuer.issue_gateway_service(request).await
+        } else {
+            issuer.issue_gateway(request).await
+        };
+        let Ok(issued_session) = issued_result else {
+            if let Err(error) = issued_result {
+                tracing::warn!(%error, invocation_id = %invocation_id, "gateway runtime authority issuance failed");
+            }
+            self.reject_invocation(invocation_id).await?;
+            return Err(GatewayEdgeError::Unavailable);
+        };
+        if let Err(error) = self
+            .create_gateway_secret_leases(invocation_id, issued_session.id.as_uuid())
+            .await
+        {
+            tracing::warn!(%invocation_id, "gateway secret lease setup failed after authority issuance");
+            let _ = self
+                .completed(invocation_id, GatewayInvocationOutcome::Rejected)
+                .await;
+            return Err(error);
+        }
+        Ok(invocation_id)
+    }
 }
 
 async fn recovery_candidates(
@@ -1070,52 +1123,17 @@ impl GatewayInvocationRecorder for PostgresGatewayEdgeAuthority {
             .await
             .map_err(|_| GatewayEdgeError::Unavailable)?;
 
-        let Some(issuer) = &self.runtime_authority else {
-            if accepted.handler_contract == "http.service.v1" {
-                self.reject_invocation(invocation_id).await?;
-                return Err(GatewayEdgeError::Unavailable);
-            }
-            return Ok(invocation_id);
-        };
-        let issued_at = OffsetDateTime::now_utc();
-        let Ok(ttl) = time::Duration::try_from(self.session_ttl) else {
-            self.reject_invocation(invocation_id).await?;
-            return Err(GatewayEdgeError::Unavailable);
-        };
-        let Some(expires_at) = issued_at.checked_add(ttl) else {
-            self.reject_invocation(invocation_id).await?;
-            return Err(GatewayEdgeError::Unavailable);
-        };
-        let request = GatewayRuntimeSessionRequest {
-            invocation_id: capability_domain::GatewayInvocationId::from_uuid(invocation_id),
-            gateway_id: accepted.gateway_id,
-            gateway_revision_id: accepted.gateway_revision_id,
-            issued_at,
-            expires_at,
-        };
-        let issued_result = if accepted.handler_contract == "http.service.v1" {
-            issuer.issue_gateway_service(request).await
-        } else {
-            issuer.issue_gateway(request).await
-        };
-        let Ok(issued_session) = issued_result else {
-            if let Err(error) = issued_result {
-                tracing::warn!(%error, invocation_id = %invocation_id, "gateway runtime authority issuance failed");
-            }
-            self.reject_invocation(invocation_id).await?;
-            return Err(GatewayEdgeError::Unavailable);
-        };
-        if let Err(error) = self
-            .create_gateway_secret_leases(invocation_id, issued_session.id.as_uuid())
+        self.finish_accepted_invocation(invocation_id, accepted)
             .await
-        {
-            tracing::warn!(%invocation_id, "gateway secret lease setup failed after authority issuance");
-            let _ = self
-                .completed(invocation_id, GatewayInvocationOutcome::Rejected)
-                .await;
-            return Err(error);
-        }
-        Ok(invocation_id)
+    }
+
+    async fn accepted_ui(
+        &self,
+        route: &GatewayRouteBinding,
+        authority: &gateway_edge::UiGatewayAuthority,
+        request_id: Uuid,
+    ) -> Result<Uuid, GatewayEdgeError> {
+        ui_browser::accept_ui_invocation(self, route, authority, request_id).await
     }
 
     async fn completed(
