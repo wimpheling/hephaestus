@@ -10,6 +10,26 @@ pending because they were written before later slices completed. Those entries
 are historical snapshots; this section and the implementation checklist govern
 the present review state.
 
+Follow-up during release UI work: a controlled PostgreSQL differential reproduced
+the intermittent recovery teardown mechanism. Normal completion left zero
+sessions; cancellation of the raw SQLx 0.8.6 pool executor left the same control
+backend idle after pool close. The active-route adapter now owns its connection
+explicitly and marks it close-on-drop only on cancellation/error, preserving
+normal successful-query reuse. No shutdown deadline or zero-session assertion
+was relaxed. The actual adapter regression observes the server lock barrier,
+cancels the read, closes normally, and verifies zero remaining sessions.
+
+The full gateway PostgreSQL package passed nine unit and 67 integration tests;
+all 17 application recovery tests passed, including the failing CI scenario.
+Scoped Clippy, rustdoc, formatting, and architecture also passed. Evidence is
+`/home/a/heph-sqlx-cancel-close-differential-20260920.log`,
+`/home/a/heph-sqlx-cancel-close-guard-20260920.log`,
+`/home/a/heph-gateway-postgres-cancel-guard-package-20260920.log`, and
+`/home/a/heph-gateway-recovery-diagnostic-group-v3-20260920.log`.
+The CI backend's historical owner was not directly observed; this fixes the
+reproduced cancellation path rather than claiming every teardown failure has
+the same cause.
+
 The service runtime has concrete evidence for the following slices:
 
 - The real third-revision capacity gate passed with A held and draining, B
@@ -45,7 +65,8 @@ authority, forwarded-header stripping, guest listener/egress/mount isolation,
 and exact service execution binding. The platform diagnostic/request-metadata
 redaction audit is complete; application-owned log capture remains explicitly
 opt-in and default-off. The persistent-service implementation and acceptance
-work is complete, with the release UI intentionally not started. Historical
+work is complete. Release UI had not started at the service-completion gate
+and is now tracked separately in its active task. Historical
 unchecked descriptions below are snapshots, not current failures; the current
 evidence and checklist reconciliation govern this completed service slice.
 

@@ -40,6 +40,8 @@ struct TestPools {
     worker: sqlx::PgPool,
 }
 
+type ActivityRow = (i32, String, String, String, Option<String>, Option<String>);
+
 #[derive(Clone, Copy)]
 struct Fixture {
     gateway: Uuid,
@@ -202,6 +204,72 @@ async fn gateway_acceptance_selects_service_and_guest_modes() {
     assert_eq!(guest_shape.0, "guest_handoff");
     assert_eq!(guest_shape.1, "pending_handoff");
     assert_eq!(guest_shape.2.as_ref().map(Vec::len), Some(32));
+}
+
+#[tokio::test(flavor = "multi_thread")]
+#[serial]
+async fn gateway_desired_configuration_cancellation_closes_worker_backend() {
+    let Some(pools) = test_pool().await else {
+        return;
+    };
+    let admin = &pools.admin;
+    let worker = &pools.worker;
+    let fixture = seed_fixture(admin, "http.service.v1").await;
+    let authority = build_authority(worker.clone(), Arc::new(GhostIssuer));
+    let first = authority
+        .desired_configuration()
+        .await
+        .expect("initial desired configuration");
+    let second = authority
+        .desired_configuration()
+        .await
+        .expect("healthy desired configuration reuse");
+    assert_eq!(first.revision, second.revision);
+    assert!(
+        first
+            .routes
+            .iter()
+            .any(|route| route.route_id == fixture.route)
+    );
+
+    let mut gateway_lock = admin.begin().await.expect("gateway lock transaction");
+    sqlx::query("LOCK TABLE gateways IN ACCESS EXCLUSIVE MODE")
+        .execute(&mut *gateway_lock)
+        .await
+        .expect("hold gateway table lock");
+    let canceled = tokio::spawn(async move { authority.desired_configuration().await });
+    let waiting = wait_for_gateway_lock(admin).await;
+    println!(
+        "REAL_GATEWAY_ACTIVE_ROUTES_CANCELLATION_BARRIER=1 pid={} application={} state={} backend={} wait_event={}",
+        waiting.0,
+        waiting.1,
+        waiting.2,
+        waiting.3,
+        waiting.5.as_deref().unwrap_or("unknown")
+    );
+    canceled.abort();
+    assert!(
+        canceled
+            .await
+            .expect_err("canceled desired configuration task")
+            .is_cancelled(),
+        "the actual adapter query must be canceled while PostgreSQL holds the table lock"
+    );
+    gateway_lock
+        .rollback()
+        .await
+        .expect("release gateway table lock");
+
+    tokio::time::timeout(Duration::from_secs(10), worker.close())
+        .await
+        .expect("worker pool close");
+    println!(
+        "REAL_GATEWAY_ACTIVE_ROUTES_CANCELLATION_POOL size={} idle={} closed={}",
+        worker.size(),
+        worker.num_idle(),
+        worker.is_closed()
+    );
+    wait_for_no_gateway_acceptance_sessions(admin).await;
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -555,26 +623,56 @@ async fn test_pool() -> Option<TestPools> {
     Some(TestPools { admin, worker })
 }
 
-async fn wait_for_gateway_lock(admin: &sqlx::PgPool) {
+async fn wait_for_gateway_lock(
+    admin: &sqlx::PgPool,
+) -> (i32, String, String, String, Option<String>, Option<String>) {
     for _ in 0..200 {
-        let waiting: bool = sqlx::query_scalar(
-            "SELECT EXISTS(
-                 SELECT 1
+        let waiting: Option<ActivityRow> = sqlx::query_as(
+            "SELECT pid, coalesce(application_name, ''), coalesce(state, ''),
+                        coalesce(backend_type, ''), wait_event_type, wait_event
                    FROM pg_stat_activity
-                  WHERE application_name = 'gateway-acceptance-worker'
+                  WHERE datname = current_database()
+                    AND application_name = 'gateway-acceptance-worker'
                     AND wait_event_type = 'Lock'
                     AND state = 'active'
-             )",
+                  ORDER BY pid
+                  LIMIT 1",
         )
-        .fetch_one(admin)
+        .fetch_optional(admin)
         .await
         .expect("inspect acceptance lock wait");
-        if waiting {
-            return;
+        if let Some(waiting) = waiting {
+            return waiting;
         }
         tokio::time::sleep(Duration::from_millis(10)).await;
     }
     panic!("worker acceptance did not wait on the held gateway lock");
+}
+
+async fn wait_for_no_gateway_acceptance_sessions(admin: &sqlx::PgPool) {
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(10);
+    loop {
+        let sessions: Vec<ActivityRow> = sqlx::query_as(
+            "SELECT pid, coalesce(application_name, ''), coalesce(state, ''),
+                        coalesce(backend_type, ''), wait_event_type, wait_event
+                   FROM pg_stat_activity
+                  WHERE datname = current_database()
+                    AND application_name = 'gateway-acceptance-worker'
+                  ORDER BY pid",
+        )
+        .fetch_all(admin)
+        .await
+        .expect("inspect gateway acceptance sessions");
+        if sessions.is_empty() {
+            println!("REAL_GATEWAY_ACTIVE_ROUTES_CANCELLATION_SESSIONS=0");
+            return;
+        }
+        assert!(
+            tokio::time::Instant::now() < deadline,
+            "gateway acceptance worker sessions remain after pool close: {sessions:?}"
+        );
+        tokio::time::sleep(Duration::from_millis(25)).await;
+    }
 }
 
 fn build_authority(

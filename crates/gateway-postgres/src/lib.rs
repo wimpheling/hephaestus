@@ -38,7 +38,7 @@ use runtime_authority::{
 };
 use serde::Deserialize;
 use sha2::{Digest, Sha256};
-use sqlx::{PgPool, Postgres, Transaction};
+use sqlx::{PgPool, Postgres, Transaction, pool::PoolConnection};
 use std::{
     collections::{BTreeMap, BTreeSet},
     path::PathBuf,
@@ -496,6 +496,46 @@ pub struct PostgresGatewayEdgeAuthority {
     session_ttl: Duration,
 }
 
+/// Owns an adapter read connection until a successful query has completed.
+///
+/// `SQLx` 0.8.6 returns a checked-out pool connection from `Drop` through a
+/// spawned task. If the query future is cancelled while `PostgreSQL` is still
+/// executing it, that return task can leave the backend alive during pool
+/// shutdown. Marking only the unsuccessful path for close-on-drop makes the
+/// cancellation/error path deterministic while successful reads still return
+/// their connection to the pool.
+struct ActiveRoutesConnection {
+    connection: Option<PoolConnection<Postgres>>,
+}
+
+impl ActiveRoutesConnection {
+    const fn new(connection: PoolConnection<Postgres>) -> Self {
+        Self {
+            connection: Some(connection),
+        }
+    }
+
+    const fn connection_mut(&mut self) -> &mut PoolConnection<Postgres> {
+        self.connection
+            .as_mut()
+            .expect("active route connection remains owned")
+    }
+
+    fn take(mut self) -> PoolConnection<Postgres> {
+        self.connection
+            .take()
+            .expect("successful active route query takes its connection")
+    }
+}
+
+impl Drop for ActiveRoutesConnection {
+    fn drop(&mut self) {
+        if let Some(connection) = self.connection.as_mut() {
+            connection.close_on_drop();
+        }
+    }
+}
+
 impl PostgresGatewayEdgeAuthority {
     /// Creates the worker-side route and invocation adapter with explicit
     /// bounded HTTP limits.
@@ -750,6 +790,12 @@ impl PostgresGatewayEdgeAuthority {
     }
 
     async fn active_routes(&self) -> Result<Vec<GatewayRouteBinding>, GatewayEdgeError> {
+        let mut connection = ActiveRoutesConnection::new(
+            self.pool
+                .acquire()
+                .await
+                .map_err(|_| GatewayEdgeError::Unavailable)?,
+        );
         let rows = sqlx::query_as::<_, ActiveRouteRow>(
             "SELECT route.id AS route_id, route.gateway_revision_id, route.path, route.methods
              FROM gateway_routes AS route
@@ -759,9 +805,10 @@ impl PostgresGatewayEdgeAuthority {
                AND route.enabled
              ORDER BY route.path, route.id",
         )
-        .fetch_all(&self.pool)
+        .fetch_all(&mut **connection.connection_mut())
         .await
         .map_err(|_| GatewayEdgeError::Unavailable)?;
+        drop(connection.take());
         rows.into_iter()
             .map(|row| active_route(row, self.limits))
             .collect()

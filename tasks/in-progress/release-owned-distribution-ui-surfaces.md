@@ -25,15 +25,20 @@ the receive and manual integration checkpoints supersede pending-wiring notes.
 
 ## Current CI context (2026-09-20)
 
-CI for manual-build checkpoint `1f3f76a` passed in run `35486471113`:
+CI passed through checkpoint `17d6dbc` in run `35487956392`:
 Rust/authorization, browser golden path, and Cooking applications all succeeded.
-Size-limit checkpoint `ed96408` is still running in `35486716206`.
+Receive fix `52bbbf7`, historical/kit gate `d51449d`, size limits `ed96408`, and
+manual-build integration `1f3f76a` also have passing CI runs.
 The preceding kit checkpoint `6c6a9c6` failed one Rust recovery-test teardown
 while browser and Cooking passed. An idle `gateway-recovery-control` PostgreSQL
-backend remained beyond the unchanged ten-second deadline. The exact owner is
-unproven; a local Caddy future is dropped with its parent, and SQLx connection
-return after cancellation is under investigation. No deadline or assertion has
-been weakened. Bounded evidence is in
+backend remained beyond the unchanged ten-second deadline. A controlled
+normal-versus-cancelled SQLx read differential subsequently reproduced a leaked
+control backend only after cancellation. The active-route adapter now uses a
+cancellation-only connection close guard. Its actual adapter regression, all
+76 gateway package tests, and all 17 application recovery tests pass. The
+historical CI PID's owner was not directly observed; no deadline or assertion
+was weakened. Follow-up evidence is recorded in the completed service task.
+Initial bounded evidence is in
 `/home/a/heph-kit-ci-teardown-failure-20260920.log` and
 `/home/a/heph-kit-ci-teardown-sqlx-analysis-20260920.log`.
 
@@ -41,7 +46,8 @@ CI at `e052a2c` (`35482989628`) exposed an application bootstrap version
 mismatch: the database reached migration 82 while `EXPECTED_DATABASE_MIGRATION`
 still required 81. Both Rust golden bootstrap and the browser golden path
 failed on this mismatch; Cooking applications passed. The application gate
-now requires 82, and retention's minimum schema requirement remains 81.
+advanced to 82 at that checkpoint (manual integration below advances it to 83),
+and retention's minimum schema requirement remains 81.
 The targeted production bearer-push bootstrap and real application retention
 tests each passed against disposable PostgreSQL/NATS in
 `/home/a/heph-schema82-bootstrap-retention-20260920.log`, including
@@ -52,8 +58,8 @@ strict Clippy, and rustdoc passed in
 `/home/a/heph-schema82-app-doc-20260920.log`. This corrects the startup schema
 gate; it is not a new complete UI or full-quality result.
 
-Subsequent CI passed at `d0def95`, `7ccb01d`, and `44fe0c3`; the latest
-successful run is `35481880564`. This does not establish the cause of the
+Subsequent CI passed at `d0def95`, `7ccb01d`, and `44fe0c3`; the successful
+run at that historical checkpoint was `35481880564`. This did not establish the cause of the
 earlier intermittent teardown failure. The separate Cooking E2E workflow for
 `44fe0c3` remained pending when checked. Final integrated UI acceptance and
 the branch-wide quality gate remain outstanding.
