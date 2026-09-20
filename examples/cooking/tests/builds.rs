@@ -19,8 +19,9 @@ use rpc_proto::{
             NetworkPolicy, OpaqueId, PageRequest, ParameterValue, RequestContext, RuntimePolicy,
         },
         gateway::v1::{
-            ConfigureGatewayRequest, CreateMailboxBindingRequest, GatewaySecretSelection,
-            GetGatewayRequest, InstallReleaseGatewaysRequest, ListProjectGatewaysRequest,
+            ConfigureGatewayRequest, CreateMailboxBindingRequest, GatewayLifecycle,
+            GatewaySecretSelection, GetGatewayRequest, InstallReleaseGatewaysRequest,
+            ListProjectGatewaysRequest,
         },
         instance::v1::{
             CreateAttachmentRequest, CreateMailboxRequest, ImportAgentRequest, RefSelector,
@@ -369,13 +370,13 @@ pub struct PreparedCookingBlog {
     pub source_commit: String,
 }
 
-/// Active gateway identifiers returned after installing its released
-/// declaration and reading it back through the query API.
+/// Gateway identifiers returned after installing its released declaration and
+/// reading it back through the query API.
 #[derive(Debug, Clone, Copy)]
 pub struct InstalledCookingGateway {
     /// Gateway metadata identifier.
     pub gateway_id: Uuid,
-    /// Active immutable declaration revision.
+    /// Latest immutable declaration revision accepted by `ConfigureGateway`.
     pub revision_id: Uuid,
 }
 
@@ -663,11 +664,16 @@ pub async fn install_cooking_gateway(
         .await?
         .into_owned();
     let revision_id = response_id(
-        current
-            .gateway
-            .into_option()
-            .and_then(|summary| summary.active_revision_id.into_option()),
-        "GetGateway active revision",
+        current.gateway.into_option().and_then(|summary| {
+            // HTTP services are installed with a desired revision before the
+            // asynchronous reconciler makes it active. Stateless gateways
+            // have no desired service revision, so retain their active one.
+            summary
+                .desired_service_revision_id
+                .into_option()
+                .or_else(|| summary.active_revision_id.into_option())
+        }),
+        "GetGateway declared revision",
     )?;
     Ok(InstalledCookingGateway {
         gateway_id,
@@ -907,12 +913,13 @@ pub async fn build_and_install_reference_uis(
     // The managed descriptor's gateway declaration is installed through the
     // existing authenticated gateway API.  No gateway or instance rows are
     // fabricated by this UI fixture helper.
-    install_cooking_gateway(
+    let installed_gateway = install_cooking_gateway(
         context,
         managed_build.release_id,
         managed_build.repository_id,
     )
     .await?;
+    wait_for_cooking_gateway_active(context, installed_gateway).await?;
 
     let static_ui = install_reference_ui(
         context,
@@ -946,6 +953,50 @@ pub async fn build_and_install_reference_uis(
         static_ui: listed.0,
         managed_ui: listed.1,
     })
+}
+
+/// Waits for an installed HTTP service gateway to become the serving revision
+/// before a managed UI asks the release service to resolve its route. Gateway
+/// installation publishes the desired revision first; the daemon promotes it
+/// only after the service readiness probe succeeds.
+async fn wait_for_cooking_gateway_active(
+    context: &CookingBuildContext<'_>,
+    gateway: InstalledCookingGateway,
+) -> Result<(), BuildError> {
+    let deadline = tokio::time::Instant::now() + context.timeout.min(Duration::from_secs(120));
+    loop {
+        let client = rpc_gateway_client(
+            context.running,
+            context.identity.rpc_token,
+            "/hephaestus.gateway.v1.GatewayService/GetGateway",
+        )?;
+        let response = tokio::time::timeout_at(
+            deadline,
+            client.get_gateway(GetGatewayRequest {
+                gateway_id: opaque(gateway.gateway_id).into(),
+                ..Default::default()
+            }),
+        )
+        .await
+        .map_err(|_| invalid_state("cooking gateway readiness polling deadline elapsed"))??;
+        let summary = response.into_owned().gateway.into_option().ok_or_else(|| {
+            invalid_state("GetGateway returned no gateway while waiting for readiness")
+        })?;
+        let active_revision_id = summary.active_revision_id.into_option();
+        if summary.lifecycle.to_i32() == GatewayLifecycle::Enabled as i32
+            && active_revision_id.is_some_and(|id| id.value == gateway.revision_id.to_string())
+        {
+            return Ok(());
+        }
+        if tokio::time::Instant::now() >= deadline {
+            return Err(invalid_state(&format!(
+                "cooking gateway {} did not activate revision {} before readiness deadline",
+                gateway.gateway_id, gateway.revision_id
+            )));
+        }
+        let remaining = deadline.saturating_duration_since(tokio::time::Instant::now());
+        sleep(Duration::from_millis(250).min(remaining)).await;
+    }
 }
 
 async fn get_published_release(
