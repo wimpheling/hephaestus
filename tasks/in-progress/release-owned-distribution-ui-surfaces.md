@@ -15,7 +15,7 @@ matrix. Gateway admission, host/resource projection, Phoenix navigation, and
 reference theme helpers pass focused checks. The bounded HTTP listener and request-wide audit now pass focused verification.
 Project-owned static/managed installed-browser smoke, live disable/stale-cookie
 and reactivation, and removal now pass in the bounded runtime. Owner
-navigation, guest-boundary coverage, parent/account revocation, and the final
+navigation, guest-boundary coverage, remaining recovery checks, and the final
 repository-wide quality gate remain open.
 The handoff remains the record of the stopped session; new evidence is recorded
 below as each resumed slice passes review and verification.
@@ -38,7 +38,7 @@ implemented. Durable browser sessions are integrated through RPC and Phoenix.
 Installation lifecycle and the static/managed HTTP serving baseline are committed.
 Project-owned static/managed installed-browser smoke and real Caddy/VM/browser
 proofs pass, including live disable, reactivation, and removal; owner-navigation
-and guest-boundary proofs, parent/account revocation, and the final integrated
+and guest-boundary proofs, remaining recovery checks, and the final integrated
 quality gate are open. The user approved organization-owned
 global installations and organization isolation. Historical checkpoints record the state
 at their time; later integration checkpoints supersede earlier pending notes.
@@ -170,6 +170,32 @@ navigation. The disable, reactivation, and baseline audit markers also passed
 in this same run. This is evidence for removal in addition to the earlier
 disable and reactivation runs; it does not establish parent/account revocation,
 owner-navigation or guest-boundary coverage, or the final quality gate.
+
+## Parent-session revocation and fresh login runtime proof (2026-09-20)
+
+The run at `6836df7` passed with outer exit zero. Evidence is retained in
+`/home/a/heph-installed-ui-twentyeighth-runtime-diag-20260920/cooking-execution.dxKtlx.log`.
+Golden: 35 passed, one ignored; gateway PostgreSQL: eight passed. Runtime and
+cgroup cleanup passed, with unrelated PID 10841 preserved.
+
+The genuine Phoenix Sign out flow revoked the exact durable parent joined to
+the managed child. The retained UI cookie then received 401 from its still-enabled
+generation host, with exactly one anonymous unauthenticated content denial and
+no new managed gateway invocation. Genuine OIDC sign-in created a new parent
+and child on the same generation; managed/API success audits correlated to
+completed invocations for the expected gateway and revision. Browser audit
+gateway fields are intentionally empty, so correlation checks the gateway
+identity on the joined invocation rather than those audit fields.
+
+```text
+REAL_UI_INSTALLATION_PARENT_REVOCATION=1 parent_revoked=1 stale_cookie_denied=1 gateway_invocation_unchanged=1 fresh_parent_child=1
+```
+
+The same run also passed the audit, disable/reactivation, and removal markers.
+Account suspension and permission revocation retain their separate real
+PostgreSQL evidence; no account-disable administration API or corresponding
+browser action is claimed. Guest policy, additional owner navigation, live-child
+service replacement, and final integrated quality remain open.
 
 ## Managed reference runtime and browser reachability findings (2026-09-20)
 
