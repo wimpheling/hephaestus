@@ -219,7 +219,7 @@ pub async fn accept_ui_invocation(
         .await
         .map_err(|_| GatewayEdgeError::Unavailable)?;
     authority
-        .finish_accepted_invocation(invocation_id, accepted)
+        .finish_accepted_invocation(invocation_id, request_id, accepted)
         .await
 }
 
