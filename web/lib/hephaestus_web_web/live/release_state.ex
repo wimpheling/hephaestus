@@ -142,7 +142,8 @@ defmodule HephaestusWebWeb.ReleaseState do
       Map.merge(state.data, %{
         release: release,
         artifacts: release["artifacts"] || [],
-        agents: release["agents"] || []
+        agents: release["agents"] || [],
+        ui_descriptors: release["ui_descriptors"] || []
       })
 
     %{state | status: :ready, data: data, error: nil}
@@ -169,8 +170,9 @@ defmodule HephaestusWebWeb.ReleaseState do
       Map.merge(state.data, %{
         release_id: state.data.release_id,
         release: release,
-        artifacts: release["artifacts"],
-        agents: release["agents"]
+        artifacts: release["artifacts"] || [],
+        agents: release["agents"] || [],
+        ui_descriptors: release["ui_descriptors"] || []
       })
 
     %{state | data: data, error: nil} |> ProductEventReducer.snapshot_complete()
@@ -226,6 +228,7 @@ defmodule HephaestusWebWeb.ReleaseState do
       release: release,
       artifacts: state.data[:artifacts] || [],
       agents: state.data[:agents] || [],
+      ui_descriptors: state.data[:ui_descriptors] || [],
       draft_version: draft_version,
       set_draft_version_event: "set-draft-version",
       publish_event: "publish-release",

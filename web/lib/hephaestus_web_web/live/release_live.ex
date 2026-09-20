@@ -110,6 +110,7 @@ defmodule HephaestusWebWeb.ReleaseLive do
         release={@presentation.release}
         artifacts={@streams.artifacts}
         agents={@streams.agents}
+        ui_descriptors={@presentation.ui_descriptors}
         organization_index_destination={@presentation.destinations[:organization_index]}
         organization_destination={@presentation.destinations[:organization]}
         project_destination={@presentation.destinations[:project]}

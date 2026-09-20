@@ -14,8 +14,8 @@ inspection through `GetRelease` are implemented and focused-validated. Checklist
 section 1 is complete. The versioned CSS kit and its local/CI checks are also
 implemented; reference-release integration remains open.
 
-Verified static-byte loading is implemented; read-only release-page metadata
-display is the current bounded slice. UI installation, static/managed hosting, browser
+Verified static-byte loading and read-only release-page metadata display are
+implemented. UI installation is the next bounded design slice. UI installation, static/managed hosting, browser
 navigation/authorization/isolation, real Caddy/VM/browser proofs, and the final
 integrated quality gate remain incomplete. Global installation ownership is an
 open question sent to the user. Historical checkpoints below record the state
@@ -145,6 +145,24 @@ Scoped Clippy, format, docs, and downstream control-plane compilation pass in
 The future asynchronous serving adapter must run this synchronous operation off
 the executor, apply the UI limits, and enforce installation/browser authority.
 No serving or browser acceptance is claimed by this storage checkpoint.
+
+## Release-page metadata checkpoint (2026-09-20)
+
+The release page now lists declared interfaces with label/key, friendly scope
+and presentation labels, static versus managed content, and declared API count.
+The state reducer preserves descriptors across loads and mutation refreshes;
+legacy absent metadata becomes an empty list. The RPC projection explicitly
+normalizes the new enum prefixes and expands the generated content oneof.
+Rendering uses existing design-system components and adds no launch link,
+authorized browser URL, or installation action.
+
+The final focused Phoenix state/page/projection suite passed 19 tests in
+`/home/a/heph-release-ui-page-tests-20260920-v2.log`; formatting passed in
+`/home/a/heph-release-ui-page-format-20260920-v2.log`. UI architecture passed
+all 14 enabled rules and its focused suite passed 100 tests in
+`/home/a/heph-release-ui-architecture-20260920.log`.
+This is release inspection only. Project/repository/global navigation entries,
+embedding, loading/revocation states, and actual browser hosting remain open.
 
 ## Current CI context (2026-09-20)
 
