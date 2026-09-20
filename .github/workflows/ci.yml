@@ -33,7 +33,7 @@ jobs:
           components: clippy,rustfmt
       - uses: Swatinem/rust-cache@v2
       - name: Install integration dependencies
-        run: sudo apt-get update && sudo apt-get install -y e2fsprogs
+        run: sudo apt-get update && sudo apt-get install -y e2fsprogs postgresql-client
       - name: Start JetStream
         run: docker run --detach --rm --name hephaestus-nats --publish 4222:4222 docker.io/library/nats@sha256:e4bf19f15fd3218814a4e3c9e0064e1334bd8aa20d5984b9f1a0afd084f8cc00 -js
       - name: Verify Mélange generation
@@ -56,14 +56,7 @@ jobs:
         run: cargo test --workspace --all-features -- --test-threads=1
       - name: Browser-session RPC lifecycle integration
         timeout-minutes: 5
-        env:
-          REAL_APP_BROWSER_SESSION_RPC: "1"
-        run: |
-          timeout --kill-after=30s 180s cargo test --manifest-path Cargo.toml \
-            --package hephaestus-app \
-            --test browser_session_lifecycle \
-            --features test-fixtures \
-            -- --nocapture --test-threads=1
+        run: scripts/test-browser-session-lifecycle.sh
       - name: Deferred update admission and reconciler race
         timeout-minutes: 15
         env:

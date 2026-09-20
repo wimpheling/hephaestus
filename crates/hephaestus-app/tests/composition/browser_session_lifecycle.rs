@@ -525,5 +525,6 @@ mod browser_session_transport {
             .expect("shutdown browser-session application");
         seed_pool.close().await;
         cleanup_nats(&nats_url).await;
+        println!("REAL_BROWSER_SESSION_LIFECYCLE=1");
     }
 }

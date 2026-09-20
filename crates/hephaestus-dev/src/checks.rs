@@ -3,7 +3,7 @@ use crate::{
     context::{DevContext, ELIXIR_IMAGE},
     process::{DevError, Result, run as run_process},
 };
-use std::{path::Path, process::Command};
+use std::{env, path::Path, process::Command};
 
 mod architecture;
 
@@ -77,6 +77,7 @@ fn protobuf(context: &DevContext) -> Result<()> {
 
 fn rust(context: &DevContext) -> Result<()> {
     let root = &context.repository_root;
+    let browser_session_rpc = env::var("REAL_APP_BROWSER_SESSION_RPC").as_deref() == Ok("1");
     phase("Rust formatting");
     cargo(root, &["fmt", "--all", "--", "--check"])?;
     phase("Rust Clippy");
@@ -85,10 +86,50 @@ fn rust(context: &DevContext) -> Result<()> {
         &["clippy", "--workspace", "--all-targets", "--all-features"],
     )?;
     phase("Rust tests");
-    cargo(root, &["test", "--workspace", "--all-features"])?;
+    workspace_tests(root, browser_session_rpc)?;
+    browser_session_lifecycle(context, browser_session_rpc)?;
     phase("Rust documentation");
     cargo(root, &["doc", "--workspace", "--all-features", "--no-deps"])?;
     cooking_service(context)
+}
+
+fn workspace_tests(root: &Path, browser_session_rpc: bool) -> Result<()> {
+    let mut command = Command::new("cargo");
+    command
+        .args(["test", "--workspace", "--all-features"])
+        .current_dir(root);
+    if browser_session_rpc {
+        // Run the opt-in proof after this shared pass against its disposable
+        // database instead of the caller's potentially contaminated database.
+        command.env_remove("REAL_APP_BROWSER_SESSION_RPC");
+    }
+    run_process(&mut command)
+}
+
+fn browser_session_lifecycle(context: &DevContext, enabled: bool) -> Result<()> {
+    if !enabled {
+        return Ok(());
+    }
+    let script = context
+        .repository_root
+        .join("scripts/test-browser-session-lifecycle.sh");
+    if !script.is_file() {
+        return Err(DevError::Invalid(format!(
+            "browser-session lifecycle runner is missing at {}",
+            script.display()
+        )));
+    }
+    phase("Browser-session RPC lifecycle integration (isolated database)");
+    let mut command = Command::new(script);
+    command.current_dir(&context.repository_root);
+    if env::var("HEPHAESTUS_BROWSER_SESSION_POSTGRES_MODE").as_deref() == Ok("container") {
+        command.env(
+            "HEPHAESTUS_POSTGRES_CONTAINER",
+            env::var("HEPHAESTUS_POSTGRES_CONTAINER")
+                .unwrap_or_else(|_| context.postgres_container()),
+        );
+    }
+    run_process(&mut command)
 }
 
 fn cooking_service(context: &DevContext) -> Result<()> {

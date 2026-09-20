@@ -4,9 +4,12 @@ Owner: Astra orchestration / Luna bounded subtasks
 
 ## Current status
 
-The user requested a graceful session stop on 2026-09-20. Resume details,
-uncommitted drafts, and the next CI isolation fix are recorded in the
-[session handoff](release-ui-session-handoff-2026-09-20.md).
+Work resumed on 2026-09-20 from the
+[session handoff](release-ui-session-handoff-2026-09-20.md). The immediate
+work is isolated-database CI validation and the organization-owner schema
+extension, followed by the remaining installation, browser, and hosting slices.
+The handoff remains the record of the stopped session; new evidence is recorded
+below as each resumed slice passes review and verification.
 
 Persistent services are a completed prerequisite on the same branch and PR 51;
 service checkpoint `8c1fb51` passed repository-wide quality. Its later SQLx
@@ -28,6 +31,27 @@ navigation/authorization/isolation, real Caddy/VM/browser proofs, and the final
 integrated quality gate remain incomplete. The user approved organization-owned
 global installations and organization isolation. Historical checkpoints record the state
 at their time; later integration checkpoints supersede earlier pending notes.
+
+## Resumed CI isolation checkpoint (2026-09-20)
+
+CI and the opt-in local quality gate now use the same browser-session lifecycle
+runner. It creates a fresh database on the supplied PostgreSQL server, requires
+both service URLs, and requires an explicit successful lifecycle marker. It drops
+the database on exit. Host `psql` is the CI path; local container administration
+requires explicit `HEPHAESTUS_BROWSER_SESSION_POSTGRES_MODE=container` and a
+matching `HEPHAESTUS_POSTGRES_CONTAINER`.
+
+With `REAL_APP_BROWSER_SESSION_RPC=1`, `cargo dev quality` removes the flag from
+its shared workspace test pass and runs the isolated proof afterward. This
+supersedes the earlier instruction to run the opt-in test inside the shared
+workspace database. The final quality run must enable this proof.
+
+The current runner passed against fresh disposable PostgreSQL/NATS: one lifecycle
+test, the `REAL_BROWSER_SESSION_LIFECYCLE=1` marker, and zero isolated databases
+remaining after cleanup. Workspace formatting, architecture, scoped
+release-domain/release-service/dev tests, strict release-domain/release-service/
+release-postgres/dev Clippy, and docs passed with Rust 1.88.0. This is focused
+local evidence; updated CI and final integrated quality remain pending.
 
 ## Approved organization ownership model (2026-09-20)
 
