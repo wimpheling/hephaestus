@@ -43,6 +43,13 @@ const STAGE_IDS = new Map([
   ["managed-identity", "managed_identity"],
   ["theme", "theme"],
   ["accessibility", "accessibility"],
+  ["accessibility-status", "accessibility_status"],
+  ["accessibility-frame-attributes", "accessibility_frame_attributes"],
+  ["accessibility-platform-csp", "accessibility_platform_csp"],
+  ["accessibility-undeclared-fetch", "accessibility_undeclared_fetch"],
+  ["accessibility-parent-navigation", "accessibility_parent_navigation"],
+  ["accessibility-platform-axe", "accessibility_platform_axe"],
+  ["accessibility-frame-axe", "accessibility_frame_axe"],
   ["close", "close"],
 ]);
 

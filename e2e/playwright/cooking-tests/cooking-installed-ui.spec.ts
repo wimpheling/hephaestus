@@ -270,57 +270,67 @@ test("cooking installed UI TLS full-page and managed iframe smoke", async ({page
     ).toBe("dark");
   });
   await test.step("accessibility", async () => {
-    await expect(embed.locator("[data-ui-status]")).toHaveAttribute("role", "status");
-    await expect(embed.locator("[data-ui-status]")).toHaveAttribute("aria-live", "polite");
-    await expect(embed.getByRole("button", {name: "Close"})).toBeVisible();
-    await expect(frame).toHaveAttribute("title", "Installed UI");
-    await expect(frame).toHaveAttribute("sandbox", "allow-scripts allow-same-origin");
-    await expect(frame).toHaveAttribute("referrerpolicy", "no-referrer");
-
-    const platformPolicy = await page.locator(
-      'meta[http-equiv="Content-Security-Policy"]',
-    ).getAttribute("content");
-    const uiNamespace = process.env.HEPHAESTUS_UI_NAMESPACE ?? "invalid.example";
-    expect(platformPolicy?.includes("frame-src 'self'") ?? false).toBe(true);
-    expect(platformPolicy?.includes(`https://*.${uiNamespace}`) ?? false).toBe(true);
-
-    const undeclaredFetchBlocked = await frameContent.locator("body").evaluate(() => new Promise(resolve => {
-      const blockedUrl = "https://example.invalid/heph-ui-csp-probe";
-      const timeout = window.setTimeout(() => {
-        window.removeEventListener("securitypolicyviolation", onViolation);
-        resolve(false);
-      }, 1_000);
-      const onViolation = (event: SecurityPolicyViolationEvent) => {
-        const blockedOrigin = new URL(blockedUrl).origin;
-        const matchesTarget = event.blockedURI === blockedOrigin || event.blockedURI.startsWith(blockedUrl);
-        if (event.effectiveDirective !== "connect-src" || !matchesTarget) return;
-        window.clearTimeout(timeout);
-        window.removeEventListener("securitypolicyviolation", onViolation);
-        resolve(true);
-      };
-      window.addEventListener("securitypolicyviolation", onViolation);
-      void fetch(blockedUrl, {cache: "no-store"}).catch(() => undefined);
-    }));
-    expect(undeclaredFetchBlocked).toBe(true);
-
-    const platformUrlBeforeParentNavigation = page.url();
-    const parentNavigationBlocked = await frameContent.locator("body").evaluate(() => {
-      try {
-        const topWindow = window.top;
-        if (!topWindow) return false;
-        topWindow.location.href = "https://example.invalid/heph-ui-parent-probe";
-        return false;
-      } catch (error) {
-        return error instanceof DOMException && error.name === "SecurityError";
-      }
+    await test.step("accessibility-status", async () => {
+      await expect(embed.locator("[data-ui-status]")).toHaveAttribute("role", "status");
+      await expect(embed.locator("[data-ui-status]")).toHaveAttribute("aria-live", "polite");
+      await expect(embed.getByRole("button", {name: "Close"})).toBeVisible();
     });
-    expect(parentNavigationBlocked).toBe(true);
-    expect(page.url()).toBe(platformUrlBeforeParentNavigation);
-
-    const axe = await new AxeBuilder({page}).include("#installed-ui-navigation-project").analyze();
-    expect(axe.violations.length).toBe(0);
-    const frameAxe = await new AxeBuilder({page}).include("#installed-ui-frame-project").analyze();
-    expect(frameAxe.violations.length).toBe(0);
+    await test.step("accessibility-frame-attributes", async () => {
+      await expect(frame).toHaveAttribute("title", "Installed UI");
+      await expect(frame).toHaveAttribute("sandbox", "allow-scripts allow-same-origin");
+      await expect(frame).toHaveAttribute("referrerpolicy", "no-referrer");
+    });
+    await test.step("accessibility-platform-csp", async () => {
+      const platformPolicy = await page.locator(
+        'meta[http-equiv="Content-Security-Policy"]',
+      ).getAttribute("content");
+      const uiNamespace = process.env.HEPHAESTUS_UI_NAMESPACE ?? "invalid.example";
+      expect(platformPolicy?.includes("frame-src 'self'") ?? false).toBe(true);
+      expect(platformPolicy?.includes(`https://*.${uiNamespace}`) ?? false).toBe(true);
+    });
+    await test.step("accessibility-undeclared-fetch", async () => {
+      const undeclaredFetchBlocked = await frameContent.locator("body").evaluate(() => new Promise(resolve => {
+        const blockedUrl = "https://example.invalid/heph-ui-csp-probe";
+        const timeout = window.setTimeout(() => {
+          window.removeEventListener("securitypolicyviolation", onViolation);
+          resolve(false);
+        }, 1_000);
+        const onViolation = (event: SecurityPolicyViolationEvent) => {
+          const blockedOrigin = new URL(blockedUrl).origin;
+          const matchesTarget = event.blockedURI === blockedOrigin || event.blockedURI.startsWith(blockedUrl);
+          if (event.effectiveDirective !== "connect-src" || !matchesTarget) return;
+          window.clearTimeout(timeout);
+          window.removeEventListener("securitypolicyviolation", onViolation);
+          resolve(true);
+        };
+        window.addEventListener("securitypolicyviolation", onViolation);
+        void fetch(blockedUrl, {cache: "no-store"}).catch(() => undefined);
+      }));
+      expect(undeclaredFetchBlocked).toBe(true);
+    });
+    await test.step("accessibility-parent-navigation", async () => {
+      const platformUrlBeforeParentNavigation = page.url();
+      const parentNavigationBlocked = await frameContent.locator("body").evaluate(() => {
+        try {
+          const topWindow = window.top;
+          if (!topWindow) return false;
+          topWindow.location.href = "https://example.invalid/heph-ui-parent-probe";
+          return false;
+        } catch (error) {
+          return error instanceof DOMException && error.name === "SecurityError";
+        }
+      });
+      expect(parentNavigationBlocked).toBe(true);
+      expect(page.url()).toBe(platformUrlBeforeParentNavigation);
+    });
+    await test.step("accessibility-platform-axe", async () => {
+      const axe = await new AxeBuilder({page}).include("#installed-ui-navigation-project").analyze();
+      expect(axe.violations.length).toBe(0);
+    });
+    await test.step("accessibility-frame-axe", async () => {
+      const frameAxe = await new AxeBuilder({page}).include("#installed-ui-frame-project").analyze();
+      expect(frameAxe.violations.length).toBe(0);
+    });
   });
   await test.step("managed-identity", async () => {
     const identityIsValid = await frameContent.locator("body").evaluate(async () => {
