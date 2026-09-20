@@ -18,6 +18,7 @@ use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::{collections::HashSet, fmt::Write as _, path::Path};
 
+pub mod build_identity;
 pub mod ui;
 pub use ui::{ParsedRepositoryUis, parse_repository_uis, validate_repository_uis_against_gateways};
 
@@ -1106,7 +1107,7 @@ pub fn parse_repository_gateways(source: &[u8]) -> ParsedRepositoryGateways {
     };
     let mut diagnostics = validate_repository_gateways(&config);
     let normalized_hash = if diagnostics.is_empty() {
-        let normalized = normalized_repository_gateways(config.clone());
+        let normalized = canonical_repository_gateways(&config);
         toml::to_string(&normalized).map_or_else(
             |_| {
                 diagnostics.push(Diagnostic {
@@ -1127,6 +1128,21 @@ pub fn parse_repository_gateways(source: &[u8]) -> ParsedRepositoryGateways {
         config: diagnostics.is_empty().then_some(config),
         diagnostics,
     }
+}
+
+/// Returns the canonical declaration used for repository gateway identity.
+///
+/// The parser deliberately returns the original validated declaration so
+/// source-facing callers retain their input shape. Persistence code that
+/// needs an immutable normalized snapshot should use this canonical clone.
+/// Serialize this value as canonical TOML when reproducing
+/// [`ParsedRepositoryGateways::normalized_hash`]; that hash intentionally
+/// retains the parser's existing TOML serialization contract.
+#[must_use]
+pub fn canonical_repository_gateways(
+    config: &RepositoryGatewaysConfig,
+) -> RepositoryGatewaysConfig {
+    normalized_repository_gateways(config.clone())
 }
 
 fn hash(source: &[u8]) -> ConfigHash {
@@ -1914,11 +1930,12 @@ const fn default_true() -> bool {
 mod tests {
     use super::{
         CapabilityOperation, CapabilityResourceKind, PublicationMode,
-        REPOSITORY_OCI_IMAGES_VERSION, REUSABLE_RELEASE_VERSION, parse, parse_repository_gateways,
-        parse_repository_oci_images,
+        REPOSITORY_OCI_IMAGES_VERSION, REUSABLE_RELEASE_VERSION, canonical_repository_gateways,
+        parse, parse_repository_gateways, parse_repository_oci_images,
     };
     use forge_domain::GitRef;
     use gateway_domain::ServiceLogCaptureMode;
+    use sha2::{Digest, Sha256};
 
     const VALID: &str = r#"
 version = 2
@@ -2598,6 +2615,27 @@ methods = ["GET", "POST"]
             reordered.diagnostics
         );
         assert_eq!(parsed.normalized_hash, reordered.normalized_hash);
+
+        let canonical = canonical_repository_gateways(&config);
+        let reordered_config = reordered.config.expect("valid reordered gateway manifest");
+        assert_eq!(canonical, canonical_repository_gateways(&reordered_config));
+        let canonical_toml = toml::to_string(&canonical).expect("canonical gateway TOML");
+        let canonical_hash: [u8; 32] = Sha256::digest(canonical_toml.as_bytes()).into();
+        let parser_hash = parsed
+            .normalized_hash
+            .expect("normalized gateway hash")
+            .as_str()
+            .as_bytes()
+            .chunks_exact(2)
+            .map(|pair| {
+                let high = u8::try_from((pair[0] as char).to_digit(16).expect("hex high"))
+                    .expect("hex high fits");
+                let low = u8::try_from((pair[1] as char).to_digit(16).expect("hex low"))
+                    .expect("hex low fits");
+                high << 4 | low
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(parser_hash, canonical_hash);
     }
 
     #[test]
