@@ -1,5 +1,6 @@
 //! Repository-owned release UI manifest parsing and validation.
 
+mod cross_manifest;
 mod validation;
 
 use gateway_domain::{GatewayName, HttpMethod, RoutePath};
@@ -128,6 +129,8 @@ pub struct ParsedRepositoryUis {
     /// Structured parser and validation diagnostics.
     pub diagnostics: Vec<super::Diagnostic>,
 }
+
+pub use cross_manifest::validate_repository_uis_against_gateways;
 
 /// Parses and validates a repository's root-level `heph.ui.toml`.
 ///

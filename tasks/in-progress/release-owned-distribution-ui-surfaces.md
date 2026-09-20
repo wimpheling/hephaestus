@@ -13,6 +13,10 @@ navigation, managed UI services, authority handoff, UI-kit publication, and
 acceptance evidence remain unchecked until their bounded designs and
 implementations are reviewed.
 
+The source cross-manifest validator is now implemented and focused-validated.
+UI capture and persistence schema work remains pending; no aggregate UI
+acceptance result is claimed.
+
 ## Current CI context (2026-09-20)
 
 The initial UI-branch CI run for `e573563` (`35480143840`) failed in the Rust
@@ -66,6 +70,26 @@ architecture validation also passed with `cargo +1.88.0 dev check architecture`
 source parser validation only; capture, persistence, exact artifact/agent ID
 resolution, authorized inspection, serving, and the aggregate UI checklist
 remain unchecked.
+
+## Source cross-manifest validation checkpoint (2026-09-20)
+
+The source validator now resolves the exact gateway name and requires
+authenticated exposure for managed UI content and declared UI APIs. It checks
+the HTTP method and segment-wise route-prefix coverage, permits narrower UI
+routes, and requires managed UI services to use `http.service.v1` with `GET`.
+Missing or malformed gateway manifests, route broadening, public exposure, and
+stateless managed references fail closed. Static UIs without APIs do not
+require an otherwise unused gateway manifest, and persisted UI configuration
+is revalidated before cross-manifest checks.
+
+The focused suite passed 22 unit tests, one existing integration test, 10 UI
+manifest tests, and 6 cross-manifest tests. Formatting, strict Clippy,
+rustdoc, and focused architecture validation passed. Evidence is recorded in
+`/home/a/heph-agent-config-ui-cross-test-v4-20260920.log` and
+`/home/a/heph-agent-config-ui-cross-{fmt,clippy,doc,architecture}-v2-20260920.log`.
+This checkpoint covers source validation only; capture, persistence, exact
+artifact/agent ID resolution, authorized inspection, publication, serving,
+browser behavior, and aggregate acceptance remain unchecked.
 
 ## Reviewed declaration architecture (planned, not implemented)
 
@@ -129,8 +153,9 @@ escape hatch for custom HTML in core pages.
 | Artifact kinds | A release may declare a static UI artifact or a UI service executed in a Hephaestus-managed VM. Both are immutable release inputs and are served only after the ordinary release/runtime checks succeed. |
 | Origin and routing | Deployment routes are platform-owned under the exact installation, release, and project binding. Hephaestus serves a release UI through a gateway-owned same-site route. Direct arbitrary third-party iframe URLs are unsupported. |
 | Declaration paths | UI declaration paths are relative path components; they are not arbitrary URLs. |
-| Browser origin | UI JavaScript never runs on the Phoenix host origin. A dedicated same-site origin is required for full-page presentations and sandboxed embeds; the exact serving design remains to be specified. |
+| Browser origin | UI JavaScript never runs on the Phoenix host origin. A dedicated origin is required per immutable installed UI binding, including the exact release/UI/generation/project context; unrelated release UIs do not share one origin. This prevents full-page/opener same-origin access across bindings and from a revoked revision to a new revision. Origin routing, CSP, and runtime behavior remain unimplemented. |
 | Artifact references | Source references resolve to immutable artifact or agent IDs before publication; authorized inspection omits opaque storage keys. |
+| Managed UI gateway authority | All managed UI content and declared UI API gateway references require `heph_authenticated` exposure to prevent public bypass. Source cross-manifest validation resolves the exact gateway name, requires the declared prefix to cover the selected UI route segment-wise, requires the exact HTTP method, and requires managed UI to use `http.service.v1` with `GET`. Narrower UI routes are allowed; route broadening, public exposure, and stateless managed references are denied. This is source validation only; runtime authorization is not implemented here. |
 | Embedding | A bounded tab or global-interface declaration can select a scope, label, icon, route, and initial presentation (`iframe` or full page). The host rejects undeclared routes and does not let arbitrary project content alter core navigation. |
 | API access | A UI reaches APIs only through explicitly declared gateway routes/capabilities. It receives no ambient database access, platform bearer token, raw secret, or authority greater than its release declaration. |
 | Authentication | The host establishes the human browser session. The UI does not receive reusable human credentials; any browser-to-service identity handoff is audience-bound, short-lived, revocable, and scoped to the exact release UI route/API. |
