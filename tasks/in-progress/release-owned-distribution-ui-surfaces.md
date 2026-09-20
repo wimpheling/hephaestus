@@ -16,8 +16,9 @@ implementations are reviewed.
 The source cross-manifest validator is now implemented and focused-validated.
 The persistence schema and receive-side Git capture/build-link wiring are
 implemented with focused PostgreSQL evidence below. Manual-build integration
-now passes its basic application-role matrix; receive/manual ordering and
-historical compatibility still need focused regression evidence. Publication,
+now passes its application-role and historical compatibility matrix. Receive
+application-role insertion and reuse also pass; receive/manual ordering still
+needs focused regression evidence. Publication,
 serving, browser integration, and aggregate acceptance remain incomplete.
 Earlier helper-only checkpoints below describe their state at the time;
 the receive and manual integration checkpoints supersede pending-wiring notes.
@@ -492,6 +493,30 @@ the derived event hash and that wrong-hash rejection does not add events. The
 real PostgreSQL matrix passed (1/1) in
 `/home/a/heph-manual-ui-build-realpg-20260920.log`; scoped Clippy passed in
 `/home/a/heph-manual-ui-build-control-clippy-v4-20260920.log`.
+
+### Application-role receive checkpoint (2026-09-20)
+
+Reusable UI builds now pass through `accept_receive_as` under `hephaestus_app`
+with a real authorized identity. The regression exposed catalog `FOR SHARE`
+requiring unavailable UPDATE privileges, then a second receive exposed the
+configuration-revision upsert's UPDATE RLS requirement. Catalog reads now use
+the same plain SELECT contract as manual builds; repository-image locking is
+unchanged. Existing immutable revisions are selected under the repository lock
+and newly absent rows are inserted without an UPDATE clause. Build insertion
+uses the same preselect/plain-insert/read sequence as the manual path. No grants
+or RLS policies were broadened in this checkpoint.
+
+Tests verify the exact derived hash and capture link, one build event, reuse
+across distinct receive IDs, and replay of the original receive ID. The full
+forge package passed with disposable PostgreSQL and NATS: 12 unit, nine receive,
+two Smart HTTP, and one schema test, with no skip markers. Evidence is in
+`/home/a/heph-forge-postgres-package-full-20260920.log`; scoped Clippy and
+rustdoc passed in `/home/a/heph-forge-app-receive-{clippy-v2,doc}-20260920.log`.
+Formatting and architecture passed. Failure evidence is retained in
+`/home/a/heph-forge-ui-lock-20260920.log` and the earlier sections of
+`/home/a/heph-forge-app-receive-fixed-20260920.log` (which ends with passing runs).
+The receive baseline did not separately reproduce the build-insert RLS failure;
+that insertion pattern was diagnosed through the manual application-role path.
 
 ### UI-kit package checkpoint (2026-09-20)
 

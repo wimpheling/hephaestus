@@ -1031,7 +1031,6 @@ async fn persist_revision(
     parsed: &ParsedConfig,
     now: OffsetDateTime,
 ) -> Result<AgentConfigRevisionId, ForgeRepositoryError> {
-    let revision_id = AgentConfigRevisionId::new();
     let status = if parsed.config.is_some() {
         "valid"
     } else {
@@ -1044,36 +1043,61 @@ async fn persist_revision(
         .transpose()
         .map_err(serialization)?;
     let diagnostics = serde_json::to_value(&parsed.diagnostics).map_err(serialization)?;
-    let row = sqlx::query_as::<_, RevisionIdentityRow>(
-        "INSERT INTO agent_config_revisions
-         (id, repository_id, receive_id, commit_sha, config_hash, schema_version,
-          status, config, diagnostics, created_at,
-          normalized_config_hash)
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
-         ON CONFLICT (repository_id, commit_sha, config_hash)
-         DO UPDATE SET repository_id = EXCLUDED.repository_id
-         RETURNING id",
+    let existing: Option<Uuid> = sqlx::query_scalar(
+        "SELECT id
+         FROM agent_config_revisions
+         WHERE repository_id = $1 AND commit_sha = $2 AND config_hash = $3",
     )
-    .bind(revision_id.as_uuid())
     .bind(repository_id.as_uuid())
-    .bind(receive_id.as_uuid())
     .bind(commit.as_str())
     .bind(parsed.hash.as_str())
-    .bind(
-        parsed
-            .config
-            .as_ref()
-            .map(|config| i32::try_from(config.version).unwrap_or(i32::MAX)),
-    )
-    .bind(status)
-    .bind(config)
-    .bind(diagnostics)
-    .bind(now)
-    .bind(parsed.normalized_hash.as_ref().map(ConfigHash::as_str))
-    .fetch_one(&mut **transaction)
+    .fetch_optional(&mut **transaction)
     .await
     .map_err(storage)?;
-    Ok(AgentConfigRevisionId::from_uuid(row.id))
+    let stored_id = if let Some(existing) = existing {
+        existing
+    } else {
+        let revision_id = AgentConfigRevisionId::new();
+        sqlx::query(
+            "INSERT INTO agent_config_revisions
+             (id, repository_id, receive_id, commit_sha, config_hash, schema_version,
+              status, config, diagnostics, created_at,
+              normalized_config_hash)
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)",
+        )
+        .bind(revision_id.as_uuid())
+        .bind(repository_id.as_uuid())
+        .bind(receive_id.as_uuid())
+        .bind(commit.as_str())
+        .bind(parsed.hash.as_str())
+        .bind(
+            parsed
+                .config
+                .as_ref()
+                .map(|config| i32::try_from(config.version).unwrap_or(i32::MAX)),
+        )
+        .bind(status)
+        .bind(config)
+        .bind(diagnostics)
+        .bind(now)
+        .bind(parsed.normalized_hash.as_ref().map(ConfigHash::as_str))
+        .execute(&mut **transaction)
+        .await
+        .map_err(storage)?;
+        let stored_id: Uuid = sqlx::query_scalar(
+            "SELECT id
+             FROM agent_config_revisions
+             WHERE repository_id = $1 AND commit_sha = $2 AND config_hash = $3",
+        )
+        .bind(repository_id.as_uuid())
+        .bind(commit.as_str())
+        .bind(parsed.hash.as_str())
+        .fetch_one(&mut **transaction)
+        .await
+        .map_err(storage)?;
+        stored_id
+    };
+    Ok(AgentConfigRevisionId::from_uuid(stored_id))
 }
 
 async fn persist_repository_oci_image_revisions(
@@ -1090,8 +1114,7 @@ async fn persist_repository_oci_image_revisions(
         let base_reference: Option<String> = sqlx::query_scalar(
             "SELECT image_reference
              FROM oci_images
-             WHERE key = $1 AND availability_state = 'available' AND role = 'execution'
-             FOR SHARE",
+             WHERE key = $1 AND availability_state = 'available' AND role = 'execution'",
         )
         .bind(&image.base_key)
         .fetch_optional(&mut **transaction)
@@ -1168,37 +1191,95 @@ async fn persist_build_request(
         serde_json::to_value(&build.artifacts).map_err(ForgeRepositoryError::Serialization)?;
     let build_image = resolve_image(transaction, repository_id, &build.image).await?;
     let guest_image = resolve_image(transaction, repository_id, guest_image).await?;
-    let requested_id = BuildRequestId::new();
-    let stored_id: Uuid = sqlx::query_scalar(
-        "INSERT INTO build_requests
-         (id, repository_id, source_commit, source_ref, origin_receive_id,
-          build_definition_hash, state, created_by, created_at, build_trigger,
-          agent_key, configuration_hash, build_declaration, build_policy,
-          declared_artifacts)
-         VALUES ($1, $2, $3, $4, $5, $6, 'queued', $7, $8, 'push', $9,
-                 decode($10, 'hex'), $11, $12, $13)
-         ON CONFLICT (
-             repository_id, source_commit, source_ref, build_definition_hash
-         ) DO UPDATE SET repository_id = EXCLUDED.repository_id
-         RETURNING id",
+    let existing: Option<Uuid> = sqlx::query_scalar(
+        "SELECT id
+         FROM build_requests
+         WHERE repository_id = $1 AND source_commit = $2
+           AND source_ref = $3 AND build_definition_hash = $4",
     )
-    .bind(requested_id.as_uuid())
     .bind(repository_id.as_uuid())
     .bind(commit.as_str())
     .bind(git_ref.as_str())
-    .bind(receive_id.as_uuid())
     .bind(build_definition_hash.as_slice())
-    .bind(identity.map(|value| value.user_id.as_uuid()))
-    .bind(now)
-    .bind(agent_key)
-    .bind(normalized_hash.as_str())
-    .bind(build_declaration)
-    .bind(build_policy)
-    .bind(declared_artifacts)
-    .fetch_one(&mut **transaction)
+    .fetch_optional(&mut **transaction)
     .await
     .map_err(storage)?;
-    for (execution_context, image) in [("build", &build_image), ("guest", &guest_image)] {
+    let (stored_id, is_new) = if let Some(existing) = existing {
+        (existing, false)
+    } else {
+        let requested_id = BuildRequestId::new();
+        sqlx::query(
+            "INSERT INTO build_requests
+             (id, repository_id, source_commit, source_ref, origin_receive_id,
+              build_definition_hash, state, created_by, created_at, build_trigger,
+              agent_key, configuration_hash, build_declaration, build_policy,
+              declared_artifacts)
+             VALUES ($1, $2, $3, $4, $5, $6, 'queued', $7, $8, 'push', $9,
+                     decode($10, 'hex'), $11, $12, $13)",
+        )
+        .bind(requested_id.as_uuid())
+        .bind(repository_id.as_uuid())
+        .bind(commit.as_str())
+        .bind(git_ref.as_str())
+        .bind(receive_id.as_uuid())
+        .bind(build_definition_hash.as_slice())
+        .bind(identity.map(|value| value.user_id.as_uuid()))
+        .bind(now)
+        .bind(agent_key)
+        .bind(normalized_hash.as_str())
+        .bind(build_declaration)
+        .bind(build_policy)
+        .bind(declared_artifacts)
+        .execute(&mut **transaction)
+        .await
+        .map_err(storage)?;
+        let stored_id: Uuid = sqlx::query_scalar(
+            "SELECT id
+             FROM build_requests
+             WHERE repository_id = $1 AND source_commit = $2
+               AND source_ref = $3 AND build_definition_hash = $4",
+        )
+        .bind(repository_id.as_uuid())
+        .bind(commit.as_str())
+        .bind(git_ref.as_str())
+        .bind(build_definition_hash.as_slice())
+        .fetch_one(&mut **transaction)
+        .await
+        .map_err(storage)?;
+        (stored_id, true)
+    };
+    persist_build_request_images(transaction, stored_id, &build_image, &guest_image).await?;
+    persist_build_request_source(transaction, stored_id, receive_id, git_ref, commit, now).await?;
+    if is_new {
+        append_outbox(
+            transaction,
+            stored_id,
+            BUILD_REQUESTED_SUBJECT,
+            "build.requested.v1",
+            json!({
+                "schema_version": 1,
+                "build_request_id": stored_id,
+                "repository_id": repository_id,
+                "source_commit": commit,
+                "source_ref": git_ref,
+                "receive_id": receive_id,
+                "normalized_configuration_hash": normalized_hash,
+                "build_definition_hash": hex_digest(&build_definition_hash),
+            }),
+            now,
+        )
+        .await?;
+    }
+    Ok(BuildRequestId::from_uuid(stored_id))
+}
+
+async fn persist_build_request_images(
+    transaction: &mut Transaction<'_, Postgres>,
+    build_request_id: Uuid,
+    build_image: &ResolvedImageRow,
+    guest_image: &ResolvedImageRow,
+) -> Result<(), ForgeRepositoryError> {
+    for (execution_context, image) in [("build", build_image), ("guest", guest_image)] {
         sqlx::query(
             "INSERT INTO build_request_images
                 (build_request_id, execution_context, image_id, repository_oci_image_id,
@@ -1206,7 +1287,7 @@ async fn persist_build_request(
              VALUES ($1, $2, $3, $4, $5, $6)
              ON CONFLICT DO NOTHING",
         )
-        .bind(stored_id)
+        .bind(build_request_id)
         .bind(execution_context)
         .bind(image.catalog_image_id)
         .bind(image.repository_image_id)
@@ -1216,13 +1297,24 @@ async fn persist_build_request(
         .await
         .map_err(storage)?;
     }
+    Ok(())
+}
+
+async fn persist_build_request_source(
+    transaction: &mut Transaction<'_, Postgres>,
+    build_request_id: Uuid,
+    receive_id: ReceiveId,
+    git_ref: &GitRef,
+    commit: &CommitSha,
+    now: OffsetDateTime,
+) -> Result<(), ForgeRepositoryError> {
     sqlx::query(
         "INSERT INTO build_request_sources
          (build_request_id, receive_id, source_ref, source_commit, created_at)
          VALUES ($1, $2, $3, $4, $5)
          ON CONFLICT DO NOTHING",
     )
-    .bind(stored_id)
+    .bind(build_request_id)
     .bind(receive_id.as_uuid())
     .bind(git_ref.as_str())
     .bind(commit.as_str())
@@ -1230,25 +1322,7 @@ async fn persist_build_request(
     .execute(&mut **transaction)
     .await
     .map_err(storage)?;
-    append_outbox(
-        transaction,
-        stored_id,
-        BUILD_REQUESTED_SUBJECT,
-        "build.requested.v1",
-        json!({
-            "schema_version": 1,
-            "build_request_id": stored_id,
-            "repository_id": repository_id,
-            "source_commit": commit,
-            "source_ref": git_ref,
-            "receive_id": receive_id,
-            "normalized_configuration_hash": normalized_hash,
-            "build_definition_hash": hex_digest(&build_definition_hash),
-        }),
-        now,
-    )
-    .await?;
-    Ok(BuildRequestId::from_uuid(stored_id))
+    Ok(())
 }
 
 #[derive(Debug, sqlx::FromRow)]
@@ -1269,8 +1343,7 @@ async fn resolve_image(
             "SELECT id AS catalog_image_id, NULL::uuid AS repository_image_id,
                     key, image_reference
                FROM oci_images
-              WHERE key = $1 AND availability_state = 'available' AND role = 'execution'
-              FOR SHARE",
+              WHERE key = $1 AND availability_state = 'available' AND role = 'execution'",
         )
         .bind(key)
         .fetch_optional(&mut **transaction)
@@ -1633,11 +1706,6 @@ impl TryFrom<RepositoryRow> for Repository {
             created_at: row.created_at,
         })
     }
-}
-
-#[derive(FromRow)]
-struct RevisionIdentityRow {
-    id: Uuid,
 }
 
 #[derive(FromRow)]
