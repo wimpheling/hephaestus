@@ -29,6 +29,8 @@ test("cooking installed UI TLS full-page and managed iframe smoke", async ({page
   await expect(managedCard).toBeVisible();
 
   let staticUrl = new URL(page.url());
+  let staticDocumentSentUiCookie = false;
+  let staticDocumentSentPlatformCookie = false;
   await test.step("static-launch", async () => {
     const staticDocument = page.waitForResponse(response => {
       try {
@@ -53,6 +55,9 @@ test("cooking installed UI TLS full-page and managed iframe smoke", async ({page
       /heph-ui-kit-v1\.0\.0\.css/,
     );
     const response = await staticDocument;
+    const requestHeaders = await response.request().allHeaders();
+    staticDocumentSentUiCookie = requestHasCookie(requestHeaders, "__Host-hephaestus_ui");
+    staticDocumentSentPlatformCookie = requestHasCookie(requestHeaders, "__Host-hephaestus_web_key");
     const headers = response.headers();
     const platformOrigin = new URL(process.env.HEPHAESTUS_WEB_URL ?? "https://invalid.example/").origin;
     const contentSecurityPolicy = headers["content-security-policy"] ?? "";
@@ -97,8 +102,10 @@ test("cooking installed UI TLS full-page and managed iframe smoke", async ({page
     expect(platformCookie !== undefined && !platformCookie.domain.startsWith(".") && platformCookie.domain === platformHostname).toBe(true);
   });
   await test.step("static-cookie-isolation", async () => {
-    const uiCookies = await page.context().cookies(staticUrl.origin);
-    expect(uiCookies.some(cookie => cookie.name === "__Host-hephaestus_web_key")).toBe(false);
+    // Context inventory filtering does not preserve host-only semantics; the
+    // actual document request headers above are the isolation proof.
+    expect(staticDocumentSentUiCookie).toBe(true);
+    expect(staticDocumentSentPlatformCookie).toBe(false);
   });
   await test.step("static-accessibility", async () => {
     const staticAxe = await new AxeBuilder({page}).analyze();
@@ -130,6 +137,8 @@ test("cooking installed UI TLS full-page and managed iframe smoke", async ({page
   const frame = page.locator("#installed-ui-frame-project");
   const embed = page.locator("#installed-ui-embed-project");
   const frameContent = frame.contentFrame();
+  let managedDocumentSentUiCookie = false;
+  let managedDocumentSentPlatformCookie = false;
   await test.step("managed-launch", async () => {
     const managedDocument = page.waitForResponse(response => {
       try {
@@ -155,6 +164,9 @@ test("cooking installed UI TLS full-page and managed iframe smoke", async ({page
     await expect(frameContent.getByRole("heading", {name: "Managed release reference"})).toBeVisible();
     await expect(frameContent.locator('link[rel="stylesheet"]')).toHaveCount(1);
     const response = await managedDocument;
+    const requestHeaders = await response.request().allHeaders();
+    managedDocumentSentUiCookie = requestHasCookie(requestHeaders, "__Host-hephaestus_ui");
+    managedDocumentSentPlatformCookie = requestHasCookie(requestHeaders, "__Host-hephaestus_web_key");
     const headers = response.headers();
     const platformOrigin = new URL(process.env.HEPHAESTUS_WEB_URL ?? "https://invalid.example/").origin;
     const contentSecurityPolicy = headers["content-security-policy"] ?? "";
@@ -171,13 +183,18 @@ test("cooking installed UI TLS full-page and managed iframe smoke", async ({page
     expect(managedFrame).toBeTruthy();
     const managedFrameUrl = new URL(managedFrame?.url() ?? "https://invalid.example/");
     const managedCookies = await page.context().cookies(managedFrameUrl.origin);
-    const managedUiCookie = managedCookies.find(cookie => cookie.name === "__Host-hephaestus_ui");
-    expect(managedUiCookie).toBeDefined();
-    expect(managedUiCookie?.secure).toBe(true);
-    expect(managedUiCookie?.httpOnly).toBe(true);
-    expect(managedUiCookie?.sameSite).toBe("Strict");
-    expect(managedUiCookie?.path).toBe("/");
-    expect(managedUiCookie?.domain).toBe(managedFrameUrl.hostname);
+    const managedUiCookie = managedCookies.find(cookie =>
+      cookie.name === "__Host-hephaestus_ui" && cookie.domain === managedFrameUrl.hostname);
+    expect(managedUiCookie !== undefined).toBe(true);
+    expect(managedUiCookie?.secure === true).toBe(true);
+    expect(managedUiCookie?.httpOnly === true).toBe(true);
+    expect(managedUiCookie?.sameSite === "Strict").toBe(true);
+    expect(managedUiCookie?.path === "/").toBe(true);
+    expect(managedUiCookie?.domain === managedFrameUrl.hostname).toBe(true);
+  });
+  await test.step("managed-cookie-isolation", async () => {
+    expect(managedDocumentSentUiCookie).toBe(true);
+    expect(managedDocumentSentPlatformCookie).toBe(false);
   });
   await test.step("theme", async () => {
     await page.getByRole("button", {name: "Use dark theme"}).click();
@@ -328,4 +345,9 @@ async function waitForLiveView(page: import("@playwright/test").Page) {
 
 function escapeRegExp(value: string) {
   return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+function requestHasCookie(headers: Record<string, string>, name: string): boolean {
+  const cookieHeader = headers.cookie ?? "";
+  return cookieHeader.split(";").some(cookie => cookie.trim().startsWith(`${name}=`));
 }
