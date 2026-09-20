@@ -14,9 +14,11 @@ acceptance evidence remain unchecked until their bounded designs and
 implementations are reviewed.
 
 The source cross-manifest validator is now implemented and focused-validated.
-The persistence schema is implemented with focused PostgreSQL evidence below;
-Git capture and adapter wiring remain pending. No aggregate UI acceptance
-result is claimed.
+The persistence schema and receive-side Git capture/build-link wiring are
+implemented with focused PostgreSQL evidence below. Manual-build integration,
+publication, serving, browser integration, and aggregate acceptance remain
+incomplete. Earlier helper-only checkpoints below describe their state at the
+time; the receive integration checkpoint supersedes their pending-wiring notes.
 
 ## Current CI context (2026-09-20)
 
@@ -170,6 +172,33 @@ Formatting, strict scoped Clippy, rustdoc, and architecture passed in
 `/home/a/heph-ui-manifest-store-{fmt,clippy,doc,architecture}-20260920.log`.
 The v3 runner had a readiness race; v4 attempted to delete immutable fixture
 rows during cleanup. V5 delegates disposal to container teardown and passes.
+
+### Receive integration checkpoint (2026-09-20)
+
+Production receive processing now inspects and persists present UI manifests
+from the exact commit before an absent agent manifest can skip processing.
+Invalid UI preserves the accepted ref and existing agent/run behavior while
+preventing build creation. Valid UI uses the shared derived build identity and
+links the returned build ID to the exact source revision in the same
+transaction. Missing UI retains the legacy identity. The receive replay branch
+now precedes Git storage validation and reuses durable results without Git.
+
+The final receive suite passed seven tests, including valid UI linking,
+invalid UI with and without an agent declaration, replay without Git, and one
+capture shared by two ref-specific build requests. Evidence is in
+`/home/a/heph-ui-manifest-receive-forgepg-v2-20260920.log`. The earlier complete
+forge-postgres suite passed 20 tests across unit, integration, smart HTTP, and
+schema checks. Strict Clippy, formatting, docs, and architecture passed in
+`/home/a/heph-ui-manifest-receive-clippy-v3-20260920.log`,
+`/home/a/heph-ui-manifest-receive-fmt-v2-20260920.log`, and the corresponding
+`doc-20260920` and `architecture-20260920` logs.
+
+Manual requests do not yet consume UI captures. Their next integration will
+serialize with receive capture using a repository `FOR NO KEY UPDATE` lock
+before inspection/lookup. This lock mode is compatible with foreign-key key
+share locks and avoids concurrent receive lock-upgrade deadlocks. The ordering
+must be proved with real concurrent PostgreSQL tests; no concurrency result is
+claimed at this checkpoint.
 
 ### Publication contract (planned)
 
@@ -341,6 +370,29 @@ escape hatch for custom HTML in core pages.
 | UI kit | Hephaestus publishes a versioned, documented UI-kit package derived from its design-system tokens/components. Projects may reuse it, but it does not expose Phoenix internals or bypass the bounded distribution API. |
 
 ## Dependencies
+
+### Browser-origin deployment findings (2026-09-20)
+
+Current local Phoenix uses loopback port 4000; production takes `PHX_HOST`.
+Its session cookie has no Domain attribute. Current Caddy reconciliation
+replaces a single `hephaestus.gateway` subroute with path-based routes and
+forwards to one trusted dispatcher authority. It has no release-UI host route
+or UI namespace, and the repository supplies no production wildcard DNS or
+certificate configuration.
+
+UI deployment will require an explicitly configured platform-owned hostname
+namespace, with each immutable installed binding receiving its own hostname.
+DNS and TLS must cover those hostnames; production configuration remains an
+operator responsibility, while integration tests must use explicit local
+resolution and a trusted test CA. Host routing and binding lookup must be
+reconciled through the existing Caddy owner so gateway and UI updates cannot
+overwrite each other. Unknown UI hosts must fail closed. The configured service
+dispatcher authority remains distinct from browser UI origin identity.
+
+This is a deployment constraint and implementation direction, not evidence of
+working UI routing or browser authentication. Audience-bound handoff, exact
+host-to-binding resolution, cookie/CSP policy, revocation, and real browser/TLS
+acceptance tests remain outstanding.
 
 - Gateway routing and invocation authority from MVP-03.
 - Runtime authority and release-artifact materialization from MVP-01 through

@@ -346,7 +346,7 @@ fn requires_gateway_manifest(config: &RepositoryUisConfig) -> bool {
         .any(|ui| !ui.apis.is_empty() || matches!(ui.content, UiContent::ManagedService { .. }))
 }
 
-fn entry_kind(mode: gix::objs::tree::EntryMode) -> Option<UiManifestEntryKind> {
+const fn entry_kind(mode: gix::objs::tree::EntryMode) -> Option<UiManifestEntryKind> {
     if mode.is_blob() {
         Some(UiManifestEntryKind::Regular)
     } else if mode.is_link() {
@@ -436,7 +436,7 @@ impl UiManifestInspection {
     fn with_gateway_observation(&mut self, gateway: &GatewayManifestInspection) {
         self.gateway_object_id = gateway.object_id;
         self.gateway_actual_size = gateway.actual_size;
-        self.gateway_source_hash = gateway.source_hash.clone();
+        self.gateway_source_hash.clone_from(&gateway.source_hash);
         self.gateway_normalized_hash = None;
         self.gateway_config = None;
     }

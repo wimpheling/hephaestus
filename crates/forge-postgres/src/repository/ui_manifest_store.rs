@@ -1,12 +1,12 @@
 //! Transactional persistence for one inspected repository UI manifest.
 //!
-//! This module is intentionally unregistered until receive wiring is reviewed.
 //! It stores bounded source evidence and reuses an identical immutable revision
 //! when the same repository commit is observed by another receive.
 
 use agent_config::ConfigHash;
 use forge_domain::{CommitSha, ReceiveId, RepositoryId};
 use forge_service::ForgeRepositoryError;
+use release_domain::BuildRequestId;
 use serde_json::Value;
 use sqlx::{FromRow, Postgres, Transaction};
 use uuid::Uuid;
@@ -159,6 +159,50 @@ pub(super) async fn persist_ui_manifest_revision(
             "gateway manifest hash",
         )?,
     })
+}
+
+/// Links a valid immutable UI revision to its exact build request.
+pub(super) async fn link_ui_manifest_to_build(
+    transaction: &mut Transaction<'_, Postgres>,
+    build_request_id: BuildRequestId,
+    repository_id: RepositoryId,
+    source_commit: &CommitSha,
+    revision_id: Uuid,
+) -> Result<(), ForgeRepositoryError> {
+    sqlx::query(
+        "INSERT INTO build_request_ui_source_manifests
+         (build_request_id, repository_id, source_commit,
+          source_manifest_revision_id)
+         VALUES ($1, $2, $3, $4)
+         ON CONFLICT (build_request_id) DO NOTHING",
+    )
+    .bind(build_request_id.as_uuid())
+    .bind(repository_id.as_uuid())
+    .bind(source_commit.as_str())
+    .bind(revision_id)
+    .execute(&mut **transaction)
+    .await
+    .map_err(super::storage)?;
+
+    let existing: (Uuid, Uuid, String, Uuid) = sqlx::query_as(
+        "SELECT build_request_id, repository_id, source_commit,
+                source_manifest_revision_id
+         FROM build_request_ui_source_manifests
+         WHERE build_request_id = $1",
+    )
+    .bind(build_request_id.as_uuid())
+    .fetch_one(&mut **transaction)
+    .await
+    .map_err(super::storage)?;
+    if existing.1 != repository_id.as_uuid()
+        || existing.2 != source_commit.as_str()
+        || existing.3 != revision_id
+    {
+        return Err(ForgeRepositoryError::InvalidMetadata(
+            "conflicting repository UI build link",
+        ));
+    }
+    Ok(())
 }
 
 fn evidence(inspection: &UiManifestInspection) -> Result<UiManifestEvidence, ForgeRepositoryError> {

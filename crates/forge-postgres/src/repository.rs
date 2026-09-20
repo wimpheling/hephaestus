@@ -26,9 +26,7 @@ use crate::{
     BUILD_REQUESTED_SUBJECT, GitStorage, INSTANCE_RUN_REQUESTED_SUBJECT, RUN_START_SUBJECT,
 };
 
-#[cfg(test)]
 mod ui_manifest;
-#[cfg(test)]
 mod ui_manifest_store;
 
 /// `PostgreSQL` forge metadata and receive repository.
@@ -439,7 +437,6 @@ impl PgForgeRepository {
         if identity.is_some() && self.authorizer.is_none() {
             return Err(ForgeRepositoryError::AuthorizationUnavailable);
         }
-        let repository_path = self.storage.validate_existing(repository.id).await?;
         let mut transaction = match identity {
             Some(identity) => begin_actor_transaction(&self.pool, identity)
                 .await
@@ -521,6 +518,7 @@ impl PgForgeRepository {
                 })?,
             });
         }
+        let repository_path = self.storage.validate_existing(repository.id).await?;
         let inspected = inspect_updates(&repository_path, updates)?;
         for (index, update) in updates.iter().enumerate() {
             let sequence = i32::try_from(index + 1)
@@ -579,6 +577,20 @@ impl PgForgeRepository {
                 )
                 .await?;
             }
+            let ui_revision = if let Some(inspection) = item.ui_manifest.as_ref() {
+                Some(
+                    ui_manifest_store::persist_ui_manifest_revision(
+                        &mut transaction,
+                        repository.id,
+                        receive_id,
+                        &item.commit,
+                        inspection,
+                    )
+                    .await?,
+                )
+            } else {
+                None
+            };
             let Some(parsed) = item.parsed else {
                 continue;
             };
@@ -635,26 +647,56 @@ impl PgForgeRepository {
                     "valid reusable configuration build definition",
                 ))?;
             if build_trigger_matches(&build.triggers, &item.git_ref) {
-                build_requests.push(
-                    persist_build_request(
-                        &mut transaction,
-                        repository.id,
-                        receive_id,
-                        identity,
-                        &item.git_ref,
-                        &item.commit,
-                        build,
-                        &config.guest.image,
-                        config.agent.key.as_deref(),
-                        parsed.normalized_hash.as_ref().ok_or(
-                            ForgeRepositoryError::InvalidStoredData(
-                                "valid reusable configuration normalized hash",
-                            ),
-                        )?,
-                        now,
+                let base_build_definition_hash =
+                    agent_config::build_identity::base_build_definition_hash(build)
+                        .map_err(ForgeRepositoryError::Serialization)?;
+                let build_definition_hash = if let Some(revision) = ui_revision.as_ref() {
+                    if !matches!(revision.status, ui_manifest::UiManifestStatus::Valid) {
+                        continue;
+                    }
+                    let ui_hash = revision.normalized_ui_hash.ok_or(
+                        ForgeRepositoryError::InvalidStoredData(
+                            "valid repository UI normalized hash",
+                        ),
+                    )?;
+                    agent_config::build_identity::ui_build_definition_hash(
+                        base_build_definition_hash,
+                        ui_hash,
+                        revision.normalized_gateway_hash,
                     )
-                    .await?,
-                );
+                } else {
+                    base_build_definition_hash
+                };
+                let build_request_id = persist_build_request(
+                    &mut transaction,
+                    repository.id,
+                    receive_id,
+                    &item.git_ref,
+                    &item.commit,
+                    build,
+                    &config.guest.image,
+                    config.agent.key.as_deref(),
+                    parsed.normalized_hash.as_ref().ok_or(
+                        ForgeRepositoryError::InvalidStoredData(
+                            "valid reusable configuration normalized hash",
+                        ),
+                    )?,
+                    build_definition_hash,
+                    identity,
+                    now,
+                )
+                .await?;
+                if let Some(revision) = ui_revision.as_ref() {
+                    ui_manifest_store::link_ui_manifest_to_build(
+                        &mut transaction,
+                        build_request_id,
+                        repository.id,
+                        &item.commit,
+                        revision.id,
+                    )
+                    .await?;
+                }
+                build_requests.push(build_request_id);
             }
         }
         persist_instance_triggers(
@@ -835,6 +877,7 @@ struct InspectedUpdate {
     git_ref: GitRef,
     commit: CommitSha,
     parsed: Option<ParsedConfig>,
+    ui_manifest: Option<ui_manifest::UiManifestInspection>,
     repository_oci_images: Option<Vec<InspectedRepositoryOciImage>>,
 }
 
@@ -872,11 +915,13 @@ fn inspect_updates(
                             .map_err(git)
                     })
                     .transpose()?;
+                let ui_manifest = ui_manifest::inspect_repository_ui(&repository, &tree)?;
                 let repository_oci_images = inspect_repository_oci_images(&tree)?;
                 Ok(InspectedUpdate {
                     git_ref: update.git_ref.clone(),
                     commit: commit.clone(),
                     parsed,
+                    ui_manifest,
                     repository_oci_images,
                 })
             })
@@ -1098,17 +1143,16 @@ async fn persist_build_request(
     transaction: &mut Transaction<'_, Postgres>,
     repository_id: RepositoryId,
     receive_id: ReceiveId,
-    identity: Option<&AuthenticatedIdentity>,
     git_ref: &GitRef,
     commit: &CommitSha,
     build: &agent_config::BuildConfig,
     guest_image: &agent_config::ImageSelection,
     agent_key: Option<&str>,
     normalized_hash: &ConfigHash,
+    build_definition_hash: [u8; 32],
+    identity: Option<&AuthenticatedIdentity>,
     now: OffsetDateTime,
 ) -> Result<BuildRequestId, ForgeRepositoryError> {
-    let build_definition =
-        serde_json::to_vec(build).map_err(ForgeRepositoryError::Serialization)?;
     let build_declaration =
         serde_json::to_value(build).map_err(ForgeRepositoryError::Serialization)?;
     let build_policy = json!({
@@ -1117,7 +1161,6 @@ async fn persist_build_request(
     });
     let declared_artifacts =
         serde_json::to_value(&build.artifacts).map_err(ForgeRepositoryError::Serialization)?;
-    let build_definition_hash: [u8; 32] = Sha256::digest(&build_definition).into();
     let build_image = resolve_image(transaction, repository_id, &build.image).await?;
     let guest_image = resolve_image(transaction, repository_id, guest_image).await?;
     let requested_id = BuildRequestId::new();
