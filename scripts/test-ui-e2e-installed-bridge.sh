@@ -23,6 +23,7 @@ trap cleanup EXIT INT TERM
 mkdir -p -- "${bridge}" "${fake_repo}/scripts"
 chmod 700 -- "${root}" "${bridge}" "${fake_repo}" "${fake_repo}/scripts"
 printf '{}\n' >"${fixture}"
+mkdir -m 700 -- "${bridge}/installed-ui-control"
 chmod 600 -- "${fixture}"
 cp -- "${script_dir}/run-ui-e2e-host-bridge.sh" "${fake_repo}/scripts/"
 cat >"${fake_repo}/scripts/run-ui-e2e-external.sh" <<'CHILD'
@@ -80,6 +81,61 @@ env "${common_env[@]}" \
     "${script_dir}/run-ui-e2e-external.sh" || installed_status="$?"
 [[ "${installed_status}" == 23 ]]
 ! compgen -G "${bridge}/ca.*.pem" >/dev/null
+
+rm -rf -- "${bridge}/installed-ui-control"
+missing_control_status=0
+env "${common_env[@]}" \
+    HEPHAESTUS_E2E_COOKING_PHASE=initial \
+    HEPHAESTUS_E2E_BROWSER_RUNNER=installed-ui \
+    HEPHAESTUS_PLATFORM_HTTPS_ORIGIN='https://platform.localhost:4443' \
+    HEPHAESTUS_UI_NAMESPACE='ui.platform.localhost' \
+    HEPHAESTUS_UI_PORT=4443 \
+    HEPHAESTUS_CADDY_TEST_CA_CERT="${root}/source-ca.pem" \
+    "${script_dir}/run-ui-e2e-external.sh" >/dev/null 2>&1 || missing_control_status="$?"
+[[ "${missing_control_status}" == 1 ]]
+mkdir -m 700 -- "${bridge}/installed-ui-control"
+
+rm -rf -- "${bridge}/installed-ui-control"
+ln -s -- "${root}/source-ca.pem" "${bridge}/installed-ui-control"
+symlink_control_status=0
+env "${common_env[@]}" \
+    HEPHAESTUS_E2E_COOKING_PHASE=initial \
+    HEPHAESTUS_E2E_BROWSER_RUNNER=installed-ui \
+    HEPHAESTUS_PLATFORM_HTTPS_ORIGIN='https://platform.localhost:4443' \
+    HEPHAESTUS_UI_NAMESPACE='ui.platform.localhost' \
+    HEPHAESTUS_UI_PORT=4443 \
+    HEPHAESTUS_CADDY_TEST_CA_CERT="${root}/source-ca.pem" \
+    "${script_dir}/run-ui-e2e-external.sh" >/dev/null 2>&1 || symlink_control_status="$?"
+[[ "${symlink_control_status}" == 1 ]]
+rm -f -- "${bridge}/installed-ui-control"
+mkdir -m 700 -- "${bridge}/installed-ui-control"
+
+chmod 0755 -- "${bridge}/installed-ui-control"
+control_mode_status=0
+env "${common_env[@]}" \
+    HEPHAESTUS_E2E_COOKING_PHASE=initial \
+    HEPHAESTUS_E2E_BROWSER_RUNNER=installed-ui \
+    HEPHAESTUS_PLATFORM_HTTPS_ORIGIN='https://platform.localhost:4443' \
+    HEPHAESTUS_UI_NAMESPACE='ui.platform.localhost' \
+    HEPHAESTUS_UI_PORT=4443 \
+    HEPHAESTUS_CADDY_TEST_CA_CERT="${root}/source-ca.pem" \
+    "${script_dir}/run-ui-e2e-external.sh" >/dev/null 2>&1 || control_mode_status="$?"
+[[ "${control_mode_status}" == 1 ]]
+chmod 0700 -- "${bridge}/installed-ui-control"
+
+outside_control="${root}/outside-control"
+mkdir -m 700 -- "${outside_control}"
+outside_control_status=0
+env "${common_env[@]}" \
+    HEPHAESTUS_E2E_COOKING_PHASE=initial \
+    HEPHAESTUS_E2E_BROWSER_RUNNER=installed-ui \
+    HEPHAESTUS_PLATFORM_HTTPS_ORIGIN='https://platform.localhost:4443' \
+    HEPHAESTUS_UI_NAMESPACE='ui.platform.localhost' \
+    HEPHAESTUS_UI_PORT=4443 \
+    HEPHAESTUS_CADDY_TEST_CA_CERT="${root}/source-ca.pem" \
+    HEPHAESTUS_INSTALLED_UI_CONTROL_DIR="${outside_control}" \
+    "${script_dir}/run-installed-ui-e2e.sh" >/dev/null 2>&1 || outside_control_status="$?"
+[[ "${outside_control_status}" == 1 ]]
 
 client_mismatch_status=0
 env "${common_env[@]}" \

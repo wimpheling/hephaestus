@@ -39,6 +39,28 @@ if [[ -n "${HEPHAESTUS_UI_PORT:-}" && "${HEPHAESTUS_UI_PORT}" != "${ui_port}" ]]
 fi
 export HEPHAESTUS_UI_PORT="${ui_port}"
 
+[[ "${fixture}" = /* ]] || {
+    printf 'installed UI fixture path must be absolute\n' >&2
+    exit 1
+}
+fixture_parent="$(cd -- "$(dirname -- "${fixture}")" && pwd -P)"
+control_dir="${HEPHAESTUS_INSTALLED_UI_CONTROL_DIR:-${fixture_parent}/installed-ui-control}"
+[[ "${control_dir}" = /* && -d "${control_dir}" && ! -L "${control_dir}" ]] || {
+    printf 'installed UI control directory is invalid\n' >&2
+    exit 1
+}
+control_real="$(cd -- "${control_dir}" && pwd -P)"
+expected_control="${fixture_parent}/installed-ui-control"
+[[ "${control_real}" == "${expected_control}" ]] || {
+    printf 'installed UI control directory is outside fixture parent\n' >&2
+    exit 1
+}
+[[ "$(stat -c '%a' -- "${control_real}")" == 700 ]] || {
+    printf 'installed UI control directory mode is not 0700\n' >&2
+    exit 1
+}
+export HEPHAESTUS_INSTALLED_UI_CONTROL_DIR="${control_real}"
+
 if [[ -n "${HEPHAESTUS_COOKING_BROWSER_BRIDGE_DIR:-}" ]]; then
     export HEPHAESTUS_E2E_BROWSER_RUNNER=installed-ui
     exec "${repo_root}/scripts/run-ui-e2e-external.sh"
@@ -208,10 +230,12 @@ if podman run --rm --name "${browser_container}" \
     --user "$(id -u):$(id -g)" \
     --network host \
     --volume "${fixture_root}:/run/heph-fixture:Z" \
+    --volume "${control_real}:/run/heph-control:Z" \
     --env HOME=/tmp \
     --env HEPHAESTUS_WEB_URL="${web_url}" \
     --env HEPHAESTUS_OIDC_URL="${oidc_issuer}" \
     --env HEPHAESTUS_UI_NAMESPACE="${ui_namespace}" \
+    --env HEPHAESTUS_INSTALLED_UI_CONTROL_DIR=/run/heph-control \
     --env HEPHAESTUS_COOKING_BROWSER_FIXTURE=/run/heph-fixture/fixture.json \
     --env HEPHAESTUS_E2E_EVIDENCE_DIR=/run/heph-fixture/playwright-results \
     --env HEPHAESTUS_SAFE_SCREENSHOT_DIR=/run/heph-fixture/playwright-results \
@@ -227,6 +251,7 @@ if podman run --rm --name "${browser_container}" \
         HEPHAESTUS_WEB_URL="$HEPHAESTUS_WEB_URL" \
         HEPHAESTUS_OIDC_URL="$HEPHAESTUS_OIDC_URL" \
         HEPHAESTUS_UI_NAMESPACE="$HEPHAESTUS_UI_NAMESPACE" \
+        HEPHAESTUS_INSTALLED_UI_CONTROL_DIR="$HEPHAESTUS_INSTALLED_UI_CONTROL_DIR" \
         HEPHAESTUS_COOKING_BROWSER_FIXTURE="$HEPHAESTUS_COOKING_BROWSER_FIXTURE" \
         HEPHAESTUS_E2E_EVIDENCE_DIR="$HEPHAESTUS_E2E_EVIDENCE_DIR" \
         ./node_modules/.bin/playwright test --config=playwright.installed-ui.config.ts --grep "cooking installed UI TLS" \

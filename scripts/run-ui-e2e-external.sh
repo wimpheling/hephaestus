@@ -48,6 +48,18 @@ if [[ -n "${HEPHAESTUS_COOKING_BROWSER_BRIDGE_DIR:-}" ]]; then
         printf 'installed UI browser bridge supports only the initial phase\n' >&2
         exit 1
     fi
+    if [[ "${browser_runner}" == installed-ui ]]; then
+        control_dir="${bridge_real}/installed-ui-control"
+        [[ -d "${control_dir}" && ! -L "${control_dir}" ]] || {
+            printf 'installed UI control directory is invalid\n' >&2
+            exit 1
+        }
+        [[ "$(stat -c '%a' -- "${control_dir}")" == 700 ]] || {
+            printf 'installed UI control directory mode is not 0700\n' >&2
+            exit 1
+        }
+        export HEPHAESTUS_INSTALLED_UI_CONTROL_DIR="${control_dir}"
+    fi
     request_id="$(date +%s%N)-$$"
     request="${bridge_dir}/request.${request_id}.json"
     pending="${request}.pending"

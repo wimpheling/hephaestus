@@ -30,8 +30,8 @@ use rpc_proto::{
             TriggerPolicy, ref_selector,
         },
         release::v1::{
-            GetReleaseRequest, InstallUiRequest, ListUiInstallationsRequest, PublishReleaseRequest,
-            ReleaseUiPresentation, ReleaseUiScope, SetDraftVersionRequest,
+            DisableUiRequest, GetReleaseRequest, InstallUiRequest, ListUiInstallationsRequest,
+            PublishReleaseRequest, ReleaseUiPresentation, ReleaseUiScope, SetDraftVersionRequest,
             UiInstallationContentKind, UiInstallationLifecycle, UiInstallationNavigation,
             UiInstallationTarget, release_ui_descriptor, ui_installation_target,
         },
@@ -1270,6 +1270,51 @@ async fn install_reference_ui(
             "InstallUi installation",
         )?,
         generation_id: response_id(response.generation_id.into_option(), "InstallUi generation")?,
+    })
+}
+
+/// Disables the managed reference installation through the owner-authorized
+/// Release RPC.  The caller supplies the generation observed at installation
+/// time so the lifecycle transition remains a real compare-and-set operation.
+pub async fn disable_installed_ui(
+    running: &RunningHephaestus,
+    token_factory: &(dyn Fn(&str) -> String + Send + Sync),
+    installed_ui: InstalledCookingUi,
+) -> Result<InstalledCookingUi, BuildError> {
+    let client = rpc_release_client(
+        running,
+        token_factory,
+        "/hephaestus.release.v1.ReleaseService/DisableUi",
+    )?;
+    let response = client
+        .disable_ui(DisableUiRequest {
+            context: mutation_context("installed-ui-disable-lifecycle").into(),
+            installation_id: opaque(installed_ui.installation_id).into(),
+            expected_generation_id: opaque(installed_ui.generation_id).into(),
+            ..Default::default()
+        })
+        .await?
+        .into_owned();
+    if response.lifecycle.to_i32()
+        != UiInstallationLifecycle::UI_INSTALLATION_LIFECYCLE_DISABLED as i32
+    {
+        return Err(invalid_state("DisableUi did not disable the managed UI"));
+    }
+    let returned_installation_id = response_id(
+        response.installation_id.into_option(),
+        "DisableUi installation",
+    )?;
+    let returned_generation_id =
+        response_id(response.generation_id.into_option(), "DisableUi generation")?;
+    if returned_installation_id != installed_ui.installation_id {
+        return Err(invalid_state("DisableUi returned a different installation"));
+    }
+    if returned_generation_id != installed_ui.generation_id {
+        return Err(invalid_state("DisableUi returned a different generation"));
+    }
+    Ok(InstalledCookingUi {
+        installation_id: returned_installation_id,
+        generation_id: returned_generation_id,
     })
 }
 

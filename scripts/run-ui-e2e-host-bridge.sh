@@ -194,6 +194,11 @@ if runner == "installed-ui":
         raise SystemExit("installed UI CA is unreadable")
     if "-----BEGIN CERTIFICATE-----" not in ca_text or "-----END CERTIFICATE-----" not in ca_text:
         raise SystemExit("installed UI CA is not PEM")
+    control = bridge / "installed-ui-control"
+    if control.is_symlink() or not control.is_dir():
+        raise SystemExit("installed UI control directory is not a bridge-owned directory")
+    if control.stat().st_mode & 0o777 != 0o700:
+        raise SystemExit("installed UI control directory mode is not 0700")
 for key in required:
     print(f"{key}\0{payload[key]}", end="\0")
 if runner == "legacy":
@@ -259,6 +264,7 @@ PY
             "HEPHAESTUS_UI_NAMESPACE=${request_values[ui_namespace]}"
             "HEPHAESTUS_UI_PORT=${request_values[ui_port]}"
             "HEPHAESTUS_CADDY_TEST_CA_CERT=${bridge_real}/${request_values[ca_cert]}"
+            "HEPHAESTUS_INSTALLED_UI_CONTROL_DIR=${bridge_real}/installed-ui-control"
         )
         if [[ -n "${HEPHAESTUS_PLAYWRIGHT_IMAGE:-}" ]]; then
             base_env+=("HEPHAESTUS_PLAYWRIGHT_IMAGE=${HEPHAESTUS_PLAYWRIGHT_IMAGE}")

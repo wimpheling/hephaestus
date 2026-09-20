@@ -1,6 +1,6 @@
 import {expect, test} from "@playwright/test";
 import {AxeBuilder} from "@axe-core/playwright";
-import {readFileSync} from "node:fs";
+import {existsSync, readFileSync, writeFileSync} from "node:fs";
 import {join} from "node:path";
 
 type CookingFixture = {
@@ -15,8 +15,12 @@ const fixturePath = process.env.HEPHAESTUS_COOKING_BROWSER_FIXTURE;
 const oidcUrl = process.env.HEPHAESTUS_OIDC_URL ?? "http://127.0.0.1:5556";
 const webUrl = process.env.HEPHAESTUS_WEB_URL;
 const uiNamespace = process.env.HEPHAESTUS_UI_NAMESPACE;
+const controlDirectory = process.env.HEPHAESTUS_INSTALLED_UI_CONTROL_DIR;
 if (!webUrl) throw new Error("HEPHAESTUS_WEB_URL is required");
 if (!uiNamespace) throw new Error("HEPHAESTUS_UI_NAMESPACE is required");
+if (controlDirectory !== "/run/heph-control") {
+  throw new Error("HEPHAESTUS_INSTALLED_UI_CONTROL_DIR must be /run/heph-control");
+}
 
 test("cooking installed UI TLS full-page and managed iframe smoke", async ({page}) => {
   const fixture = loadFixture();
@@ -359,6 +363,57 @@ test("cooking installed UI TLS full-page and managed iframe smoke", async ({page
   });
   await expect(page.locator("#installed-ui-terminal-status-project")).toBeHidden();
   await page.screenshot({path: screenshotPath("installed-ui-managed-iframe.png"), fullPage: true});
+  await test.step("lifecycle-disable", async () => {
+    await test.step("lifecycle-managed-ready", async () => {
+      writeFileSync(join(controlDirectory, "managed-ready"), "ready\n", {
+        encoding: "utf8",
+        mode: 0o600,
+        flag: "wx",
+      });
+    });
+    await test.step("lifecycle-disable-complete", async () => {
+      await expect.poll(
+        () => existsSync(join(controlDirectory, "disable-complete")),
+        {timeout: 30_000},
+      ).toBe(true);
+    });
+    await test.step("lifecycle-stale-cookie-denied", async () => {
+      const frameHandle = await frame.elementHandle();
+      const managedFrame = frameHandle ? await frameHandle.contentFrame() : null;
+      expect(managedFrame).not.toBeNull();
+      if (managedFrame === null) return;
+      const managedHostname = new URL(managedFrame.url()).hostname;
+      const staleRequest = page.waitForRequest(request => {
+        try {
+          const requestUrl = new URL(request.url());
+          return requestUrl.hostname === managedHostname &&
+            request.method() === "GET" &&
+            request.resourceType() === "fetch" &&
+            requestUrl.pathname === "/managed-reference/index.html";
+        } catch {
+          return false;
+        }
+      }, {timeout: 30_000}).catch(() => null);
+      const staleStatus = await frameContent.locator("body").evaluate(async () => {
+        const response = await fetch("/managed-reference/index.html", {
+          cache: "no-store",
+          credentials: "same-origin",
+        });
+        return response.status;
+      });
+      const request = await staleRequest;
+      expect(request).not.toBeNull();
+      if (request === null) return;
+      const requestHeaders = await request.allHeaders();
+      expect(staleStatus).toBe(401);
+      expect(requestHasCookie(requestHeaders, "__Host-hephaestus_ui")).toBe(true);
+      writeFileSync(join(controlDirectory, "stale-cookie-denied"), "denied\n", {
+        encoding: "utf8",
+        mode: 0o600,
+        flag: "wx",
+      });
+    });
+  });
   await test.step("close", async () => {
     await embed.getByRole("button", {name: "Close"}).click();
     await expect(embed).toBeHidden();
