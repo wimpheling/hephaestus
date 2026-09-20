@@ -14,10 +14,17 @@ acceptance evidence remain unchecked until their bounded designs and
 implementations are reviewed.
 
 The source cross-manifest validator is now implemented and focused-validated.
-UI capture and persistence schema work remains pending; no aggregate UI
-acceptance result is claimed.
+The persistence schema is implemented with focused PostgreSQL evidence below;
+Git capture and adapter wiring remain pending. No aggregate UI acceptance
+result is claimed.
 
 ## Current CI context (2026-09-20)
+
+Subsequent CI passed at `d0def95`, `7ccb01d`, and `44fe0c3`; the latest
+successful run is `35481880564`. This does not establish the cause of the
+earlier intermittent teardown failure. The separate Cooking E2E workflow for
+`44fe0c3` remained pending when checked. Final integrated UI acceptance and
+the branch-wide quality gate remain outstanding.
 
 The initial UI-branch CI run for `e573563` (`35480143840`) failed in the Rust
 test job at `daemon_loop_restores_active_service_without_manual_start`, during
@@ -148,7 +155,7 @@ is captured only when the UI references a managed gateway or APIs; a static UI
 without APIs does not require it. Existing `heph.images` behavior remains
 outside this UI scope. Implementation remains pending.
 
-### Reviewed capture schema boundary (planned, not implemented)
+### Capture schema checkpoint (2026-09-20)
 
 The capture design uses two UI-specific append-only tables: one
 `source_manifest_revisions` row for each present `heph.ui.toml`, and one
@@ -174,8 +181,66 @@ closed. Both tables use forced repository/build RLS, insert/read permissions
 following the existing patterns, and append-only immutability triggers; the
 trusted worker remains the only elevated writer. Existing receive transaction
 and outbox mechanisms can carry future capture effects without a new event
-framework. This is a reviewed schema boundary only; migration and adapter
-implementation remain pending.
+framework.
+
+Migration `0082_ui_source_manifest_revisions.sql` implements this boundary.
+The source table is named `ui_source_manifest_revisions`; its build links are
+in `build_request_ui_source_manifests`. All present entries require a Git OID;
+valid referenced gateway sources are capped at 1 MiB. Multiple matching build
+requests may share a snapshot. The real PostgreSQL schema test proves shape
+checks, oversized invalid evidence, invalid-status linkage denial, exact
+repository/commit binding, shared snapshots, immutability, and app-role
+isolation, with SQLSTATE assertions for rejected operations.
+
+The corrected schema suite passed against fresh PostgreSQL in
+`/home/a/heph-ui-source-manifest-schema-realpg-final-20260920.log`.
+Formatting passed; strict scoped Clippy and rustdoc passed in the corresponding
+`clippy-final` and `doc-final` logs. Architecture subsequently passed with
+61 enabled rules and two migration-gated rules in
+`/home/a/heph-agent-config-gateway-canonical-architecture-20260920.log`,
+after the Git helper fixture correction. Receive capture and adapter wiring
+remain unimplemented.
+
+### Build identity compatibility decision (implementation pending)
+
+A captured valid UI snapshot must participate in build identity. UI-bearing
+builds will use a domain-separated SHA-256 over the existing build-definition
+hash, normalized UI hash, and an explicit presence marker plus normalized
+gateway hash when required. Hash components are fixed-width bytes; the domain
+is `hephaestus.build-definition-with-ui.v1`. Without captured UI, the existing
+build-definition hash remains byte-for-byte unchanged. Both receive-created
+and manually requested builds must apply the same rule.
+
+This prevents a newly captured UI snapshot from being attached retroactively
+to a historical build that used the legacy identity. Multiple build requests
+may share one immutable source snapshot, but each link must match the exact
+repository and commit of its build request. Invalid captured UI must prevent
+build creation through both paths. Historical commits without capture remain
+legacy until inspected through the receive path; no historical build is
+silently upgraded to carry UI. The manual API will accept either the trusted,
+recomputed base hash or the recomputed UI-aware hash and store the UI-aware
+hash when a valid snapshot exists. This preserves existing request callers
+and clients retrying with the hash exposed by build inspection, without a
+protobuf change. Both database paths remain to be implemented and verified.
+
+The shared `agent-config::build_identity` helper is implemented. Its fixed
+vectors verify the existing `BuildConfig` serialization and domain-separated
+encoding, including optional gateway presence. The full agent-config suite
+passed 25 unit tests, one Cooking manifest test, six gateway cross-validation
+tests, and ten UI manifest tests in
+`/home/a/heph-agent-config-full-tests-20260920.log`. Workspace formatting,
+strict scoped Clippy, and rustdoc passed in
+`/home/a/heph-agent-config-build-identity-{fmt,clippy,doc}-20260920.log`.
+No database caller uses the new helper yet.
+
+`canonical_repository_gateways` now exposes the existing gateway normalization
+without changing the parser's returned source ordering. Its normalized hash
+continues to use canonical TOML, whereas UI normalization uses JSON. The
+existing gateway ordering test now verifies equal canonical configurations and
+their TOML hash. The full agent-config suite, strict Clippy, rustdoc, formatting,
+and architecture passed; evidence is in
+`/home/a/heph-agent-config-gateway-canonical-{tests,clippy,doc}-v2-20260920.log`
+and the architecture log above.
 
 ## Outcome
 
