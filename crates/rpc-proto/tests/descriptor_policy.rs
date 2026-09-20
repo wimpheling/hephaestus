@@ -61,7 +61,7 @@ fn reflection_inventory_contains_every_application_service_and_method() {
             .iter()
             .map(|service| service.methods().len())
             .sum::<usize>(),
-        91
+        98
     );
 
     let reflector = connectrpc_reflection::Reflector::from_descriptor_pool(pool)
@@ -244,16 +244,21 @@ fn validate_mutation_method(
         ),
         "{qualified} mutation is missing RequestContext"
     );
-    let response = pool.message(method.output());
-    assert!(
-        message_field_is(
-            pool,
-            response,
-            "receipt",
-            "hephaestus.common.v1.MutationReceipt"
-        ),
-        "{qualified} mutation is missing its read-your-writes receipt"
-    );
+    // Browser handoff is an ephemeral capability issue. It deliberately
+    // rejects idempotency keys and has no durable mutation receipt ledger;
+    // its request correlation remains in the authenticated audit path.
+    if qualified != "hephaestus.release.v1.ReleaseService/CreateUiBrowserHandoff" {
+        let response = pool.message(method.output());
+        assert!(
+            message_field_is(
+                pool,
+                response,
+                "receipt",
+                "hephaestus.common.v1.MutationReceipt"
+            ),
+            "{qualified} mutation is missing its read-your-writes receipt"
+        );
+    }
 }
 
 fn validate_server_stream_method(
@@ -361,7 +366,7 @@ fn every_method_declares_auth_kind_limits_and_retry_policy() {
         }
     }
 
-    assert_eq!(methods, 91, "review the policy when adding an RPC method");
+    assert_eq!(methods, 98, "review the policy when adding an RPC method");
 }
 
 #[test]
@@ -972,6 +977,7 @@ fn application_payloads_are_typed_and_responses_are_secret_safe() {
         "hephaestus.repository_browser.v1.StreamFileResponse.contents",
         "hephaestus.pat.v1.PersonalAccessTokenValue.value",
         "hephaestus.secret.v1.SecretValue.value",
+        "hephaestus.release.v1.CreateUiBrowserHandoffRequest.handoff_secret",
     ]);
 
     for message in pool
@@ -1019,6 +1025,7 @@ fn application_payloads_are_typed_and_responses_are_secret_safe() {
             "hephaestus.identity.v1.CreateBrowserSessionRequest.sid".to_owned(),
             "hephaestus.pat.v1.PersonalAccessTokenValue.value".to_owned(),
             "hephaestus.secret.v1.SecretValue.value".to_owned(),
+            "hephaestus.release.v1.CreateUiBrowserHandoffRequest.handoff_secret".to_owned(),
         ])
     );
     for service in pool
@@ -1125,7 +1132,7 @@ fn sensitive_fields_are_annotated_and_reachable_only_at_reviewed_boundaries() {
     let sensitive = sensitive_fields(&pool);
     assert_eq!(
         sensitive.len(),
-        3,
+        4,
         "review every sensitive descriptor field"
     );
     for qualified in sensitive {

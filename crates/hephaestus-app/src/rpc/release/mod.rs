@@ -5,6 +5,7 @@ mod list_repository_releases;
 mod model;
 mod publish_release;
 mod set_draft_version;
+pub(super) mod ui;
 mod watch_release;
 
 use super::{MediatorAuthenticator, MutationReceipts};
@@ -24,22 +25,37 @@ pub(super) struct ReleaseRpc {
     application: ReleaseApplication,
     event_application: EventApplication,
     cursor_codec: EventCursorCodec,
+    pub(super) ui_installations: Arc<release_postgres::ReleaseService>,
+    pub(super) ui_navigator: Arc<release_postgres::PgUiInstallationNavigator>,
+    pub(super) ui_browser: Arc<release_postgres::PgUiBrowserSessionStore>,
+    ui_cursor_codec: ui::UiInstallationCursorCodec,
     authenticator: MediatorAuthenticator,
     receipts: MutationReceipts,
 }
 
 impl ReleaseRpc {
+    // Composition wires the existing release/event dependencies and the three
+    // UI ports; keeping them explicit preserves their ownership boundaries.
+    #[allow(clippy::too_many_arguments)]
     const fn new(
         pool: PgPool,
         authenticator: MediatorAuthenticator,
         receipts: MutationReceipts,
         event_application: EventApplication,
         cursor_codec: EventCursorCodec,
+        ui_installations: Arc<release_postgres::ReleaseService>,
+        ui_navigator: Arc<release_postgres::PgUiInstallationNavigator>,
+        ui_browser: Arc<release_postgres::PgUiBrowserSessionStore>,
+        cursor_key: [u8; 32],
     ) -> Self {
         Self {
             application: ReleaseApplication::new(pool),
             event_application,
             cursor_codec,
+            ui_installations,
+            ui_navigator,
+            ui_browser,
+            ui_cursor_codec: ui::UiInstallationCursorCodec::new(cursor_key),
             authenticator,
             receipts,
         }
@@ -47,6 +63,9 @@ impl ReleaseRpc {
 }
 
 /// Registers the generated release service.
+// The registration boundary receives each independently owned adapter so the
+// composition root remains explicit and testable.
+#[allow(clippy::too_many_arguments)]
 pub(super) fn register(
     router: Router,
     pool: PgPool,
@@ -54,6 +73,9 @@ pub(super) fn register(
     receipts: MutationReceipts,
     event_wakeups: std::sync::Arc<dyn EventWakeupSource>,
     cursor_key: [u8; 32],
+    ui_installations: Arc<release_postgres::ReleaseService>,
+    ui_navigator: Arc<release_postgres::PgUiInstallationNavigator>,
+    ui_browser: Arc<release_postgres::PgUiBrowserSessionStore>,
 ) -> Router {
     Arc::new(ReleaseRpc::new(
         pool.clone(),
@@ -61,12 +83,102 @@ pub(super) fn register(
         receipts,
         EventApplication::new(pool, event_wakeups),
         EventCursorCodec::new(cursor_key),
+        ui_installations,
+        ui_navigator,
+        ui_browser,
+        cursor_key,
     ))
     .register(router)
 }
 
 #[allow(refining_impl_trait)]
 impl ReleaseService for ReleaseRpc {
+    async fn activate_ui(
+        &self,
+        ctx: connectrpc::RequestContext,
+        request: connectrpc::ServiceRequest<
+            '_,
+            rpc_proto::messages::hephaestus::release::v1::ActivateUiRequest,
+        >,
+    ) -> connectrpc::ServiceResult<rpc_proto::messages::hephaestus::release::v1::ActivateUiResponse>
+    {
+        ui::activate(self, ctx, request).await
+    }
+
+    async fn rollback_ui(
+        &self,
+        ctx: connectrpc::RequestContext,
+        request: connectrpc::ServiceRequest<
+            '_,
+            rpc_proto::messages::hephaestus::release::v1::RollbackUiRequest,
+        >,
+    ) -> connectrpc::ServiceResult<rpc_proto::messages::hephaestus::release::v1::RollbackUiResponse>
+    {
+        ui::rollback(self, ctx, request).await
+    }
+
+    async fn disable_ui(
+        &self,
+        ctx: connectrpc::RequestContext,
+        request: connectrpc::ServiceRequest<
+            '_,
+            rpc_proto::messages::hephaestus::release::v1::DisableUiRequest,
+        >,
+    ) -> connectrpc::ServiceResult<rpc_proto::messages::hephaestus::release::v1::DisableUiResponse>
+    {
+        ui::disable(self, ctx, request).await
+    }
+
+    async fn remove_ui(
+        &self,
+        ctx: connectrpc::RequestContext,
+        request: connectrpc::ServiceRequest<
+            '_,
+            rpc_proto::messages::hephaestus::release::v1::RemoveUiRequest,
+        >,
+    ) -> connectrpc::ServiceResult<rpc_proto::messages::hephaestus::release::v1::RemoveUiResponse>
+    {
+        ui::remove(self, ctx, request).await
+    }
+
+    async fn install_ui(
+        &self,
+        ctx: connectrpc::RequestContext,
+        request: connectrpc::ServiceRequest<
+            '_,
+            rpc_proto::messages::hephaestus::release::v1::InstallUiRequest,
+        >,
+    ) -> connectrpc::ServiceResult<rpc_proto::messages::hephaestus::release::v1::InstallUiResponse>
+    {
+        ui::install(self, ctx, request).await
+    }
+
+    async fn list_ui_installations(
+        &self,
+        ctx: connectrpc::RequestContext,
+        request: connectrpc::ServiceRequest<
+            '_,
+            rpc_proto::messages::hephaestus::release::v1::ListUiInstallationsRequest,
+        >,
+    ) -> connectrpc::ServiceResult<
+        rpc_proto::messages::hephaestus::release::v1::ListUiInstallationsResponse,
+    > {
+        ui::list(self, ctx, request).await
+    }
+
+    async fn create_ui_browser_handoff(
+        &self,
+        ctx: connectrpc::RequestContext,
+        request: connectrpc::ServiceRequest<
+            '_,
+            rpc_proto::messages::hephaestus::release::v1::CreateUiBrowserHandoffRequest,
+        >,
+    ) -> connectrpc::ServiceResult<
+        rpc_proto::messages::hephaestus::release::v1::CreateUiBrowserHandoffResponse,
+    > {
+        ui::handoff(self, ctx, request).await
+    }
+
     async fn list_repository_releases(
         &self,
         ctx: connectrpc::RequestContext,

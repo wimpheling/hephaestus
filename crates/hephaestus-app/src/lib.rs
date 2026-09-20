@@ -1704,12 +1704,14 @@ impl HephaestusApp {
             rpc::ApplicationDependencies::new(
                 self.pool.clone(),
                 self.application_pool.clone(),
+                self.service_log_pool.clone(),
                 Arc::clone(&self.forge),
                 Arc::new(event_postgres::PostgresMutationReceiptReader::new(
                     self.pool.clone(),
                 )),
                 Arc::clone(&self.identity_store) as Arc<dyn IdempotentIdentityResolver>,
                 Arc::clone(&browser_sessions),
+                Arc::clone(&self.release_service),
             ),
             Arc::clone(&self.storage),
             self.artifact_store.clone(),

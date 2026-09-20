@@ -72,6 +72,35 @@ defmodule Hephaestus.Release.V1.ReleaseUiCachePolicy do
   field(:RELEASE_UI_CACHE_POLICY_NO_STORE, 1)
 end
 
+defmodule Hephaestus.Release.V1.UiInstallationLifecycle do
+  @moduledoc false
+
+  use Protobuf,
+    enum: true,
+    full_name: "hephaestus.release.v1.UiInstallationLifecycle",
+    protoc_gen_elixir_version: "0.17.0",
+    syntax: :proto3
+
+  field(:UI_INSTALLATION_LIFECYCLE_UNSPECIFIED, 0)
+  field(:UI_INSTALLATION_LIFECYCLE_ENABLED, 1)
+  field(:UI_INSTALLATION_LIFECYCLE_DISABLED, 2)
+  field(:UI_INSTALLATION_LIFECYCLE_REMOVED, 3)
+end
+
+defmodule Hephaestus.Release.V1.UiInstallationContentKind do
+  @moduledoc false
+
+  use Protobuf,
+    enum: true,
+    full_name: "hephaestus.release.v1.UiInstallationContentKind",
+    protoc_gen_elixir_version: "0.17.0",
+    syntax: :proto3
+
+  field(:UI_INSTALLATION_CONTENT_KIND_UNSPECIFIED, 0)
+  field(:UI_INSTALLATION_CONTENT_KIND_STATIC, 1)
+  field(:UI_INSTALLATION_CONTENT_KIND_MANAGED_SERVICE, 2)
+end
+
 defmodule Hephaestus.Release.V1.ReleaseSummary do
   @moduledoc false
 
@@ -250,6 +279,278 @@ defmodule Hephaestus.Release.V1.ReleaseUiApiBinding do
   field(:method, 3, type: :string)
   field(:route, 4, type: :string)
   field(:release_agent_id, 5, type: Hephaestus.Common.V1.OpaqueId, json_name: "releaseAgentId")
+end
+
+defmodule Hephaestus.Release.V1.UiInstallationTarget do
+  @moduledoc false
+
+  use Protobuf,
+    full_name: "hephaestus.release.v1.UiInstallationTarget",
+    protoc_gen_elixir_version: "0.17.0",
+    syntax: :proto3
+
+  oneof(:target, 0)
+
+  field(:global, 1, type: Hephaestus.Release.V1.GlobalUiInstallationTarget, oneof: 0)
+  field(:project_id, 2, type: Hephaestus.Common.V1.OpaqueId, json_name: "projectId", oneof: 0)
+
+  field(:repository_id, 3,
+    type: Hephaestus.Common.V1.OpaqueId,
+    json_name: "repositoryId",
+    oneof: 0
+  )
+end
+
+defmodule Hephaestus.Release.V1.GlobalUiInstallationTarget do
+  @moduledoc false
+
+  use Protobuf,
+    full_name: "hephaestus.release.v1.GlobalUiInstallationTarget",
+    protoc_gen_elixir_version: "0.17.0",
+    syntax: :proto3
+end
+
+defmodule Hephaestus.Release.V1.InstallUiRequest do
+  @moduledoc false
+
+  use Protobuf,
+    full_name: "hephaestus.release.v1.InstallUiRequest",
+    protoc_gen_elixir_version: "0.17.0",
+    syntax: :proto3
+
+  field(:context, 1, type: Hephaestus.Common.V1.RequestContext)
+  field(:organization_id, 2, type: Hephaestus.Common.V1.OpaqueId, json_name: "organizationId")
+  field(:target, 3, type: Hephaestus.Release.V1.UiInstallationTarget)
+  field(:release_id, 4, type: Hephaestus.Common.V1.OpaqueId, json_name: "releaseId")
+  field(:ui_key, 5, type: :string, json_name: "uiKey")
+end
+
+defmodule Hephaestus.Release.V1.InstallUiResponse do
+  @moduledoc false
+
+  use Protobuf,
+    full_name: "hephaestus.release.v1.InstallUiResponse",
+    protoc_gen_elixir_version: "0.17.0",
+    syntax: :proto3
+
+  field(:installation_id, 1, type: Hephaestus.Common.V1.OpaqueId, json_name: "installationId")
+  field(:generation_id, 2, type: Hephaestus.Common.V1.OpaqueId, json_name: "generationId")
+  field(:lifecycle, 3, type: Hephaestus.Release.V1.UiInstallationLifecycle, enum: true)
+  field(:receipt, 4, type: Hephaestus.Common.V1.MutationReceipt)
+end
+
+defmodule Hephaestus.Release.V1.ActivateUiRequest do
+  @moduledoc false
+
+  use Protobuf,
+    full_name: "hephaestus.release.v1.ActivateUiRequest",
+    protoc_gen_elixir_version: "0.17.0",
+    syntax: :proto3
+
+  field(:context, 1, type: Hephaestus.Common.V1.RequestContext)
+  field(:installation_id, 2, type: Hephaestus.Common.V1.OpaqueId, json_name: "installationId")
+
+  field(:expected_generation_id, 3,
+    type: Hephaestus.Common.V1.OpaqueId,
+    json_name: "expectedGenerationId"
+  )
+
+  field(:release_id, 4, type: Hephaestus.Common.V1.OpaqueId, json_name: "releaseId")
+  field(:ui_key, 5, type: :string, json_name: "uiKey")
+end
+
+defmodule Hephaestus.Release.V1.ActivateUiResponse do
+  @moduledoc false
+
+  use Protobuf,
+    full_name: "hephaestus.release.v1.ActivateUiResponse",
+    protoc_gen_elixir_version: "0.17.0",
+    syntax: :proto3
+
+  field(:installation_id, 1, type: Hephaestus.Common.V1.OpaqueId, json_name: "installationId")
+  field(:generation_id, 2, type: Hephaestus.Common.V1.OpaqueId, json_name: "generationId")
+  field(:lifecycle, 3, type: Hephaestus.Release.V1.UiInstallationLifecycle, enum: true)
+  field(:receipt, 4, type: Hephaestus.Common.V1.MutationReceipt)
+end
+
+defmodule Hephaestus.Release.V1.RollbackUiRequest do
+  @moduledoc false
+
+  use Protobuf,
+    full_name: "hephaestus.release.v1.RollbackUiRequest",
+    protoc_gen_elixir_version: "0.17.0",
+    syntax: :proto3
+
+  field(:context, 1, type: Hephaestus.Common.V1.RequestContext)
+  field(:installation_id, 2, type: Hephaestus.Common.V1.OpaqueId, json_name: "installationId")
+
+  field(:expected_generation_id, 3,
+    type: Hephaestus.Common.V1.OpaqueId,
+    json_name: "expectedGenerationId"
+  )
+
+  field(:release_id, 4, type: Hephaestus.Common.V1.OpaqueId, json_name: "releaseId")
+  field(:ui_key, 5, type: :string, json_name: "uiKey")
+end
+
+defmodule Hephaestus.Release.V1.RollbackUiResponse do
+  @moduledoc false
+
+  use Protobuf,
+    full_name: "hephaestus.release.v1.RollbackUiResponse",
+    protoc_gen_elixir_version: "0.17.0",
+    syntax: :proto3
+
+  field(:installation_id, 1, type: Hephaestus.Common.V1.OpaqueId, json_name: "installationId")
+  field(:generation_id, 2, type: Hephaestus.Common.V1.OpaqueId, json_name: "generationId")
+  field(:lifecycle, 3, type: Hephaestus.Release.V1.UiInstallationLifecycle, enum: true)
+  field(:receipt, 4, type: Hephaestus.Common.V1.MutationReceipt)
+end
+
+defmodule Hephaestus.Release.V1.DisableUiRequest do
+  @moduledoc false
+
+  use Protobuf,
+    full_name: "hephaestus.release.v1.DisableUiRequest",
+    protoc_gen_elixir_version: "0.17.0",
+    syntax: :proto3
+
+  field(:context, 1, type: Hephaestus.Common.V1.RequestContext)
+  field(:installation_id, 2, type: Hephaestus.Common.V1.OpaqueId, json_name: "installationId")
+
+  field(:expected_generation_id, 3,
+    type: Hephaestus.Common.V1.OpaqueId,
+    json_name: "expectedGenerationId"
+  )
+end
+
+defmodule Hephaestus.Release.V1.DisableUiResponse do
+  @moduledoc false
+
+  use Protobuf,
+    full_name: "hephaestus.release.v1.DisableUiResponse",
+    protoc_gen_elixir_version: "0.17.0",
+    syntax: :proto3
+
+  field(:installation_id, 1, type: Hephaestus.Common.V1.OpaqueId, json_name: "installationId")
+  field(:generation_id, 2, type: Hephaestus.Common.V1.OpaqueId, json_name: "generationId")
+  field(:lifecycle, 3, type: Hephaestus.Release.V1.UiInstallationLifecycle, enum: true)
+  field(:receipt, 4, type: Hephaestus.Common.V1.MutationReceipt)
+end
+
+defmodule Hephaestus.Release.V1.RemoveUiRequest do
+  @moduledoc false
+
+  use Protobuf,
+    full_name: "hephaestus.release.v1.RemoveUiRequest",
+    protoc_gen_elixir_version: "0.17.0",
+    syntax: :proto3
+
+  field(:context, 1, type: Hephaestus.Common.V1.RequestContext)
+  field(:installation_id, 2, type: Hephaestus.Common.V1.OpaqueId, json_name: "installationId")
+
+  field(:expected_generation_id, 3,
+    type: Hephaestus.Common.V1.OpaqueId,
+    json_name: "expectedGenerationId"
+  )
+end
+
+defmodule Hephaestus.Release.V1.RemoveUiResponse do
+  @moduledoc false
+
+  use Protobuf,
+    full_name: "hephaestus.release.v1.RemoveUiResponse",
+    protoc_gen_elixir_version: "0.17.0",
+    syntax: :proto3
+
+  field(:installation_id, 1, type: Hephaestus.Common.V1.OpaqueId, json_name: "installationId")
+  field(:generation_id, 2, type: Hephaestus.Common.V1.OpaqueId, json_name: "generationId")
+  field(:lifecycle, 3, type: Hephaestus.Release.V1.UiInstallationLifecycle, enum: true)
+  field(:receipt, 4, type: Hephaestus.Common.V1.MutationReceipt)
+end
+
+defmodule Hephaestus.Release.V1.ListUiInstallationsRequest do
+  @moduledoc false
+
+  use Protobuf,
+    full_name: "hephaestus.release.v1.ListUiInstallationsRequest",
+    protoc_gen_elixir_version: "0.17.0",
+    syntax: :proto3
+
+  field(:organization_id, 1, type: Hephaestus.Common.V1.OpaqueId, json_name: "organizationId")
+  field(:target, 2, type: Hephaestus.Release.V1.UiInstallationTarget)
+  field(:page, 3, type: Hephaestus.Common.V1.PageRequest)
+end
+
+defmodule Hephaestus.Release.V1.ListUiInstallationsResponse do
+  @moduledoc false
+
+  use Protobuf,
+    full_name: "hephaestus.release.v1.ListUiInstallationsResponse",
+    protoc_gen_elixir_version: "0.17.0",
+    syntax: :proto3
+
+  field(:installations, 1, repeated: true, type: Hephaestus.Release.V1.UiInstallationNavigation)
+  field(:page, 2, type: Hephaestus.Common.V1.PageResponse)
+end
+
+defmodule Hephaestus.Release.V1.UiInstallationNavigation do
+  @moduledoc false
+
+  use Protobuf,
+    full_name: "hephaestus.release.v1.UiInstallationNavigation",
+    protoc_gen_elixir_version: "0.17.0",
+    syntax: :proto3
+
+  field(:installation_id, 1, type: Hephaestus.Common.V1.OpaqueId, json_name: "installationId")
+  field(:generation_id, 2, type: Hephaestus.Common.V1.OpaqueId, json_name: "generationId")
+  field(:organization_id, 3, type: Hephaestus.Common.V1.OpaqueId, json_name: "organizationId")
+  field(:target, 4, type: Hephaestus.Release.V1.UiInstallationTarget)
+  field(:lifecycle, 5, type: Hephaestus.Release.V1.UiInstallationLifecycle, enum: true)
+  field(:release_id, 6, type: Hephaestus.Common.V1.OpaqueId, json_name: "releaseId")
+  field(:ui_key, 7, type: :string, json_name: "uiKey")
+  field(:label, 8, type: :string)
+  field(:icon, 9, type: Hephaestus.Release.V1.ReleaseUiIcon, enum: true)
+  field(:presentation, 10, type: Hephaestus.Release.V1.ReleaseUiPresentation, enum: true)
+  field(:route_base, 11, type: :string, json_name: "routeBase")
+
+  field(:content_kind, 12,
+    type: Hephaestus.Release.V1.UiInstallationContentKind,
+    json_name: "contentKind",
+    enum: true
+  )
+
+  field(:launchable, 13, type: :bool)
+end
+
+defmodule Hephaestus.Release.V1.CreateUiBrowserHandoffRequest do
+  @moduledoc false
+
+  use Protobuf,
+    full_name: "hephaestus.release.v1.CreateUiBrowserHandoffRequest",
+    protoc_gen_elixir_version: "0.17.0",
+    syntax: :proto3
+
+  field(:context, 1, type: Hephaestus.Common.V1.RequestContext)
+  field(:installation_id, 2, type: Hephaestus.Common.V1.OpaqueId, json_name: "installationId")
+  field(:generation_id, 3, type: Hephaestus.Common.V1.OpaqueId, json_name: "generationId")
+  field(:route, 4, type: :string)
+  field(:handoff_secret, 5, type: :bytes, json_name: "handoffSecret", deprecated: false)
+end
+
+defmodule Hephaestus.Release.V1.CreateUiBrowserHandoffResponse do
+  @moduledoc false
+
+  use Protobuf,
+    full_name: "hephaestus.release.v1.CreateUiBrowserHandoffResponse",
+    protoc_gen_elixir_version: "0.17.0",
+    syntax: :proto3
+
+  field(:handoff_id, 1, type: Hephaestus.Common.V1.OpaqueId, json_name: "handoffId")
+  field(:installation_id, 2, type: Hephaestus.Common.V1.OpaqueId, json_name: "installationId")
+  field(:generation_id, 3, type: Hephaestus.Common.V1.OpaqueId, json_name: "generationId")
+  field(:route, 4, type: :string)
+  field(:expires_at, 5, type: Google.Protobuf.Timestamp, json_name: "expiresAt")
 end
 
 defmodule Hephaestus.Release.V1.ListRepositoryReleasesRequest do
@@ -448,6 +749,36 @@ defmodule Hephaestus.Release.V1.ReleaseService.Service do
     :WatchRelease,
     Hephaestus.Release.V1.WatchReleaseRequest,
     stream(Hephaestus.Release.V1.WatchReleaseResponse)
+  )
+
+  rpc(:InstallUi, Hephaestus.Release.V1.InstallUiRequest, Hephaestus.Release.V1.InstallUiResponse)
+
+  rpc(
+    :ActivateUi,
+    Hephaestus.Release.V1.ActivateUiRequest,
+    Hephaestus.Release.V1.ActivateUiResponse
+  )
+
+  rpc(
+    :RollbackUi,
+    Hephaestus.Release.V1.RollbackUiRequest,
+    Hephaestus.Release.V1.RollbackUiResponse
+  )
+
+  rpc(:DisableUi, Hephaestus.Release.V1.DisableUiRequest, Hephaestus.Release.V1.DisableUiResponse)
+
+  rpc(:RemoveUi, Hephaestus.Release.V1.RemoveUiRequest, Hephaestus.Release.V1.RemoveUiResponse)
+
+  rpc(
+    :ListUiInstallations,
+    Hephaestus.Release.V1.ListUiInstallationsRequest,
+    Hephaestus.Release.V1.ListUiInstallationsResponse
+  )
+
+  rpc(
+    :CreateUiBrowserHandoff,
+    Hephaestus.Release.V1.CreateUiBrowserHandoffRequest,
+    Hephaestus.Release.V1.CreateUiBrowserHandoffResponse
   )
 end
 

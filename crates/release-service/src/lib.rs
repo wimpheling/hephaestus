@@ -27,7 +27,7 @@ pub use ui_browser::{
 pub use ui_installation::{
     ActivateUiInstallation, DisableUiInstallation, InstallStaticUi, InstallStaticUiResult,
     InstallUi, InstallUiResult, RemoveUiInstallation, RollbackUiInstallation, UiInstallationError,
-    UiInstallationGenerationResult, UiInstallationLifecycleResult,
+    UiInstallationGenerationResult, UiInstallationLifecycleResult, UiInstallationReceiptScope,
 };
 pub use ui_installation_navigation::{
     DEFAULT_UI_INSTALLATION_PAGE_SIZE, ListUiInstallations, MAX_UI_INSTALLATION_PAGE_SIZE,

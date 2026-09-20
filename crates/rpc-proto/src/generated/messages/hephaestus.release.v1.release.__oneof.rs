@@ -55,6 +55,59 @@ pub mod release_ui_descriptor {
         }
     }
 }
+pub mod ui_installation_target {
+    #[allow(unused_imports)]
+    use super::*;
+    #[derive(Clone, PartialEq, Debug)]
+    pub enum Target {
+        Global(
+            ::buffa::alloc::boxed::Box<super::super::super::GlobalUiInstallationTarget>,
+        ),
+        ProjectId(
+            ::buffa::alloc::boxed::Box<
+                super::super::super::super::super::common::v1::OpaqueId,
+            >,
+        ),
+        RepositoryId(
+            ::buffa::alloc::boxed::Box<
+                super::super::super::super::super::common::v1::OpaqueId,
+            >,
+        ),
+    }
+    impl ::buffa::Oneof for Target {}
+    impl From<super::super::super::GlobalUiInstallationTarget> for Target {
+        fn from(v: super::super::super::GlobalUiInstallationTarget) -> Self {
+            Self::Global(::buffa::alloc::boxed::Box::new(v))
+        }
+    }
+    impl From<super::super::super::GlobalUiInstallationTarget>
+    for ::core::option::Option<Target> {
+        fn from(v: super::super::super::GlobalUiInstallationTarget) -> Self {
+            Self::Some(Target::from(v))
+        }
+    }
+    impl serde::Serialize for Target {
+        fn serialize<S: serde::Serializer>(
+            &self,
+            s: S,
+        ) -> ::core::result::Result<S::Ok, S::Error> {
+            use serde::ser::SerializeMap;
+            let mut map = s.serialize_map(Some(1))?;
+            match self {
+                Self::Global(v) => {
+                    map.serialize_entry("global", v)?;
+                }
+                Self::ProjectId(v) => {
+                    map.serialize_entry("projectId", v)?;
+                }
+                Self::RepositoryId(v) => {
+                    map.serialize_entry("repositoryId", v)?;
+                }
+            }
+            map.end()
+        }
+    }
+}
 pub mod watch_release_response {
     #[allow(unused_imports)]
     use super::*;

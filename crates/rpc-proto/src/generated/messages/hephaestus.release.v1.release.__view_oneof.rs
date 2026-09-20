@@ -20,6 +20,34 @@ pub mod release_ui_descriptor {
         ),
     }
 }
+pub mod ui_installation_target {
+    #[allow(unused_imports)]
+    use super::*;
+    #[derive(Clone, Debug)]
+    pub enum Target<'a> {
+        Global(
+            ::buffa::alloc::boxed::Box<
+                super::super::super::super::__buffa::view::GlobalUiInstallationTargetView<
+                    'a,
+                >,
+            >,
+        ),
+        ProjectId(
+            ::buffa::alloc::boxed::Box<
+                super::super::super::super::super::super::common::v1::__buffa::view::OpaqueIdView<
+                    'a,
+                >,
+            >,
+        ),
+        RepositoryId(
+            ::buffa::alloc::boxed::Box<
+                super::super::super::super::super::super::common::v1::__buffa::view::OpaqueIdView<
+                    'a,
+                >,
+            >,
+        ),
+    }
+}
 pub mod watch_release_response {
     #[allow(unused_imports)]
     use super::*;

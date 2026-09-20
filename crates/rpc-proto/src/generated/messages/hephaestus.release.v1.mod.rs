@@ -40,6 +40,23 @@ pub mod __buffa {
         reg.register_json_any(super::__RELEASE_UI_STATIC_FILE_JSON_ANY);
         reg.register_json_any(super::__RELEASE_UI_MANAGED_SERVICE_JSON_ANY);
         reg.register_json_any(super::__RELEASE_UI_API_BINDING_JSON_ANY);
+        reg.register_json_any(super::__UI_INSTALLATION_TARGET_JSON_ANY);
+        reg.register_json_any(super::__GLOBAL_UI_INSTALLATION_TARGET_JSON_ANY);
+        reg.register_json_any(super::__INSTALL_UI_REQUEST_JSON_ANY);
+        reg.register_json_any(super::__INSTALL_UI_RESPONSE_JSON_ANY);
+        reg.register_json_any(super::__ACTIVATE_UI_REQUEST_JSON_ANY);
+        reg.register_json_any(super::__ACTIVATE_UI_RESPONSE_JSON_ANY);
+        reg.register_json_any(super::__ROLLBACK_UI_REQUEST_JSON_ANY);
+        reg.register_json_any(super::__ROLLBACK_UI_RESPONSE_JSON_ANY);
+        reg.register_json_any(super::__DISABLE_UI_REQUEST_JSON_ANY);
+        reg.register_json_any(super::__DISABLE_UI_RESPONSE_JSON_ANY);
+        reg.register_json_any(super::__REMOVE_UI_REQUEST_JSON_ANY);
+        reg.register_json_any(super::__REMOVE_UI_RESPONSE_JSON_ANY);
+        reg.register_json_any(super::__LIST_UI_INSTALLATIONS_REQUEST_JSON_ANY);
+        reg.register_json_any(super::__LIST_UI_INSTALLATIONS_RESPONSE_JSON_ANY);
+        reg.register_json_any(super::__UI_INSTALLATION_NAVIGATION_JSON_ANY);
+        reg.register_json_any(super::__CREATE_UI_BROWSER_HANDOFF_REQUEST_JSON_ANY);
+        reg.register_json_any(super::__CREATE_UI_BROWSER_HANDOFF_RESPONSE_JSON_ANY);
         reg.register_json_any(super::__LIST_REPOSITORY_RELEASES_REQUEST_JSON_ANY);
         reg.register_json_any(super::__LIST_REPOSITORY_RELEASES_RESPONSE_JSON_ANY);
         reg.register_json_any(super::__GET_RELEASE_REQUEST_JSON_ANY);
@@ -85,6 +102,74 @@ pub use self::__buffa::view::ReleaseUiManagedServiceOwnedView;
 pub use self::__buffa::view::ReleaseUiApiBindingView;
 #[doc(inline)]
 pub use self::__buffa::view::ReleaseUiApiBindingOwnedView;
+#[doc(inline)]
+pub use self::__buffa::view::UiInstallationTargetView;
+#[doc(inline)]
+pub use self::__buffa::view::UiInstallationTargetOwnedView;
+#[doc(inline)]
+pub use self::__buffa::view::GlobalUiInstallationTargetView;
+#[doc(inline)]
+pub use self::__buffa::view::GlobalUiInstallationTargetOwnedView;
+#[doc(inline)]
+pub use self::__buffa::view::InstallUiRequestView;
+#[doc(inline)]
+pub use self::__buffa::view::InstallUiRequestOwnedView;
+#[doc(inline)]
+pub use self::__buffa::view::InstallUiResponseView;
+#[doc(inline)]
+pub use self::__buffa::view::InstallUiResponseOwnedView;
+#[doc(inline)]
+pub use self::__buffa::view::ActivateUiRequestView;
+#[doc(inline)]
+pub use self::__buffa::view::ActivateUiRequestOwnedView;
+#[doc(inline)]
+pub use self::__buffa::view::ActivateUiResponseView;
+#[doc(inline)]
+pub use self::__buffa::view::ActivateUiResponseOwnedView;
+#[doc(inline)]
+pub use self::__buffa::view::RollbackUiRequestView;
+#[doc(inline)]
+pub use self::__buffa::view::RollbackUiRequestOwnedView;
+#[doc(inline)]
+pub use self::__buffa::view::RollbackUiResponseView;
+#[doc(inline)]
+pub use self::__buffa::view::RollbackUiResponseOwnedView;
+#[doc(inline)]
+pub use self::__buffa::view::DisableUiRequestView;
+#[doc(inline)]
+pub use self::__buffa::view::DisableUiRequestOwnedView;
+#[doc(inline)]
+pub use self::__buffa::view::DisableUiResponseView;
+#[doc(inline)]
+pub use self::__buffa::view::DisableUiResponseOwnedView;
+#[doc(inline)]
+pub use self::__buffa::view::RemoveUiRequestView;
+#[doc(inline)]
+pub use self::__buffa::view::RemoveUiRequestOwnedView;
+#[doc(inline)]
+pub use self::__buffa::view::RemoveUiResponseView;
+#[doc(inline)]
+pub use self::__buffa::view::RemoveUiResponseOwnedView;
+#[doc(inline)]
+pub use self::__buffa::view::ListUiInstallationsRequestView;
+#[doc(inline)]
+pub use self::__buffa::view::ListUiInstallationsRequestOwnedView;
+#[doc(inline)]
+pub use self::__buffa::view::ListUiInstallationsResponseView;
+#[doc(inline)]
+pub use self::__buffa::view::ListUiInstallationsResponseOwnedView;
+#[doc(inline)]
+pub use self::__buffa::view::UiInstallationNavigationView;
+#[doc(inline)]
+pub use self::__buffa::view::UiInstallationNavigationOwnedView;
+#[doc(inline)]
+pub use self::__buffa::view::CreateUiBrowserHandoffRequestView;
+#[doc(inline)]
+pub use self::__buffa::view::CreateUiBrowserHandoffRequestOwnedView;
+#[doc(inline)]
+pub use self::__buffa::view::CreateUiBrowserHandoffResponseView;
+#[doc(inline)]
+pub use self::__buffa::view::CreateUiBrowserHandoffResponseOwnedView;
 #[doc(inline)]
 pub use self::__buffa::view::ListRepositoryReleasesRequestView;
 #[doc(inline)]

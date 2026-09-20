@@ -6,11 +6,12 @@ use identity_domain::{AuthenticatedIdentity, actor_idempotency_id};
 use release_domain::{
     ReleaseCommandKey, ReleaseId, UiInstallationCommandIdentity, UiInstallationGenerationId,
     UiInstallationId, UiInstallationInputDigest, UiInstallationOperation, UiInstallationState,
+    UiInstallationTarget,
 };
 use release_service::{
     ActivateUiInstallation, DisableUiInstallation, InstallStaticUi, InstallStaticUiResult,
     InstallUi, InstallUiResult, RemoveUiInstallation, RollbackUiInstallation, UiInstallationError,
-    UiInstallationGenerationResult, UiInstallationLifecycleResult,
+    UiInstallationGenerationResult, UiInstallationLifecycleResult, UiInstallationReceiptScope,
 };
 use sqlx::{FromRow, Postgres, Transaction};
 use uuid::Uuid;
@@ -369,6 +370,7 @@ impl ReleaseService {
                 input_hash,
                 identity.user_id.as_uuid(),
                 installation_id,
+                target,
             );
         }
         if locked.lifecycle == "removed" {
@@ -504,6 +506,7 @@ impl ReleaseService {
             .map_err(|_| UiInstallationError::Unavailable)?;
         Ok(UiInstallationGenerationResult {
             installation_id,
+            receipt_scope: receipt_scope(target),
             generation_id,
             state: UiInstallationState::Enabled,
             idempotency_id: idempotency_id.as_uuid(),
@@ -578,6 +581,7 @@ impl ReleaseService {
                 identity.user_id.as_uuid(),
                 installation_id,
                 next_state,
+                target,
             );
         }
         // Disabled -> disabled is intentionally valid: a fresh caller key is
@@ -652,6 +656,7 @@ impl ReleaseService {
             .map_err(|_| UiInstallationError::Unavailable)?;
         Ok(UiInstallationLifecycleResult {
             installation_id,
+            receipt_scope: receipt_scope(target),
             generation_id: UiInstallationGenerationId::from_uuid(locked.current_generation_id),
             state: next_state,
             idempotency_id: idempotency_id.as_uuid(),
@@ -1025,6 +1030,23 @@ fn lifecycle_state(value: &str) -> Option<UiInstallationState> {
     }
 }
 
+const fn receipt_scope(target: UiInstallationTarget) -> UiInstallationReceiptScope {
+    let aggregate_type = match target {
+        UiInstallationTarget::Organization(_) => "organization",
+        UiInstallationTarget::Project(_) => "project",
+        UiInstallationTarget::Repository(_) => "repository",
+    };
+    UiInstallationReceiptScope {
+        aggregate_type,
+        primary_scope_kind: match target {
+            UiInstallationTarget::Repository(_) => "project",
+            UiInstallationTarget::Organization(_) | UiInstallationTarget::Project(_) => {
+                aggregate_type
+            }
+        },
+    }
+}
+
 const fn lifecycle_name(value: UiInstallationState) -> &'static str {
     match value {
         UiInstallationState::Enabled => "enabled",
@@ -1040,6 +1062,7 @@ fn replay_lifecycle_or_conflict(
     actor_id: Uuid,
     installation_id: UiInstallationId,
     expected_state: UiInstallationState,
+    target: UiInstallationTarget,
 ) -> Result<UiInstallationLifecycleResult, AttemptError> {
     if existing.command_key.as_slice() != command_key.as_bytes()
         || existing.input_hash.as_slice() != input_hash.as_bytes()
@@ -1053,6 +1076,7 @@ fn replay_lifecycle_or_conflict(
     }
     Ok(UiInstallationLifecycleResult {
         installation_id,
+        receipt_scope: receipt_scope(target),
         generation_id: UiInstallationGenerationId::from_uuid(existing.result_generation_id),
         state: expected_state,
         idempotency_id: actor_idempotency_id(actor_id.as_bytes(), command_key.as_bytes()).as_uuid(),
@@ -1202,6 +1226,7 @@ fn replay_generation_or_conflict(
     input_hash: UiInstallationInputDigest,
     actor_id: Uuid,
     installation_id: UiInstallationId,
+    target: UiInstallationTarget,
 ) -> Result<UiInstallationGenerationResult, AttemptError> {
     if existing.command_key.as_slice() != command_key.as_bytes()
         || existing.input_hash.as_slice() != input_hash.as_bytes()
@@ -1215,6 +1240,7 @@ fn replay_generation_or_conflict(
     }
     Ok(UiInstallationGenerationResult {
         installation_id,
+        receipt_scope: receipt_scope(target),
         generation_id: UiInstallationGenerationId::from_uuid(existing.result_generation_id),
         state: UiInstallationState::Enabled,
         idempotency_id: actor_idempotency_id(actor_id.as_bytes(), command_key.as_bytes()).as_uuid(),

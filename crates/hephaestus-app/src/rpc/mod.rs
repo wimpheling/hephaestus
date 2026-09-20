@@ -140,28 +140,36 @@ pub fn mediator_signing_key(internal_token: &[u8]) -> [u8; 32] {
 pub(crate) struct ApplicationDependencies {
     pool: PgPool,
     application_pool: PgPool,
+    ui_browser_worker_pool: PgPool,
     forge: Arc<PgForgeRepository>,
     mutation_receipt_reader: Arc<dyn MutationReceiptReader>,
     identity_resolver: Arc<dyn IdempotentIdentityResolver>,
     browser_sessions: Arc<dyn BrowserSessionStore>,
+    release_service: Arc<release_postgres::ReleaseService>,
 }
 
 impl ApplicationDependencies {
+    // Keep the composition root's explicit pool and adapter boundaries visible.
+    #[allow(clippy::too_many_arguments)]
     pub(crate) fn new(
         pool: PgPool,
         application_pool: PgPool,
+        ui_browser_worker_pool: PgPool,
         forge: Arc<PgForgeRepository>,
         mutation_receipt_reader: Arc<dyn MutationReceiptReader>,
         identity_resolver: Arc<dyn IdempotentIdentityResolver>,
         browser_sessions: Arc<dyn BrowserSessionStore>,
+        release_service: Arc<release_postgres::ReleaseService>,
     ) -> Self {
         Self {
             pool,
             application_pool,
+            ui_browser_worker_pool,
             forge,
             mutation_receipt_reader,
             identity_resolver,
             browser_sessions,
+            release_service,
         }
     }
 }
@@ -181,6 +189,14 @@ pub(crate) fn service(
     let cursor_key: [u8; 32] = mediator_signing_key.try_into().map_err(|_| {
         RpcInitializationError::Descriptor(String::from("invalid event cursor key"))
     })?;
+    let ui_installations = Arc::clone(&applications.release_service);
+    let ui_navigator = Arc::new(release_postgres::PgUiInstallationNavigator::new(
+        applications.application_pool.clone(),
+    ));
+    let ui_browser = Arc::new(release_postgres::PgUiBrowserSessionStore::new(
+        applications.ui_browser_worker_pool.clone(),
+        applications.application_pool.clone(),
+    ));
     let mutation_receipts = MutationReceipts::new(applications.mutation_receipt_reader, cursor_key);
     let pool = &applications.pool;
     let identity = Arc::new(identity::IdentityRpc::new(
@@ -270,6 +286,9 @@ pub(crate) fn service(
         mutation_receipts.clone(),
         Arc::clone(&event_wakeups),
         cursor_key,
+        ui_installations,
+        ui_navigator,
+        ui_browser,
     );
     let router = artifact::register(
         router,

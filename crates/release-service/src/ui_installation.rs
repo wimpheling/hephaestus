@@ -73,12 +73,23 @@ pub struct RollbackUiInstallation {
 pub struct UiInstallationGenerationResult {
     /// Stable installation identity.
     pub installation_id: UiInstallationId,
+    /// Owner event scope needed to retrieve the committed mutation receipt.
+    pub receipt_scope: UiInstallationReceiptScope,
     /// Newly created immutable generation identity.
     pub generation_id: UiInstallationGenerationId,
     /// Committed lifecycle state.
     pub state: UiInstallationState,
     /// Actor-bound occurrence/idempotency identity used by the event ledger.
     pub idempotency_id: Uuid,
+}
+
+/// Owner event scope used by the transport receipt reader.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct UiInstallationReceiptScope {
+    /// Event aggregate type (`organization`, `project`, or `repository`).
+    pub aggregate_type: &'static str,
+    /// Event primary scope kind used by the receipt reader.
+    pub primary_scope_kind: &'static str,
 }
 
 /// A compatibility command for one published static UI with no API bindings.
@@ -134,6 +145,8 @@ pub struct RemoveUiInstallation {
 pub struct UiInstallationLifecycleResult {
     /// Stable installation identity.
     pub installation_id: UiInstallationId,
+    /// Owner event scope needed to retrieve the committed mutation receipt.
+    pub receipt_scope: UiInstallationReceiptScope,
     /// The retained current generation; lifecycle changes do not create one.
     pub generation_id: UiInstallationGenerationId,
     /// Committed lifecycle state.

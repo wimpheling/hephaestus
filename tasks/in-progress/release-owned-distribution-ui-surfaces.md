@@ -10,8 +10,9 @@ CI execution, organization-owned static installations, disable/remove lifecycle,
 browser credential storage, handoff issuance/exchange, managed/API installation,
 and application-role request authentication have passed focused verification.
 Activation/rollback and explicit-organization navigation also pass focused
-verification. Current work validates RPC prerequisites and prepares transport,
-hosting, and Phoenix integration.
+verification. The UI RPC transport checkpoint now passes its expanded real
+matrix. Current work verifies gateway admission and prepares hosting and
+Phoenix integration.
 The handoff remains the record of the stopped session; new evidence is recorded
 below as each resumed slice passes review and verification.
 
@@ -35,6 +36,91 @@ navigation/authorization/isolation, real Caddy/VM/browser proofs, and the final
 integrated quality gate remain incomplete. The user approved organization-owned
 global installations and organization isolation. Historical checkpoints record the state
 at their time; later integration checkpoints supersede earlier pending notes.
+
+## UI request audit design (2026-09-20)
+
+Request-level UI audit will use a dedicated append-only stream, following the
+existing capability-audit model. It will not advance installation owner event
+revisions or trigger navigation refreshes for each asset request. These records
+are audit persistence, not product events; any product events continue to use
+committed outboxes.
+
+The provider-neutral port will accept closed surface, decision, outcome, and
+reason values with request correlation and optional safe actor, organization,
+installation, generation, child-session, and gateway identities. Anonymous
+denials remain anonymous; caller-supplied identities must not be represented as
+verified authority. Parent session IDs, credentials, digests, headers, paths,
+queries, and payloads are excluded structurally. Successful handoff writes and
+their audit record share a transaction. Denied attempts need an independent
+append so command rollback does not erase evidence. Existing gateway invocation
+accounting remains authoritative for accepted execution and completion.
+
+The worker-owned adapter, migration, denial/rollback behavior, redaction tests,
+and HTTP/gateway integration remain unimplemented. A successful audit lookup
+or logging statement alone is not acceptance evidence.
+
+## UI RPC generation and unit checkpoint (2026-09-20)
+
+The seven ReleaseService UI methods now have generated Rust/Elixir bindings and
+application adapters for installation, activation, rollback, disable, removal,
+navigation, and handoff issuance. Install passes the explicit organization into
+the locked application command; lifecycle mutations require generation CAS.
+Repository receipts use the repository aggregate and project primary scope.
+Handoff issuance obtains the canonical parent from middleware, accepts exactly
+32 sensitive request bytes, and rejects idempotency keys. Its receipt-policy
+exception is limited to this ephemeral operation.
+
+Generation succeeds. Fifteen descriptor-policy tests and one protocol interop
+test pass in `/home/a/heph-backend-rpc-proto-tests-20260920-v2.log`; ten release
+RPC tests pass in `/home/a/heph-backend-rpc-app-release-tests-20260920.log`.
+Cursor tests include a binary HMAC containing the delimiter byte; decoding uses
+a fixed-length signature boundary and constant-time verification. The app
+compiled before the subsequent serving modules were introduced. Proto Clippy,
+architecture, scoped formatting, and diff checks pass. Generated doctests were
+ignored and are not counted as executed tests.
+
+The first real production-router matrix also passes with disposable PostgreSQL
+and NATS in `/home/a/heph-ui-installation-rpc-real-v14-20260920.log`: exact
+install replay, listing, 32-byte handoff input and parent redaction, all five
+mutations, stale CAS, wrong audience, expiry, and revocation. The runner requires
+the real completion marker and selects the isolated test explicitly. UI browser
+writes now use the existing worker-role pool rather than the general
+control-plane pool. Disposable resources were cleaned after the run.
+
+The expanded real matrix passes in
+`/home/a/heph-ui-installation-rpc-real-v24-20260920.log` (one executed test):
+organization/repository installs and receipts, explicit wrong-tenant rejection,
+cross-actor/organization/target cursors, and tampered cursors supplement the
+earlier cases. The runner inherits its caller's Cargo target directory and
+cleans its disposable database. No live test handles remain.
+
+App all-target Clippy passes in
+`/home/a/heph-ui-rpc-clippy-app-final2-20260920.log`; gateway Clippy, architecture,
+workspace formatting, generated-code validation, and app rustdoc pass in the
+corresponding `/home/a/heph-ui-rpc-*-final*-20260920.log` files. Integrated
+serving verification remains in progress. These results do not establish a
+working installed browser flow. Main CI
+at the preceding committed prerequisite
+`ce8e12d` passes in run `35514511262`; its Cooking run is still pending.
+The isolated UI RPC runner still needs quality/CI integration; it must not run
+against the shared workspace-test database. Final quality must execute this
+proof as well as the already isolated browser-session lifecycle proof.
+
+## Phoenix UI client helper checkpoint (2026-09-20)
+
+The Phoenix client now lists installed UIs within an explicit organization and
+owner target, preserves scoped cursors, and projects generated oneof/enum values
+into safe navigation metadata. Handoff creation generates 32 cryptographic
+bytes, uses a fresh request ID with no idempotency key or retries, and exposes
+the bearer only to a successful transient launch callback. Default responses
+contain safe metadata only.
+
+The URL helper constructs the exact generation HTTPS bootstrap URL and checks
+namespace, UUID, route, theme, canonical port, and fragment constraints. Eleven
+focused client/helper tests pass, including all owner projections and failure
+without retry or callback. Scoped formatting passes. Checks ran through
+`localhost/hephaestus-elixir-review:latest` with Podman because native Elixir/Mix
+are absent. Navigation, embedding, and real browser verification remain open.
 
 ## Authenticated parent-session context checkpoint (2026-09-20)
 
@@ -307,6 +393,39 @@ The distinct child cookie is `__Host-hephaestus_ui`, with Secure, HttpOnly,
 Path=/, SameSite=Strict, and the fixed child expiry. Reserved `/_heph/` routes
 must not collide with release declarations. These are implementation contracts,
 not yet runtime or browser verification claims.
+
+The UI namespace must be a strict subdomain of the configured platform host.
+Generation hosts must fit the DNS length limit, and explicit ports use canonical
+decimal spelling. SameSite cookies alone do not isolate sibling generation
+origins: unsafe content/API requests require the exact generation Origin, and
+foreign or null supplied origins are rejected. The platform controls response
+CSP for static and managed content, including the exact platform
+`frame-ancestors`, same-origin connections, and disabled form submission.
+
+The HTTP handler supplies only a canonical raw path and method to the serving
+port. The adapter requires exactly one authorized static, managed, or API
+declaration; ambiguous legacy declarations fail closed. After deriving the RLS
+actor from child authentication, the final verifier and resource projection run
+in the same SQL statement. Query strings remain opaque and never participate
+in authority matching. Static reads verify the full artifact before conditional
+or range responses and retain the published cache policy. These contracts still
+require runtime and browser proof.
+
+Authenticated document-base requests redirect to the descriptor's canonical
+`/{route_base}/{entrypoint}` for both static and managed content. This preserves
+relative CSS/JS resolution in the reference releases without rewriting artifact
+bytes. The redirect retains the opaque query, including theme metadata, and
+uses the serving path's 514-byte bound rather than widening stored handoff
+routes. API requests do not receive this redirect. This projection and handler
+follow-up is pending integration.
+
+Bootstrap propagates only the validated initial theme to its POST. The final
+document receives `heph_theme` and `heph_theme_origin`, with the latter derived
+solely from the exact configured platform origin. Theme messages are
+appearance-only and require the expected parent window, exact origin, and a
+light/dark value. Content CSP permits published same-origin scripts, styles,
+images, and fonts while denying workers, objects, and nested frames. The
+shared public UI port setting is `HEPHAESTUS_UI_PORT`.
 
 Managed/API installation will resolve preexisting, currently active gateway
 revisions and pin them in the generation. It will not silently create or retarget
