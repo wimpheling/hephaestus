@@ -59,21 +59,44 @@ test("cooking installed UI TLS full-page and managed iframe smoke", async ({page
     expect(contentSecurityPolicy.includes(`frame-ancestors ${platformOrigin}`)).toBe(true);
     expect(headers["x-content-type-options"] === "nosniff").toBe(true);
   });
-  await test.step("static-cookie", async () => {
+  await test.step("static-ui-cookie-presence", async () => {
     const staticCookies = await page.context().cookies();
-    const staticUiCookie = staticCookies.find(cookie => cookie.name === "__Host-hephaestus_ui");
-    expect(staticUiCookie).toBeDefined();
-    expect(staticUiCookie?.secure).toBe(true);
-    expect(staticUiCookie?.httpOnly).toBe(true);
-    expect(staticUiCookie?.sameSite).toBe("Strict");
-    expect(staticUiCookie?.path).toBe("/");
-    expect(staticUiCookie?.domain).toBe(staticUrl.hostname);
-    const platformCookie = staticCookies.find(cookie => cookie.name === "__Host-hephaestus_web_key");
-    expect(platformCookie).toBeDefined();
-    expect(platformCookie?.secure).toBe(true);
-    expect(platformCookie?.httpOnly).toBe(true);
-    expect(platformCookie?.domain.startsWith(".")).toBe(false);
-    expect(platformCookie?.domain).toBe(new URL(process.env.HEPHAESTUS_WEB_URL ?? "https://invalid/").hostname);
+    expect(staticCookies.some(cookie => cookie.name === "__Host-hephaestus_ui")).toBe(true);
+  });
+  await test.step("static-ui-cookie-secure", async () => {
+    const staticUiCookie = (await page.context().cookies()).find(cookie => cookie.name === "__Host-hephaestus_ui");
+    expect(staticUiCookie?.secure === true).toBe(true);
+  });
+  await test.step("static-ui-cookie-http-only", async () => {
+    const staticUiCookie = (await page.context().cookies()).find(cookie => cookie.name === "__Host-hephaestus_ui");
+    expect(staticUiCookie?.httpOnly === true).toBe(true);
+  });
+  await test.step("static-ui-cookie-same-site", async () => {
+    const staticUiCookie = (await page.context().cookies()).find(cookie => cookie.name === "__Host-hephaestus_ui");
+    expect(staticUiCookie?.sameSite === "Strict").toBe(true);
+  });
+  await test.step("static-ui-cookie-path", async () => {
+    const staticUiCookie = (await page.context().cookies()).find(cookie => cookie.name === "__Host-hephaestus_ui");
+    expect(staticUiCookie?.path === "/").toBe(true);
+  });
+  await test.step("static-ui-cookie-host-domain", async () => {
+    const staticUiCookie = (await page.context().cookies()).find(cookie => cookie.name === "__Host-hephaestus_ui");
+    expect(staticUiCookie !== undefined && staticUiCookie.domain === staticUrl.hostname).toBe(true);
+  });
+  await test.step("static-platform-cookie-presence", async () => {
+    const staticCookies = await page.context().cookies();
+    expect(staticCookies.some(cookie => cookie.name === "__Host-hephaestus_web_key")).toBe(true);
+  });
+  await test.step("static-platform-cookie-security", async () => {
+    const platformCookie = (await page.context().cookies()).find(cookie => cookie.name === "__Host-hephaestus_web_key");
+    expect(platformCookie?.secure === true && platformCookie?.httpOnly === true).toBe(true);
+  });
+  await test.step("static-platform-cookie-host-domain", async () => {
+    const platformCookie = (await page.context().cookies()).find(cookie => cookie.name === "__Host-hephaestus_web_key");
+    const platformHostname = new URL(process.env.HEPHAESTUS_WEB_URL ?? "https://invalid/").hostname;
+    expect(platformCookie !== undefined && !platformCookie.domain.startsWith(".") && platformCookie.domain === platformHostname).toBe(true);
+  });
+  await test.step("static-cookie-isolation", async () => {
     const uiCookies = await page.context().cookies(staticUrl.origin);
     expect(uiCookies.some(cookie => cookie.name === "__Host-hephaestus_web_key")).toBe(false);
   });

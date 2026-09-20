@@ -24,10 +24,20 @@ test("safe reporter emits only fixed IDs and bounded result fields", () => {
     {},
     {title: "signin-redirect"},
   );
+  reporter.onStepBegin(
+    {title: "cooking installed UI TLS full-page and managed iframe smoke"},
+    {},
+    {title: `dynamic-step-${fragment}`},
+  );
   reporter.onStepEnd(
     {title: "cooking installed UI TLS full-page and managed iframe smoke"},
     {},
-    {title: "static-cookie", error: undefined},
+    {title: `dynamic-step-${fragment}`, error: new Error(cookie)},
+  );
+  reporter.onStepEnd(
+    {title: "cooking installed UI TLS full-page and managed iframe smoke"},
+    {},
+    {title: "static-ui-cookie-presence", error: undefined},
   );
   reporter.onTestEnd(
     {
@@ -59,7 +69,7 @@ test("safe reporter emits only fixed IDs and bounded result fields", () => {
   assert.deepEqual(records, [
     {event: "run_started", test_count: 1},
     {event: "stage", stage_id: "signin_redirect", status: "pending"},
-    {event: "stage", stage_id: "static_cookie", status: "passed"},
+    {event: "stage", stage_id: "static_ui_cookie_presence", status: "passed"},
     {event: "test", test_id: "unknown_test", status: "failed", duration_ms: 12, retry: 0},
     {event: "run_finished", status: "failed", counts: {passed: 0, failed: 1, skipped: 0, other: 0}},
   ]);
