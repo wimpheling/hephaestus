@@ -139,43 +139,86 @@ test("cooking installed UI TLS full-page and managed iframe smoke", async ({page
   const frameContent = frame.contentFrame();
   let managedDocumentSentUiCookie = false;
   let managedDocumentSentPlatformCookie = false;
-  await test.step("managed-launch", async () => {
-    const managedDocument = page.waitForResponse(response => {
-      try {
-        const url = new URL(response.url());
-        return url.hostname.startsWith("g-") &&
-          url.pathname === "/managed-reference/index.html" &&
-          response.request().resourceType() === "document" &&
-          response.status() === 200;
-      } catch {
-        return false;
+  let managedDocumentStatusClass = 0;
+  let managedDocumentHeaders: Record<string, string> = {};
+  let managedFrameCspViolation = false;
+  await page.evaluate(() => {
+    const state = window as typeof window & {__hephManagedFrameCspViolation?: boolean};
+    state.__hephManagedFrameCspViolation = false;
+    window.addEventListener("securitypolicyviolation", (event: SecurityPolicyViolationEvent) => {
+      if (event.effectiveDirective === "frame-src" || event.effectiveDirective === "child-src") {
+        state.__hephManagedFrameCspViolation = true;
       }
-    }, {timeout: 30_000});
-    await managedCardAfterReturn.getByRole("button", {name: /Launch/}).click();
-    await expect(frame).toBeVisible();
-    await expect.poll(async () => {
-      const frameHandle = await frame.elementHandle();
-      const childFrame = frameHandle ? await frameHandle.contentFrame() : null;
-      if (!childFrame) return false;
-      const frameUrl = new URL(childFrame.url());
-      return /^g-[0-9a-f]{32}\./.test(frameUrl.hostname) && frameUrl.pathname === "/managed-reference/index.html";
-    }, {timeout: 30_000}).toBe(true);
-    await expect(frameContent.getByText("Managed service UI")).toBeVisible();
-    await expect(frameContent.getByRole("heading", {name: "Managed release reference"})).toBeVisible();
-    await expect(frameContent.locator('link[rel="stylesheet"]')).toHaveCount(1);
-    const response = await managedDocument;
-    const requestHeaders = await response.request().allHeaders();
-    managedDocumentSentUiCookie = requestHasCookie(requestHeaders, "__Host-hephaestus_ui");
-    managedDocumentSentPlatformCookie = requestHasCookie(requestHeaders, "__Host-hephaestus_web_key");
-    const headers = response.headers();
-    const platformOrigin = new URL(process.env.HEPHAESTUS_WEB_URL ?? "https://invalid.example/").origin;
-    const contentSecurityPolicy = headers["content-security-policy"] ?? "";
-    expect(contentSecurityPolicy.includes("default-src 'none'")).toBe(true);
-    expect(contentSecurityPolicy.includes("connect-src 'self'")).toBe(true);
-    expect(contentSecurityPolicy.includes("form-action 'none'")).toBe(true);
-    expect(contentSecurityPolicy.includes("frame-src 'none'")).toBe(true);
-    expect(contentSecurityPolicy.includes(`frame-ancestors ${platformOrigin}`)).toBe(true);
-    expect(headers["x-content-type-options"] === "nosniff").toBe(true);
+    });
+  });
+  const managedDocument = page.waitForResponse(response => {
+    try {
+      const url = new URL(response.url());
+      return url.hostname.startsWith("g-") &&
+        url.pathname === "/managed-reference/index.html" &&
+        response.request().resourceType() === "document";
+    } catch {
+      return false;
+    }
+  }, {timeout: 30_000}).catch(() => null);
+  await test.step("managed-launch", async () => {
+    await test.step("managed-card-click", async () => {
+      await managedCardAfterReturn.getByRole("button", {name: /Launch/}).click();
+    });
+    await test.step("managed-frame-visible", async () => {
+      await expect(frame).toBeVisible();
+    });
+    try {
+      await test.step("managed-frame-route", async () => {
+        await expect.poll(async () => {
+          const frameHandle = await frame.elementHandle();
+          const childFrame = frameHandle ? await frameHandle.contentFrame() : null;
+          if (!childFrame) return false;
+          const frameUrl = new URL(childFrame.url());
+          return /^g-[0-9a-f]{32}\./.test(frameUrl.hostname) && frameUrl.pathname === "/managed-reference/index.html";
+        }, {timeout: 30_000}).toBe(true);
+      });
+    } finally {
+      await test.step("managed-frame-csp", async () => {
+        managedFrameCspViolation = await page.evaluate(() => Boolean(
+          (window as typeof window & {__hephManagedFrameCspViolation?: boolean}).__hephManagedFrameCspViolation,
+        ));
+        expect(managedFrameCspViolation).toBe(false);
+      });
+    }
+    await test.step("managed-document-response", async () => {
+      const response = await managedDocument;
+      expect(response).not.toBeNull();
+      if (response === null) return;
+      managedDocumentStatusClass = Math.floor(response.status() / 100);
+      managedDocumentHeaders = response.headers();
+      const requestHeaders = await response.request().allHeaders();
+      managedDocumentSentUiCookie = requestHasCookie(requestHeaders, "__Host-hephaestus_ui");
+      managedDocumentSentPlatformCookie = requestHasCookie(requestHeaders, "__Host-hephaestus_web_key");
+    });
+    const statusStage = managedDocumentStatusClass === 2 ? "managed-document-2xx" :
+      managedDocumentStatusClass === 3 ? "managed-document-3xx" :
+        managedDocumentStatusClass === 4 ? "managed-document-4xx" :
+          managedDocumentStatusClass === 5 ? "managed-document-5xx" : "managed-document-other";
+    await test.step(statusStage, async () => {
+      expect(managedDocumentStatusClass).toBe(2);
+    });
+    await test.step("managed-document-headers", async () => {
+      const headers = managedDocumentHeaders;
+      const platformOrigin = new URL(process.env.HEPHAESTUS_WEB_URL ?? "https://invalid.example/").origin;
+      const contentSecurityPolicy = headers["content-security-policy"] ?? "";
+      expect(contentSecurityPolicy.includes("default-src 'none'")).toBe(true);
+      expect(contentSecurityPolicy.includes("connect-src 'self'")).toBe(true);
+      expect(contentSecurityPolicy.includes("form-action 'none'")).toBe(true);
+      expect(contentSecurityPolicy.includes("frame-src 'none'")).toBe(true);
+      expect(contentSecurityPolicy.includes(`frame-ancestors ${platformOrigin}`)).toBe(true);
+      expect(headers["x-content-type-options"] === "nosniff").toBe(true);
+    });
+    await test.step("managed-document-content", async () => {
+      await expect(frameContent.getByText("Managed service UI")).toBeVisible();
+      await expect(frameContent.getByRole("heading", {name: "Managed release reference"})).toBeVisible();
+      await expect(frameContent.locator('link[rel="stylesheet"]')).toHaveCount(1);
+    });
   });
   await test.step("managed-cookie", async () => {
     const frameHandle = await frame.elementHandle();
