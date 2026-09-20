@@ -646,8 +646,16 @@ struct InstalledUiBrowserContext<'a> {
     workload_phase_timing: bool,
 }
 
-const INSTALLED_UI_CONTROL_MARKERS: [&str; 3] =
-    ["managed-ready", "disable-complete", "stale-cookie-denied"];
+const INSTALLED_UI_CONTROL_MARKERS: [&str; 7] = [
+    "managed-ready",
+    "disable-complete",
+    "stale-cookie-denied",
+    "reactivate-complete",
+    "old-generation-denied-after-reactivate",
+    "old-generation-denial-verified",
+    "new-generation-ready",
+];
+const INSTALLED_UI_LIFECYCLE_DEADLINE: Duration = Duration::from_secs(240);
 type InstalledUiDenialRow = (
     String,
     String,
@@ -824,11 +832,11 @@ async fn assert_installed_ui_stale_cookie_denial(
     );
 }
 
-async fn run_installed_ui_disable_control(
+async fn run_installed_ui_disable_phase(
     context: &InstalledUiBrowserContext<'_>,
     control_dir: &Path,
-) {
-    let deadline = tokio::time::Instant::now() + Duration::from_secs(120);
+    deadline: tokio::time::Instant,
+) -> (Vec<uuid::Uuid>, i64, Vec<uuid::Uuid>) {
     wait_for_installed_ui_control_marker(control_dir, "managed-ready", deadline).await;
     let baseline_managed_audit_ids: Vec<uuid::Uuid> = sqlx::query_scalar(
         "SELECT id
@@ -895,8 +903,124 @@ async fn run_installed_ui_disable_control(
     .await;
     assert_installed_ui_stale_cookie_denial(context, disabled_at, &baseline_content_audit_ids)
         .await;
+
+    let reactivation_content_audit_ids: Vec<uuid::Uuid> = sqlx::query_scalar(
+        "SELECT id
+           FROM ui_request_audit_events
+          WHERE surface = 'content'
+          ORDER BY occurred_at, id",
+    )
+    .fetch_all(context.pool)
+    .await
+    .expect("snapshot content audit IDs before reactivation");
+    (
+        baseline_managed_audit_ids,
+        baseline_managed_invocations,
+        reactivation_content_audit_ids,
+    )
+}
+
+async fn run_installed_ui_reactivation_phase(
+    context: &InstalledUiBrowserContext<'_>,
+    control_dir: &Path,
+    deadline: tokio::time::Instant,
+    baseline_managed_audit_ids: &[uuid::Uuid],
+    baseline_managed_invocations: i64,
+    reactivation_content_audit_ids: &[uuid::Uuid],
+) -> cooking_builds::InstalledCookingUi {
+    let reactivated_at: OffsetDateTime = sqlx::query_scalar("SELECT clock_timestamp()")
+        .fetch_one(context.pool)
+        .await
+        .expect("read installed UI reactivation audit boundary");
+    let reactivated = cooking_builds::activate_installed_ui(
+        context.running,
+        context.rpc_token,
+        context.installed_uis.managed_ui,
+        context.installed_uis.managed_release_id,
+    )
+    .await
+    .expect("reactivate managed installed UI through owner RPC");
+    let current_generation: uuid::Uuid = sqlx::query_scalar(
+        "SELECT current_generation_id
+           FROM ui_installations
+          WHERE id = $1 AND lifecycle = 'enabled'",
+    )
+    .bind(reactivated.installation_id)
+    .fetch_one(context.pool)
+    .await
+    .expect("read reactivated managed UI generation");
+    assert_eq!(
+        current_generation, reactivated.generation_id,
+        "reactivation must publish its fresh enabled generation"
+    );
+    write_installed_ui_control_marker(control_dir, "reactivate-complete").await;
+    wait_for_installed_ui_control_marker(
+        control_dir,
+        "old-generation-denied-after-reactivate",
+        deadline,
+    )
+    .await;
+    assert_installed_ui_disable_did_not_reach_gateway(
+        context,
+        baseline_managed_audit_ids,
+        baseline_managed_invocations,
+    )
+    .await;
+    assert_installed_ui_stale_cookie_denial(
+        context,
+        reactivated_at,
+        reactivation_content_audit_ids,
+    )
+    .await;
+    write_installed_ui_control_marker(control_dir, "old-generation-denial-verified").await;
+    wait_for_installed_ui_control_marker(control_dir, "new-generation-ready", deadline).await;
+    reactivated
+}
+
+async fn run_installed_ui_disable_control(
+    context: &InstalledUiBrowserContext<'_>,
+    control_dir: &Path,
+) {
+    let deadline = tokio::time::Instant::now() + INSTALLED_UI_LIFECYCLE_DEADLINE;
+    let (baseline_managed_audit_ids, baseline_managed_invocations, reactivation_content_audit_ids) =
+        run_installed_ui_disable_phase(context, control_dir, deadline).await;
+    let reactivated = run_installed_ui_reactivation_phase(
+        context,
+        control_dir,
+        deadline,
+        &baseline_managed_audit_ids,
+        baseline_managed_invocations,
+        &reactivation_content_audit_ids,
+    )
+    .await;
+    let mut activated_uis = context.installed_uis;
+    activated_uis.managed_ui = reactivated;
+    let activated_context = InstalledUiBrowserContext {
+        pool: context.pool,
+        running: context.running,
+        database_url: context.database_url,
+        rpc_token: context.rpc_token,
+        organization_id: context.organization_id,
+        installed_uis: activated_uis,
+        actor_id: context.actor_id,
+        workload_phase_timing: context.workload_phase_timing,
+    };
+    assert_installed_ui_browser_audit(&activated_context).await;
+    let new_generation_invocations: i64 = sqlx::query_scalar(
+        "SELECT count(*)
+           FROM gateway_invocations
+          WHERE gateway_id = $1",
+    )
+    .bind(context.installed_uis.managed_gateway_id)
+    .fetch_one(context.pool)
+    .await
+    .expect("count managed gateway invocations after reactivation");
+    assert!(
+        new_generation_invocations > baseline_managed_invocations,
+        "new managed generation must create a gateway invocation"
+    );
     println!(
-        "REAL_UI_INSTALLATION_DISABLE_LIFECYCLE=1 stale_cookie_denied=1 gateway_invocation_unchanged=1"
+        "REAL_UI_INSTALLATION_DISABLE_LIFECYCLE=1 stale_cookie_denied=1 old_generation_denied=1 gateway_invocation_unchanged=1 reactivated_generation=1 new_generation_audit=1 gateway_invocation_increased=1"
     );
 }
 
@@ -972,7 +1096,7 @@ async fn supervise_installed_ui_browser(
 
     let mut disable_control = Box::pin(
         std::panic::AssertUnwindSafe(tokio::time::timeout(
-            Duration::from_secs(120),
+            INSTALLED_UI_LIFECYCLE_DEADLINE,
             run_installed_ui_disable_control(context, control_dir),
         ))
         .catch_unwind(),
@@ -1006,7 +1130,7 @@ async fn supervise_installed_ui_browser(
                 }
                 Ok(Ok(())) => {}
             }
-            tokio::time::timeout(Duration::from_secs(120), browser.wait())
+            tokio::time::timeout(INSTALLED_UI_LIFECYCLE_DEADLINE, browser.wait())
                 .await
                 .expect("installed UI browser E2E completion deadline")
                 .expect("wait for installed UI browser E2E after disable")

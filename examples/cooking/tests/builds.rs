@@ -30,10 +30,11 @@ use rpc_proto::{
             TriggerPolicy, ref_selector,
         },
         release::v1::{
-            DisableUiRequest, GetReleaseRequest, InstallUiRequest, ListUiInstallationsRequest,
-            PublishReleaseRequest, ReleaseUiPresentation, ReleaseUiScope, SetDraftVersionRequest,
-            UiInstallationContentKind, UiInstallationLifecycle, UiInstallationNavigation,
-            UiInstallationTarget, release_ui_descriptor, ui_installation_target,
+            ActivateUiRequest, DisableUiRequest, GetReleaseRequest, InstallUiRequest,
+            ListUiInstallationsRequest, PublishReleaseRequest, ReleaseUiPresentation,
+            ReleaseUiScope, SetDraftVersionRequest, UiInstallationContentKind,
+            UiInstallationLifecycle, UiInstallationNavigation, UiInstallationTarget,
+            release_ui_descriptor, ui_installation_target,
         },
     },
 };
@@ -407,6 +408,8 @@ pub struct InstalledCookingReferenceUis {
     pub managed_gateway_id: Uuid,
     /// Immutable managed reference gateway revision installed by the fixture.
     pub managed_gateway_revision_id: Uuid,
+    /// Published managed reference release retained for later reactivation.
+    pub managed_release_id: Uuid,
     /// Static full-page reference UI.
     pub static_ui: InstalledCookingUi,
     /// Managed iframe reference UI.
@@ -960,6 +963,7 @@ pub async fn build_and_install_reference_uis(
         project_id: context.project_id,
         managed_gateway_id: installed_gateway.gateway_id,
         managed_gateway_revision_id: installed_gateway.revision_id,
+        managed_release_id: managed_build.release_id,
         static_ui: listed.0,
         managed_ui: listed.1,
     })
@@ -1311,6 +1315,58 @@ pub async fn disable_installed_ui(
     }
     if returned_generation_id != installed_ui.generation_id {
         return Err(invalid_state("DisableUi returned a different generation"));
+    }
+    Ok(InstalledCookingUi {
+        installation_id: returned_installation_id,
+        generation_id: returned_generation_id,
+    })
+}
+
+/// Activates a fresh managed-reference generation after a lifecycle disable.
+/// The old generation is supplied as the compare-and-set expectation so a
+/// concurrent lifecycle change cannot silently relaunch stale UI state.
+pub async fn activate_installed_ui(
+    running: &RunningHephaestus,
+    token_factory: &(dyn Fn(&str) -> String + Send + Sync),
+    installed_ui: InstalledCookingUi,
+    release_id: Uuid,
+) -> Result<InstalledCookingUi, BuildError> {
+    let client = rpc_release_client(
+        running,
+        token_factory,
+        "/hephaestus.release.v1.ReleaseService/ActivateUi",
+    )?;
+    let response = client
+        .activate_ui(ActivateUiRequest {
+            context: mutation_context("installed-ui-reactivate-lifecycle").into(),
+            installation_id: opaque(installed_ui.installation_id).into(),
+            expected_generation_id: opaque(installed_ui.generation_id).into(),
+            release_id: opaque(release_id).into(),
+            ui_key: String::from("managed-reference"),
+            ..Default::default()
+        })
+        .await?
+        .into_owned();
+    if response.lifecycle.to_i32()
+        != UiInstallationLifecycle::UI_INSTALLATION_LIFECYCLE_ENABLED as i32
+    {
+        return Err(invalid_state("ActivateUi did not enable the managed UI"));
+    }
+    let returned_installation_id = response_id(
+        response.installation_id.into_option(),
+        "ActivateUi installation",
+    )?;
+    let returned_generation_id = response_id(
+        response.generation_id.into_option(),
+        "ActivateUi generation",
+    )?;
+    if returned_installation_id != installed_ui.installation_id {
+        return Err(invalid_state(
+            "ActivateUi returned a different installation",
+        ));
+    }
+    if returned_generation_id == installed_ui.generation_id {
+        return Err(invalid_state("ActivateUi reused the disabled generation"));
     }
     Ok(InstalledCookingUi {
         installation_id: returned_installation_id,

@@ -23,6 +23,9 @@ if (controlDirectory !== "/run/heph-control") {
 }
 
 test("cooking installed UI TLS full-page and managed iframe smoke", async ({page}) => {
+  // Disable/reactivate control barriers and the Phoenix refresh interval need
+  // one bounded controller window; this remains below the runner's 240s gate.
+  test.setTimeout(240_000);
   const fixture = loadFixture();
   const installed = fixture.installed_reference_uis;
   await test.step("signin", async () => {
@@ -463,8 +466,169 @@ test("cooking installed UI TLS full-page and managed iframe smoke", async ({page
       await test.step(staleStatusStage, async () => {
         expect(staleStatusCode).toBe(404);
       });
+      await page.reload({waitUntil: "domcontentloaded", timeout: 30_000});
+      await waitForLiveView(page);
+      await test.step("lifecycle-disabled-card", async () => {
+        const disabledCard = page.locator(`#installed-ui-${installed.managed_installation_id}`);
+        await expect(disabledCard).toBeVisible();
+        await expect(disabledCard).toContainText("Disabled");
+        await expect(disabledCard).toContainText("Unavailable");
+        await expect(disabledCard.getByRole("button", {name: /Launch/})).toHaveCount(0);
+      });
       await test.step("lifecycle-stale-cookie-denied", async () => {
         writeFileSync(join(controlDirectory, "stale-cookie-denied"), "denied\n", {
+          encoding: "utf8",
+          mode: 0o600,
+          flag: "wx",
+        });
+      });
+      await test.step("lifecycle-reactivate-complete", async () => {
+        await expect.poll(
+          () => existsSync(join(controlDirectory, "reactivate-complete")),
+          {timeout: 30_000},
+        ).toBe(true);
+      });
+
+      let oldGenerationStatusCode = 0;
+      let oldGenerationRequestObserved = false;
+      let oldGenerationUiCookiePresent = false;
+      await test.step("lifecycle-old-generation-fetch-response", async () => {
+        const [request, response] = await Promise.all([
+          stalePage.waitForRequest(
+            candidate => candidate.url() === managedDocumentUrl && candidate.resourceType() === "fetch",
+            {timeout: 30_000},
+          ),
+          stalePage.waitForResponse(
+            candidate => candidate.url() === managedDocumentUrl && candidate.request().resourceType() === "fetch",
+            {timeout: 30_000},
+          ),
+          stalePage.evaluate(async url => {
+            const candidate = await fetch(url, {cache: "no-store", credentials: "same-origin"});
+            return candidate.status;
+          }, managedDocumentUrl),
+        ]);
+        oldGenerationStatusCode = response.status();
+        oldGenerationRequestObserved = true;
+        oldGenerationUiCookiePresent = requestHasCookie(
+          await request.allHeaders(),
+          "__Host-hephaestus_ui",
+        );
+      });
+      const oldGenerationStatusStage = oldGenerationStatusCode === 401 ? "lifecycle-old-generation-fetch-401" :
+        oldGenerationStatusCode === 403 ? "lifecycle-old-generation-fetch-403" :
+          oldGenerationStatusCode === 404 ? "lifecycle-old-generation-fetch-404" :
+            oldGenerationStatusCode === 410 ? "lifecycle-old-generation-fetch-410" :
+              oldGenerationStatusCode === 200 ? "lifecycle-old-generation-fetch-200" :
+                "lifecycle-old-generation-fetch-other";
+      await test.step("lifecycle-old-generation-request-observed", async () => {
+        expect(oldGenerationRequestObserved).toBe(true);
+      });
+      await test.step("lifecycle-old-generation-cookie-present", async () => {
+        expect(oldGenerationUiCookiePresent).toBe(true);
+      });
+      await test.step(oldGenerationStatusStage, async () => {
+        expect(oldGenerationStatusCode).toBe(404);
+      });
+      await test.step("lifecycle-old-generation-denied", async () => {
+        writeFileSync(join(controlDirectory, "old-generation-denied-after-reactivate"), "denied\n", {
+          encoding: "utf8",
+          mode: 0o600,
+          flag: "wx",
+        });
+      });
+      await test.step("lifecycle-old-generation-denial-verified", async () => {
+        await expect.poll(
+          () => existsSync(join(controlDirectory, "old-generation-denial-verified")),
+          {timeout: 30_000},
+        ).toBe(true);
+      });
+
+      await page.reload({waitUntil: "domcontentloaded", timeout: 30_000});
+      await waitForLiveView(page);
+      const reactivatedCard = page.locator(`#installed-ui-${installed.managed_installation_id}`);
+      await expect(reactivatedCard).toBeVisible();
+      const reactivatedDocument = page.waitForResponse(response => {
+        try {
+          const url = new URL(response.url());
+          return url.hostname.startsWith("g-") &&
+            url.pathname === "/managed-reference/index.html" &&
+            response.request().resourceType() === "document";
+        } catch {
+          return false;
+        }
+      }, {timeout: 30_000});
+      await test.step("lifecycle-reactivated-launch", async () => {
+        await reactivatedCard.getByRole("button", {name: /Launch/}).click();
+      });
+      await test.step("lifecycle-reactivated-frame-visible", async () => {
+        await expect(frame).toBeVisible();
+      });
+      let reactivatedFrameUrl = "";
+      await test.step("lifecycle-reactivated-frame-route", async () => {
+        await expect.poll(async () => {
+          const frameHandle = await frame.elementHandle();
+          const childFrame = frameHandle ? await frameHandle.contentFrame() : null;
+          if (!childFrame) return false;
+          reactivatedFrameUrl = childFrame.url();
+          const url = new URL(reactivatedFrameUrl);
+          return /^g-[0-9a-f]{32}\./.test(url.hostname) &&
+            url.pathname === "/managed-reference/index.html";
+        }, {timeout: 30_000}).toBe(true);
+      });
+      await test.step("lifecycle-reactivated-generation-different", async () => {
+        expect(new URL(reactivatedFrameUrl).hostname).not.toBe(new URL(managedDocumentUrl).hostname);
+      });
+      let reactivatedDocumentStatusCode = 0;
+      let reactivatedDocumentResponseUrl = "";
+      let reactivatedDocumentUiCookiePresent = false;
+      await test.step("lifecycle-reactivated-document-response", async () => {
+        const response = await reactivatedDocument;
+        reactivatedDocumentStatusCode = response.status();
+        reactivatedDocumentResponseUrl = response.url();
+        reactivatedDocumentUiCookiePresent = requestHasCookie(
+          await response.request().allHeaders(),
+          "__Host-hephaestus_ui",
+        );
+      });
+      await test.step(
+        reactivatedDocumentStatusCode >= 200 && reactivatedDocumentStatusCode < 300
+          ? "lifecycle-reactivated-document-2xx"
+          : "lifecycle-reactivated-document-other",
+        async () => {
+          expect(reactivatedDocumentStatusCode).toBe(200);
+        },
+      );
+      await test.step("lifecycle-reactivated-document-url", async () => {
+        expect(reactivatedDocumentResponseUrl === reactivatedFrameUrl).toBe(true);
+      });
+      await test.step("lifecycle-reactivated-bootstrap-fragment", async () => {
+        expect(new URL(reactivatedFrameUrl).hash).toBe("");
+      });
+      await test.step("lifecycle-reactivated-cookie-present", async () => {
+        expect(reactivatedDocumentUiCookiePresent).toBe(true);
+      });
+      await test.step("lifecycle-reactivated-identity", async () => {
+        const identityIsValid = await frameContent.locator("body").evaluate(async () => {
+          const response = await fetch("/reference/identity", {
+            headers: {accept: "application/json"},
+            credentials: "same-origin",
+          });
+          if (!response.ok) return false;
+          const body: unknown = await response.json();
+          if (!body || typeof body !== "object") return false;
+          const value = body as {pid?: unknown; startup_id?: unknown};
+          const keys = Object.keys(value).sort();
+          return keys.length === 2 && keys[0] === "pid" && keys[1] === "startup_id" &&
+            typeof value.pid === "number" && Number.isInteger(value.pid) && value.pid > 0 &&
+            typeof value.startup_id === "string" && value.startup_id.length > 0;
+        });
+        expect(identityIsValid).toBe(true);
+      });
+      await test.step("lifecycle-reactivated-frame-ready", async () => {
+        await expect(embed.locator("[data-ui-status]")).toHaveText("Ready");
+      });
+      await test.step("lifecycle-new-generation-ready", async () => {
+        writeFileSync(join(controlDirectory, "new-generation-ready"), "ready\n", {
           encoding: "utf8",
           mode: 0o600,
           flag: "wx",
