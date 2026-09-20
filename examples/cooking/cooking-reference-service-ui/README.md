@@ -1,18 +1,18 @@
 # Cooking managed reference UI service
 
 This fixture is a small Hephaestus-managed HTTP UI service. It serves local
-HTML and the versioned release UI kit CSS from a long-lived, network-disabled
-Python process. It has no JavaScript, external resources, credentials,
-workspace mount, or state volume.
+HTML and the versioned release UI kit CSS and optional theme/ready helper from
+a long-lived, network-disabled Python process. It has no cookies, storage,
+authority APIs, credentials, workspace mount, or state volume.
 
 The service listens on `127.0.0.1:8080` and exposes `/readyz`, `/healthz`,
-`/reference/index.html`, `/reference/heph-ui-kit-v1.0.0.css`, and a bounded
+`/reference/index.html`, `/reference/heph-ui-kit-v1.0.0.css`, `/reference/heph-ui-kit-v1.0.0.js`, and a bounded
 `/reference/identity` startup probe. The relative stylesheet link in the HTML
 therefore stays inside the managed UI route.
 
-`build.sh` verifies the vendored kit manifest and CSS hash before copying the
-service, HTML, and CSS into `bin/`. The vendored kit files must match the
-canonical package under `web/assets/release_ui_kit`; the Node kit check covers
+`build.sh` verifies the vendored kit manifest and CSS/helper hashes before
+copying the service, HTML, CSS, and helper into `bin/`. The vendored kit files
+must match the canonical package under `web/assets/release_ui_kit`; the Node kit check covers
 both the static and managed reference fixtures.
 
 The `heph.gateways.toml` declaration uses the authenticated `http.service.v1`

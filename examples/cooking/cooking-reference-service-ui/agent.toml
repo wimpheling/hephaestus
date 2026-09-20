@@ -33,6 +33,11 @@ path = "bin/heph-ui-kit-v1.0.0.css"
 kind = "file"
 media_type = "text/css"
 
+[[build.artifacts]]
+path = "bin/heph-ui-kit-v1.0.0.js"
+kind = "file"
+media_type = "text/javascript"
+
 [guest]
 image = { key = "python-ubuntu" }
 command = "bin/reference-ui-service"

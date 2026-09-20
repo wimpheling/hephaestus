@@ -17,6 +17,7 @@ MAX_HEADER_BYTES = 8 * 1024
 MAX_HEADER_COUNT = 32
 REQUEST_TIMEOUT_SECONDS = 5
 CSS_NAME = "heph-ui-kit-v1.0.0.css"
+JS_NAME = "heph-ui-kit-v1.0.0.js"
 
 
 class ReferenceHandler(BaseHTTPRequestHandler):
@@ -45,6 +46,8 @@ class ReferenceHandler(BaseHTTPRequestHandler):
             self._send_file("index.html", "text/html; charset=utf-8")
         elif path == f"/reference/{CSS_NAME}":
             self._send_file(CSS_NAME, "text/css; charset=utf-8")
+        elif path == f"/reference/{JS_NAME}":
+            self._send_file(JS_NAME, "text/javascript; charset=utf-8")
         elif path == "/reference/identity":
             body = json.dumps(self.server.startup_identity, sort_keys=True).encode() + b"\n"
             self._send(HTTPStatus.OK, body, "application/json")

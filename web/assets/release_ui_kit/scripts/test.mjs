@@ -15,14 +15,23 @@ const manifest = JSON.parse(second.manifest)
 
 assert.equal(packageJson.version, "1.0.0")
 assert.equal(packageJson.exports["."], "./dist/heph-ui-kit-v1.0.0.css")
+assert.equal(packageJson.exports["./theme"], "./dist/heph-ui-kit-v1.0.0.js")
 assert.equal(packageJson.exports["./manifest"], "./dist/manifest.json")
 assert.equal(manifest.version, packageJson.version)
 assert.equal(manifest.css_file, "heph-ui-kit-v1.0.0.css")
 assert.equal(manifest.css_sha256, digest(second.css))
+assert.equal(manifest.js_file, "heph-ui-kit-v1.0.0.js")
+assert.equal(manifest.helper_source, "src/theme.js")
+assert.equal(manifest.helper_sha256, digest(second.themeSource))
 assert.equal(manifest.token_sha256, digest(second.tokenSource))
 assert.equal(first.css, second.css, "the CSS build must be deterministic")
 assert.equal(first.manifest, second.manifest, "the manifest must be deterministic")
 assert.equal(second.css.includes(second.tokenSource), true, "the exact token source must be included")
+assert.match(second.themeSource, /heph-ui-theme/)
+assert.match(second.themeSource, /heph-ui-ready/)
+assert.equal(second.themeSource.includes('postMessage({type: "heph-ui-ready"}, "*")'), false)
+assert.equal(second.themeSource.includes("localStorage"), false)
+assert.equal(second.themeSource.includes("document.cookie"), false)
 
 for (const forbidden of ["phoenix", "liveview", "heex", "tailwind", "@import"]) {
   assert.equal(second.css.toLowerCase().includes(forbidden), false, `kit must not import ${forbidden}`)
@@ -73,6 +82,7 @@ const packed = JSON.parse(
 const packedFiles = new Set(packed[0].files.map(file => file.path))
 for (const expectedFile of [
   "dist/heph-ui-kit-v1.0.0.css",
+  "dist/heph-ui-kit-v1.0.0.js",
   "dist/manifest.json",
   "package.json",
   "README.md",

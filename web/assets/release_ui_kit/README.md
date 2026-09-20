@@ -1,6 +1,6 @@
 # Hephaestus release UI kit
 
-Version 1.0.0 is a standalone CSS-only kit for immutable release UIs. It
+Version 1.0.0 is a standalone CSS kit with an optional external helper for immutable release UIs. It
 contains the existing Hephaestus semantic token source and a small prefixed
 component layer for containers, layout, type, panels, buttons, status labels,
 and inputs.
@@ -20,6 +20,22 @@ does not have a valid theme attribute. An explicit `data-theme="light"` or
 Use `data-theme="light"` or `data-theme="dark"` when a release needs a fixed
 palette. The kit does not persist or change this value.
 
+The optional `dist/heph-ui-kit-v1.0.0.js` helper is available as the package
+`./theme` export. Include it as a deferred external script when the UI is
+embedded by the platform:
+
+```html
+<script src="heph-ui-kit-v1.0.0.js" defer></script>
+```
+
+It reads one validated `heph_theme=light|dark` query value and one exact
+HTTPS `heph_theme_origin` value. An absent or invalid theme leaves the root
+unset so the CSS operating-system fallback applies. In an iframe it announces
+`{ "type": "heph-ui-ready" }` to that exact origin after DOM ready and accepts
+only closed `{ "type": "heph-ui-theme", "theme": "light"|"dark" }` messages
+from `window.parent` at the same origin. It never uses wildcard message
+origins, cookies, storage, or authority/data APIs.
+
 Build and test it without downloading dependencies:
 
 ```sh
@@ -34,11 +50,12 @@ writes the derived files below `dist/`:
 
 ```text
 dist/heph-ui-kit-v1.0.0.css
+dist/heph-ui-kit-v1.0.0.js
 dist/manifest.json
 ```
 
 `manifest.json` records the package version and SHA-256 digests for the final
-CSS, token source, and component source. `dist/` is ignored because it is
+CSS, helper, token source, and component source. `dist/` is ignored because it is
 generated output, matching the repository's existing Phoenix asset policy.
 Run `npm run test` in a checkout to rebuild and validate the output. Run
 `npm run check` in CI or before packaging to compare the existing `dist/` bytes

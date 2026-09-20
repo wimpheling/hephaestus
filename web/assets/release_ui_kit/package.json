@@ -2,16 +2,17 @@
   "name": "@hephaestus/release-ui-kit",
   "version": "1.0.0",
   "private": true,
-  "description": "Standalone CSS kit for immutable Hephaestus release UIs",
+  "description": "Standalone CSS and optional theme helper kit for immutable Hephaestus release UIs",
   "type": "module",
   "scripts": {
     "build": "node scripts/build.mjs",
     "check": "node scripts/check.mjs",
-    "test": "node scripts/build.mjs && node scripts/test.mjs && node scripts/check-reference-fixture.mjs",
+    "test": "node scripts/build.mjs && node scripts/test.mjs && node scripts/theme.test.mjs && node scripts/check-reference-fixture.mjs",
     "prepack": "node scripts/build.mjs"
   },
   "exports": {
     ".": "./dist/heph-ui-kit-v1.0.0.css",
+    "./theme": "./dist/heph-ui-kit-v1.0.0.js",
     "./manifest": "./dist/manifest.json",
     "./package.json": "./package.json"
   },

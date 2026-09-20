@@ -37,6 +37,26 @@ integrated quality gate remain incomplete. The user approved organization-owned
 global installations and organization isolation. Historical checkpoints record the state
 at their time; later integration checkpoints supersede earlier pending notes.
 
+## Reference UI theme helper checkpoint (2026-09-20)
+
+The optional versioned kit helper applies bounded light/dark hints, accepts theme
+messages only from the configured exact parent origin and window, and announces
+iframe readiness to that origin. Missing or invalid hints retain the existing
+system-theme CSS fallback. It uses no credentials or storage. Both reference
+releases declare and build the helper; the managed service serves its exact
+JavaScript route with a closed MIME value.
+
+Kit `npm test` (including four helper cases and the managed HTTP route regression)
+and `npm run check` passed. Both fixture builds passed in disposable output
+directories. An ephemeral loopback service returned status 200,
+`text/javascript; charset=utf-8`, and the exact 2,106 canonical helper bytes,
+then shut down cleanly. Evidence is in
+`/home/a/heph-ui-kit-npm-{test,check}-20260920.log`,
+`/home/a/heph-reference-ui-build-20260920.log`,
+`/home/a/heph-reference-service-ui-build-20260920.log`, and
+`/home/a/heph-reference-service-ui-route-20260920.log`.
+Installed Caddy/VM/browser acceptance remains outstanding.
+
 ## Recovery teardown follow-up (2026-09-20)
 
 The successful active-route read now awaits SQLx connection return. The isolated

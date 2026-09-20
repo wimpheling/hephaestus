@@ -19,6 +19,7 @@ source = Path(os.environ["SOURCE_DIR"])
 output = Path(os.environ["OUTPUT_ROOT"])
 manifest_path = source / "vendor/release-ui-kit/v1.0.0/dist/manifest.json"
 css_path = source / "vendor/release-ui-kit/v1.0.0/dist/heph-ui-kit-v1.0.0.css"
+js_path = source / "vendor/release-ui-kit/v1.0.0/dist/heph-ui-kit-v1.0.0.js"
 html_path = source / "index.html"
 manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
 expected = {
@@ -26,11 +27,14 @@ expected = {
     "package": "@hephaestus/release-ui-kit",
     "version": "1.0.0",
     "css_file": "heph-ui-kit-v1.0.0.css",
+    "js_file": "heph-ui-kit-v1.0.0.js",
 }
 if any(manifest.get(key) != value for key, value in expected.items()):
     raise SystemExit("managed reference UI kit manifest identity is invalid")
 if hashlib.sha256(css_path.read_bytes()).hexdigest() != manifest.get("css_sha256"):
     raise SystemExit("managed reference UI kit CSS hash does not match its manifest")
+if hashlib.sha256(js_path.read_bytes()).hexdigest() != manifest.get("helper_sha256"):
+    raise SystemExit("managed reference UI kit helper hash does not match its manifest")
 html = html_path.read_text(encoding="utf-8")
 if "<title>Managed release reference</title>" not in html:
     raise SystemExit("managed reference UI HTML title is missing")
@@ -42,5 +46,6 @@ bin_dir.mkdir(parents=True, exist_ok=True)
 shutil.copyfile(source / "reference-ui-service.py", bin_dir / "reference-ui-service")
 shutil.copyfile(html_path, bin_dir / "index.html")
 shutil.copyfile(css_path, bin_dir / "heph-ui-kit-v1.0.0.css")
+shutil.copyfile(js_path, bin_dir / "heph-ui-kit-v1.0.0.js")
 (bin_dir / "reference-ui-service").chmod(0o755)
 PY
