@@ -3321,6 +3321,33 @@ async fn bearer_push_starts_run_through_production_bootstrap() {
     } else {
         None
     };
+    // The installed UI fixture publishes an HTTP service gateway before the
+    // later Cooking-service restart. Give the initial daemon its real gateway
+    // supervisor so that desired service revisions can pass readiness and
+    // become active before InstallUi resolves the managed route. The UI origin
+    // is intentionally added only by the later restart below.
+    let initial_gateway_edge = if installed_ui_fixture {
+        let dispatcher = TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("reserve installed UI gateway dispatcher listener");
+        let dispatcher_listen = dispatcher
+            .local_addr()
+            .expect("installed UI gateway dispatcher listener address");
+        drop(dispatcher);
+        Some(GatewayEdgeConfig {
+            caddy_admin_url: env::var("HEPHAESTUS_CADDY_TEST_ADMIN_URL")
+                .expect("joined Caddy admin URL"),
+            caddy_configuration_template: caddy_configuration(
+                &env::var("HEPHAESTUS_CADDY_TEST_ADMIN_URL").expect("joined Caddy admin URL"),
+            ),
+            caddy_server_name: String::from("shared"),
+            dispatcher_listen,
+            public_authority: String::from("gateway.golden.invalid"),
+            ui_origin: None,
+        })
+    } else {
+        gateway_edge.as_ref().map(|(config, _)| config.clone())
+    };
 
     let mut backend_fixture = backend_fixture(&root).await;
     let root_image = backend_fixture.root_image.clone();
@@ -3487,7 +3514,7 @@ async fn bearer_push_starts_run_through_production_bootstrap() {
             decoding_key: jsonwebtoken::DecodingKey::from_secret(SIGNING_SECRET),
         },
         registry: golden_registry_config(),
-        gateway_edge: gateway_edge.as_ref().map(|(config, _)| config.clone()),
+        gateway_edge: initial_gateway_edge,
         volumes: LocalVolumeConfig {
             volume_root: backend_fixture.volume_root,
             transient_runtime_roots,
