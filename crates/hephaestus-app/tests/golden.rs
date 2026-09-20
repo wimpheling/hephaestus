@@ -4007,6 +4007,11 @@ async fn bearer_push_starts_run_through_production_bootstrap() {
             );
             let identity_proof = identity_after;
             if let Some(installed_uis) = installed_reference_uis {
+                let managed_reference_fixture = GatewayServiceGoldenFixture {
+                    gateway_id: installed_uis.managed_gateway_id,
+                    revision_id: installed_uis.managed_gateway_revision_id,
+                };
+                wait_for_gateway_service_ready(&pool, &managed_reference_fixture).await;
                 run_installed_ui_browser_phase(InstalledUiBrowserContext {
                     pool: &pool,
                     running: &running,

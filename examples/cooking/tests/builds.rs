@@ -403,6 +403,10 @@ pub struct InstalledCookingReferenceUis {
     pub organization_id: OrganizationId,
     /// Project target receiving both installations.
     pub project_id: ProjectId,
+    /// Managed reference gateway identifier retained for post-restart readiness.
+    pub managed_gateway_id: Uuid,
+    /// Immutable managed reference gateway revision installed by the fixture.
+    pub managed_gateway_revision_id: Uuid,
     /// Static full-page reference UI.
     pub static_ui: InstalledCookingUi,
     /// Managed iframe reference UI.
@@ -954,6 +958,8 @@ pub async fn build_and_install_reference_uis(
     Ok(InstalledCookingReferenceUis {
         organization_id,
         project_id: context.project_id,
+        managed_gateway_id: installed_gateway.gateway_id,
+        managed_gateway_revision_id: installed_gateway.revision_id,
         static_ui: listed.0,
         managed_ui: listed.1,
     })
