@@ -18,6 +18,9 @@ use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::{collections::HashSet, fmt::Write as _, path::Path};
 
+pub mod ui;
+pub use ui::{ParsedRepositoryUis, parse_repository_uis};
+
 /// Reusable release and typed-instance configuration version.
 pub const REUSABLE_RELEASE_VERSION: u32 = 2;
 

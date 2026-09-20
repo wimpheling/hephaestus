@@ -6,10 +6,25 @@ Owner: Astra orchestration / Luna bounded subtasks
 
 Persistent-service work is a completed prerequisite on the same feature branch
 and PR 51 at source checkpoint `8c1fb51`; repository-wide quality v4 passed.
-This UI task is now active. The first slice is limited to primitive release-UI
-declaration model validation. Serving, browser navigation, managed UI services,
-authority handoff, UI-kit publication, and acceptance evidence remain
-unchecked until their bounded designs and implementations are reviewed.
+This UI task is now active. The first slices cover primitive release-UI
+declaration model validation and source-level declaration parsing. Capture,
+persistence, exact-ID resolution, authorized inspection, serving, browser
+navigation, managed UI services, authority handoff, UI-kit publication, and
+acceptance evidence remain unchecked until their bounded designs and
+implementations are reviewed.
+
+## Current CI context (2026-09-20)
+
+The initial UI-branch CI run for `e573563` (`35480143840`) failed in the Rust
+test job at `daemon_loop_restores_active_service_without_manual_start`, during
+teardown at `gateway_recovery_tests.rs:3891` with an idle backend reported
+after pool shutdown. Browser and Cooking jobs passed. The preserved log is
+`/home/a/heph-ui-initial-ci-20260920.log`; investigation is pending and no
+functional root cause is claimed. Service-completion CI runs
+`35479824078` (`8c1fb51`) and `35479909080` (`7494f9a`) passed, and local
+quality v4 remains valid historical evidence. The current branch final gate
+and UI capture/publication work remain pending; source-parser validation has
+focused evidence below, with no capture or publication result claimed here.
 
 ## Primitive declaration checkpoint (2026-09-20)
 
@@ -29,6 +44,66 @@ and rustdoc passing in the v2 logs:
 `/home/a/heph-release-domain-ui-doc-v2-20260920.log`. Aggregate declaration
 publication, serving, browser, authority, UI-kit, and end-to-end acceptance
 checklist items remain unchecked.
+
+## Source parser validation checkpoint (2026-09-20)
+
+The `agent-config` UI module and types now validate the version-1 optional
+manifest, including the 256 KiB manifest, 16 UI, 16 API, and 256 static-file
+limits. The returned normalized configuration equals the hash serialization;
+over-limit inputs fail fast with redacted diagnostics. Validation covers scoped
+route collisions, HTML entrypoint and static-asset selection, and typed
+managed-gateway/API route references.
+
+The tests passed 22 unit tests, one existing integration test, and 10 new UI
+tests. Workspace formatting, strict `agent-config` Clippy, and rustdoc passed
+in `/home/a/heph-agent-config-ui-parser-fmt-v6-20260920.log`,
+`/home/a/heph-agent-config-ui-parser-test-v6-20260920.log`,
+`/home/a/heph-agent-config-ui-parser-clippy-v6-20260920.log`, and
+`/home/a/heph-agent-config-ui-parser-doc-v6-20260920.log`. Focused
+architecture validation also passed with `cargo +1.88.0 dev check architecture`
+(61 enabled rules, 2 migration-gated, all semantic dry-runs clean); evidence is
+`/home/a/heph-agent-config-ui-parser-architecture-v2-20260920.log`. This is
+source parser validation only; capture, persistence, exact artifact/agent ID
+resolution, authorized inspection, serving, and the aggregate UI checklist
+remain unchecked.
+
+## Reviewed declaration architecture (planned, not implemented)
+
+The reviewed v1 model optionally reads a repository sibling `heph.ui.toml`,
+captured from the exact Git commit during receive/build-request creation
+alongside the referenced `heph.gateways.toml`. An immutable build-request
+snapshot is consumed atomically by `CompleteBuild` so UI child records freeze
+with resolved artifact and agent IDs. Existing gateway declarations are read
+from the same commit at install; UI publication additionally validates and
+persists them at publication time.
+
+Static directory outputs flatten to files. A static declaration therefore
+maps each explicit route to an artifact path and MIME type, then resolves exact
+artifact IDs at publication. Managed UI declarations reference the exact
+same-release gateway name, route, and entrypoint. API access is declared by
+explicit gateway, method, and route bindings.
+
+The v1 limits are `no_store` caching, kit version 1, at most 16 UIs, 256
+static files, 16 APIs, and a 256 KiB manifest. Route-prefix collisions are
+forbidden within a scope, and UI keys are globally unique. Source-level parser
+validation is implemented and tested as recorded above; capture, persistence,
+publication, serving, browser, authority, and aggregate acceptance remain
+unchecked.
+
+Receive semantics remain planned: an absent `heph.ui` file preserves legacy
+behavior. A present but invalid UI declaration accepts the Git push/ref update
+while persisting redacted structured UI diagnostics and creating no
+UI-bearing build request. A valid declaration is captured from the exact
+commit and linked atomically to the build request. Database or Git-object
+failures are fatal. Replay of an existing receive reuses durable results
+without reinspection, and immutable-capture conflicts fail closed without
+overwriting the capture.
+
+The planned design stores a UI-specific source-manifest revision so an invalid
+manifest can retain diagnostics without a build request. The gateway manifest
+is captured only when the UI references a managed gateway or APIs; a static UI
+without APIs does not require it. Existing `heph.images` behavior remains
+outside this UI scope. Implementation remains pending.
 
 ## Outcome
 
