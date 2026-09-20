@@ -887,9 +887,9 @@ pub async fn build_and_install_reference_uis(
         UiInstallationContentKind::UI_INSTALLATION_CONTENT_KIND_STATIC,
         "reference",
         Some(&[
-            "index.html",
             "heph-ui-kit-v1.0.0.css",
             "heph-ui-kit-v1.0.0.js",
+            "index.html",
         ]),
         None,
     )?;
