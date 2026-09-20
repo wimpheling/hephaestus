@@ -34,7 +34,10 @@ use time::OffsetDateTime;
 use tokio::sync::Semaphore;
 use uuid::Uuid;
 
-use crate::ui_origin_config::{UiOriginConfig, UiOriginConfigError};
+use crate::{
+    ui_audit::{UiAuditRecorder, correlation_id, reason_for_bootstrap_error},
+    ui_origin_config::{UiOriginConfig, UiOriginConfigError},
+};
 
 /// The raw handoff is exactly 43 ASCII bytes. The extra allowance prevents a
 /// transport implementation from buffering an unbounded malformed body.
@@ -116,6 +119,7 @@ pub struct UiBootstrapState {
     config: UiBootstrapConfig,
     permits: Arc<Semaphore>,
     deadline: Duration,
+    audit: UiAuditRecorder,
 }
 
 impl UiBootstrapState {
@@ -125,6 +129,7 @@ impl UiBootstrapState {
         host_resolver: Arc<dyn UiGenerationHostResolver>,
         sessions: Arc<dyn UiBrowserSessionStore>,
         config: UiBootstrapConfig,
+        audit_sink: Arc<dyn release_service::UiRequestAuditSink>,
     ) -> Self {
         Self {
             host_resolver,
@@ -132,6 +137,7 @@ impl UiBootstrapState {
             config,
             permits: Arc::new(Semaphore::new(DEFAULT_BOOTSTRAP_CONCURRENCY)),
             deadline: DEFAULT_BOOTSTRAP_DEADLINE,
+            audit: UiAuditRecorder::new(audit_sink),
         }
     }
 
@@ -157,26 +163,86 @@ pub fn router(state: Arc<UiBootstrapState>) -> Router {
         .with_state(state)
 }
 
+// Keep the ordered authority, host, and response-audit phases together so a
+// denial cannot accidentally bypass the same correlation path.
+#[allow(clippy::too_many_lines)]
 async fn get_bootstrap(
     ConnectInfo(peer): ConnectInfo<SocketAddr>,
     State(state): State<Arc<UiBootstrapState>>,
     request: Request<Body>,
 ) -> Response {
+    let request_id = correlation_id(request.extensions());
     if !peer.ip().is_loopback() {
-        return error_response(StatusCode::FORBIDDEN, "bootstrap_forbidden");
+        return state
+            .audit
+            .denial(
+                request_id,
+                release_service::UiRequestAuditSurface::Bootstrap,
+                release_service::UiRequestAuditReason::Unauthorized,
+                error_response(StatusCode::FORBIDDEN, "bootstrap_forbidden"),
+            )
+            .await;
     }
     let Ok(_permit) = state.permits.clone().try_acquire_owned() else {
-        return error_response(StatusCode::TOO_MANY_REQUESTS, "bootstrap_busy");
+        return state
+            .audit
+            .denial(
+                request_id,
+                release_service::UiRequestAuditSurface::Bootstrap,
+                release_service::UiRequestAuditReason::Unavailable,
+                error_response(StatusCode::TOO_MANY_REQUESTS, "bootstrap_busy"),
+            )
+            .await;
     };
     let authority = match request_authority(&request) {
         Ok(authority) => authority,
-        Err(status) => return error_response(status, "bootstrap_unavailable"),
+        Err(status) => {
+            return state
+                .audit
+                .denial(
+                    request_id,
+                    release_service::UiRequestAuditSurface::Bootstrap,
+                    release_service::UiRequestAuditReason::InvalidInput,
+                    error_response(status, "bootstrap_unavailable"),
+                )
+                .await;
+        }
     };
     let _host = match tokio::time::timeout(state.deadline, resolve_host(&state, authority)).await {
         Ok(Ok(Some(host))) => host,
-        Ok(Ok(None)) => return error_response(StatusCode::NOT_FOUND, "bootstrap_unavailable"),
-        Ok(Err(status)) => return error_response(status, "bootstrap_unavailable"),
-        Err(_) => return error_response(StatusCode::SERVICE_UNAVAILABLE, "bootstrap_unavailable"),
+        Ok(Ok(None)) => {
+            return state
+                .audit
+                .denial(
+                    request_id,
+                    release_service::UiRequestAuditSurface::Bootstrap,
+                    release_service::UiRequestAuditReason::NotFound,
+                    error_response(StatusCode::NOT_FOUND, "bootstrap_unavailable"),
+                )
+                .await;
+        }
+        Ok(Err(status)) => {
+            return state
+                .audit
+                .denial(
+                    request_id,
+                    release_service::UiRequestAuditSurface::Bootstrap,
+                    release_service::UiRequestAuditReason::InvalidInput,
+                    error_response(status, "bootstrap_unavailable"),
+                )
+                .await;
+        }
+        Err(_) => {
+            return state
+                .audit
+                .denial(
+                    request_id,
+                    release_service::UiRequestAuditSurface::Bootstrap,
+                    release_service::UiRequestAuditReason::Unavailable,
+                    error_response(StatusCode::SERVICE_UNAVAILABLE, "bootstrap_unavailable"),
+                )
+                .await;
+        }
     };
     let nonce = URL_SAFE_NO_PAD.encode(Uuid::new_v4().as_bytes());
     let html = bootstrap_html(&nonce, state.config.platform_origin());
@@ -197,44 +263,159 @@ async fn get_bootstrap(
             state.config.platform_origin()
         ),
     );
-    response
+    state
+        .audit
+        .allowed(
+            request_id,
+            release_service::UiRequestAuditSurface::Bootstrap,
+            release_service::UiRequestAuditContext::anonymous(),
+            release_service::UiRequestAuditOutcome::Succeeded,
+            release_service::UiRequestAuditReason::None,
+            response,
+        )
+        .await
 }
 
+// Keep the ordered authority, exchange, and response-audit phases together so
+// every terminal result retains the same correlation and timeout semantics.
+#[allow(clippy::too_many_lines)]
 async fn post_bootstrap(
     ConnectInfo(peer): ConnectInfo<SocketAddr>,
     State(state): State<Arc<UiBootstrapState>>,
     request: Request<Body>,
 ) -> Response {
+    let request_id = correlation_id(request.extensions());
     if !peer.ip().is_loopback() {
-        return error_response(StatusCode::FORBIDDEN, "bootstrap_forbidden");
+        return state
+            .audit
+            .denial(
+                request_id,
+                release_service::UiRequestAuditSurface::Bootstrap,
+                release_service::UiRequestAuditReason::Unauthorized,
+                error_response(StatusCode::FORBIDDEN, "bootstrap_forbidden"),
+            )
+            .await;
     }
     let Ok(_permit) = state.permits.clone().try_acquire_owned() else {
-        return error_response(StatusCode::TOO_MANY_REQUESTS, "bootstrap_busy");
+        return state
+            .audit
+            .denial(
+                request_id,
+                release_service::UiRequestAuditSurface::Bootstrap,
+                release_service::UiRequestAuditReason::Unavailable,
+                error_response(StatusCode::TOO_MANY_REQUESTS, "bootstrap_busy"),
+            )
+            .await;
     };
     let authority = match request_authority(&request) {
         Ok(authority) => authority,
-        Err(status) => return error_response(status, "bootstrap_unavailable"),
+        Err(status) => {
+            return state
+                .audit
+                .denial(
+                    request_id,
+                    release_service::UiRequestAuditSurface::Bootstrap,
+                    release_service::UiRequestAuditReason::InvalidInput,
+                    error_response(status, "bootstrap_unavailable"),
+                )
+                .await;
+        }
     };
     let host = match tokio::time::timeout(state.deadline, resolve_host(&state, authority)).await {
         Ok(Ok(Some(host))) => host,
-        Ok(Ok(None)) => return error_response(StatusCode::NOT_FOUND, "bootstrap_unavailable"),
-        Ok(Err(status)) => return error_response(status, "bootstrap_unavailable"),
-        Err(_) => return error_response(StatusCode::SERVICE_UNAVAILABLE, "bootstrap_unavailable"),
+        Ok(Ok(None)) => {
+            return state
+                .audit
+                .denial(
+                    request_id,
+                    release_service::UiRequestAuditSurface::Bootstrap,
+                    release_service::UiRequestAuditReason::NotFound,
+                    error_response(StatusCode::NOT_FOUND, "bootstrap_unavailable"),
+                )
+                .await;
+        }
+        Ok(Err(status)) => {
+            return state
+                .audit
+                .denial(
+                    request_id,
+                    release_service::UiRequestAuditSurface::Bootstrap,
+                    release_service::UiRequestAuditReason::InvalidInput,
+                    error_response(status, "bootstrap_unavailable"),
+                )
+                .await;
+        }
+        Err(_) => {
+            return state
+                .audit
+                .denial(
+                    request_id,
+                    release_service::UiRequestAuditSurface::Bootstrap,
+                    release_service::UiRequestAuditReason::Unavailable,
+                    error_response(StatusCode::SERVICE_UNAVAILABLE, "bootstrap_unavailable"),
+                )
+                .await;
+        }
     };
     if !exact_origin_matches(&request, &host, &state.config) {
-        return error_response(StatusCode::FORBIDDEN, "bootstrap_forbidden");
+        return state
+            .audit
+            .denial(
+                request_id,
+                release_service::UiRequestAuditSurface::Bootstrap,
+                release_service::UiRequestAuditReason::Unauthorized,
+                error_response(StatusCode::FORBIDDEN, "bootstrap_forbidden"),
+            )
+            .await;
     }
     let Ok(theme) = parse_theme(request.uri().query()) else {
-        return error_response(StatusCode::BAD_REQUEST, "bootstrap_invalid_request");
+        return state
+            .audit
+            .denial(
+                request_id,
+                release_service::UiRequestAuditSurface::Bootstrap,
+                release_service::UiRequestAuditReason::InvalidInput,
+                error_response(StatusCode::BAD_REQUEST, "bootstrap_invalid_request"),
+            )
+            .await;
     };
-    let exchange = tokio::time::timeout(state.deadline, exchange(&state, request, host)).await;
+    let exchange =
+        tokio::time::timeout(state.deadline, exchange(&state, request_id, request, host)).await;
     let created = match exchange {
         Ok(Ok(created)) => created,
-        Ok(Err(error)) => return exchange_error_response(error),
-        Err(_) => return error_response(StatusCode::SERVICE_UNAVAILABLE, "bootstrap_unavailable"),
+        Ok(Err(error)) => {
+            return state
+                .audit
+                .denial(
+                    request_id,
+                    release_service::UiRequestAuditSurface::Bootstrap,
+                    reason_for_bootstrap_error(error),
+                    exchange_error_response(error),
+                )
+                .await;
+        }
+        Err(_) => {
+            return state
+                .audit
+                .undetermined(
+                    request_id,
+                    release_service::UiRequestAuditSurface::Bootstrap,
+                    release_service::UiRequestAuditContext::anonymous(),
+                    error_response(StatusCode::SERVICE_UNAVAILABLE, "bootstrap_unavailable"),
+                )
+                .await;
+        }
     };
     let Some(max_age) = child_max_age(created.expires_at) else {
-        return error_response(StatusCode::SERVICE_UNAVAILABLE, "bootstrap_unavailable");
+        return state
+            .audit
+            .denial(
+                request_id,
+                release_service::UiRequestAuditSurface::Bootstrap,
+                release_service::UiRequestAuditReason::Unavailable,
+                error_response(StatusCode::SERVICE_UNAVAILABLE, "bootstrap_unavailable"),
+            )
+            .await;
     };
     let cookie = format!(
         "{UI_CHILD_COOKIE}={}; Path=/; Max-Age={max_age}; Secure; HttpOnly; SameSite=Strict",
@@ -254,7 +435,24 @@ async fn post_bootstrap(
     add_no_store(headers);
     insert_header(headers, header::X_CONTENT_TYPE_OPTIONS, "nosniff");
     insert_header(headers, header::SET_COOKIE, &cookie);
-    response
+    state
+        .audit
+        .allowed(
+            request_id,
+            release_service::UiRequestAuditSurface::Bootstrap,
+            release_service::UiRequestAuditContext::verified(
+                created.context.actor_id,
+                created.context.organization_id,
+                created.context.installation_id,
+                created.context.generation_id,
+                Some(created.context.session_id),
+                None,
+            ),
+            release_service::UiRequestAuditOutcome::Succeeded,
+            release_service::UiRequestAuditReason::None,
+            response,
+        )
+        .await
 }
 
 async fn resolve_host(
@@ -299,6 +497,7 @@ fn request_authority(request: &Request<Body>) -> Result<String, StatusCode> {
 
 async fn exchange(
     state: &UiBootstrapState,
+    request_id: RequestId,
     request: Request<Body>,
     host: UiGenerationHost,
 ) -> Result<ExchangeCreated, UiBrowserHandoffError> {
@@ -321,7 +520,7 @@ async fn exchange(
     let created = state
         .sessions
         .exchange_ui_browser_handoff(ExchangeUiBrowserHandoff {
-            request_id: RequestId::new(),
+            request_id,
             handoff_secret,
             expected_generation_id: host.generation_id(),
             child_secret,
@@ -677,8 +876,57 @@ mod tests {
                 reject,
             }),
             UiBootstrapConfig::new(namespace, port, "https://app.example").expect("config"),
+            Arc::new(crate::ui_audit::NoopAuditSink),
         );
         (Arc::new(state), authority)
+    }
+
+    #[tokio::test]
+    async fn bootstrap_router_appends_correlation_before_exchange_denial() {
+        let generation_id = UiInstallationGenerationId::from_uuid(Uuid::new_v4());
+        let host_calls = Arc::new(AtomicUsize::new(0));
+        let exchange_calls = Arc::new(AtomicUsize::new(0));
+        let sink = Arc::new(crate::ui_audit::CapturingAuditSink::default());
+        let namespace = UiNamespace::parse("ui.app.example").expect("namespace");
+        let port = UiPublicPort::https_default();
+        let host = UiGenerationHost::from_generation_id(generation_id);
+        let authority = host.authority(&namespace, port);
+        let state = Arc::new(UiBootstrapState::new(
+            Arc::new(FakeHostResolver {
+                generation_id,
+                calls: host_calls,
+            }),
+            Arc::new(FakeSessions {
+                exchanges: exchange_calls,
+                reject: true,
+            }),
+            UiBootstrapConfig::new(namespace, port, "https://app.example").expect("config"),
+            Arc::clone(&sink) as Arc<dyn release_service::UiRequestAuditSink>,
+        ));
+        let mut request = Request::builder()
+            .method("POST")
+            .uri(UI_BOOTSTRAP_PATH)
+            .header(header::HOST, &authority)
+            .header(header::ORIGIN, format!("https://{authority}"))
+            .body(Body::from(URL_SAFE_NO_PAD.encode([7_u8; 32])))
+            .expect("request");
+        request
+            .extensions_mut()
+            .insert(ConnectInfo(SocketAddr::from(([127, 0, 0, 1], 4321))));
+        let response = router(state).oneshot(request).await.expect("response");
+        assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+        let events = sink.events.lock().expect("events");
+        assert_eq!(events.len(), 1);
+        assert_eq!(
+            events[0].surface(),
+            release_service::UiRequestAuditSurface::Bootstrap
+        );
+        assert_eq!(
+            events[0].decision(),
+            release_service::UiRequestAuditDecision::Denied
+        );
+        assert!(events[0].context().actor_id().is_none());
+        drop(events);
     }
 
     #[tokio::test]

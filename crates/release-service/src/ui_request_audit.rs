@@ -62,6 +62,9 @@ pub enum UiRequestAuditDecision {
     Allowed,
     /// The request was rejected before the protected operation.
     Denied,
+    /// The bounded operation may have started, but its final disposition is
+    /// unknowable after a deadline or transport cancellation.
+    Undetermined,
 }
 
 impl UiRequestAuditDecision {
@@ -71,6 +74,7 @@ impl UiRequestAuditDecision {
         match self {
             Self::Allowed => "allowed",
             Self::Denied => "denied",
+            Self::Undetermined => "undetermined",
         }
     }
 }
@@ -84,6 +88,8 @@ pub enum UiRequestAuditOutcome {
     Failed,
     /// The denied phase did not perform the protected operation.
     NotAttempted,
+    /// The operation may have executed, but completion could not be observed.
+    Unknown,
 }
 
 impl UiRequestAuditOutcome {
@@ -94,6 +100,7 @@ impl UiRequestAuditOutcome {
             Self::Succeeded => "succeeded",
             Self::Failed => "failed",
             Self::NotAttempted => "not_attempted",
+            Self::Unknown => "unknown",
         }
     }
 }
@@ -416,5 +423,11 @@ mod tests {
             UiRequestAuditReason::GenerationMismatch.as_str(),
             "generation_mismatch"
         );
+        assert_eq!(
+            UiRequestAuditDecision::Undetermined.as_str(),
+            "undetermined"
+        );
+        assert_eq!(UiRequestAuditOutcome::Unknown.as_str(), "unknown");
+        assert_eq!(UiRequestAuditReason::Unavailable.as_str(), "unavailable");
     }
 }

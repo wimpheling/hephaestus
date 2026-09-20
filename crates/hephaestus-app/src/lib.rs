@@ -5,6 +5,7 @@ mod event_adapter;
 mod event_cursor;
 pub mod rpc;
 mod service_log_maintenance;
+pub(crate) mod ui_audit;
 mod ui_bootstrap;
 mod ui_browser_content;
 mod ui_origin_config;
@@ -123,8 +124,8 @@ use registry_zot::{RegistryPullTokenProvider, ZotClientConfig, ZotClientError, Z
 use release_artifact_store::LocalArtifactStore;
 use release_domain::{BuildRequestId, ReleaseCommandKey};
 use release_postgres::{
-    PgUiBrowserServingStore, PgUiBrowserSessionStore, PgUiGenerationHostResolver, ReleaseService,
-    ReleaseServiceError,
+    PgUiBrowserServingStore, PgUiBrowserSessionStore, PgUiGenerationHostResolver,
+    PgUiRequestAuditRepository, ReleaseService, ReleaseServiceError,
 };
 use release_service::{BeginUpdateHook, UiBrowserSessionStore};
 use review_domain::CONTROL_EXECUTE_SUBJECT;
@@ -193,7 +194,7 @@ use workspace_local::{LocalWorkspaceConfig, LocalWorkspaceManager};
 use workspace_postgres::PgWorkspaceMetadataRepository;
 
 /// Ordered database migration expected by this application version.
-pub const EXPECTED_DATABASE_MIGRATION: i64 = 93;
+pub const EXPECTED_DATABASE_MIGRATION: i64 = 94;
 
 const GATEWAY_SERVICE_SERVING_CAPACITY: usize = 8;
 const GATEWAY_SERVICE_REPLACEMENT_CAPACITY: usize = 2;
@@ -1725,6 +1726,9 @@ impl HephaestusApp {
             self.service_log_pool.clone(),
             self.application_pool.clone(),
         ));
+        let audit_sink: Arc<dyn release_service::UiRequestAuditSink> = Arc::new(
+            PgUiRequestAuditRepository::new(self.service_log_pool.clone()),
+        );
         let host_resolver: Arc<dyn release_service::UiGenerationHostResolver> = Arc::new(
             PgUiGenerationHostResolver::new(self.application_pool.clone()),
         );
@@ -1732,6 +1736,7 @@ impl HephaestusApp {
             Arc::clone(&host_resolver),
             sessions,
             origin,
+            Arc::clone(&audit_sink),
         ));
         let serving: Arc<dyn release_service::UiBrowserHttpServingProjection> =
             Arc::new(PgUiBrowserServingStore::new(self.application_pool.clone()));
@@ -1747,13 +1752,15 @@ impl HephaestusApp {
                 ui.namespace().clone(),
                 ui.public_port(),
                 ui.platform_origin().to_owned(),
+                Arc::clone(&audit_sink),
             )
             .map_err(component("UI content configuration"))?,
         );
-        let router = ui_origin_wiring::bounded_ui_router(
+        let router = ui_origin_wiring::bounded_ui_router_with_audit(
             ui_bootstrap::router(bootstrap).merge(ui_browser_content::router(content)),
             Arc::new(Semaphore::new(128)),
             Duration::from_secs(30),
+            Arc::clone(&audit_sink),
         );
         Ok(Some((listener, router)))
     }
@@ -1852,6 +1859,9 @@ impl HephaestusApp {
             )),
         )
         .map_err(component("Connect RPC configuration"))?;
+        let ui_request_audit: Arc<dyn release_service::UiRequestAuditSink> = Arc::new(
+            release_postgres::PgUiRequestAuditRepository::new(self.service_log_pool.clone()),
+        );
         let registry_store = PgRegistryStore::new(self.pool.clone());
         let registry_reconciliation_adapter = PostgresRegistryReconciliation {
             store: registry_store.clone(),
@@ -1921,7 +1931,8 @@ impl HephaestusApp {
                 rpc::MediatorAuthenticationState::new(
                     rpc::MediatorAuthenticator::new(&self.rpc_mediator_signing_key),
                     browser_sessions,
-                ),
+                )
+                .with_ui_request_audit_sink(ui_request_audit),
                 rpc::mediator_identity_middleware,
             ));
         let listener = tokio::net::TcpListener::bind(self.http_listen)

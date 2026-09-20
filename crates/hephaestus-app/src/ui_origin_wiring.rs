@@ -4,12 +4,14 @@ use async_trait::async_trait;
 use axum::{Router, middleware, middleware::Next};
 use bytes::Bytes;
 use gateway_edge::{
-    GatewayDispatcher, GatewayProviderResponse, GatewayScheme, TrustedRequestMetadata,
+    GatewayDispatcher, GatewayScheme, TrustedRequestMetadata, UiDispatchResult,
     UiGatewayAdmissionProvider, UiGatewayAuthority, UiGatewayRequest, UiGatewayRequestKind,
 };
 use http::{HeaderMap, Method, StatusCode};
+use identity_domain::RequestId;
 use release_service::{
     UiGatewayRequestKind as ReleaseGatewayRequestKind, UiGenerationHost, UiNamespace, UiPublicPort,
+    UiRequestAuditContext, UiRequestAuditReason, UiRequestAuditSink, UiRequestAuditSurface,
 };
 use std::{
     net::{IpAddr, Ipv4Addr},
@@ -17,20 +19,23 @@ use std::{
     time::Duration,
 };
 
+use crate::ui_audit::{UiAuditRecorder, UiRequestCorrelation};
 use crate::ui_browser_content::{
-    UiContentError, UiGatewayDispatchAuthority, UiGatewayDispatcher, UiGatewayResponse,
+    UiContentError, UiGatewayDispatchAuthority, UiGatewayDispatchResult, UiGatewayDispatcher,
+    UiGatewayResponse,
 };
 
 /// Object-safe call surface retaining the concrete dispatcher required by
 /// `GatewayDispatcher::dispatch_ui`.
 #[async_trait]
 pub trait UiDispatchCore: Send + Sync {
-    /// Dispatches through the existing VM handler and invocation lifecycle.
-    async fn dispatch_ui_request(
+    /// Dispatches through the existing VM handler and invocation lifecycle,
+    /// retaining the typed admission/execution disposition for audit.
+    async fn dispatch_ui_request_detailed(
         &self,
         request: UiGatewayRequest,
         provider: &dyn UiGatewayAdmissionProvider,
-    ) -> GatewayProviderResponse;
+    ) -> UiDispatchResult;
 }
 
 #[async_trait]
@@ -40,12 +45,12 @@ where
     H: gateway_edge::GatewayVmHandler + Send + Sync,
     I: gateway_edge::GatewayInvocationRecorder + Send + Sync,
 {
-    async fn dispatch_ui_request(
+    async fn dispatch_ui_request_detailed(
         &self,
         request: UiGatewayRequest,
         provider: &dyn UiGatewayAdmissionProvider,
-    ) -> GatewayProviderResponse {
-        self.dispatch_ui(request, provider).await
+    ) -> UiDispatchResult {
+        self.dispatch_ui_detailed(request, provider).await
     }
 }
 
@@ -81,14 +86,14 @@ where
     C: UiDispatchCore + 'static,
     P: UiGatewayAdmissionProvider + 'static,
 {
-    async fn dispatch_ui(
+    async fn dispatch_ui_detailed(
         &self,
         authority: UiGatewayDispatchAuthority,
         method: gateway_domain::HttpMethod,
         path_and_query: String,
         headers: HeaderMap,
         body: Bytes,
-    ) -> Result<UiGatewayResponse, UiContentError> {
+    ) -> Result<UiGatewayDispatchResult, UiContentError> {
         let (request_kind, canonical_path, request_path_and_query) = match authority.request.kind {
             ReleaseGatewayRequestKind::Managed => {
                 let canonical_path = authority
@@ -135,14 +140,17 @@ where
                 request_id: authority.request_id.as_uuid(),
             },
         };
-        let response = self
+        let dispatch = self
             .core
-            .dispatch_ui_request(request, self.admission.as_ref())
+            .dispatch_ui_request_detailed(request, self.admission.as_ref())
             .await;
-        Ok(UiGatewayResponse {
-            status: response.response.status,
-            headers: response.response.headers,
-            body: response.response.body,
+        Ok(UiGatewayDispatchResult {
+            response: UiGatewayResponse {
+                status: dispatch.response.response.status,
+                headers: dispatch.response.response.headers.clone(),
+                body: dispatch.response.response.body.clone(),
+            },
+            disposition: dispatch.disposition,
         })
     }
 }
@@ -167,6 +175,7 @@ const fn to_http_method(method: gateway_domain::HttpMethod) -> Method {
 }
 
 /// Applies one bounded deadline and permit pool to every UI-origin route.
+#[cfg(test)]
 pub fn bounded_ui_router<S>(
     router: Router<S>,
     permits: Arc<tokio::sync::Semaphore>,
@@ -198,18 +207,98 @@ where
     ))
 }
 
+/// Audited outer bound used by the production composition root. It allocates
+/// correlation before permit/deadline denial; inner handlers own verified
+/// success and protected-operation outcomes.
+pub fn bounded_ui_router_with_audit<S>(
+    router: Router<S>,
+    permits: Arc<tokio::sync::Semaphore>,
+    deadline: Duration,
+    audit: Arc<dyn UiRequestAuditSink>,
+) -> Router<S>
+where
+    S: Clone + Send + Sync + 'static,
+{
+    let audit = Arc::new(UiAuditRecorder::new(audit));
+    router.layer(middleware::from_fn(
+        move |request: http::Request<axum::body::Body>, next: Next| {
+            let permits = Arc::clone(&permits);
+            let audit = Arc::clone(&audit);
+            async move {
+                let request_id = RequestId::new();
+                let mut request = request;
+                request
+                    .extensions_mut()
+                    .insert(UiRequestCorrelation(request_id));
+                let surface = if request.uri().path()
+                    == release_service::ui_browser_host::UI_BOOTSTRAP_PATH
+                {
+                    UiRequestAuditSurface::Bootstrap
+                } else {
+                    UiRequestAuditSurface::Content
+                };
+                let denied = |status: StatusCode, reason: UiRequestAuditReason| {
+                    let audit = Arc::clone(&audit);
+                    async move {
+                        audit
+                            .denial(
+                                request_id,
+                                surface,
+                                reason,
+                                axum::response::Response::builder()
+                                    .status(status)
+                                    .header(http::header::CACHE_CONTROL, "no-store")
+                                    .body(axum::body::Body::empty())
+                                    .expect("bounded UI response"),
+                            )
+                            .await
+                    }
+                };
+                let Ok(_permit) = permits.try_acquire_owned() else {
+                    return denied(
+                        StatusCode::TOO_MANY_REQUESTS,
+                        UiRequestAuditReason::Unavailable,
+                    )
+                    .await;
+                };
+                match tokio::time::timeout(deadline, next.run(request)).await {
+                    Ok(response) => response,
+                    Err(_) => {
+                        audit
+                            .undetermined(
+                                request_id,
+                                surface,
+                                UiRequestAuditContext::anonymous(),
+                                axum::response::Response::builder()
+                                    .status(StatusCode::SERVICE_UNAVAILABLE)
+                                    .header(http::header::CACHE_CONTROL, "no-store")
+                                    .body(axum::body::Body::empty())
+                                    .expect("bounded UI timeout response"),
+                            )
+                            .await
+                    }
+                }
+            }
+        },
+    ))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use async_trait::async_trait;
     use axum::{body::Body, routing::get};
     use forge_domain::OrganizationId;
-    use gateway_edge::{GatewayResponse, UiGatewayAdmission, UiGatewayAdmissionError};
+    use gateway_edge::{UiGatewayAdmission, UiGatewayAdmissionError};
     use identity_domain::{RequestId, UserId};
     use release_domain::{
         UiInstallationGenerationId, UiInstallationId, ui_browser::UiBrowserSessionId,
     };
     use release_service::{UiBrowserHttpPath, UiGatewayRequestProjection};
+    use release_service::{
+        UiRequestAuditDecision, UiRequestAuditOutcome, UiRequestAuditReason, UiRequestAuditSink,
+        UiRequestAuditSurface,
+    };
     use std::sync::Mutex;
     use tower::ServiceExt;
     use uuid::Uuid;
@@ -220,20 +309,26 @@ mod tests {
 
     #[async_trait]
     impl UiDispatchCore for CapturingCore {
-        async fn dispatch_ui_request(
+        async fn dispatch_ui_request_detailed(
             &self,
             request: UiGatewayRequest,
             _provider: &dyn UiGatewayAdmissionProvider,
-        ) -> GatewayProviderResponse {
+        ) -> UiDispatchResult {
             *self.request.lock().expect("capture lock") = Some(request);
-            GatewayProviderResponse {
-                response: GatewayResponse {
-                    status: StatusCode::OK,
-                    headers: HeaderMap::new(),
-                    body: Bytes::from_static(b"ok"),
-                    mailbox_publication: None,
+            UiDispatchResult {
+                response: gateway_edge::GatewayProviderResponse {
+                    response: gateway_edge::GatewayResponse {
+                        status: StatusCode::OK,
+                        headers: HeaderMap::new(),
+                        body: Bytes::from_static(b"ok"),
+                        mailbox_publication: None,
+                    },
+                    invocation_id: Uuid::new_v4(),
                 },
-                invocation_id: Uuid::new_v4(),
+                disposition: gateway_edge::UiDispatchDisposition::Admitted {
+                    outcome: gateway_edge::GatewayInvocationOutcome::Completed,
+                    completion_persisted: true,
+                },
             }
         }
     }
@@ -290,7 +385,7 @@ mod tests {
             gateway_domain::HttpMethod::Get,
         );
         bridge
-            .dispatch_ui(
+            .dispatch_ui_detailed(
                 authority,
                 gateway_domain::HttpMethod::Get,
                 "/reference/assets/app.js?x=%2F%2F&empty=".to_owned(),
@@ -332,7 +427,7 @@ mod tests {
             UiPublicPort::https_default(),
         );
         bridge
-            .dispatch_ui(
+            .dispatch_ui_detailed(
                 authority(
                     RequestId::new(),
                     ReleaseGatewayRequestKind::Api,
@@ -355,6 +450,67 @@ mod tests {
         assert_eq!(request.authority.request_kind, UiGatewayRequestKind::Api);
         assert_eq!(request.authority.canonical_request_path, "/api/ready");
         assert_eq!(request.request_path_and_query, "/api/ready?");
+    }
+
+    #[tokio::test]
+    async fn audited_outer_bound_records_permit_denial_before_response() {
+        let permits = Arc::new(tokio::sync::Semaphore::new(1));
+        let _held = permits.clone().try_acquire_owned().expect("permit");
+        let sink = Arc::new(crate::ui_audit::CapturingAuditSink::default());
+        let router = bounded_ui_router_with_audit(
+            Router::new().route("/healthz", get(|| async { "ok" })),
+            permits,
+            Duration::from_secs(1),
+            Arc::clone(&sink) as Arc<dyn UiRequestAuditSink>,
+        );
+        let response = router
+            .oneshot(
+                axum::http::Request::get("/healthz")
+                    .body(Body::empty())
+                    .expect("request"),
+            )
+            .await
+            .expect("response");
+        assert_eq!(response.status(), StatusCode::TOO_MANY_REQUESTS);
+        let events = sink.events.lock().expect("events");
+        assert_eq!(events.len(), 1);
+        assert_eq!(events[0].surface(), UiRequestAuditSurface::Content);
+        assert_eq!(events[0].decision(), UiRequestAuditDecision::Denied);
+        assert_eq!(events[0].reason(), UiRequestAuditReason::Unavailable);
+        assert!(events[0].context().actor_id().is_none());
+        drop(events);
+    }
+
+    #[tokio::test]
+    async fn audited_outer_deadline_records_unknown_after_operation_may_have_started() {
+        let sink = Arc::new(crate::ui_audit::CapturingAuditSink::default());
+        let router = bounded_ui_router_with_audit(
+            Router::new().route(
+                "/healthz",
+                get(|| async {
+                    tokio::time::sleep(Duration::from_millis(20)).await;
+                    "late"
+                }),
+            ),
+            Arc::new(tokio::sync::Semaphore::new(1)),
+            Duration::from_millis(1),
+            Arc::clone(&sink) as Arc<dyn UiRequestAuditSink>,
+        );
+        let response = router
+            .oneshot(
+                axum::http::Request::get("/healthz")
+                    .body(Body::empty())
+                    .expect("request"),
+            )
+            .await
+            .expect("response");
+        assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
+        let events = sink.events.lock().expect("events");
+        assert_eq!(events.len(), 1);
+        assert_eq!(events[0].decision(), UiRequestAuditDecision::Undetermined);
+        assert_eq!(events[0].outcome(), UiRequestAuditOutcome::Unknown);
+        assert_eq!(events[0].reason(), UiRequestAuditReason::Unavailable);
+        drop(events);
     }
 
     #[tokio::test]

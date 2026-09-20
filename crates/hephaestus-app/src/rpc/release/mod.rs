@@ -28,14 +28,15 @@ pub(super) struct ReleaseRpc {
     pub(super) ui_installations: Arc<release_postgres::ReleaseService>,
     pub(super) ui_navigator: Arc<release_postgres::PgUiInstallationNavigator>,
     pub(super) ui_browser: Arc<release_postgres::PgUiBrowserSessionStore>,
+    pub(super) ui_request_audit: Arc<dyn release_service::UiRequestAuditSink>,
     ui_cursor_codec: ui::UiInstallationCursorCodec,
     authenticator: MediatorAuthenticator,
     receipts: MutationReceipts,
 }
 
 impl ReleaseRpc {
-    // Composition wires the existing release/event dependencies and the three
-    // UI ports; keeping them explicit preserves their ownership boundaries.
+    // Composition wires the existing release/event dependencies and the UI
+    // ports; keeping them explicit preserves their ownership boundaries.
     #[allow(clippy::too_many_arguments)]
     const fn new(
         pool: PgPool,
@@ -46,6 +47,7 @@ impl ReleaseRpc {
         ui_installations: Arc<release_postgres::ReleaseService>,
         ui_navigator: Arc<release_postgres::PgUiInstallationNavigator>,
         ui_browser: Arc<release_postgres::PgUiBrowserSessionStore>,
+        ui_request_audit: Arc<dyn release_service::UiRequestAuditSink>,
         cursor_key: [u8; 32],
     ) -> Self {
         Self {
@@ -55,6 +57,7 @@ impl ReleaseRpc {
             ui_installations,
             ui_navigator,
             ui_browser,
+            ui_request_audit,
             ui_cursor_codec: ui::UiInstallationCursorCodec::new(cursor_key),
             authenticator,
             receipts,
@@ -76,6 +79,7 @@ pub(super) fn register(
     ui_installations: Arc<release_postgres::ReleaseService>,
     ui_navigator: Arc<release_postgres::PgUiInstallationNavigator>,
     ui_browser: Arc<release_postgres::PgUiBrowserSessionStore>,
+    ui_request_audit: Arc<dyn release_service::UiRequestAuditSink>,
 ) -> Router {
     Arc::new(ReleaseRpc::new(
         pool.clone(),
@@ -86,6 +90,7 @@ pub(super) fn register(
         ui_installations,
         ui_navigator,
         ui_browser,
+        ui_request_audit,
         cursor_key,
     ))
     .register(router)

@@ -12,8 +12,8 @@ and application-role request authentication have passed focused verification.
 Activation/rollback and explicit-organization navigation also pass focused
 verification. The UI RPC transport checkpoint now passes its expanded real
 matrix. Gateway admission, host/resource projection, Phoenix navigation, and
-reference theme helpers pass focused checks. The bounded HTTP listener is committed. Current work integrates request-wide
-audit and verifies installed-browser acceptance.
+reference theme helpers pass focused checks. The bounded HTTP listener and request-wide audit now pass focused verification.
+Current work verifies installed-browser acceptance.
 The handoff remains the record of the stopped session; new evidence is recorded
 below as each resumed slice passes review and verification.
 
@@ -33,10 +33,63 @@ implemented; reference-release integration remains open.
 Verified static-byte loading and read-only release-page metadata display are
 implemented. Durable browser sessions are integrated through RPC and Phoenix.
 Installation lifecycle and the static/managed HTTP serving baseline are committed.
-Request-wide audit, installed browser navigation/authorization/isolation, real
-Caddy/VM/browser proofs, and the final integrated quality gate remain incomplete. The user approved organization-owned
+Installed browser navigation/authorization/isolation, real Caddy/VM/browser
+proofs, and the final integrated quality gate remain incomplete. The user approved organization-owned
 global installations and organization isolation. Historical checkpoints record the state
 at their time; later integration checkpoints supersede earlier pending notes.
+
+## HTTP and RPC request-audit checkpoint (2026-09-20)
+
+The production UI listener now shares a worker-backed audit sink across
+bootstrap, static, managed, and declared API serving. One server-generated
+request ID follows the outer middleware, handlers, exchange, and gateway
+invocation. Every independent append has a 250 ms budget. Denials retain their
+original response if the sink fails; successful responses wait for durable
+audit and become unavailable if it fails. Warnings contain only closed labels
+and correlation IDs.
+
+Migration 94 adds exactly the `undetermined/unknown` decision/outcome pair for
+operations whose execution or commit cannot be determined after timeout or
+completion-store failure. Typed gateway outcomes distinguish permission denial
+from an admitted guest HTTP 403. Tests observe guest dispatch starting before a
+timeout and verify unknown classification. Outer and inner records describe
+phases; distributed exactly-once audit delivery is not claimed.
+
+The generated handoff RPC path now audits authentication and pre-store failures,
+including decoder rejection. Its request-local marker prevents duplicate
+middleware/handler denials and carries one generated correlation into the store;
+the caller's request ID is still validated as a required wire field. Verified
+actor-only context appears only after active authentication. The real generated
+router matrix proves malformed protobuf and 31-byte secret rejection, one audit
+event, unchanged handoff rows, and store/audit correlation. A missing canonical
+parent cannot arise through the active production middleware; no artificial
+transport proof is claimed for that unreachable composition.
+
+Validation passed:
+
+- All-target/all-feature app compilation; 42 focused UI cases and two audit-domain
+  cases; all 154 app library tests and 11 daemon configuration tests.
+- The isolated production RPC matrix with fresh PostgreSQL/NATS.
+- Fresh migration-94 app-pool bootstrap with both connections using
+  `hephaestus_app`; resource tests (two), browser schema tests (four), and audit
+  schema/role/vocabulary regression (one).
+- Exchange audit-failure rollback leaves no child and an unconsumed handoff;
+  restoring audit persistence and retrying produces exactly one child/consumption.
+- The private typed-publication guard test invokes the actual persistence helper
+  with reserved and colliding routes and observes exact InvalidStoredData plus
+  zero rows in the same transaction before rollback. This closes the previously
+  documented direct-guard coverage gap.
+- Strict scoped Clippy and rustdoc, workspace formatting, architecture (61 enabled
+  rules), and diff checks.
+
+Durable logs are in `/home/a/heph-release-ui-audit94-20260920/`. The existing
+future-assertion test now uses a comfortably future, short-lived claim so a
+wall-clock second rollover cannot erase its intended skew violation; production
+validation is unchanged and the full app unit suite passes.
+
+These results cover real RPC and database behavior plus in-process HTTP handlers.
+Live Caddy/TLS/VM/browser serving and its actual HTTP audit rows remain acceptance
+work, as does the final repository-wide quality gate.
 
 ## Production platform-origin consistency checkpoint (2026-09-20)
 

@@ -38,7 +38,10 @@ use std::{net::SocketAddr, sync::Arc, time::Duration};
 use thiserror::Error;
 use tokio::sync::Semaphore;
 
-use crate::ui_origin_config::UiOriginConfig;
+use crate::{
+    ui_audit::{UiAuditRecorder, correlation_id, reason_for_content_error, verified_context},
+    ui_origin_config::UiOriginConfig,
+};
 
 /// Bound for a guest request body forwarded to the managed/API worker.
 pub const MAX_UI_REQUEST_BODY_BYTES: usize = 2 * 1024 * 1024;
@@ -136,18 +139,30 @@ pub struct UiGatewayResponse {
     pub body: Bytes,
 }
 
+/// Safe response plus authoritative gateway disposition. It deliberately
+/// carries no duplicate provider response, guest payload, gateway ID, or
+/// revision ID.
+#[derive(Clone)]
+pub struct UiGatewayDispatchResult {
+    /// Response after guest policy validation.
+    pub response: UiGatewayResponse,
+    /// Admission/execution classification from gateway-edge.
+    pub disposition: gateway_edge::UiDispatchDisposition,
+}
+
 /// Minimal gateway dispatch seam; no runtime implementation is claimed here.
 #[async_trait]
 pub trait UiGatewayDispatcher: Send + Sync {
-    /// Dispatches only a safe authority and sanitized request envelope.
-    async fn dispatch_ui(
+    /// Dispatches only a safe authority and sanitized request envelope while
+    /// retaining the authoritative gateway disposition for audit.
+    async fn dispatch_ui_detailed(
         &self,
         authority: UiGatewayDispatchAuthority,
         method: HttpMethod,
         path_and_query: String,
         headers: HeaderMap,
         body: Bytes,
-    ) -> Result<UiGatewayResponse, UiContentError>;
+    ) -> Result<UiGatewayDispatchResult, UiContentError>;
 }
 
 /// Handler dependencies and bounded resource limits.
@@ -171,10 +186,15 @@ pub struct UiContentState {
     pub deadline: Duration,
     /// Blocking artifact read bound.
     pub static_read_permits: Arc<Semaphore>,
+    /// Closed audit sink; production composition installs the worker-backed repository.
+    audit: UiAuditRecorder,
 }
 
 impl UiContentState {
     /// Constructs bounded serving state. A zero bound is rejected.
+    // The constructor keeps the independent projection and storage seams
+    // explicit so each serving dependency remains replaceable in tests.
+    #[allow(clippy::too_many_arguments)]
     pub fn new(
         host_resolver: Arc<dyn UiGenerationHostResolver>,
         authority: Arc<dyn UiBrowserHttpServingProjection>,
@@ -183,6 +203,7 @@ impl UiContentState {
         namespace: UiNamespace,
         public_port: UiPublicPort,
         platform_origin: impl Into<String>,
+        audit_sink: Arc<dyn release_service::UiRequestAuditSink>,
     ) -> Result<Self, UiContentError> {
         if DEFAULT_STATIC_READ_CONCURRENCY == 0 || DEFAULT_MAX_STATIC_BYTES == 0 {
             return Err(UiContentError::Unavailable);
@@ -204,6 +225,7 @@ impl UiContentState {
             max_static_bytes: DEFAULT_MAX_STATIC_BYTES,
             deadline: DEFAULT_CONTENT_DEADLINE,
             static_read_permits: Arc::new(Semaphore::new(DEFAULT_STATIC_READ_CONCURRENCY)),
+            audit: UiAuditRecorder::new(audit_sink),
         })
     }
 }
@@ -221,19 +243,53 @@ async fn content_request(
     State(state): State<Arc<UiContentState>>,
     request: Request<Body>,
 ) -> Response {
+    // Correlation is allocated before loopback, host, cookie, or syntax checks.
+    let request_id = correlation_id(request.extensions());
     if !peer.ip().is_loopback() {
-        return error_response(StatusCode::FORBIDDEN, "ui_forbidden");
+        return state
+            .audit
+            .denial(
+                request_id,
+                release_service::UiRequestAuditSurface::Content,
+                release_service::UiRequestAuditReason::Unauthorized,
+                error_response(StatusCode::FORBIDDEN, "ui_forbidden"),
+            )
+            .await;
     }
-    match tokio::time::timeout(state.deadline, serve(state, request)).await {
+    match tokio::time::timeout(state.deadline, serve(state.clone(), request, request_id)).await {
         Ok(Ok(response)) => response,
-        Ok(Err(error)) => error.into_response(),
-        Err(_) => error_response(StatusCode::SERVICE_UNAVAILABLE, "ui_unavailable"),
+        Ok(Err(error)) => {
+            state
+                .audit
+                .denial(
+                    request_id,
+                    release_service::UiRequestAuditSurface::Content,
+                    reason_for_content_error(error),
+                    error.into_response(),
+                )
+                .await
+        }
+        Err(_) => {
+            state
+                .audit
+                .undetermined(
+                    request_id,
+                    release_service::UiRequestAuditSurface::Content,
+                    release_service::UiRequestAuditContext::anonymous(),
+                    error_response(StatusCode::SERVICE_UNAVAILABLE, "ui_unavailable"),
+                )
+                .await
+        }
     }
 }
 
+// The ordered checks in this handler mirror the serving contract: authority,
+// authentication, origin, gateway/static dispatch, then response auditing.
+#[allow(clippy::too_many_lines)]
 async fn serve(
     state: Arc<UiContentState>,
     request: Request<Body>,
+    request_id: RequestId,
 ) -> Result<Response, UiContentError> {
     let authority = request_authority(&request)?;
     let host = parse_and_resolve_host(&state, authority).await?;
@@ -249,7 +305,6 @@ async fn serve(
     let authority_request =
         UiBrowserHttpRequest::new(http_request.method, http_request.path.as_str())
             .map_err(|_| UiContentError::InvalidRequest)?;
-    let request_id = RequestId::new();
     let projection = state
         .authority
         .authenticate_and_project_http(
@@ -261,43 +316,241 @@ async fn serve(
         .await
         .map_err(map_serving_error)?;
     match projection {
-        UiServingProjection::Redirect { location, .. } => redirect_response(
-            &location,
-            http_request.query.as_deref(),
-            &state.platform_csp,
-        ),
-        UiServingProjection::Static { artifact, .. } => {
+        UiServingProjection::Redirect { context, location } => {
+            let result = redirect_response(
+                &location,
+                http_request.query.as_deref(),
+                &state.platform_csp,
+            );
+            match result {
+                Ok(response) => Ok(state
+                    .audit
+                    .allowed(
+                        request_id,
+                        release_service::UiRequestAuditSurface::Content,
+                        verified_context(&context),
+                        release_service::UiRequestAuditOutcome::Succeeded,
+                        release_service::UiRequestAuditReason::None,
+                        response,
+                    )
+                    .await),
+                Err(error) => Ok(state
+                    .audit
+                    .failed(
+                        request_id,
+                        release_service::UiRequestAuditSurface::Content,
+                        verified_context(&context),
+                        reason_for_content_error(error),
+                        error.into_response(),
+                    )
+                    .await),
+            }
+        }
+        UiServingProjection::Static { context, artifact } => {
+            let context_for_audit = verified_context(&context);
             let request_headers = StaticRequestHeaders::from_request(&request);
-            serve_static(&state, &request_headers, &http_request, artifact).await
+            match serve_static(&state, &request_headers, &http_request, artifact).await {
+                Ok(response) => Ok(state
+                    .audit
+                    .allowed(
+                        request_id,
+                        release_service::UiRequestAuditSurface::Static,
+                        context_for_audit,
+                        release_service::UiRequestAuditOutcome::Succeeded,
+                        release_service::UiRequestAuditReason::None,
+                        response,
+                    )
+                    .await),
+                Err(error) => Ok(state
+                    .audit
+                    .failed(
+                        request_id,
+                        release_service::UiRequestAuditSurface::Static,
+                        context_for_audit,
+                        reason_for_content_error(error),
+                        error.into_response(),
+                    )
+                    .await),
+            }
         }
         UiServingProjection::Gateway {
             context,
             request: gateway_request,
         } => {
-            let headers = sanitize_guest_request_headers(request.headers().clone());
-            let body = to_bytes(request.into_body(), MAX_UI_REQUEST_BODY_BYTES)
-                .await
-                .map_err(|_| UiContentError::BodyTooLarge)?;
-            let authority = UiGatewayDispatchAuthority {
-                request_id,
-                child_session_id: context.session_id,
-                actor_id: context.actor_id,
-                organization_id: context.organization_id,
-                installation_id: context.installation_id,
-                generation_id: context.generation_id,
-                request: gateway_request,
+            let context_for_audit = verified_context(&context);
+            let surface = match gateway_request.kind {
+                release_service::UiGatewayRequestKind::Managed => {
+                    release_service::UiRequestAuditSurface::Managed
+                }
+                release_service::UiGatewayRequestKind::Api => {
+                    release_service::UiRequestAuditSurface::Api
+                }
             };
-            let response = state
-                .gateway
-                .dispatch_ui(
-                    authority,
-                    http_request.method,
-                    http_request.path_and_query(),
-                    headers,
-                    body,
-                )
-                .await?;
-            gateway_response(response, &state.platform_csp)
+            let result = async {
+                let headers = sanitize_guest_request_headers(request.headers().clone());
+                let body = to_bytes(request.into_body(), MAX_UI_REQUEST_BODY_BYTES)
+                    .await
+                    .map_err(|_| UiContentError::BodyTooLarge)?;
+                let authority = UiGatewayDispatchAuthority {
+                    request_id,
+                    child_session_id: context.session_id,
+                    actor_id: context.actor_id,
+                    organization_id: context.organization_id,
+                    installation_id: context.installation_id,
+                    generation_id: context.generation_id,
+                    request: gateway_request,
+                };
+                let dispatch = state
+                    .gateway
+                    .dispatch_ui_detailed(
+                        authority,
+                        http_request.method,
+                        http_request.path_and_query(),
+                        headers,
+                        body,
+                    )
+                    .await?;
+                let disposition = dispatch.disposition;
+                let response = gateway_response(dispatch.response, &state.platform_csp);
+                Ok::<_, UiContentError>((disposition, response))
+            }
+            .await;
+            match result {
+                Ok((disposition, Ok(response))) => match gateway_audit_disposition(disposition) {
+                    GatewayAuditDisposition::Denied(reason) => Ok(state
+                        .audit
+                        .denial_with_context(
+                            request_id,
+                            surface,
+                            context_for_audit,
+                            reason,
+                            response,
+                        )
+                        .await),
+                    GatewayAuditDisposition::Failed(reason) => Ok(state
+                        .audit
+                        .failed(request_id, surface, context_for_audit, reason, response)
+                        .await),
+                    GatewayAuditDisposition::Unknown => Ok(state
+                        .audit
+                        .undetermined(request_id, surface, context_for_audit, response)
+                        .await),
+                    GatewayAuditDisposition::Succeeded => Ok(state
+                        .audit
+                        .allowed(
+                            request_id,
+                            surface,
+                            context_for_audit,
+                            release_service::UiRequestAuditOutcome::Succeeded,
+                            release_service::UiRequestAuditReason::None,
+                            response,
+                        )
+                        .await),
+                },
+                Ok((disposition, Err(error))) => match gateway_audit_disposition(disposition) {
+                    GatewayAuditDisposition::Unknown => Ok(state
+                        .audit
+                        .undetermined(
+                            request_id,
+                            surface,
+                            context_for_audit,
+                            error.into_response(),
+                        )
+                        .await),
+                    GatewayAuditDisposition::Denied(reason) => Ok(state
+                        .audit
+                        .denial_with_context(
+                            request_id,
+                            surface,
+                            context_for_audit,
+                            reason,
+                            error.into_response(),
+                        )
+                        .await),
+                    GatewayAuditDisposition::Failed(reason) => Ok(state
+                        .audit
+                        .failed(
+                            request_id,
+                            surface,
+                            context_for_audit,
+                            reason,
+                            error.into_response(),
+                        )
+                        .await),
+                    GatewayAuditDisposition::Succeeded => Ok(state
+                        .audit
+                        .failed(
+                            request_id,
+                            surface,
+                            context_for_audit,
+                            release_service::UiRequestAuditReason::UpstreamFailure,
+                            error.into_response(),
+                        )
+                        .await),
+                },
+                Err(error) => Ok(state
+                    .audit
+                    .failed(
+                        request_id,
+                        surface,
+                        context_for_audit,
+                        reason_for_content_error(error),
+                        error.into_response(),
+                    )
+                    .await),
+            }
+        }
+    }
+}
+
+enum GatewayAuditDisposition {
+    Denied(release_service::UiRequestAuditReason),
+    Failed(release_service::UiRequestAuditReason),
+    Unknown,
+    Succeeded,
+}
+
+const fn gateway_audit_disposition(
+    disposition: gateway_edge::UiDispatchDisposition,
+) -> GatewayAuditDisposition {
+    use gateway_edge::{GatewayInvocationOutcome, UiDispatchDisposition};
+    match disposition {
+        UiDispatchDisposition::ProviderDenied => {
+            GatewayAuditDisposition::Denied(release_service::UiRequestAuditReason::Unauthorized)
+        }
+        UiDispatchDisposition::ProviderNotFound => {
+            GatewayAuditDisposition::Denied(release_service::UiRequestAuditReason::NotFound)
+        }
+        UiDispatchDisposition::ProviderUnavailable => {
+            GatewayAuditDisposition::Denied(release_service::UiRequestAuditReason::Unavailable)
+        }
+        UiDispatchDisposition::StructuralInvalid => {
+            GatewayAuditDisposition::Denied(release_service::UiRequestAuditReason::InvalidInput)
+        }
+        UiDispatchDisposition::AcceptedUiFailure => {
+            GatewayAuditDisposition::Failed(release_service::UiRequestAuditReason::Unavailable)
+        }
+        UiDispatchDisposition::Admitted {
+            completion_persisted: false,
+            ..
+        }
+        | UiDispatchDisposition::Admitted {
+            outcome: GatewayInvocationOutcome::TimedOut,
+            completion_persisted: true,
+        } => GatewayAuditDisposition::Unknown,
+        UiDispatchDisposition::Admitted {
+            outcome: GatewayInvocationOutcome::Completed,
+            completion_persisted: true,
+        } => GatewayAuditDisposition::Succeeded,
+        UiDispatchDisposition::Admitted {
+            outcome: GatewayInvocationOutcome::Rejected,
+            completion_persisted: true,
+        } => GatewayAuditDisposition::Failed(release_service::UiRequestAuditReason::Unauthorized),
+        UiDispatchDisposition::Admitted {
+            outcome: GatewayInvocationOutcome::Failed,
+            completion_persisted: true,
+        } => {
+            GatewayAuditDisposition::Failed(release_service::UiRequestAuditReason::UpstreamFailure)
         }
     }
 }
@@ -707,6 +960,10 @@ fn gateway_response(
     let mut headers = sanitize_guest_response_headers(response.headers);
     headers.insert(header::CACHE_CONTROL, HeaderValue::from_static("no-store"));
     headers.insert(header::PRAGMA, HeaderValue::from_static("no-cache"));
+    headers.insert(
+        header::X_CONTENT_TYPE_OPTIONS,
+        HeaderValue::from_static("nosniff"),
+    );
     apply_platform_csp(&mut headers, platform_csp);
     let mut result = Response::new(Body::from(response.body));
     *result.status_mut() = response.status;
@@ -869,7 +1126,7 @@ mod tests {
         fs,
         os::unix::fs::PermissionsExt,
         path::PathBuf,
-        sync::atomic::{AtomicUsize, Ordering},
+        sync::atomic::{AtomicBool, AtomicUsize, Ordering},
     };
     use time::OffsetDateTime;
     use tokio::sync::Mutex;
@@ -958,6 +1215,23 @@ mod tests {
         assert_eq!(parse_single_range("bytes=-2", 8), Ok((6, 7)));
         assert!(parse_single_range("bytes=2-4,6-7", 8).is_err());
         assert!(parse_single_range("bytes=9-10", 8).is_err());
+    }
+
+    #[test]
+    fn response_policy_forces_nosniff_on_guest_success() {
+        let response = gateway_response(
+            UiGatewayResponse {
+                status: StatusCode::OK,
+                headers: HeaderMap::new(),
+                body: Bytes::from_static(b"ok"),
+            },
+            &platform_csp_value("https://platform.example").expect("CSP"),
+        )
+        .expect("response");
+        assert_eq!(
+            response.headers()[header::X_CONTENT_TYPE_OPTIONS],
+            "nosniff"
+        );
     }
 
     #[test]
@@ -1097,25 +1371,53 @@ mod tests {
         response: Mutex<Option<UiGatewayResponse>>,
     }
 
+    struct StartedTimeoutGateway {
+        started: Arc<AtomicBool>,
+    }
+
     #[async_trait]
     impl UiGatewayDispatcher for FakeGateway {
-        async fn dispatch_ui(
+        async fn dispatch_ui_detailed(
             &self,
             authority: UiGatewayDispatchAuthority,
             _method: HttpMethod,
             _path_and_query: String,
             headers: HeaderMap,
             _body: Bytes,
-        ) -> Result<UiGatewayResponse, UiContentError> {
+        ) -> Result<UiGatewayDispatchResult, UiContentError> {
             self.calls.fetch_add(1, Ordering::SeqCst);
             assert!(headers.get(header::AUTHORIZATION).is_none());
             assert!(headers.get(header::COOKIE).is_none());
             *self.captured.lock().await = Some(authority);
-            self.response
+            let response = self
+                .response
                 .lock()
                 .await
                 .clone()
-                .ok_or(UiContentError::Unavailable)
+                .ok_or(UiContentError::Unavailable)?;
+            Ok(UiGatewayDispatchResult {
+                response,
+                disposition: gateway_edge::UiDispatchDisposition::Admitted {
+                    outcome: gateway_edge::GatewayInvocationOutcome::Completed,
+                    completion_persisted: true,
+                },
+            })
+        }
+    }
+
+    #[async_trait]
+    impl UiGatewayDispatcher for StartedTimeoutGateway {
+        async fn dispatch_ui_detailed(
+            &self,
+            _authority: UiGatewayDispatchAuthority,
+            _method: HttpMethod,
+            _path_and_query: String,
+            _headers: HeaderMap,
+            _body: Bytes,
+        ) -> Result<UiGatewayDispatchResult, UiContentError> {
+            self.started.store(true, Ordering::SeqCst);
+            tokio::time::sleep(Duration::from_millis(250)).await;
+            Err(UiContentError::Unavailable)
         }
     }
 
@@ -1132,11 +1434,12 @@ mod tests {
         }
     }
 
-    fn host_and_state(
+    fn host_and_state_with_sink(
         authority: Arc<FakeAuthority>,
         artifacts: Arc<LocalArtifactStore>,
-        gateway: Arc<FakeGateway>,
+        gateway: Arc<dyn UiGatewayDispatcher>,
         generation_id: UiInstallationGenerationId,
+        audit_sink: Arc<dyn release_service::UiRequestAuditSink>,
     ) -> (Arc<UiContentState>, String) {
         let namespace = UiNamespace::parse("ui.app.example").expect("namespace");
         let port = UiPublicPort::https_default();
@@ -1149,11 +1452,27 @@ mod tests {
             namespace,
             port,
             "https://app.example",
+            audit_sink,
         )
         .expect("state");
         (
             Arc::new(state),
             host.authority(&UiNamespace::parse("ui.app.example").unwrap(), port),
+        )
+    }
+
+    fn host_and_state(
+        authority: Arc<FakeAuthority>,
+        artifacts: Arc<LocalArtifactStore>,
+        gateway: Arc<FakeGateway>,
+        generation_id: UiInstallationGenerationId,
+    ) -> (Arc<UiContentState>, String) {
+        host_and_state_with_sink(
+            authority,
+            artifacts,
+            gateway,
+            generation_id,
+            Arc::new(crate::ui_audit::NoopAuditSink),
         )
     }
 
@@ -1202,6 +1521,88 @@ mod tests {
             .extensions_mut()
             .insert(ConnectInfo(SocketAddr::from(([127, 0, 0, 1], 4321))));
         request
+    }
+
+    #[tokio::test]
+    async fn content_router_audits_verified_static_success_before_bytes() {
+        let generation_id = UiInstallationGenerationId::from_uuid(Uuid::new_v4());
+        let key = Uuid::new_v4();
+        let (artifacts, root) = temp_store(b"audited", key);
+        let context = context(generation_id);
+        let authority = Arc::new(FakeAuthority {
+            calls: AtomicUsize::new(0),
+            projection: Mutex::new(Some(UiServingProjection::Static {
+                context,
+                artifact: static_artifact(b"audited", key),
+            })),
+        });
+        let gateway = Arc::new(FakeGateway {
+            calls: AtomicUsize::new(0),
+            captured: Mutex::new(None),
+            response: Mutex::new(None),
+        });
+        let sink = Arc::new(crate::ui_audit::CapturingAuditSink::default());
+        let (state, host) = host_and_state_with_sink(
+            authority,
+            artifacts,
+            gateway,
+            generation_id,
+            Arc::clone(&sink) as Arc<dyn release_service::UiRequestAuditSink>,
+        );
+        let request = content_request("GET", "/docs/index.html", &host, &[], Body::empty());
+        let response = router(state).oneshot(request).await.expect("response");
+        assert_eq!(response.status(), StatusCode::OK);
+        assert_eq!(
+            to_bytes(response.into_body(), 128).await.expect("body"),
+            "audited"
+        );
+        let events = sink.events.lock().expect("events");
+        assert_eq!(events.len(), 1);
+        assert_eq!(
+            events[0].surface(),
+            release_service::UiRequestAuditSurface::Static
+        );
+        assert_eq!(
+            events[0].decision(),
+            release_service::UiRequestAuditDecision::Allowed
+        );
+        assert_eq!(
+            events[0].outcome(),
+            release_service::UiRequestAuditOutcome::Succeeded
+        );
+        assert!(events[0].context().child_session_id().is_some());
+        drop(events);
+        fs::remove_dir_all(root).expect("cleanup");
+    }
+
+    #[tokio::test]
+    async fn content_router_keeps_denial_when_audit_sink_is_unavailable() {
+        let generation_id = UiInstallationGenerationId::from_uuid(Uuid::new_v4());
+        let key = Uuid::new_v4();
+        let (artifacts, root) = temp_store(b"unused", key);
+        let authority = Arc::new(FakeAuthority {
+            calls: AtomicUsize::new(0),
+            projection: Mutex::new(None),
+        });
+        let gateway = Arc::new(FakeGateway {
+            calls: AtomicUsize::new(0),
+            captured: Mutex::new(None),
+            response: Mutex::new(None),
+        });
+        let sink = Arc::new(crate::ui_audit::CapturingAuditSink::default());
+        sink.fail.store(true, Ordering::Relaxed);
+        let (state, host) = host_and_state_with_sink(
+            authority,
+            artifacts,
+            gateway,
+            generation_id,
+            Arc::clone(&sink) as Arc<dyn release_service::UiRequestAuditSink>,
+        );
+        let request = content_request("GET", "/docs/index.html", &host, &[], Body::empty());
+        let response = router(state).oneshot(request).await.expect("response");
+        assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+        assert!(sink.events.lock().expect("events").is_empty());
+        fs::remove_dir_all(root).expect("cleanup");
     }
 
     #[tokio::test]
@@ -1463,5 +1864,95 @@ mod tests {
         assert_eq!(authority.calls.load(Ordering::SeqCst), 1);
         assert_eq!(gateway.calls.load(Ordering::SeqCst), 0);
         fs::remove_dir_all(root).expect("cleanup");
+    }
+
+    #[tokio::test]
+    async fn gateway_started_before_deadline_is_audited_as_unknown() {
+        let generation_id = UiInstallationGenerationId::from_uuid(Uuid::new_v4());
+        let key = Uuid::new_v4();
+        let (artifacts, root) = temp_store(b"unused", key);
+        let request_projection = UiGatewayRequestProjection {
+            kind: release_service::UiGatewayRequestKind::Api,
+            path: release_service::UiBrowserHttpPath::parse("/service/api").expect("path"),
+            method: HttpMethod::Post,
+        };
+        let authority = Arc::new(FakeAuthority {
+            calls: AtomicUsize::new(0),
+            projection: Mutex::new(Some(UiServingProjection::Gateway {
+                context: context(generation_id),
+                request: request_projection,
+            })),
+        });
+        let started = Arc::new(AtomicBool::new(false));
+        let gateway: Arc<dyn UiGatewayDispatcher> = Arc::new(StartedTimeoutGateway {
+            started: Arc::clone(&started),
+        });
+        let sink = Arc::new(crate::ui_audit::CapturingAuditSink::default());
+        let (mut state, host) = host_and_state_with_sink(
+            authority,
+            artifacts,
+            gateway,
+            generation_id,
+            Arc::clone(&sink) as Arc<dyn release_service::UiRequestAuditSink>,
+        );
+        Arc::get_mut(&mut state).expect("unique state").deadline = Duration::from_millis(100);
+        let request = content_request(
+            "POST",
+            "/service/api",
+            &host,
+            &[("origin", &format!("https://{host}"))],
+            Body::empty(),
+        );
+        let response = router(state)
+            .oneshot(request)
+            .await
+            .expect("timeout response");
+        assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
+        assert!(started.load(Ordering::SeqCst));
+        let events = sink.events.lock().expect("events");
+        assert_eq!(events.len(), 1);
+        assert_eq!(
+            events[0].decision(),
+            release_service::UiRequestAuditDecision::Undetermined
+        );
+        assert_eq!(
+            events[0].outcome(),
+            release_service::UiRequestAuditOutcome::Unknown
+        );
+        drop(events);
+        fs::remove_dir_all(root).expect("cleanup");
+    }
+
+    #[test]
+    fn gateway_denial_and_guest_forbidden_have_distinct_audit_classes() {
+        assert!(matches!(
+            gateway_audit_disposition(gateway_edge::UiDispatchDisposition::ProviderDenied),
+            GatewayAuditDisposition::Denied(release_service::UiRequestAuditReason::Unauthorized)
+        ));
+        assert!(matches!(
+            gateway_audit_disposition(gateway_edge::UiDispatchDisposition::Admitted {
+                outcome: gateway_edge::GatewayInvocationOutcome::Completed,
+                completion_persisted: true,
+            }),
+            GatewayAuditDisposition::Succeeded
+        ));
+    }
+
+    #[test]
+    fn gateway_timeout_and_completion_store_failure_are_unknown() {
+        assert!(matches!(
+            gateway_audit_disposition(gateway_edge::UiDispatchDisposition::Admitted {
+                outcome: gateway_edge::GatewayInvocationOutcome::TimedOut,
+                completion_persisted: true,
+            }),
+            GatewayAuditDisposition::Unknown
+        ));
+        assert!(matches!(
+            gateway_audit_disposition(gateway_edge::UiDispatchDisposition::Admitted {
+                outcome: gateway_edge::GatewayInvocationOutcome::Completed,
+                completion_persisted: false,
+            }),
+            GatewayAuditDisposition::Unknown
+        ));
     }
 }

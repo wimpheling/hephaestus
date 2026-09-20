@@ -5,12 +5,13 @@
 //! rechecked by the release ports in their transactions.
 
 use super::ReleaseRpc;
+use crate::rpc::auth::{UiHandoffAuditMarker, append_ui_request_audit_bounded};
 use crate::rpc::{RpcError, into_connect_error, mutation_receipt, request};
 use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD};
 use connectrpc::{RequestContext, Response, ServiceRequest, ServiceResult};
 use forge_domain::{OrganizationId, ProjectId, RepositoryId};
 use hmac::{Hmac, Mac as _};
-use identity_domain::{RequestId, UserId};
+use identity_domain::{AuthenticatedIdentity, RequestId, UserId};
 use release_domain::{
     ReleaseId, UiInstallationCallerKey, UiInstallationGenerationId, UiInstallationId,
     UiInstallationState, UiInstallationTarget,
@@ -22,7 +23,8 @@ use release_service::{
     ListUiInstallations, RemoveUiInstallation, RollbackUiInstallation, UiBrowserHandoffError,
     UiInstallationContentKind, UiInstallationNavigation, UiInstallationNavigationError,
     UiInstallationNavigator, UiInstallationPage, UiInstallationReceiptScope,
-    UiInstallationTargetFilter,
+    UiInstallationTargetFilter, UiRequestAuditContext, UiRequestAuditDecision,
+    UiRequestAuditOutcome, UiRequestAuditReason, UiRequestAuditSink, UiRequestAuditSurface,
 };
 use rpc_proto::messages::hephaestus::{
     common::v1::{OpaqueId, PageResponse},
@@ -352,6 +354,9 @@ pub(super) async fn list(
 }
 
 /// Handles the non-replayable public handoff issuance boundary.
+// Keep validation and audit-denial ordering in one boundary so every rejected
+// field carries the same verified actor and transport correlation.
+#[allow(clippy::too_many_lines)]
 pub(super) async fn handoff(
     service: &ReleaseRpc,
     ctx: RequestContext,
@@ -361,39 +366,153 @@ pub(super) async fn handoff(
     >,
 ) -> ServiceResult<rpc_proto::messages::hephaestus::release::v1::CreateUiBrowserHandoffResponse> {
     let request = request.to_owned_message();
-    let identity = request::query_identity(&ctx, &service.authenticator, HANDOFF_AUDIENCE)
-        .map_err(into_connect_error)?;
-    let verified = request::verified_mediator_session(&ctx).map_err(into_connect_error)?;
-    let parent_session_id = verified
-        .parent_session_id
-        .ok_or_else(|| into_connect_error(RpcError::Unauthenticated))?;
-    let context = request
-        .context
-        .as_option()
-        .ok_or_else(|| into_connect_error(RpcError::InvalidArgument))?;
+    if let Some(marker) = ctx.extensions().get::<UiHandoffAuditMarker>() {
+        marker.mark_handler_reached();
+    }
+    let actor_hint = ctx
+        .extensions()
+        .get::<AuthenticatedIdentity>()
+        .map(|identity| identity.user_id);
+    let Ok(identity) = request::query_identity(&ctx, &service.authenticator, HANDOFF_AUDIENCE)
+    else {
+        return Err(audit_handoff_denial(
+            service,
+            &ctx,
+            request.context.as_option(),
+            actor_hint,
+            RpcError::Unauthenticated,
+            UiRequestAuditReason::Unauthenticated,
+        )
+        .await);
+    };
+    let Ok(verified) = request::verified_mediator_session(&ctx) else {
+        return Err(audit_handoff_denial(
+            service,
+            &ctx,
+            request.context.as_option(),
+            Some(identity.user_id),
+            RpcError::Unauthenticated,
+            UiRequestAuditReason::Unauthenticated,
+        )
+        .await);
+    };
+    let Some(parent_session_id) = verified.parent_session_id else {
+        return Err(audit_handoff_denial(
+            service,
+            &ctx,
+            request.context.as_option(),
+            Some(identity.user_id),
+            RpcError::Unauthenticated,
+            UiRequestAuditReason::Unauthenticated,
+        )
+        .await);
+    };
+    let Some(context) = request.context.as_option() else {
+        return Err(audit_handoff_denial(
+            service,
+            &ctx,
+            None,
+            Some(identity.user_id),
+            RpcError::InvalidArgument,
+            UiRequestAuditReason::InvalidInput,
+        )
+        .await);
+    };
     if !context.idempotency_key.is_empty() {
-        return Err(into_connect_error(RpcError::InvalidArgument));
+        return Err(audit_handoff_denial(
+            service,
+            &ctx,
+            Some(context),
+            Some(identity.user_id),
+            RpcError::InvalidArgument,
+            UiRequestAuditReason::InvalidInput,
+        )
+        .await);
     }
-    let request_id_text =
-        request::required_id(context.request_id.as_option()).map_err(into_connect_error)?;
-    let request_id = RequestId::from_str(&request_id_text)
-        .map_err(|_| into_connect_error(RpcError::InvalidArgument))?;
-    if request.handoff_secret.len() != 32 {
-        return Err(into_connect_error(RpcError::InvalidArgument));
-    }
-    let mut secret = [0_u8; 32];
-    secret.copy_from_slice(&request.handoff_secret);
+    let Ok(request_id_text) = request::required_id(context.request_id.as_option()) else {
+        return Err(audit_handoff_denial(
+            service,
+            &ctx,
+            Some(context),
+            Some(identity.user_id),
+            RpcError::InvalidArgument,
+            UiRequestAuditReason::InvalidInput,
+        )
+        .await);
+    };
+    let Ok(caller_request_id) = RequestId::from_str(&request_id_text) else {
+        return Err(audit_handoff_denial(
+            service,
+            &ctx,
+            Some(context),
+            Some(identity.user_id),
+            RpcError::InvalidArgument,
+            UiRequestAuditReason::InvalidInput,
+        )
+        .await);
+    };
+    // The middleware marker is the one server-generated correlation carried
+    // across transport, handler, and worker-store phases. The caller's
+    // RequestContext ID is still parsed above as a required wire field, but
+    // it is not allowed to split one request into two audit/store IDs.
+    let request_id = ctx
+        .extensions()
+        .get::<UiHandoffAuditMarker>()
+        .map_or(caller_request_id, UiHandoffAuditMarker::request_id);
+    let Ok(secret) = parse_handoff_secret(&request.handoff_secret) else {
+        return Err(audit_handoff_denial(
+            service,
+            &ctx,
+            Some(context),
+            Some(identity.user_id),
+            RpcError::InvalidArgument,
+            UiRequestAuditReason::InvalidInput,
+        )
+        .await);
+    };
+    let Ok(installation_id) = installation_id(request.installation_id.as_option()) else {
+        return Err(audit_handoff_denial(
+            service,
+            &ctx,
+            Some(context),
+            Some(identity.user_id),
+            RpcError::InvalidArgument,
+            UiRequestAuditReason::InvalidInput,
+        )
+        .await);
+    };
+    let Ok(generation_id) = generation_id(request.generation_id.as_option()) else {
+        return Err(audit_handoff_denial(
+            service,
+            &ctx,
+            Some(context),
+            Some(identity.user_id),
+            RpcError::InvalidArgument,
+            UiRequestAuditReason::InvalidInput,
+        )
+        .await);
+    };
+    let Ok(route) = UiBrowserRoute::parse(request.route) else {
+        return Err(audit_handoff_denial(
+            service,
+            &ctx,
+            Some(context),
+            Some(identity.user_id),
+            RpcError::InvalidArgument,
+            UiRequestAuditReason::InvalidInput,
+        )
+        .await);
+    };
     let created = service
         .ui_browser
         .create_ui_browser_handoff(CreateUiBrowserHandoff {
             request_id,
             actor_id: identity.user_id,
             parent_session_id,
-            installation_id: installation_id(request.installation_id.as_option())?,
-            generation_id: generation_id(request.generation_id.as_option())?,
-            route: UiBrowserRoute::parse(request.route)
-                .map_err(|_| into_connect_error(RpcError::InvalidArgument))?,
-            secret: UiBrowserHandoffSecret::from_bytes(secret),
+            installation_id,
+            generation_id,
+            route,
+            secret,
         })
         .await
         .map_err(handoff_error)
@@ -408,6 +527,66 @@ pub(super) async fn handoff(
             ..Default::default()
         },
     )
+}
+
+async fn audit_handoff_denial(
+    service: &ReleaseRpc,
+    transport_context: &RequestContext,
+    request_context: Option<&rpc_proto::messages::hephaestus::common::v1::RequestContext>,
+    actor_id: Option<UserId>,
+    transport_error: RpcError,
+    reason: UiRequestAuditReason,
+) -> connectrpc::ConnectError {
+    append_handoff_denial(
+        service.ui_request_audit.as_ref(),
+        transport_context.extensions().get::<UiHandoffAuditMarker>(),
+        request_context,
+        actor_id,
+        reason,
+    )
+    .await;
+    into_connect_error(transport_error)
+}
+
+async fn append_handoff_denial(
+    sink: &dyn UiRequestAuditSink,
+    marker: Option<&UiHandoffAuditMarker>,
+    request_context: Option<&rpc_proto::messages::hephaestus::common::v1::RequestContext>,
+    actor_id: Option<UserId>,
+    reason: UiRequestAuditReason,
+) -> RequestId {
+    let request_id = marker.map_or_else(
+        || {
+            if actor_id.is_some() {
+                request_context
+                    .and_then(|context| context.request_id.as_option())
+                    .and_then(|value| Uuid::parse_str(value.value.trim()).ok())
+                    .map_or_else(RequestId::new, RequestId::from_uuid)
+            } else {
+                RequestId::new()
+            }
+        },
+        UiHandoffAuditMarker::request_id,
+    );
+    let context = actor_id.map_or_else(
+        UiRequestAuditContext::anonymous,
+        UiRequestAuditContext::actor,
+    );
+    let event = release_service::NewUiRequestAuditEvent::now(
+        request_id,
+        UiRequestAuditSurface::HandoffIssue,
+        UiRequestAuditDecision::Denied,
+        UiRequestAuditOutcome::NotAttempted,
+        reason,
+        context,
+    );
+    let _ = append_ui_request_audit_bounded(sink, event).await;
+    request_id
+}
+
+fn parse_handoff_secret(value: &[u8]) -> Result<UiBrowserHandoffSecret, RpcError> {
+    let bytes: [u8; 32] = value.try_into().map_err(|_| RpcError::InvalidArgument)?;
+    Ok(UiBrowserHandoffSecret::from_bytes(bytes))
 }
 
 fn mutation_context(
@@ -780,6 +959,16 @@ mod tests {
             })
             .is_ok()
         );
+    }
+}
+
+#[cfg(test)]
+mod handoff_audit_tests {
+    use super::parse_handoff_secret;
+
+    #[test]
+    fn malformed_secret_is_rejected_before_store_call() {
+        assert!(parse_handoff_secret(&[0_u8; 31]).is_err());
     }
 }
 

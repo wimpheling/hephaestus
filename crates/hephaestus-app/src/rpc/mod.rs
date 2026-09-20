@@ -197,6 +197,10 @@ pub(crate) fn service(
         applications.ui_browser_worker_pool.clone(),
         applications.application_pool.clone(),
     ));
+    let ui_request_audit: Arc<dyn release_service::UiRequestAuditSink> =
+        Arc::new(release_postgres::PgUiRequestAuditRepository::new(
+            applications.ui_browser_worker_pool.clone(),
+        ));
     let mutation_receipts = MutationReceipts::new(applications.mutation_receipt_reader, cursor_key);
     let pool = &applications.pool;
     let identity = Arc::new(identity::IdentityRpc::new(
@@ -289,6 +293,7 @@ pub(crate) fn service(
         ui_installations,
         ui_navigator,
         ui_browser,
+        ui_request_audit,
     );
     let router = artifact::register(
         router,

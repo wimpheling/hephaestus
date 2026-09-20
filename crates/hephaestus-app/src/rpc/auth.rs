@@ -1,11 +1,24 @@
 use axum::{body::Body, extract::State, http::Request, middleware::Next, response::Response};
 use http::{HeaderMap, StatusCode, header::AUTHORIZATION};
 use identity_application::{BrowserSessionAuthenticationError, BrowserSessionStore};
-use identity_domain::{BrowserSessionId, BrowserSessionSid, UserId};
+use identity_domain::{BrowserSessionId, BrowserSessionSid, RequestId, UserId};
 use jsonwebtoken::{Algorithm, DecodingKey, Validation, decode};
+use release_service::{
+    NewUiRequestAuditEvent, UiRequestAuditContext, UiRequestAuditDecision, UiRequestAuditOutcome,
+    UiRequestAuditReason, UiRequestAuditSink, UiRequestAuditSurface,
+};
 use serde::Deserialize;
-use std::{collections::HashSet, str::FromStr, sync::Arc};
+use std::{
+    collections::HashSet,
+    str::FromStr,
+    sync::{
+        Arc, Mutex,
+        atomic::{AtomicBool, Ordering},
+    },
+    time::Duration,
+};
 use time::OffsetDateTime;
+use tokio::time::timeout;
 use uuid::Uuid;
 
 const ISSUER: &str = "hephaestus-web-mediator";
@@ -15,8 +28,75 @@ const BOOTSTRAP_AUDIENCE: &str = "/hephaestus.identity.v1.IdentityService/Resolv
 const CREATE_BOOTSTRAP_AUDIENCE: &str =
     "/hephaestus.identity.v1.IdentityService/CreateBrowserSession";
 const REVOKE_AUDIENCE: &str = "/hephaestus.identity.v1.IdentityService/RevokeBrowserSession";
+const HANDOFF_AUDIENCE: &str = "/hephaestus.release.v1.ReleaseService/CreateUiBrowserHandoff";
 const MAX_LIFETIME_SECONDS: i64 = 30;
 const CLOCK_SKEW_SECONDS: i64 = 5;
+const UI_AUDIT_APPEND_BUDGET: Duration = Duration::from_millis(250);
+
+/// Request-local state shared by the authentication layer, Connect dispatch,
+/// and the handoff handler. The generated ID is correlation-only: it never
+/// becomes verified actor or target context.
+#[derive(Clone)]
+pub struct UiHandoffAuditMarker {
+    request_id: RequestId,
+    handler_reached: Arc<AtomicBool>,
+    actor_id: Arc<Mutex<Option<UserId>>>,
+}
+
+impl UiHandoffAuditMarker {
+    fn new() -> Self {
+        Self {
+            request_id: RequestId::new(),
+            handler_reached: Arc::new(AtomicBool::new(false)),
+            actor_id: Arc::new(Mutex::new(None)),
+        }
+    }
+
+    pub(crate) const fn request_id(&self) -> RequestId {
+        self.request_id
+    }
+
+    pub(crate) fn mark_handler_reached(&self) {
+        self.handler_reached.store(true, Ordering::Release);
+    }
+
+    pub(crate) fn set_actor(&self, actor_id: UserId) {
+        if let Ok(mut value) = self.actor_id.lock() {
+            *value = Some(actor_id);
+        }
+    }
+
+    fn actor_id(&self) -> Option<UserId> {
+        self.actor_id.lock().ok().and_then(|value| *value)
+    }
+
+    fn handler_reached(&self) -> bool {
+        self.handler_reached.load(Ordering::Acquire)
+    }
+}
+
+/// Append one audit event without allowing an unavailable audit sink to alter
+/// the already-determined RPC result. The timeout also prevents a stalled
+/// worker pool from holding the RPC request open indefinitely.
+pub async fn append_ui_request_audit_bounded(
+    sink: &dyn UiRequestAuditSink,
+    event: NewUiRequestAuditEvent,
+) -> bool {
+    let request_id = event.request_id();
+    let surface = event.surface();
+    let reason = event.reason();
+    if timeout(UI_AUDIT_APPEND_BUDGET, sink.append(event)).await == Ok(Ok(())) {
+        true
+    } else {
+        tracing::warn!(
+            %request_id,
+            %surface,
+            reason = reason.as_str(),
+            "UI request audit append unavailable or timed out"
+        );
+        false
+    }
+}
 
 /// Authenticated mediator subject safe to convert into application identity.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -69,6 +149,7 @@ pub struct VerifiedMediatorSession {
 pub struct MediatorAuthenticationState {
     authenticator: MediatorAuthenticator,
     browser_sessions: Arc<dyn BrowserSessionStore>,
+    ui_request_audit: Option<Arc<dyn UiRequestAuditSink>>,
 }
 
 impl MediatorAuthenticationState {
@@ -81,7 +162,41 @@ impl MediatorAuthenticationState {
         Self {
             authenticator,
             browser_sessions,
+            ui_request_audit: None,
         }
+    }
+
+    /// Adds the worker-owned sink used for denied handoff authentication
+    /// attempts. Other middleware paths remain audit-neutral.
+    #[must_use]
+    pub fn with_ui_request_audit_sink(mut self, sink: Arc<dyn UiRequestAuditSink>) -> Self {
+        self.ui_request_audit = Some(sink);
+        self
+    }
+
+    async fn audit_handoff_denial(
+        &self,
+        marker: &UiHandoffAuditMarker,
+        reason: UiRequestAuditReason,
+    ) {
+        let Some(sink) = &self.ui_request_audit else {
+            return;
+        };
+        if marker.handler_reached() {
+            return;
+        }
+        let event = NewUiRequestAuditEvent::now(
+            marker.request_id(),
+            UiRequestAuditSurface::HandoffIssue,
+            UiRequestAuditDecision::Denied,
+            UiRequestAuditOutcome::NotAttempted,
+            reason,
+            marker.actor_id().map_or_else(
+                UiRequestAuditContext::anonymous,
+                UiRequestAuditContext::actor,
+            ),
+        );
+        let _ = append_ui_request_audit_bounded(sink.as_ref(), event).await;
     }
 
     fn authenticate_signed(
@@ -247,15 +362,25 @@ pub async fn mediator_identity_middleware(
     next: Next,
 ) -> Response {
     let mode = auth_mode(request.uri().path());
+    let handoff_marker = (request.uri().path() == HANDOFF_AUDIENCE).then(UiHandoffAuditMarker::new);
+    if let Some(marker) = &handoff_marker {
+        request.extensions_mut().insert(marker.clone());
+    }
     let session = match mode {
         MediatorAuthMode::Public | MediatorAuthMode::Bootstrap => {
             return next.run(request).await;
         }
         MediatorAuthMode::Signed => {
-            match state.authenticate_signed(request.headers(), request.uri().path()) {
-                Ok(session) => session,
-                Err(_) => return auth_response(StatusCode::UNAUTHORIZED),
-            }
+            let Ok(session) = state.authenticate_signed(request.headers(), request.uri().path())
+            else {
+                if let Some(marker) = &handoff_marker {
+                    state
+                        .audit_handoff_denial(marker, UiRequestAuditReason::Unauthenticated)
+                        .await;
+                }
+                return auth_response(StatusCode::UNAUTHORIZED);
+            };
+            session
         }
         MediatorAuthMode::Active => match state
             .authenticate_active(request.headers(), request.uri().path())
@@ -263,13 +388,26 @@ pub async fn mediator_identity_middleware(
         {
             Ok(session) => session,
             Err(SessionAuthenticationError::Unauthenticated) => {
+                if let Some(marker) = &handoff_marker {
+                    state
+                        .audit_handoff_denial(marker, UiRequestAuditReason::Unauthenticated)
+                        .await;
+                }
                 return auth_response(StatusCode::UNAUTHORIZED);
             }
             Err(SessionAuthenticationError::Unavailable) => {
+                if let Some(marker) = &handoff_marker {
+                    state
+                        .audit_handoff_denial(marker, UiRequestAuditReason::Unavailable)
+                        .await;
+                }
                 return auth_response(StatusCode::SERVICE_UNAVAILABLE);
             }
         },
     };
+    if let Some(marker) = &handoff_marker {
+        marker.set_actor(session.user_id);
+    }
     request.extensions_mut().insert(session);
     request
         .extensions_mut()
@@ -280,7 +418,18 @@ pub async fn mediator_identity_middleware(
             serde_json::json!({"mediator": "phoenix", "assertion_id": session.assertion_id}),
             identity_domain::RequestId::from_uuid(session.assertion_id),
         ));
-    next.run(request).await
+    let response = next.run(request).await;
+    if let Some(marker) = &handoff_marker {
+        if !marker.handler_reached() {
+            let reason = if response.status().is_server_error() {
+                UiRequestAuditReason::Unavailable
+            } else {
+                UiRequestAuditReason::InvalidInput
+            };
+            state.audit_handoff_denial(marker, reason).await;
+        }
+    }
+    response
 }
 
 fn auth_response(status: StatusCode) -> Response {
@@ -425,8 +574,15 @@ mod tests {
     };
     use identity_domain::{BrowserSessionId, BrowserSessionMetadata, BrowserSessionSid, UserId};
     use jsonwebtoken::{Algorithm, EncodingKey, Header, encode};
+    use release_service::{
+        NewUiRequestAuditEvent, UiRequestAuditDecision, UiRequestAuditOutcome,
+        UiRequestAuditReason, UiRequestAuditSink, UiRequestAuditSurface,
+    };
     use serde::Serialize;
-    use std::sync::{Arc, Mutex};
+    use std::{
+        future::pending,
+        sync::{Arc, Mutex},
+    };
     use time::{Duration, OffsetDateTime};
     use tower::ServiceExt;
     use uuid::Uuid;
@@ -491,6 +647,39 @@ mod tests {
         metadata: BrowserSessionMetadata,
         outcome: FakeSessionOutcome,
         calls: Arc<Mutex<Vec<(UserId, BrowserSessionSid)>>>,
+    }
+
+    #[derive(Clone, Default)]
+    struct RecordingAuditSink {
+        events: Arc<Mutex<Vec<NewUiRequestAuditEvent>>>,
+        fail: bool,
+    }
+
+    #[derive(Clone, Copy, Default)]
+    struct HangingAuditSink;
+
+    #[async_trait]
+    impl UiRequestAuditSink for HangingAuditSink {
+        async fn append(
+            &self,
+            _event: NewUiRequestAuditEvent,
+        ) -> Result<(), release_service::UiRequestAuditError> {
+            pending().await
+        }
+    }
+
+    #[async_trait]
+    impl UiRequestAuditSink for RecordingAuditSink {
+        async fn append(
+            &self,
+            event: NewUiRequestAuditEvent,
+        ) -> Result<(), release_service::UiRequestAuditError> {
+            if self.fail {
+                return Err(release_service::UiRequestAuditError::Unavailable);
+            }
+            self.events.lock().expect("audit sink lock").push(event);
+            Ok(())
+        }
     }
 
     #[async_trait]
@@ -653,6 +842,158 @@ mod tests {
             dispatch_status(unavailable, AUDIENCE, Some(&token)).await,
             StatusCode::SERVICE_UNAVAILABLE
         );
+    }
+
+    #[tokio::test]
+    async fn handoff_middleware_failures_are_audited_without_verified_context() {
+        let key = mediator_signing_key(TOKEN);
+        let user_id = UserId::new();
+        let sid = BrowserSessionSid::new();
+        let events = Arc::new(Mutex::new(Vec::new()));
+        let sink = RecordingAuditSink {
+            events: Arc::clone(&events),
+            fail: false,
+        };
+        let now = OffsetDateTime::now_utc().unix_timestamp();
+        let expired = assertion_with_sid(
+            &key,
+            super::HANDOFF_AUDIENCE,
+            user_id.as_uuid(),
+            Uuid::new_v4(),
+            now - 60,
+            now - 30,
+            sid,
+        );
+        let wrong_audience = assertion_with_sid(
+            &key,
+            AUDIENCE,
+            user_id.as_uuid(),
+            Uuid::new_v4(),
+            now,
+            now + 30,
+            sid,
+        );
+        let revoked = assertion_with_sid(
+            &key,
+            super::HANDOFF_AUDIENCE,
+            user_id.as_uuid(),
+            Uuid::new_v4(),
+            now,
+            now + 30,
+            sid,
+        );
+        let state = MediatorAuthenticationState::new(
+            MediatorAuthenticator::new(&key),
+            Arc::new(RecordingSessionStore {
+                expected_user: user_id,
+                expected_sid: sid,
+                metadata: session_metadata(user_id),
+                outcome: FakeSessionOutcome::Unauthenticated,
+                calls: Arc::new(Mutex::new(Vec::new())),
+            }),
+        )
+        .with_ui_request_audit_sink(Arc::new(sink));
+
+        assert_eq!(
+            dispatch_status(state.clone(), super::HANDOFF_AUDIENCE, Some(&expired)).await,
+            StatusCode::UNAUTHORIZED
+        );
+        assert_eq!(
+            dispatch_status(
+                state.clone(),
+                super::HANDOFF_AUDIENCE,
+                Some(&wrong_audience)
+            )
+            .await,
+            StatusCode::UNAUTHORIZED
+        );
+        assert_eq!(
+            dispatch_status(state, super::HANDOFF_AUDIENCE, Some(&revoked)).await,
+            StatusCode::UNAUTHORIZED
+        );
+
+        let events = events.lock().expect("audit sink lock");
+        assert_eq!(events.len(), 3);
+        for event in events.iter() {
+            assert_eq!(event.surface(), UiRequestAuditSurface::HandoffIssue);
+            assert_eq!(event.decision(), UiRequestAuditDecision::Denied);
+            assert_eq!(event.outcome(), UiRequestAuditOutcome::NotAttempted);
+            assert_eq!(event.reason(), UiRequestAuditReason::Unauthenticated);
+            assert_eq!(event.context().actor_id(), None);
+            assert_eq!(event.context().installation_id(), None);
+        }
+        assert_ne!(events[0].request_id(), events[1].request_id());
+        drop(events);
+    }
+
+    #[tokio::test]
+    async fn handoff_audit_failure_preserves_middleware_status() {
+        let key = mediator_signing_key(TOKEN);
+        let user_id = UserId::new();
+        let sid = BrowserSessionSid::new();
+        let now = OffsetDateTime::now_utc().unix_timestamp();
+        let expired = assertion_with_sid(
+            &key,
+            super::HANDOFF_AUDIENCE,
+            user_id.as_uuid(),
+            Uuid::new_v4(),
+            now - 60,
+            now - 30,
+            sid,
+        );
+        let state = MediatorAuthenticationState::new(
+            MediatorAuthenticator::new(&key),
+            Arc::new(RecordingSessionStore {
+                expected_user: user_id,
+                expected_sid: sid,
+                metadata: session_metadata(user_id),
+                outcome: FakeSessionOutcome::Active,
+                calls: Arc::new(Mutex::new(Vec::new())),
+            }),
+        )
+        .with_ui_request_audit_sink(Arc::new(RecordingAuditSink {
+            events: Arc::new(Mutex::new(Vec::new())),
+            fail: true,
+        }));
+        assert_eq!(
+            dispatch_status(state, super::HANDOFF_AUDIENCE, Some(&expired)).await,
+            StatusCode::UNAUTHORIZED
+        );
+    }
+
+    #[tokio::test]
+    async fn hanging_handoff_audit_sink_is_bounded_without_changing_status() {
+        let key = mediator_signing_key(TOKEN);
+        let user_id = UserId::new();
+        let sid = BrowserSessionSid::new();
+        let now = OffsetDateTime::now_utc().unix_timestamp();
+        let expired = assertion_with_sid(
+            &key,
+            super::HANDOFF_AUDIENCE,
+            user_id.as_uuid(),
+            Uuid::new_v4(),
+            now - 60,
+            now - 30,
+            sid,
+        );
+        let state = MediatorAuthenticationState::new(
+            MediatorAuthenticator::new(&key),
+            Arc::new(RecordingSessionStore {
+                expected_user: user_id,
+                expected_sid: sid,
+                metadata: session_metadata(user_id),
+                outcome: FakeSessionOutcome::Active,
+                calls: Arc::new(Mutex::new(Vec::new())),
+            }),
+        )
+        .with_ui_request_audit_sink(Arc::new(HangingAuditSink));
+        let response = tokio::time::timeout(
+            std::time::Duration::from_secs(1),
+            dispatch_status(state, super::HANDOFF_AUDIENCE, Some(&expired)),
+        )
+        .await
+        .expect("handoff audit timeout must be bounded");
+        assert_eq!(response, StatusCode::UNAUTHORIZED);
     }
 
     #[tokio::test]
@@ -882,13 +1223,16 @@ mod tests {
                 .is_err()
         );
 
+        // Keep a generous future margin so a fresh truncated clock cannot
+        // cross the boundary between constructing and authenticating.
+        let future_iat = OffsetDateTime::now_utc().unix_timestamp() + CLOCK_SKEW_SECONDS + 60;
         let future = assertion(
             &key,
             AUDIENCE,
             user_id,
             assertion_id,
-            now + CLOCK_SKEW_SECONDS + 1,
-            now + CLOCK_SKEW_SECONDS + 2,
+            future_iat,
+            future_iat + 1,
         );
         assert!(
             authenticator

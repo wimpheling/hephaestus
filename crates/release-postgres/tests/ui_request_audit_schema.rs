@@ -1,4 +1,4 @@
-//! Real-role coverage for migration 0093's redacted UI request audit stream.
+//! Real-role coverage for migration 0094's redacted UI request audit stream.
 //!
 //! The validator should run this against an isolated database with
 //! `HEPHAESTUS_POSTGRES_TEST_URL`; this draft intentionally contains no
@@ -9,7 +9,7 @@ use sqlx::{PgPool, postgres::PgPoolOptions};
 use std::env;
 use uuid::Uuid;
 
-const EXPECTED_MIGRATION: i64 = 93;
+const EXPECTED_MIGRATION: i64 = 94;
 
 #[tokio::test]
 #[serial]
@@ -26,7 +26,7 @@ async fn ui_request_audit_is_redacted_append_only_and_worker_owned() {
     sqlx::migrate!("../../migrations")
         .run(&bootstrap)
         .await
-        .expect("apply migrations through 0093");
+        .expect("apply migrations through 0094");
     let max_migration: i64 = sqlx::query_scalar::<_, Option<i64>>(
         "SELECT max(version) FROM _sqlx_migrations WHERE success",
     )
@@ -45,6 +45,8 @@ async fn ui_request_audit_is_redacted_append_only_and_worker_owned() {
 
     let event_id = Uuid::new_v4();
     insert_anonymous_denial(&worker, event_id).await;
+    let unknown_id = Uuid::new_v4();
+    insert_unknown(&worker, unknown_id).await;
     let count_before_rollback: i64 =
         sqlx::query_scalar("SELECT count(*) FROM ui_request_audit_events WHERE id = $1")
             .bind(event_id)
@@ -52,6 +54,53 @@ async fn ui_request_audit_is_redacted_append_only_and_worker_owned() {
             .await
             .expect("read committed anonymous audit event");
     assert_eq!(count_before_rollback, 1);
+    let unknown_count: i64 =
+        sqlx::query_scalar("SELECT count(*) FROM ui_request_audit_events WHERE id = $1")
+            .bind(unknown_id)
+            .fetch_one(&bootstrap)
+            .await
+            .expect("read committed unknown audit event");
+    assert_eq!(unknown_count, 1);
+
+    for (decision, outcome) in [("undetermined", "succeeded"), ("allowed", "unknown")] {
+        let invalid = insert_values(&worker, Uuid::new_v4(), decision, outcome).await;
+        assert!(
+            invalid.is_err(),
+            "invalid audit pair unexpectedly succeeded"
+        );
+        assert_sqlstate(
+            &take_sql_error(invalid, "invalid audit pair unexpectedly succeeded"),
+            "23514",
+        );
+    }
+
+    let constraints: Vec<(String, String)> = sqlx::query_as(
+        "SELECT conname::text, pg_get_constraintdef(oid)::text
+         FROM pg_catalog.pg_constraint
+         WHERE conrelid = 'public.ui_request_audit_events'::regclass
+           AND contype = 'c'
+           AND conname IN (
+             'ui_request_audit_events_decision_check',
+             'ui_request_audit_events_outcome_check',
+             'ui_request_audit_events_decision_outcome_check'
+           )
+         ORDER BY conname",
+    )
+    .fetch_all(&bootstrap)
+    .await
+    .expect("inspect migration 0094 audit checks");
+    assert_eq!(constraints.len(), 3);
+    assert!(constraints.iter().any(|(name, definition)| {
+        name == "ui_request_audit_events_decision_check" && definition.contains("undetermined")
+    }));
+    assert!(constraints.iter().any(|(name, definition)| {
+        name == "ui_request_audit_events_outcome_check" && definition.contains("unknown")
+    }));
+    assert!(constraints.iter().any(|(name, definition)| {
+        name == "ui_request_audit_events_decision_outcome_check"
+            && definition.contains("undetermined")
+            && definition.contains("unknown")
+    }));
 
     let rolled_back_id = Uuid::new_v4();
     let mut transaction = worker.begin().await.expect("begin worker rollback test");
@@ -162,13 +211,30 @@ async fn insert_anonymous_denial(pool: &PgPool, event_id: Uuid) {
 }
 
 async fn insert_event_with_pool(pool: &PgPool, event_id: Uuid) -> Result<(), sqlx::Error> {
+    insert_values(pool, event_id, "denied", "not_attempted").await
+}
+
+async fn insert_unknown(pool: &PgPool, event_id: Uuid) {
+    insert_values(pool, event_id, "undetermined", "unknown")
+        .await
+        .expect("insert unknown audit event");
+}
+
+async fn insert_values(
+    pool: &PgPool,
+    event_id: Uuid,
+    decision: &str,
+    outcome: &str,
+) -> Result<(), sqlx::Error> {
     sqlx::query(
         "INSERT INTO ui_request_audit_events
             (id, request_id, surface, decision, outcome, reason_code, occurred_at)
-         VALUES ($1, $2, 'bootstrap', 'denied', 'not_attempted', 'unauthenticated', statement_timestamp())",
+         VALUES ($1, $2, 'bootstrap', $3, $4, 'unavailable', statement_timestamp())",
     )
     .bind(event_id)
     .bind(Uuid::new_v4())
+    .bind(decision)
+    .bind(outcome)
     .execute(pool)
     .await
     .map(|_| ())
