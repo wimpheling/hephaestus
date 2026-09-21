@@ -272,6 +272,7 @@ cp -- \
     "${repo_root}/e2e/playwright/cooking-tests/session-chat-installed-ui.spec.ts" \
     "${repo_root}/e2e/playwright/cooking-tests/session-chat-new-installed-ui.spec.ts" \
     "${repo_root}/e2e/playwright/cooking-tests/session-chat-concurrent-installed-ui.spec.ts" \
+    "${repo_root}/e2e/playwright/cooking-tests/session-chat-concurrent-parser.mjs" \
     "${repo_root}/e2e/playwright/cooking-tests/session-chat-fork-installed-ui.spec.ts" \
     "${browser_project}/cooking-tests/"
 cp -- "${fixture}" "${fixture_root}/fixture.json"
