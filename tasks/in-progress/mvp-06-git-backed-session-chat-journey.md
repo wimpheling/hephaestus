@@ -788,3 +788,23 @@ pass, with no skips, in `/var/tmp/sessionchat-smart-http-pg-denial-final4.log`;
 formatting and focused strict Clippy pass. This closes the listed local
 negative-capability item. A fresh GCP run must still retain the corresponding
 negative evidence; browser/lifecycle acceptance remains open.
+
+Subsequent retained diagnostics identify and resolve two more setup defects:
+`bb012d3` validates backend-compatible session names before any mutation, and
+`b6577bb` gives the browser fixture actor the same explicit project capability
+delegation role as the standalone fixture. Final15 confirms repository
+creation, agent import, capability revision, and attachment creation succeed.
+Brokered HTTPS rule declaration then returns `unavailable`; UI installation,
+message turns, and recovery have not yet run. Evidence is retained in
+`/var/tmp/sessionchat-browser-final15-run.log`.
+
+The declaration failure was a durable receipt contract mismatch. Commit
+`0c2f153` appends an `agent_secret_binding.changed` event atomically with rule
+creation and requests its receipt in the existing `agent_instance` scope.
+No new event aggregate or schema migration is required. A real PostgreSQL
+regression verifies the distinct command occurrence, actor, exact scope,
+binding version increment, related instance/import IDs, committed outbox row,
+and same-command replay without duplicate events. It passes without skips in
+`/var/tmp/sessionchat-secret-receipt-focused4.log`; focused strict Clippy and
+application compilation also pass. Browser acceptance remains pending the
+fresh final16 run; this regression alone does not prove the interactive journey.
