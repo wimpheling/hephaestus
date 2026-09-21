@@ -900,3 +900,46 @@ failing Git operation or prove any browser-backed turn. Fixed-category evidence:
 The pinned HTTP transport's header normalization matches the client; focused UI
 tests pass 19/19 (`/var/tmp/sessionchat-ui-focused-tests.log`), but those tests do
 not substitute for the failing installed-browser path.
+
+Commit `4c6803f` requires all four browser phases (initial, recovery,
+concurrency, fork) in the GCP session-chat evidence and workload timing gates.
+The runner selects the fork flag; collector and final diagnostic summary retain
+the canonical phase order. The 133 focused Python contracts cover successful
+four-phase projection, missing fork as incomplete, and failed fork as a typed
+failure (`/tmp/heph-gcp-fork-contracts-20260921.log`). Shell syntax and diff
+checks pass. This is contract validation, not a completed local or cloud journey.
+
+Final21 stopped during compilation of incomplete fork test wiring. After that
+wiring compiled, final22 stopped during production build source materialization
+with `isolated build source contains an unsupported object` (34 golden tests
+passed, one failed, one ignored). Both runs cleaned up without reaching
+Playwright; neither produced connection-operation evidence. The final22 run log
+is `/var/tmp/sessionchat-browser-final22/cooking-execution.jePnmC.log`.
+
+Final22's unsupported objects were generated `ui/node_modules/.bin` symlinks
+copied into the release fixture after an isolated UI dependency install. Removing
+only those generated dependencies restored source materialization. Final23 then
+reached the installed browser and reproduced the connection error, but its new
+diagnostic hook accessed `document.documentElement` before it existed. The hook
+raised TypeErrors and did not activate operation capture; this run does not
+identify the underlying Git failure. Evidence is under
+`/var/tmp/sessionchat-browser-final23/browser.soUUFd/`.
+
+Commit `b7b2456` wires the optional fork host phase after concurrency. It captures
+the source's actual model rule/binding, publishes inherited history through the
+production Git boundary, creates fresh target authority and UI installation,
+and checks the target turn's exact commits, records, receives, run count, and
+runtime revision. Source history and records remain invariant in the assertions.
+Formatting, golden compilation, and strict golden Clippy pass; logs are
+`/var/tmp/session-chat-fork-cargo-{fmt,check,clippy}-final23.log`. Fork browser/VM
+execution remains unverified.
+
+The diagnostic hook now uses a global opt-in set before module execution. A
+real Chromium probe against the packaged UI verifies the flag, fixed discovery
+error capture, and zero page errors (`/var/tmp/sessionchat-ui-init-script-probe.log`).
+Final24 then captures the actual failing operation as `discovery`, status
+`failed`, code `Error`, despite successful HTTP response and valid actor header.
+This localizes the failure to `getRemoteInfo` before initialization, clone, or
+history reading; the underlying cause remains unresolved. No browser-backed
+turn is proven. Safe sidecar:
+`/var/tmp/sessionchat-browser-final24/browser.SAx5AU/playwright-results/session-chat-safe-diagnostics.jsonl`.
