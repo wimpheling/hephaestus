@@ -20,7 +20,10 @@ defmodule HephaestusWeb.RPC.ProjectionTest do
     ReleaseUiDescriptor,
     ReleaseUiManagedService,
     ReleaseUiPresentation,
-    ReleaseUiScope
+    ReleaseUiRepositoryGitAccess,
+    ReleaseUiScope,
+    ReleaseUiStaticContent,
+    ReleaseUiStaticFile
   }
 
   alias Hephaestus.Pat.V1.{
@@ -102,6 +105,45 @@ defmodule HephaestusWeb.RPC.ProjectionTest do
              "presentation" => "iframe",
              "managed_service" => %{"gateway_name" => "dashboard"},
              "apis" => [%{"key" => "summary", "method" => "GET", "route" => "/summary"}]
+           } = Projection.to_value(descriptor)
+  end
+
+  test "projects the reference repository UI descriptor shape consumed by session chat" do
+    descriptor = %ReleaseUiDescriptor{
+      key: "session-chat",
+      scope: ReleaseUiScope.RELEASE_UI_SCOPE_REPOSITORY,
+      presentation: ReleaseUiPresentation.RELEASE_UI_PRESENTATION_FULL_PAGE,
+      route_base: "session-chat",
+      repository_git_access:
+        ReleaseUiRepositoryGitAccess.RELEASE_UI_REPOSITORY_GIT_ACCESS_READ_WRITE,
+      content:
+        {:static_content,
+         %ReleaseUiStaticContent{
+           files: [
+             %ReleaseUiStaticFile{
+               route: "index.html",
+               artifact_id: %OpaqueId{value: "artifact-1"},
+               media_type: "text/html"
+             }
+           ]
+         }}
+    }
+
+    assert %{
+             "key" => "session-chat",
+             "scope" => "repository",
+             "presentation" => "full_page",
+             "route_base" => "session-chat",
+             "repository_git_access" => "read_write",
+             "static_content" => %{
+               "files" => [
+                 %{
+                   "route" => "index.html",
+                   "artifact_id" => "artifact-1",
+                   "media_type" => "text/html"
+                 }
+               ]
+             }
            } = Projection.to_value(descriptor)
   end
 
