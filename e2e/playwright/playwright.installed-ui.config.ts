@@ -6,6 +6,8 @@ export default {
   testMatch: [
     "cooking-installed-ui.spec.ts",
     "session-chat-installed-ui.spec.ts",
+    "session-chat-concurrent-installed-ui.spec.ts",
+    "session-chat-fork-installed-ui.spec.ts",
     "session-chat-new-installed-ui.spec.ts",
   ],
   // Keep Playwright's automatic error-context artifact outside the mounted

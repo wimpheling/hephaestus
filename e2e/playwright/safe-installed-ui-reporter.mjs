@@ -3,6 +3,7 @@ const TEST_IDS = new Map([
   ["cooking session-chat installed UI initializes and reconnects ordinary Git history", "session_chat_ui"],
   ["cooking new session chat creates and opens a real Git-backed browser session", "session_chat_new"],
   ["cooking concurrent session chat clients reconcile a stale Git push and preserve both turns", "session_chat_concurrent"],
+  ["cooking forked session chat preserves inherited history and receives a fresh response", "session_chat_fork"],
 ]);
 
 const STAGE_IDS = new Map([
@@ -16,6 +17,10 @@ const STAGE_IDS = new Map([
   ["session-chat-concurrent-race", "session_chat_concurrent_race"],
   ["session-chat-concurrent-stale-retry", "session_chat_concurrent_stale_retry"],
   ["session-chat-concurrent-reconnect", "session_chat_concurrent_reconnect"],
+  ["session-chat-fork-initialize", "session_chat_fork_initialize"],
+  ["session-chat-fork-send", "session_chat_fork_send"],
+  ["session-chat-fork-response", "session_chat_fork_response"],
+  ["session-chat-fork-reconnect", "session_chat_fork_reconnect"],
   ["signin", "signin"],
   ["signin-platform", "signin_platform"],
   ["signin-redirect", "signin_redirect"],
