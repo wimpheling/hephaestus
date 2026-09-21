@@ -177,6 +177,22 @@ async fn clone_fetch_push_audit_and_run_request() {
         eprintln!("skipping: HEPHAESTUS_POSTGRES_TEST_URL is not set");
         return;
     };
+    // Apply the current workspace schema before constructing the repository
+    // service so this focused matrix covers the complete receive-path schema.
+    let migrations = sqlx::migrate!("../../migrations");
+    migrations
+        .run(&pool)
+        .await
+        .expect("current workspace migrations");
+    let latest_migration: i64 =
+        sqlx::query_scalar("SELECT max(version) FROM _sqlx_migrations WHERE success = true")
+            .fetch_one(&pool)
+            .await
+            .expect("latest applied migration");
+    assert_eq!(
+        latest_migration, 98,
+        "focused matrix must use current schema"
+    );
     let temporary = tempfile::tempdir().expect("temporary directory");
     let storage = Arc::new(
         GitStorage::initialize(temporary.path().join("repositories"))
@@ -187,10 +203,6 @@ async fn clone_fetch_push_audit_and_run_request() {
         PgForgeRepository::new(pool.clone(), Arc::clone(&storage))
             .with_authorizer(Arc::new(PostgresMelangeAuthorizer)),
     );
-    repository_service
-        .initialize()
-        .await
-        .expect("forge migrations");
     let organization_id = OrganizationId::new();
     let user_id = UserId::new();
     let identity = AuthenticatedIdentity::new(
@@ -247,6 +259,19 @@ async fn clone_fetch_push_audit_and_run_request() {
         )
         .await
         .expect("repository");
+    let other_repository = repository_service
+        .create_repository(
+            &identity,
+            &CreateRepository {
+                project_id: project.id,
+                name: String::from("other-transport"),
+                default_branch: GitRef::parse("refs/heads/main").expect("default branch"),
+                is_public: false,
+                agent_runs_enabled: false,
+            },
+        )
+        .await
+        .expect("other repository");
 
     let identity = identity.clone();
     let authorizer = Arc::new(RecordingAuthorizer {
@@ -368,15 +393,37 @@ async fn clone_fetch_push_audit_and_run_request() {
     git(&source, &["add", "runtime.txt"]).await;
     git(&source, &["commit", "-m", "runtime receive"]).await;
     let runtime_commit = git_output(&source, &["rev-parse", "HEAD"]).await;
-    let (runtime_session_id, origin_attachment, runtime_credential) =
+    let (runtime_session_id, origin_attachment, runtime_credential, runtime_binding_id) =
         seed_runtime_transport_authority(
             &pool,
             repository.id.as_uuid(),
             &runtime_commit,
             user_id,
             temporary.path().join("runtime-git-handoff"),
+            None,
+            time::Duration::minutes(10),
         )
         .await;
+    let (expired_session_id, _, expired_credential, _) = seed_runtime_transport_authority(
+        &pool,
+        repository.id.as_uuid(),
+        &runtime_commit,
+        user_id,
+        temporary.path().join("expired-runtime-git-handoff"),
+        Some(runtime_binding_id),
+        time::Duration::seconds(1),
+    )
+    .await;
+    let (revoked_session_id, _, revoked_credential, _) = seed_runtime_transport_authority(
+        &pool,
+        repository.id.as_uuid(),
+        &runtime_commit,
+        user_id,
+        temporary.path().join("revoked-runtime-git-handoff"),
+        Some(runtime_binding_id),
+        time::Duration::minutes(10),
+    )
+    .await;
     // Prerequisite: `cargo build -p git-http --bin pre-receive`, unless
     // HEPHAESTUS_GIT_RECEIVE_HOOK points to an absolute executable hook.
     let hook = runtime_receive_hook_path();
@@ -422,6 +469,12 @@ async fn clone_fetch_push_audit_and_run_request() {
     });
     let runtime_remote = format!("http://{runtime_address}/{}", repository.id);
     git(&source, &["remote", "add", "runtime", &runtime_remote]).await;
+    let other_runtime_remote = format!("http://{runtime_address}/{}", other_repository.id);
+    git(
+        &source,
+        &["remote", "add", "other-runtime", &other_runtime_remote],
+    )
+    .await;
     let wrong_credential = format!(
         "Basic {}",
         BASE64_STANDARD.encode("heph-runtime:heph_git_v1_invalid")
@@ -437,6 +490,16 @@ async fn clone_fetch_push_audit_and_run_request() {
         "wrong runtime token was accepted"
     );
     assert!(!String::from_utf8_lossy(&wrong_token.stderr).contains("heph_git_v1_invalid"));
+    let other_repository_attempt = git_authenticated_result(
+        &source,
+        &["push", "other-runtime", "HEAD:refs/heads/main"],
+        &runtime_credential_header,
+    )
+    .await;
+    assert!(
+        !other_repository_attempt.status.success(),
+        "a runtime credential was accepted for another repository"
+    );
     git_authenticated(
         &source,
         &["push", "runtime", "HEAD:refs/heads/main"],
@@ -462,6 +525,131 @@ async fn clone_fetch_push_audit_and_run_request() {
         String::from_utf8_lossy(&denied_path.stderr).contains("runtime receive denied"),
         "guarded hook denial was not reported"
     );
+    git(&source, &["reset", "--hard", &runtime_commit]).await;
+    tokio::fs::create_dir_all(source.join("sessions"))
+        .await
+        .expect("runtime ref fixture directory");
+    tokio::fs::write(source.join("sessions/ref-denied.json"), "denied ref\n")
+        .await
+        .expect("denied runtime ref change");
+    git(&source, &["add", "sessions/ref-denied.json"]).await;
+    git(&source, &["commit", "-m", "denied runtime ref"]).await;
+    let denied_ref = git_authenticated_result(
+        &source,
+        &["push", "runtime", "HEAD:refs/heads/other"],
+        &runtime_credential_header,
+    )
+    .await;
+    assert!(
+        !denied_ref.status.success(),
+        "out-of-scope runtime ref was accepted"
+    );
+    assert!(
+        String::from_utf8_lossy(&denied_ref.stderr).contains("runtime receive denied"),
+        "ref denial was not reported"
+    );
+    git(&source, &["reset", "--hard", &runtime_commit]).await;
+    let denied_delete = git_authenticated_result(
+        &source,
+        &["push", "runtime", ":refs/heads/main"],
+        &runtime_credential_header,
+    )
+    .await;
+    assert!(
+        !denied_delete.status.success(),
+        "runtime branch deletion was accepted"
+    );
+    let baseline_tree = git_output(
+        &source,
+        &["rev-parse", &format!("{runtime_commit}^{{tree}}")],
+    )
+    .await;
+    let force_commit = git_output(
+        &source,
+        &[
+            "commit-tree",
+            &baseline_tree,
+            "-m",
+            "non-fast-forward runtime change",
+        ],
+    )
+    .await;
+    let denied_force = git_authenticated_result(
+        &source,
+        &[
+            "push",
+            "runtime",
+            &format!("+{force_commit}:refs/heads/main"),
+        ],
+        &runtime_credential_header,
+    )
+    .await;
+    assert!(
+        !denied_force.status.success(),
+        "runtime force push was accepted"
+    );
+    assert!(
+        String::from_utf8_lossy(&denied_force.stderr).contains("runtime receive denied"),
+        "force-push denial was not reported by the receive hook"
+    );
+    tokio::time::sleep(std::time::Duration::from_secs(2)).await;
+    tokio::fs::create_dir_all(source.join("sessions"))
+        .await
+        .expect("expired runtime fixture directory");
+    let expired_state: (String, bool) = sqlx::query_as(
+        "SELECT status, expires_at < now()
+           FROM runtime_authority_sessions WHERE id = $1",
+    )
+    .bind(expired_session_id)
+    .fetch_one(&pool)
+    .await
+    .expect("inspect expired runtime Git session");
+    assert_eq!(expired_state, (String::from("active"), true));
+    tokio::fs::write(source.join("sessions/expired.json"), "expired\n")
+        .await
+        .expect("expired runtime change");
+    git(&source, &["add", "sessions/expired.json"]).await;
+    git(&source, &["commit", "-m", "expired runtime session"]).await;
+    let expired_header = credential_header(&expired_credential);
+    let denied_expired = git_authenticated_result(
+        &source,
+        &["push", "runtime", "HEAD:refs/heads/main"],
+        &expired_header,
+    )
+    .await;
+    assert!(
+        !denied_expired.status.success(),
+        "expired runtime session was accepted"
+    );
+    git(&source, &["reset", "--hard", &runtime_commit]).await;
+    tokio::fs::create_dir_all(source.join("sessions"))
+        .await
+        .expect("revoked runtime fixture directory");
+    tokio::fs::write(source.join("sessions/revoked.json"), "revoked\n")
+        .await
+        .expect("revoked runtime change");
+    git(&source, &["add", "sessions/revoked.json"]).await;
+    git(&source, &["commit", "-m", "revoked runtime session"]).await;
+    let revoked_header = credential_header(&revoked_credential);
+    sqlx::query(
+        "UPDATE runtime_authority_sessions
+            SET status = 'revoked', revoked_at = now(), revocation_reason = 'test'
+          WHERE id = $1",
+    )
+    .bind(revoked_session_id)
+    .execute(&pool)
+    .await
+    .expect("revoke runtime Git session");
+    let denied_revoked = git_authenticated_result(
+        &source,
+        &["push", "runtime", "HEAD:refs/heads/main"],
+        &revoked_header,
+    )
+    .await;
+    assert!(
+        !denied_revoked.status.success(),
+        "revoked runtime session was accepted"
+    );
     assert_eq!(
         git_output(
             &storage.repository_path(repository.id),
@@ -470,6 +658,50 @@ async fn clone_fetch_push_audit_and_run_request() {
         .await,
         runtime_commit,
         "guarded rejection changed canonical ref"
+    );
+    let other_receive_count: i64 =
+        sqlx::query_scalar("SELECT count(*) FROM git_receives WHERE repository_id = $1")
+            .bind(other_repository.id.as_uuid())
+            .fetch_one(&pool)
+            .await
+            .expect("other repository receive count");
+    assert_eq!(
+        other_receive_count, 0,
+        "wrong-repository attempt reached receive persistence"
+    );
+    let runtime_receive_count: i64 = sqlx::query_scalar(
+        "SELECT count(*) FROM git_receives
+          WHERE runtime_session_id = ANY($1)",
+    )
+    .bind(vec![
+        runtime_session_id,
+        expired_session_id,
+        revoked_session_id,
+    ])
+    .fetch_one(&pool)
+    .await
+    .expect("runtime receive count");
+    assert_eq!(
+        runtime_receive_count, 1,
+        "a rejected runtime receive was persisted"
+    );
+    let runtime_run_request_count: i64 = sqlx::query_scalar(
+        "SELECT count(*) FROM run_requests
+          WHERE receive_id IN (
+              SELECT id FROM git_receives WHERE runtime_session_id = ANY($1)
+          )",
+    )
+    .bind(vec![
+        runtime_session_id,
+        expired_session_id,
+        revoked_session_id,
+    ])
+    .fetch_one(&pool)
+    .await
+    .expect("runtime receive run-request count");
+    assert_eq!(
+        runtime_run_request_count, 0,
+        "runtime receive recursively triggered a run"
     );
     let runtime_receive: (Uuid, Option<Uuid>) = sqlx::query_as(
         "SELECT runtime_session_id, runtime_attachment_id
@@ -756,6 +988,14 @@ fn runtime_receive_binding_hash(repository_id: Uuid) -> [u8; 32] {
     .as_bytes()
 }
 
+fn credential_header(credential: &RuntimeGitCredential) -> String {
+    let token = credential.expose_token().to_string();
+    format!(
+        "Basic {}",
+        BASE64_STANDARD.encode(format!("heph-runtime:{token}"))
+    )
+}
+
 // The transport test uses the production Git HTTP/authentication path while
 // constructing only the already-published runtime join graph that this crate
 // does not own. Release-authority integration tests cover creation of these
@@ -767,7 +1007,9 @@ async fn seed_runtime_transport_authority(
     commit: &str,
     user_id: UserId,
     handoff_root: std::path::PathBuf,
-) -> (Uuid, Uuid, RuntimeGitCredential) {
+    existing_binding_id: Option<Uuid>,
+    lifetime: time::Duration,
+) -> (Uuid, Uuid, RuntimeGitCredential, Uuid) {
     let (attachment_id, instance_id): (Uuid, Uuid) =
         sqlx::query_as("SELECT id, instance_id FROM agent_attachments WHERE repository_id = $1")
             .bind(repository_id)
@@ -788,9 +1030,9 @@ async fn seed_runtime_transport_authority(
     let run_id = Uuid::new_v4();
     let snapshot_id = Uuid::new_v4();
     let runtime_session_id = Uuid::new_v4();
-    let binding_id = Uuid::new_v4();
+    let binding_id = existing_binding_id.unwrap_or_else(Uuid::new_v4);
     let now = time::OffsetDateTime::now_utc();
-    let expires_at = now + time::Duration::minutes(10);
+    let expires_at = now + lifetime;
     let binding_hash = runtime_receive_binding_hash(repository_id);
     sqlx::query(
         "INSERT INTO runs
@@ -853,26 +1095,28 @@ async fn seed_runtime_transport_authority(
         .execute(&mut *transaction)
         .await
         .expect("enable runtime transport fixture mode");
-    sqlx::query(
-        "INSERT INTO agent_capability_bindings
-         (id, instance_revision_id, release_agent_id, requirement_id,
-          requirement_hash, slot_key, resource_kind, resource_id,
-          granted_operations, normalized_hash, authorization_model_version,
-          created_by)
-         VALUES ($1, $2, $3, $4, $5, 'content', 'repository', $6,
-                 ARRAY['update_ref'], $7, 'test/v1', $8)",
-    )
-    .bind(binding_id)
-    .bind(revision_id)
-    .bind(release_agent_id)
-    .bind(Uuid::new_v4())
-    .bind([3_u8; 32].as_slice())
-    .bind(repository_id)
-    .bind(binding_hash.as_slice())
-    .bind(user_id.as_uuid())
-    .execute(&mut *transaction)
-    .await
-    .expect("runtime generic capability binding");
+    if existing_binding_id.is_none() {
+        sqlx::query(
+            "INSERT INTO agent_capability_bindings
+             (id, instance_revision_id, release_agent_id, requirement_id,
+              requirement_hash, slot_key, resource_kind, resource_id,
+              granted_operations, normalized_hash, authorization_model_version,
+              created_by)
+             VALUES ($1, $2, $3, $4, $5, 'content', 'repository', $6,
+                     ARRAY['update_ref'], $7, 'test/v1', $8)",
+        )
+        .bind(binding_id)
+        .bind(revision_id)
+        .bind(release_agent_id)
+        .bind(Uuid::new_v4())
+        .bind([3_u8; 32].as_slice())
+        .bind(repository_id)
+        .bind(binding_hash.as_slice())
+        .bind(user_id.as_uuid())
+        .execute(&mut *transaction)
+        .await
+        .expect("runtime generic capability binding");
+    }
     sqlx::query(
         "INSERT INTO run_authorization_snapshot_bindings
          (snapshot_id, instance_revision_id, ordinal, binding_id,
@@ -937,11 +1181,11 @@ async fn seed_runtime_transport_authority(
         .expect("commit runtime transport graph");
     let handoff = EncryptedFileRuntimeGitHandoffStore::new(handoff_root, [0x11; 32])
         .expect("runtime Git handoff store");
-    let issuer = RuntimeGitCredentialIssuer::new(
+    let credential_issuer = RuntimeGitCredentialIssuer::new(
         PgRuntimeGitCredentialRepository::new(pool.clone()),
         handoff,
     );
-    let issued = issuer
+    let issued_credential = credential_issuer
         .issue(
             RuntimeSessionId::from_uuid(runtime_session_id),
             RuntimeCredentialGeneration::INITIAL,
@@ -974,13 +1218,24 @@ async fn seed_runtime_transport_authority(
     let authenticated: i64 = sqlx::query_scalar(
         "SELECT count(*) FROM authenticate_runtime_git_credential($1, $2, 'receive')",
     )
-    .bind(issued.credential.storage_hash().as_bytes().as_slice())
+    .bind(
+        issued_credential
+            .credential
+            .storage_hash()
+            .as_bytes()
+            .as_slice(),
+    )
     .bind(repository_id)
     .fetch_one(pool)
     .await
     .expect("runtime credential authentication query");
     assert_eq!(authenticated, 1, "production runtime credential rejected");
-    (runtime_session_id, attachment_id, issued.credential)
+    (
+        runtime_session_id,
+        attachment_id,
+        issued_credential.credential,
+        binding_id,
+    )
 }
 
 async fn postgres_pool() -> Option<PgPool> {
@@ -999,17 +1254,18 @@ async fn git_exec_path() -> std::path::PathBuf {
 }
 
 fn runtime_receive_hook_path() -> PathBuf {
-    let hook = if let Some(configured) = std::env::var_os("HEPHAESTUS_GIT_RECEIVE_HOOK") {
-        PathBuf::from(configured)
-    } else {
-        let test_executable =
-            std::env::current_exe().expect("locate the active smart HTTP test executable");
-        test_executable
-            .parent()
-            .and_then(Path::parent)
-            .map(|profile| profile.join("pre-receive"))
-            .expect("locate the active Cargo target profile")
-    };
+    let hook = std::env::var_os("HEPHAESTUS_GIT_RECEIVE_HOOK").map_or_else(
+        || {
+            let test_executable =
+                std::env::current_exe().expect("locate the active smart HTTP test executable");
+            test_executable
+                .parent()
+                .and_then(Path::parent)
+                .map(|profile| profile.join("pre-receive"))
+                .expect("locate the active Cargo target profile")
+        },
+        PathBuf::from,
+    );
     assert!(
         hook.is_absolute(),
         "runtime receive hook must be an absolute path: {}",
@@ -1079,6 +1335,7 @@ async fn git_authenticated_result(
     Command::new("git")
         .args(arguments)
         .current_dir(directory)
+        .env("GIT_TERMINAL_PROMPT", "0")
         .env("GIT_CONFIG_COUNT", "1")
         .env("GIT_CONFIG_KEY_0", "http.extraHeader")
         .env(
