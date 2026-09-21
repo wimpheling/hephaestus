@@ -693,15 +693,35 @@ Session validation must observe the actual emitted workload phases
 `browser-setup`, `runtime-guest-build`, `oci-image-materialization`,
 `gateway-services-ready`, `runtime-worker-build`, `gateway-readiness`,
 `golden-tests`, and `database-tests`. The trusted session-chat path also
-requires the three browser workload phases `browser-initial`,
-`browser-recovery`, and `browser-concurrency`. The browser
+requires the four browser workload phases `browser-initial`,
+`browser-recovery`, `browser-concurrency`, and `browser-fork`. The browser
 projector uses `--scenario session-chat` and requires complete typed evidence
-for the initial `session_chat_new`, recovery `session_chat_ui`, and
-concurrency `session_chat_concurrent` journeys. These commits provide the
-selection and validators only; no session-chat cloud run or full browser/VM
-acceptance is recorded here. The current final18 local browser attempt reached
-successful server creation but failed during UI initialization, so runtime
-acceptance remains incomplete; no cloud run or merge is claimed.
+for `session_chat_new`, `session_chat_ui`, `session_chat_concurrent`, and
+`session_chat_fork`, in that order. A missing or failed phase fails the typed
+gate; an earlier passing phase cannot substitute for a later one.
+
+The combined session-chat lifecycle can additionally set
+`HEPHAESTUS_APP_SESSION_CHAT_NEGATIVE_E2E=1` alongside all four browser-phase
+flags. The trusted runner starts a second fresh guest process and supplies
+`HEPHAESTUS_APP_SESSION_CHAT_DENIAL_PROBE_E2E=1` internally for that process.
+The typed workload phase is `guest-negative-capability`, and its private
+`session-chat-negative-summary` source is collected with the four browser
+reports. The raw mode-`0600` log remains private; collection retains only the
+allowlisted summary and fixed ten-check host result.
+
+The standalone runner can still be invoked separately with
+`HEPHAESTUS_APP_SESSION_CHAT_DENIAL_PROBE_E2E=1` and without the browser
+lifecycle flags. That direct mode is distinct from combined GCP selection.
+GCP negative-mode dispatch and fresh combined negative evidence are still
+pending trusted-controller/runtime promotion; this section does not claim that
+cloud path has passed.
+
+These commits provide the selector, lifecycle plumbing, phase validators, and
+private evidence contracts only. No session-chat cloud run or full
+browser/VM acceptance is recorded here. The current local browser attempt
+reached successful server creation and first human send but timed out waiting
+for the first assistant response, so runtime acceptance remains incomplete; no
+cloud run or merge is claimed.
 
 PR mode requires the reviewed runner image with browser dependencies already
 baked. It fails closed on the stock image because installing Playwright
@@ -710,6 +730,12 @@ controller labels the VM and diagnostics with the validated PR SHA, run ID
 and attempt. Startup fetches only that public source SHA and stages
 hash-anchored trusted runtime, gate, scanner, browser-summary and timing
 helpers from metadata before invoking the workload.
+
+The session-chat release fixture must not retain a generated
+`examples/session-chat/ui/node_modules` tree when it is materialized for a VM:
+package-manager symlinks can violate the source-object contract. Build UI
+dependencies in an external temporary tree, copy only the generated release
+assets, and verify the fixture source is clean before the VM build.
 
 The PR process and its npm lifecycle setup both run as `forge` in delegated
 systemd units with the same sandbox. Its cache is staged and frozen
@@ -738,8 +764,11 @@ host user manager and its sockets are not exposed.
 access to controller credentials and the GCE metadata service. The guard is
 installed before PR npm/browser hooks and remains active for passt and the
 nested guest. Collection and upload stay root-owned and retain only validated
-safe projections. Fork execution remains deferred pending a separate trust
-and approval policy.
+safe projections. Fork-origin pull request execution remains deferred pending
+a separate trust and approval policy. That restriction concerns untrusted
+GitHub fork PRs and is distinct from the application session-chat fork phase,
+which still requires its own trusted evidence and is not inferred from earlier
+phases.
 
 This is a local implementation foundation, not live PR acceptance evidence.
 No paid PR dispatch, cloud baseline, performance claim, image promotion or

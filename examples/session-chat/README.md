@@ -39,9 +39,13 @@ env -u HEPHAESTUS_APP_COOKING_E2E \
 
 The default deterministic session run does not enable the denial probe.
 
-The browser-backed restart and concurrency phases are separately opt-in. They
-require the browser and restart phases together, and the concurrency phase
-uses the same installation, repository, and session after recovery. Prepare
+The browser-backed lifecycle is separately opt-in and runs in order as
+browser-initial, restart/recovery, concurrency, and fork. The later phases
+reuse the installed UI and source session through restart/recovery and
+concurrency; the fork phase creates a fresh target repository, authority, and
+UI installation while checking inherited history. Each phase has its own
+typed report, and a missing or failed phase does not count as acceptance.
+Prepare
 the KVM, Podman, Rust musl target, digest-pinned guest images, and browser
 dependencies using [`examples/cooking/README.md`](../cooking/README.md) and
 [`docs/vm-libkrun.md`](../../docs/vm-libkrun.md). The shared runner provisions
@@ -59,6 +63,7 @@ env -u HEPHAESTUS_APP_SESSION_CHAT_DENIAL_PROBE_E2E \
   HEPHAESTUS_PLATFORM_HTTPS_ORIGIN="https://platform.localhost:${CADDY_PORT}" \
   HEPHAESTUS_APP_SESSION_CHAT_RESTART_E2E=1 \
   HEPHAESTUS_APP_SESSION_CHAT_CONCURRENT_E2E=1 \
+  HEPHAESTUS_APP_SESSION_CHAT_FORK_E2E=1 \
   HEPHAESTUS_LIBKRUN_UBUNTU_IMAGE='...@sha256:<python-image-digest>' \
   HEPHAESTUS_LIBKRUN_RUST_BUILDER_IMAGE='...@sha256:<rust-builder-image-digest>' \
   examples/cooking/run.sh
@@ -66,8 +71,32 @@ env -u HEPHAESTUS_APP_SESSION_CHAT_DENIAL_PROBE_E2E \
 
 The two image values must be exact compatible digests prepared as described in
 the linked Cooking setup; the placeholders above are not runnable values. This
-command exercises the local production path only. The full runtime, browser,
-recovery, and concurrency acceptance journey remains incomplete.
+command exercises the local production path only. The corresponding GCP
+projector uses the fixed phase IDs `browser-initial`, `browser-recovery`,
+`browser-concurrency`, and `browser-fork`, with session reports
+`session_chat_new`, `session_chat_ui`, `session_chat_concurrent`, and
+`session_chat_fork`. The implementation and typed gate are present, but real
+runtime, browser, recovery, concurrency, fork, and GCP acceptance evidence
+remain pending.
+
+The combined lifecycle can additionally set
+`HEPHAESTUS_APP_SESSION_CHAT_NEGATIVE_E2E=1` alongside the browser, restart,
+concurrency, and fork flags. The runner starts a second fresh guest process
+for the negative summary and supplies its denial-probe flag internally; the
+combined path still requires all four browser reports. This second process
+runs one exact denial test and writes `session-chat-negative-summary.json`.
+Its private raw log is mode `0600`; collection retains the bounded summary.
+
+The separate guest negative process is enabled with
+`HEPHAESTUS_APP_SESSION_CHAT_DENIAL_PROBE_E2E=1` in the standalone invocation
+above. Keep the browser/restart/concurrency/fork flags out of that direct
+invocation. It exercises the probe within the ordinary golden suite and emits
+the ten-check host result; it does not use the combined path's separate exact
+test and summary step. Fresh combined runtime and GCP evidence remain pending.
+
+Do not install UI dependencies inside the release fixture before a VM build.
+The generated `ui/node_modules` tree can contain symlinks and must be created
+in an external temporary directory, or removed before source materialization.
 
 `build.sh` compiles the three Python modules and stages them as one directory
 artifact. The resulting `agent.toml` declares a required `runtime_git` session
