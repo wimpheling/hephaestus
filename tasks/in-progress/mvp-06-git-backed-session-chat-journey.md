@@ -172,6 +172,31 @@ over repositories and content capabilities later.
 
 ## Completion evidence
 
+### Initial code audit (2026-09-21)
+
+Implementation is tracked in draft [PR #53](https://github.com/wimpheling/hephaestus/pull/53).
+The initial read-only audit found these boundaries; this is not runtime
+acceptance evidence:
+
+| Transition | Existing support and remaining work |
+| --- | --- |
+| Create session | Repository creation, release import, attachment creation and capability revision exist separately. Compose these generic operations in the distribution; do not introduce a core chat/session model. |
+| Open released UI | Completed release-owned static/managed surfaces provide authenticated child navigation. The reference chat adapter still needs implementation. |
+| Submit input | Git HTTP authenticates human OIDC/PAT pushes and persists receives. Child UI authentication does not itself authorize Git; a narrowly scoped generic repository boundary is still needed. The release must construct its own commits. |
+| Execute and publish | Exact-run Git credentials and guarded receives exist. The documented guest worktree/internal remote and durable runtime receive provenance/originating-attachment suppression need completion and direct verification. |
+| Reconnect | Generic repository browsing and resumable repository events exist. The release owns transcript interpretation, response correlation and model context; no platform transcript contract is required. |
+| GCP acceptance | Existing Cooking orchestration provides disposable VM execution, two browser phases and retained diagnostics. A new run must exercise the actual MVP-06 artifact; prior Cooking evidence cannot establish chat acceptance. |
+
+Primary code evidence: `crates/git-http/src/lib.rs`,
+`crates/forge-postgres/src/repository.rs`,
+`crates/run-runtime-local/src/lib.rs`,
+`crates/workspace-local/src/lib.rs`,
+`crates/run-orchestrator/src/orchestrator.rs`, and the repository-browser,
+event and instance adapters under `crates/hephaestus-app/src/rpc/`.
+The MVP-01.2 record is in `done/` but retains unchecked implementation items;
+its location is not evidence that the missing guest/runtime transitions work.
+Keep the full journey and its negative cases open until exercised.
+
 The completed task records the released protocol version and source revision;
 browser and real-Git evidence for session creation, turns, restart, and fork;
 the reference agent's allowed session-repository push and denied cross-repository
