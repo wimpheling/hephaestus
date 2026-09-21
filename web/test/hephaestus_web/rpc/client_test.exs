@@ -11,7 +11,13 @@ defmodule HephaestusWeb.RPC.ClientTest do
   }
 
   alias Hephaestus.Identity.V1.CreateBrowserSessionResponse
-  alias Hephaestus.Instance.V1.ImportAgentResponse
+
+  alias Hephaestus.Instance.V1.{
+    DeclareBrokeredHttpsRuleRequest,
+    DeclareBrokeredHttpsRuleResponse,
+    ImportAgentResponse
+  }
+
   alias HephaestusWeb.Identity
   alias HephaestusWeb.RPC.Client
 
@@ -64,6 +70,41 @@ defmodule HephaestusWeb.RPC.ClientTest do
            } = request.selected_policy
 
     assert network == NetworkPolicy.value(:NETWORK_POLICY_BROKER_ONLY)
+  end
+
+  test "round-trips the requested brokered rule ID through generated RPC messages" do
+    caller = self()
+    requested_rule_id = "40000000-0000-4000-8000-000000000004"
+
+    stub = fn _channel, request, _options ->
+      send(caller, {:declare_rule_call, request})
+
+      {:ok,
+       %DeclareBrokeredHttpsRuleResponse{
+         rule_id: %OpaqueId{value: requested_rule_id}
+       }}
+    end
+
+    assert {:ok, %{"rule_id" => ^requested_rule_id}} =
+             Client.declare_brokered_https_rule(
+               identity(),
+               %{
+                 "binding_id" => "50000000-0000-4000-8000-000000000005",
+                 "requested_rule_id" => requested_rule_id,
+                 "destination" => "https://api.model.example",
+                 "header" => "authorization",
+                 "header_prefix" => "Bearer "
+               },
+               stub_call: stub,
+               channel_provider: channel_provider()
+             )
+
+    assert_receive {:declare_rule_call, %DeclareBrokeredHttpsRuleRequest{} = request}
+    assert request.binding_id.value == "50000000-0000-4000-8000-000000000005"
+    assert request.requested_rule_id.value == requested_rule_id
+    assert request.destination == "https://api.model.example"
+    assert request.header == "authorization"
+    assert request.header_prefix == "Bearer "
   end
 
   test "projects a typed create response into safe session metadata" do

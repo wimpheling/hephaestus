@@ -78,7 +78,7 @@ defmodule HephaestusWebWeb.SessionChatNewStateTest.FakeClient do
     rule_id =
       if Process.get(:session_chat_fake_wrong_rule, false),
         do: "00000000-0000-4000-8000-000000000099",
-        else: attributes["requested_rule_id"]
+        else: String.downcase(attributes["requested_rule_id"])
 
     {:ok, %{"rule_id" => rule_id}}
   end
