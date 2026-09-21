@@ -126,6 +126,23 @@ test("installed session chat title maps to a fixed ID", () => {
   });
 });
 
+test("concurrent session chat title maps to a fixed ID", () => {
+  const sink = recorder();
+  const reporter = new SafeInstalledUiReporter({output: sink.output});
+  reporter.onTestEnd(
+    {title: "cooking concurrent session chat clients reconcile a stale Git push and preserve both turns"},
+    {status: "passed", duration: 1, retry: 0},
+  );
+
+  assert.deepEqual(JSON.parse(sink.text()), {
+    event: "test",
+    test_id: "session_chat_concurrent",
+    status: "passed",
+    duration_ms: 1,
+    retry: 0,
+  });
+});
+
 test("session chat stages map to fixed IDs", () => {
   const sink = recorder();
   const reporter = new SafeInstalledUiReporter({output: sink.output});
@@ -149,6 +166,29 @@ test("session chat stages map to fixed IDs", () => {
       {event: "stage", stage_id: "session_chat_reconnect", status: "pending"},
       {event: "stage", stage_id: "session_chat_second_send", status: "pending"},
       {event: "stage", stage_id: "session_chat_second_response", status: "pending"},
+    ],
+  );
+});
+
+test("concurrent session chat stages map to fixed IDs", () => {
+  const sink = recorder();
+  const reporter = new SafeInstalledUiReporter({output: sink.output});
+  for (const title of [
+    "session-chat-concurrent-initialize",
+    "session-chat-concurrent-race",
+    "session-chat-concurrent-stale-retry",
+    "session-chat-concurrent-reconnect",
+  ]) {
+    reporter.onStepBegin({}, {}, {title});
+  }
+
+  assert.deepEqual(
+    sink.text().trim().split("\n").map(JSON.parse),
+    [
+      {event: "stage", stage_id: "session_chat_concurrent_initialize", status: "pending"},
+      {event: "stage", stage_id: "session_chat_concurrent_race", status: "pending"},
+      {event: "stage", stage_id: "session_chat_concurrent_stale_retry", status: "pending"},
+      {event: "stage", stage_id: "session_chat_concurrent_reconnect", status: "pending"},
     ],
   );
 });

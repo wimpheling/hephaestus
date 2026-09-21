@@ -2,6 +2,7 @@ const TEST_IDS = new Map([
   ["cooking installed UI TLS full-page and managed iframe smoke", "installed_ui_tls_smoke"],
   ["cooking session-chat installed UI initializes and reconnects ordinary Git history", "session_chat_ui"],
   ["cooking new session chat creates and opens a real Git-backed browser session", "session_chat_new"],
+  ["cooking concurrent session chat clients reconcile a stale Git push and preserve both turns", "session_chat_concurrent"],
 ]);
 
 const STAGE_IDS = new Map([
@@ -11,6 +12,10 @@ const STAGE_IDS = new Map([
   ["session-chat-reconnect", "session_chat_reconnect"],
   ["session-chat-second-send", "session_chat_second_send"],
   ["session-chat-second-response", "session_chat_second_response"],
+  ["session-chat-concurrent-initialize", "session_chat_concurrent_initialize"],
+  ["session-chat-concurrent-race", "session_chat_concurrent_race"],
+  ["session-chat-concurrent-stale-retry", "session_chat_concurrent_stale_retry"],
+  ["session-chat-concurrent-reconnect", "session_chat_concurrent_reconnect"],
   ["signin", "signin"],
   ["signin-platform", "signin_platform"],
   ["signin-redirect", "signin_redirect"],

@@ -749,3 +749,14 @@ Clippy, and 29 scenario/timing tests passing, and shared harness support now for
 The fake-child bridge contract verifies sequential phases, retained transcript
 counts, and invalid phase/runner rejection. Full initial-plus-recovery runtime
 acceptance remains pending.
+
+The post-fix final12 run selected restart acceptance but failed during the
+initial browser phase (34 tests passed, one failed, one ignored); recovery did
+not start. The retained `/var/tmp/sessionchat-browser-final12-run.log` records
+the actual failed `browser-initial` timing. Without creation-step diagnostics
+this run cannot identify the current failing setup operation. The broader
+journey remains unverified.
+
+The safe reporter now maps the concurrency test and its four stages to fixed
+IDs. Seven reporter tests pass; this does not supply concurrency runtime
+evidence or complete its host/GCP integration.
