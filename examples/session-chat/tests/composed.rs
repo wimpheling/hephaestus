@@ -36,7 +36,7 @@ use secret_store::{EncryptedStore, LocalKeyProvider};
 use serde_json::Value as JsonValue;
 use sqlx::PgPool;
 use std::{
-    collections::HashSet,
+    collections::{HashMap, HashSet},
     fs, io,
     os::unix::fs as unix_fs,
     path::{Path, PathBuf},
@@ -506,6 +506,41 @@ async fn assert_runtime_git_turn(
     human_commit: &str,
     expected_human_record_id: Option<&str>,
 ) {
+    wait_for_run_succeeded(pool, run_id, Duration::from_secs(120)).await;
+    let agent_commit =
+        git_output_bare(root, repository_id, &["rev-parse", "refs/heads/main"]).await;
+    assert_runtime_git_turn_at_commit(
+        pool,
+        root,
+        repository_id,
+        instance_id,
+        attachment_id,
+        actor_id,
+        run_id,
+        human_commit,
+        &agent_commit,
+        expected_human_record_id,
+    )
+    .await;
+}
+
+#[allow(
+    clippy::cognitive_complexity,
+    clippy::too_many_arguments,
+    clippy::too_many_lines
+)] // This is one reviewable assertion over a runtime turn at a specified canonical commit.
+async fn assert_runtime_git_turn_at_commit(
+    pool: &PgPool,
+    root: &Path,
+    repository_id: Uuid,
+    instance_id: Uuid,
+    attachment_id: Uuid,
+    actor_id: Uuid,
+    run_id: Uuid,
+    human_commit: &str,
+    agent_commit: &str,
+    expected_human_record_id: Option<&str>,
+) {
     let human_request_attachment: Uuid = sqlx::query_scalar(
         "SELECT request.attachment_id
            FROM run_requests AS request
@@ -538,10 +573,6 @@ async fn assert_runtime_git_turn(
     .expect("exact human Git receive/run provenance");
     assert_eq!(human_request_attachment, attachment_id);
 
-    wait_for_run_succeeded(pool, run_id, Duration::from_secs(120)).await;
-
-    let agent_commit =
-        git_output_bare(root, repository_id, &["rev-parse", "refs/heads/main"]).await;
     assert_eq!(
         git_output_bare(
             root,
@@ -560,7 +591,7 @@ async fn assert_runtime_git_turn(
             "--no-commit-id",
             "--name-only",
             "-r",
-            &agent_commit,
+            agent_commit,
         ],
     )
     .await;
@@ -690,7 +721,7 @@ async fn assert_runtime_git_turn(
         )
         .bind(repository_id)
         .bind(human_commit)
-        .bind(&agent_commit)
+        .bind(agent_commit)
         .fetch_one(pool)
         .await
         .expect("runtime-authenticated agent Git receive provenance");
@@ -1063,6 +1094,7 @@ pub async fn exercise(
             pool,
             root,
             project,
+            identity.user_id.as_uuid(),
             built.release_agent_id,
             &existing_repository_ids,
             requests,
@@ -1512,11 +1544,88 @@ struct BrowserSessionObjects {
     attachment_id: Uuid,
 }
 
+async fn canonical_record_commit(root: &Path, repository_id: Uuid, record_path: &str) -> String {
+    let commits = git_output_bare(
+        root,
+        repository_id,
+        &[
+            "log",
+            "--all",
+            "--diff-filter=A",
+            "--format=%H",
+            "--",
+            record_path,
+        ],
+    )
+    .await;
+    let commits = commits.lines().collect::<Vec<_>>();
+    assert_eq!(
+        commits.len(),
+        1,
+        "canonical record must be added by exactly one commit: {record_path}"
+    );
+    commits[0].to_owned()
+}
+
+async fn accepted_normal_run_id(
+    pool: &PgPool,
+    repository_id: Uuid,
+    instance_id: Uuid,
+    attachment_id: Uuid,
+    actor_id: Uuid,
+    commit: &str,
+) -> Uuid {
+    sqlx::query_scalar(
+        "SELECT request.run_id
+           FROM run_requests AS request
+           JOIN git_ref_updates AS update ON update.receive_id = request.receive_id
+           JOIN git_receives AS receive ON receive.id = update.receive_id
+          WHERE request.repository_id = $1
+            AND request.instance_id = $2
+            AND request.commit_sha = $3
+            AND request.git_ref = 'refs/heads/main'
+            AND request.request_kind = 'instance_normal'
+            AND request.attachment_id = $4
+            AND receive.repository_id = $1
+            AND receive.actor_id = $5
+            AND receive.status = 'accepted'
+            AND receive.runtime_session_id IS NULL
+            AND receive.runtime_attachment_id IS NULL
+            AND update.git_ref = 'refs/heads/main'
+            AND update.new_commit = $3
+          LIMIT 1",
+    )
+    .bind(repository_id)
+    .bind(instance_id)
+    .bind(commit)
+    .bind(attachment_id)
+    .bind(actor_id)
+    .fetch_one(pool)
+    .await
+    .expect("accepted browser session run request")
+}
+
+async fn accepted_runtime_receive_count(pool: &PgPool, run_id: Uuid) -> i64 {
+    sqlx::query_scalar(
+        "SELECT count(*)
+           FROM git_receives AS receive
+           JOIN runtime_authority_sessions AS session
+             ON session.id = receive.runtime_session_id
+          WHERE session.run_id = $1
+            AND receive.status = 'accepted'",
+    )
+    .bind(run_id)
+    .fetch_one(pool)
+    .await
+    .expect("runtime receive provenance count")
+}
+
 #[allow(clippy::cognitive_complexity, clippy::too_many_lines)] // This is one reviewable assertion over the browser's persisted Git session.
 async fn assert_browser_session(
     pool: &PgPool,
     root: &Path,
     project: ProjectId,
+    actor_id: Uuid,
     release_agent_id: Uuid,
     existing_repository_ids: &HashSet<Uuid>,
     requests: Vec<ObservedModelRequest>,
@@ -1532,17 +1641,16 @@ async fn assert_browser_session(
                 revision.id AS revision_id,
                 attachment.id AS attachment_id
            FROM repositories repository
-           JOIN agent_families family ON family.repository_id = repository.id
+           JOIN agent_attachments attachment
+             ON attachment.repository_id = repository.id
+            AND attachment.project_id = repository.project_id
            JOIN agent_instances instance
-             ON instance.family_id = family.id
+             ON instance.id = attachment.instance_id
             AND instance.project_id = repository.project_id
            JOIN agent_instance_revisions revision
-             ON revision.instance_id = instance.id
+             ON revision.id = instance.active_revision_id
+            AND revision.instance_id = instance.id
             AND revision.release_agent_id = $2
-           JOIN agent_attachments attachment
-             ON attachment.instance_id = instance.id
-            AND attachment.repository_id = repository.id
-            AND attachment.project_id = repository.project_id
           WHERE repository.project_id = $1
             AND attachment.ref_selector = 'refs/heads/main'
             AND attachment.removed_at IS NULL",
@@ -1624,6 +1732,7 @@ async fn assert_browser_session(
         "browser session must publish two assistant records"
     );
     let mut human_records = Vec::with_capacity(human_paths.len());
+    let mut human_record_paths = HashMap::with_capacity(human_paths.len());
     for path in human_paths {
         let record: JsonValue = serde_json::from_str(
             &git_output_bare(root, repository_id, &["show", &format!("{head}:{path}")]).await,
@@ -1636,9 +1745,11 @@ async fn assert_browser_session(
         )
         .expect("browser human record UUID");
         assert_eq!(record["kind"], "user_message");
+        human_record_paths.insert(record_id, (*path).clone());
         human_records.push((record_id, record));
     }
     let mut agent_records = Vec::with_capacity(agent_paths.len());
+    let mut agent_record_paths = HashMap::with_capacity(agent_paths.len());
     for path in agent_paths {
         let record: JsonValue = serde_json::from_str(
             &git_output_bare(root, repository_id, &["show", &format!("{head}:{path}")]).await,
@@ -1652,6 +1763,7 @@ async fn assert_browser_session(
         .expect("browser assistant record UUID");
         assert_eq!(record["kind"], "assistant_message");
         assert_eq!(record["content"]["text"], MODEL_RESPONSE_TEXT);
+        agent_record_paths.insert(record_id, (*path).clone());
         agent_records.push((record_id, record));
     }
 
@@ -1689,7 +1801,138 @@ async fn assert_browser_session(
         .expect("second assistant response");
     assert_eq!(second.messages[1].record_id, first_agent.0);
     assert_ne!(first_agent.0, second_agent.0);
-    assert_eq!(agent_records.len(), 2);
+
+    let first_human_path = human_record_paths
+        .get(&first.record_id)
+        .expect("first model request human record path");
+    let first_human_commit = canonical_record_commit(root, repository_id, first_human_path).await;
+    let initialization_commit = git_output_bare(
+        root,
+        repository_id,
+        &["rev-parse", &format!("{first_human_commit}^")],
+    )
+    .await;
+    let initialization_parent_line = git_output_bare(
+        root,
+        repository_id,
+        &["rev-list", "--parents", "-n", "1", &initialization_commit],
+    )
+    .await;
+    let initialization_parents = initialization_parent_line
+        .split_whitespace()
+        .collect::<Vec<_>>();
+    assert_eq!(
+        initialization_parents,
+        [initialization_commit.as_str()],
+        "session initialization must be the root commit"
+    );
+    let initialization_paths = git_output_bare(
+        root,
+        repository_id,
+        &["ls-tree", "-r", "--name-only", &initialization_commit],
+    )
+    .await
+    .lines()
+    .map(str::to_owned)
+    .collect::<Vec<_>>();
+    assert_eq!(
+        initialization_paths,
+        [
+            ".heph/session/v1/manifest.json".to_owned(),
+            ".heph/session/v1/participants/agent%3Areference-chat.json".to_owned(),
+            ".heph/session/v1/participants/release%3Areference-chat.json".to_owned(),
+            format!(".heph/session/v1/participants/user%3A{actor_id}.json"),
+        ],
+        "session initialization must publish only its manifest and participants"
+    );
+    let initialization_run_id = accepted_normal_run_id(
+        pool,
+        repository_id,
+        instance_id,
+        attachment_id,
+        actor_id,
+        &initialization_commit,
+    )
+    .await;
+    wait_for_run_succeeded(pool, initialization_run_id, Duration::from_secs(120)).await;
+    let initialization_runtime_receives =
+        accepted_runtime_receive_count(pool, initialization_run_id).await;
+    assert_eq!(
+        initialization_runtime_receives, 0,
+        "idle initialization must not publish a runtime-authenticated receive"
+    );
+
+    for request in [first, second] {
+        let human_path = human_record_paths
+            .get(&request.record_id)
+            .expect("model request human record path");
+        let human_commit = canonical_record_commit(root, repository_id, human_path).await;
+        let agent = agent_records
+            .iter()
+            .find(|(_, record)| record["in_reply_to"] == request.record_id.to_string())
+            .expect("assistant response for each model request");
+        let run_id = accepted_normal_run_id(
+            pool,
+            repository_id,
+            instance_id,
+            attachment_id,
+            actor_id,
+            &human_commit,
+        )
+        .await;
+        wait_for_run_succeeded(pool, run_id, Duration::from_secs(120)).await;
+        assert_eq!(
+            accepted_runtime_receive_count(pool, run_id).await,
+            1,
+            "each human turn must have one accepted runtime-authenticated receive"
+        );
+        let agent_path = agent_record_paths
+            .get(&agent.0)
+            .expect("assistant record path");
+        let agent_commit = canonical_record_commit(root, repository_id, agent_path).await;
+        assert_eq!(
+            git_output_bare(
+                root,
+                repository_id,
+                &["rev-parse", &format!("{agent_commit}^")],
+            )
+            .await,
+            human_commit,
+            "assistant commit must be directly based on its human commit"
+        );
+        let expected_human_record_id = request.record_id.to_string();
+        assert_runtime_git_turn_at_commit(
+            pool,
+            root,
+            repository_id,
+            instance_id,
+            attachment_id,
+            actor_id,
+            run_id,
+            &human_commit,
+            &agent_commit,
+            Some(&expected_human_record_id),
+        )
+        .await;
+    }
+
+    // The new-session browser flow asserts an empty transcript immediately
+    // after opening the UI; its initialization creates one idle run, and its
+    // two explicit Send steps create the only model-bearing runs.
+    let run_request_count: i64 = sqlx::query_scalar(
+        "SELECT count(*)
+           FROM run_requests
+          WHERE instance_id = $1 AND repository_id = $2",
+    )
+    .bind(instance_id)
+    .bind(repository_id)
+    .fetch_one(pool)
+    .await
+    .expect("browser session run request count");
+    assert_eq!(
+        run_request_count, 3,
+        "browser initialization must schedule one idle run; two human runs must not recurse"
+    );
     let receive_count: i64 =
         sqlx::query_scalar("SELECT count(*) FROM git_receives WHERE repository_id = $1")
             .bind(repository_id)
