@@ -489,6 +489,7 @@ mod tests {
                 working_dir: None,
             },
             runtime_authority: None,
+            runtime_git_bridge: None,
             private_http_service: Some(PrivateHttpServiceSpec {
                 loopback_port: 8080,
                 max_connections: 32,

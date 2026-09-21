@@ -455,6 +455,7 @@ cargo build \
     --release \
     --package vm-libkrun \
     --bin heph-init \
+    --bin heph-git-credential \
     --target "${GUEST_TARGET}"
 cargo build \
     --package vm-libkrun \
@@ -544,6 +545,9 @@ for reference in "${oci_image_references[@]}"; do
     install -D -m 0755 \
         "${repo_root}/target/${GUEST_TARGET}/release/heph-init" \
         "$(image_cache_path "${reference}")/usr/libexec/hephaestus/heph-init"
+    install -D -m 0755 \
+        "${repo_root}/target/${GUEST_TARGET}/release/heph-git-credential" \
+        "$(image_cache_path "${reference}")/usr/libexec/hephaestus/heph-git-credential"
 done
 
 manifest_temporary="${image_manifest}.$$"

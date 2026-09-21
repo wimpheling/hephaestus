@@ -192,6 +192,9 @@ prepare_guest_root() {
         "${cargo_target_dir}/${GUEST_TARGET}/release/heph-init" \
         "${root}/usr/libexec/hephaestus/heph-init"
     install -D -m 0755 \
+        "${cargo_target_dir}/${GUEST_TARGET}/release/heph-git-credential" \
+        "${root}/usr/libexec/hephaestus/heph-git-credential"
+    install -D -m 0755 \
         "${cargo_target_dir}/${GUEST_TARGET}/release/heph-integration-check" \
         "${root}/usr/libexec/hephaestus/integration-check.payload"
     # libkrun's embedded DHCP setup runs before this workload. Keep the
@@ -817,6 +820,7 @@ cargo build \
     --release \
     --package vm-libkrun \
     --bin heph-init \
+    --bin heph-git-credential \
     --bin heph-integration-check \
     --features integration-guest \
     --target "${GUEST_TARGET}"

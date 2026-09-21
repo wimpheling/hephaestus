@@ -29,6 +29,7 @@ pub struct PreparedSpec {
     pub memory_mib: u32,
     pub network: PreparedNetwork,
     pub private_http_service: Option<PreparedPrivateHttpService>,
+    pub runtime_git_bridge: Option<PreparedRuntimeGitBridge>,
     pub command: PreparedCommand,
     pub runtime_authority: Option<PreparedRuntimeAuthority>,
     pub labels: BTreeMap<String, String>,
@@ -39,6 +40,12 @@ pub struct PreparedPrivateHttpService {
     pub loopback_port: u16,
     pub max_connections: u32,
     pub connect_timeout_ms: u64,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
+pub struct PreparedRuntimeGitBridge {
+    pub repository_id: Uuid,
+    pub loopback_port: u16,
 }
 
 #[derive(Clone, Serialize, Deserialize)]
@@ -143,6 +150,9 @@ pub fn validate_config(config: &LibkrunConfig) -> Result<(), VmError> {
     if let Some(path) = &config.broker_socket_path {
         validate_absolute("broker_socket_path", path)?;
     }
+    if let Some(path) = &config.runtime_git_socket_path {
+        validate_absolute("runtime_git_socket_path", path)?;
+    }
 
     OpenOptions::new()
         .read(true)
@@ -224,7 +234,6 @@ pub fn prepare_spec(config: &LibkrunConfig, spec: &VmSpec) -> Result<PreparedSpe
         }
         _ => return unsupported("root filesystem"),
     };
-
     let mut disk_ids = HashSet::new();
     let mut writable_bytes = 0_u64;
     let mut disks = Vec::with_capacity(spec.disks.len());
@@ -287,6 +296,7 @@ pub fn prepare_spec(config: &LibkrunConfig, spec: &VmSpec) -> Result<PreparedSpe
         .transpose()?;
 
     let private_http_service = validate_private_http_service(spec)?;
+    let runtime_git_bridge = validate_runtime_git_bridge(config, spec, runtime_authority.as_ref())?;
 
     let mut mount_tags = HashSet::new();
     let mut mounts = Vec::with_capacity(spec.mounts.len());
@@ -388,6 +398,7 @@ pub fn prepare_spec(config: &LibkrunConfig, spec: &VmSpec) -> Result<PreparedSpe
         memory_mib: spec.resources.memory_mib,
         network,
         private_http_service,
+        runtime_git_bridge,
         command: PreparedCommand {
             program: spec.command.program.clone(),
             args: spec.command.args.clone(),
@@ -397,6 +408,67 @@ pub fn prepare_spec(config: &LibkrunConfig, spec: &VmSpec) -> Result<PreparedSpe
         runtime_authority,
         labels: spec.labels.clone(),
     })
+}
+
+fn validate_runtime_git_bridge(
+    config: &LibkrunConfig,
+    spec: &VmSpec,
+    authority: Option<&PreparedRuntimeAuthority>,
+) -> Result<Option<PreparedRuntimeGitBridge>, VmError> {
+    let Some(bridge) = spec.runtime_git_bridge else {
+        return Ok(None);
+    };
+    if bridge.repository_id().is_nil() {
+        return invalid("runtime_git_bridge.repository_id", "must not be nil");
+    }
+    if !(1024..=u16::MAX).contains(&bridge.loopback_port()) {
+        return invalid(
+            "runtime_git_bridge.loopback_port",
+            "must be between 1024 and 65535",
+        );
+    }
+    if !matches!(
+        spec.network,
+        NetworkMode::Disabled | NetworkMode::BrokerOnly
+    ) {
+        return invalid(
+            "runtime_git_bridge.network",
+            "requires disabled or broker-only networking",
+        );
+    }
+    let authority = authority.ok_or_else(|| VmError::InvalidSpec {
+        field: String::from("runtime_git_bridge"),
+        reason: String::from("requires runtime authority"),
+    })?;
+    if authority.runtime_git_credential.is_none() {
+        return invalid("runtime_git_bridge", "requires a runtime Git credential");
+    }
+    if spec.private_http_service.is_some() {
+        return invalid(
+            "runtime_git_bridge",
+            "cannot combine with private HTTP service",
+        );
+    }
+    if spec
+        .labels
+        .get("hephaestus.gateway.handler-contract")
+        .is_some_and(|value| value == "http.v1")
+    {
+        return invalid(
+            "runtime_git_bridge",
+            "cannot combine with a gateway handler",
+        );
+    }
+    if config.runtime_git_socket_path.is_none() {
+        return invalid(
+            "runtime_git_socket_path",
+            "is required when a runtime Git bridge is declared",
+        );
+    }
+    Ok(Some(PreparedRuntimeGitBridge {
+        repository_id: bridge.repository_id(),
+        loopback_port: bridge.loopback_port(),
+    }))
 }
 
 fn validate_private_http_service(
@@ -693,9 +765,10 @@ mod tests {
         time::Duration,
     };
     use tempfile::TempDir;
+    use uuid::Uuid;
     use vm_trait::{
         DiskFormat, GuestCommand, NetworkMode, PortForward, PortProtocol, PrivateHttpServiceSpec,
-        RootFilesystem, VmDisk, VmError, VmId, VmMount, VmResources, VmSpec,
+        RootFilesystem, RuntimeGitBridge, VmDisk, VmError, VmId, VmMount, VmResources, VmSpec,
     };
 
     #[test]
@@ -803,6 +876,38 @@ mod tests {
         assert_eq!(service.loopback_port, 8080);
         assert_eq!(service.max_connections, 4);
         assert_eq!(service.connect_timeout_ms, 250);
+    }
+
+    #[test]
+    fn runtime_git_bridge_requires_exact_git_authority_and_private_network() {
+        let mut fixture = Fixture::new();
+        let repository_id = Uuid::new_v4();
+        let mut spec = fixture.spec();
+        spec.runtime_git_bridge = Some(RuntimeGitBridge::new(repository_id, 19_100));
+        assert_invalid_field(prepare_spec(&fixture.config, &spec), "runtime_git_bridge");
+
+        spec.runtime_authority = Some(
+            vm_trait::RuntimeAuthorityBootstrap::new(
+                Uuid::new_v4(),
+                1,
+                [0x11; vm_trait::RUNTIME_AUTHORITY_CREDENTIAL_BYTES],
+            )
+            .with_runtime_git_credential([0x22; vm_trait::RUNTIME_GIT_CREDENTIAL_BYTES]),
+        );
+        fixture.config.runtime_git_socket_path =
+            Some(PathBuf::from("/run/hephaestus/runtime-git.sock"));
+        let prepared = prepare_spec(&fixture.config, &spec).expect("runtime Git bridge");
+        let bridge = prepared.runtime_git_bridge.expect("prepared bridge");
+        assert_eq!(bridge.repository_id, repository_id);
+        assert_eq!(bridge.loopback_port, 19_100);
+
+        spec.network = NetworkMode::UserMode {
+            ingress: Vec::new(),
+        };
+        assert_invalid_field(
+            prepare_spec(&fixture.config, &spec),
+            "runtime_git_bridge.network",
+        );
     }
 
     #[test]
@@ -1238,6 +1343,7 @@ mod tests {
                 },
                 runtime_authority: None,
                 private_http_service: None,
+                runtime_git_bridge: None,
                 labels: BTreeMap::new(),
             }
         }

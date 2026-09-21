@@ -662,6 +662,7 @@ impl VmSpecFactory for StateSpecFactory {
                 working_dir: None,
             },
             runtime_authority: None,
+            runtime_git_bridge: None,
             private_http_service: None,
             labels,
         })

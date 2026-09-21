@@ -622,6 +622,7 @@ fn fake_launch(identity: GatewayServiceIdentity) -> GatewayServiceLaunch {
                 working_dir: None,
             },
             runtime_authority: None,
+            runtime_git_bridge: None,
             private_http_service: Some(PrivateHttpServiceSpec {
                 loopback_port: 18_080,
                 max_connections: 32,

@@ -1220,6 +1220,7 @@ impl WorkerClient {
             service_gid: config.service_gid,
             startup_timeout: config.startup_timeout,
             broker_socket_path: config.broker_socket_path.clone(),
+            runtime_git_socket_path: config.runtime_git_socket_path.clone(),
         };
         if let Err(error) = client
             .request(WorkerCommand::Configure {
@@ -2206,6 +2207,7 @@ mod tests {
             },
             runtime_authority: None,
             private_http_service: None,
+            runtime_git_bridge: None,
             labels: BTreeMap::new(),
         }
     }

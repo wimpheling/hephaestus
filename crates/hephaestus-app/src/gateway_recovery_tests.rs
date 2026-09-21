@@ -798,6 +798,7 @@ impl GatewayServiceLaunchResolver for NoopLaunchResolver {
                     working_dir: None,
                 },
                 runtime_authority: None,
+                runtime_git_bridge: None,
                 labels: BTreeMap::new(),
             },
         })

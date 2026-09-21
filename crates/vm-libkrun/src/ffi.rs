@@ -110,6 +110,10 @@ impl Context {
         Ok(Self { api, id: Some(id) })
     }
 
+    // Keep the FFI setup in call order so failures identify the exact libkrun
+    // operation; the sequential resource mapping necessarily exceeds the
+    // pedantic line-count threshold.
+    #[allow(clippy::too_many_lines)]
     pub fn configure(
         &self,
         spec: &PreparedSpec,
@@ -117,6 +121,7 @@ impl Context {
         control_socket: &Path,
         broker_socket: Option<&Path>,
         private_service_socket: Option<&Path>,
+        runtime_git_socket: Option<&Path>,
     ) -> Result<(), FfiError> {
         let id = self.id();
         status(
@@ -197,6 +202,29 @@ impl Context {
                 return Err(FfiError::message(
                     "krun_add_vsock_port",
                     "private service socket provided without a service",
+                ));
+            }
+            (None, None) => {}
+        }
+        match (spec.runtime_git_bridge.as_ref(), runtime_git_socket) {
+            (Some(_), Some(socket)) => {
+                let socket = path_cstring(socket)?;
+                status(
+                    "krun_add_vsock_port",
+                    self.api
+                        .add_vsock_port(id, crate::protocol::RUNTIME_GIT_VSOCK_PORT, &socket),
+                )?;
+            }
+            (Some(_), None) => {
+                return Err(FfiError::message(
+                    "krun_add_vsock_port",
+                    "runtime Git bridge has no host socket",
+                ));
+            }
+            (None, Some(_)) => {
+                return Err(FfiError::message(
+                    "krun_add_vsock_port",
+                    "runtime Git bridge socket provided without a bridge",
                 ));
             }
             (None, None) => {}
@@ -476,7 +504,7 @@ mod tests {
     use super::{Context, KrunApi, deterministic_mac, path_cstring, status};
     use crate::validation::{
         PreparedCommand, PreparedDisk, PreparedForward, PreparedMount, PreparedNetwork,
-        PreparedPrivateHttpService, PreparedRoot, PreparedSpec,
+        PreparedPrivateHttpService, PreparedRoot, PreparedRuntimeGitBridge, PreparedSpec,
     };
     use std::{
         collections::BTreeMap,
@@ -514,6 +542,7 @@ mod tests {
                 &prepared_spec(),
                 Some(Path::new("/run/vm/passt.sock")),
                 Path::new("/run/vm/control.sock"),
+                None,
                 None,
                 None,
             )
@@ -579,7 +608,14 @@ mod tests {
         spec.mounts.clear();
         spec.network = PreparedNetwork::Disabled;
         context
-            .configure(&spec, None, Path::new("/run/vm/control.sock"), None, None)
+            .configure(
+                &spec,
+                None,
+                Path::new("/run/vm/control.sock"),
+                None,
+                None,
+                None,
+            )
             .unwrap();
         drop(context);
         let calls = api.calls();
@@ -613,6 +649,7 @@ mod tests {
                 None,
                 Path::new("/run/vm/control.sock"),
                 Some(Path::new("/run/hephaestus/broker.sock")),
+                None,
                 None,
             )
             .unwrap();
@@ -648,6 +685,7 @@ mod tests {
                 Path::new("/run/vm/control.sock"),
                 None,
                 Some(Path::new("/run/vm/private-service.sock")),
+                None,
             )
             .unwrap();
         drop(context);
@@ -656,6 +694,46 @@ mod tests {
             id: 7,
             port: crate::protocol::PRIVATE_SERVICE_VSOCK_PORT,
             path: String::from("/run/vm/private-service.sock"),
+        }));
+        assert!(
+            calls
+                .iter()
+                .all(|call| !matches!(call, Call::Network { .. }))
+        );
+    }
+
+    #[test]
+    fn runtime_git_maps_a_separate_guest_to_host_vsock() {
+        let api = Arc::new(RecordingApi::new(None));
+        let context = Context::from_api(api.clone()).unwrap();
+        let mut spec = prepared_spec();
+        spec.network = PreparedNetwork::Disabled;
+        spec.private_http_service = None;
+        spec.runtime_authority = Some(crate::validation::PreparedRuntimeAuthority {
+            session_id: uuid::Uuid::new_v4(),
+            generation: 1,
+            credential: [0x11; vm_trait::RUNTIME_AUTHORITY_CREDENTIAL_BYTES],
+            runtime_git_credential: Some([0x22; vm_trait::RUNTIME_GIT_CREDENTIAL_BYTES]),
+        });
+        spec.runtime_git_bridge = Some(PreparedRuntimeGitBridge {
+            repository_id: uuid::Uuid::new_v4(),
+            loopback_port: 19_100,
+        });
+        context
+            .configure(
+                &spec,
+                None,
+                Path::new("/run/vm/control.sock"),
+                None,
+                None,
+                Some(Path::new("/run/hephaestus/runtime-git.sock")),
+            )
+            .unwrap();
+        let calls = api.calls();
+        assert!(calls.contains(&Call::VsockPort {
+            id: 7,
+            port: crate::protocol::RUNTIME_GIT_VSOCK_PORT,
+            path: String::from("/run/hephaestus/runtime-git.sock"),
         }));
         assert!(
             calls
@@ -686,6 +764,7 @@ mod tests {
                     Path::new("/run/vm/control.sock"),
                     None,
                     None,
+                    None,
                 )
             });
             let error = result.expect_err("injected FFI failure must propagate");
@@ -709,6 +788,7 @@ mod tests {
                     &raw_root,
                     Some(Path::new("/run/vm/passt.sock")),
                     Path::new("/run/vm/control.sock"),
+                    None,
                     None,
                     None,
                 )
@@ -759,6 +839,7 @@ mod tests {
             },
             runtime_authority: None,
             private_http_service: None,
+            runtime_git_bridge: None,
             labels: BTreeMap::new(),
         }
     }

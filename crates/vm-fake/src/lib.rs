@@ -732,6 +732,7 @@ mod tests {
                 working_dir: Some(PathBuf::from("/workspace")),
             },
             runtime_authority: None,
+            runtime_git_bridge: None,
             private_http_service: None,
             labels: BTreeMap::new(),
         }

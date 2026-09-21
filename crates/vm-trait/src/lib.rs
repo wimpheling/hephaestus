@@ -51,8 +51,56 @@ pub struct VmSpec {
     /// Sensitive one-run authority delivered through the authenticated guest
     /// bootstrap stream, never through environment variables or host mounts.
     pub runtime_authority: Option<RuntimeAuthorityBootstrap>,
+    /// Optional internal runtime-Git bridge. The bridge is usable only when
+    /// the authority bootstrap carries the separate runtime-Git credential.
+    /// It never contains bearer material or a host socket path.
+    pub runtime_git_bridge: Option<RuntimeGitBridge>,
     /// Caller-defined metadata associated with the VM.
     pub labels: BTreeMap<String, String>,
+}
+
+/// Non-secret guest-facing metadata for one exact runtime-Git bridge.
+///
+/// The provider maps the bridge to its configured host Unix socket over a
+/// dedicated vsock port. The repository UUID is an opaque route component;
+/// authentication and authorization remain host-side responsibilities.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct RuntimeGitBridge {
+    repository_id: Uuid,
+    loopback_port: u16,
+}
+
+impl RuntimeGitBridge {
+    /// Creates bridge metadata. Provider validation rejects nil IDs and
+    /// loopback ports outside the unprivileged range.
+    #[must_use]
+    pub const fn new(repository_id: Uuid, loopback_port: u16) -> Self {
+        Self {
+            repository_id,
+            loopback_port,
+        }
+    }
+
+    /// Returns the opaque repository route component.
+    #[must_use]
+    pub const fn repository_id(self) -> Uuid {
+        self.repository_id
+    }
+
+    /// Returns the guest loopback port used by the local proxy.
+    #[must_use]
+    pub const fn loopback_port(self) -> u16 {
+        self.loopback_port
+    }
+
+    /// Returns the token-free URL convention installed in the worktree.
+    #[must_use]
+    pub fn remote_url(self) -> String {
+        format!(
+            "http://127.0.0.1:{}/{}",
+            self.loopback_port, self.repository_id
+        )
+    }
 }
 
 /// Sensitive authority delivered once to trusted guest bootstrap code.
@@ -624,7 +672,8 @@ pub trait VmInstance: Send + Sync + 'static {
 
 #[cfg(test)]
 mod tests {
-    use super::{VmInstance, VmProvider};
+    use super::{RuntimeGitBridge, VmInstance, VmProvider};
+    use uuid::Uuid;
 
     const fn assert_runtime_trait<T: ?Sized + Send + Sync + 'static>() {}
 
@@ -632,5 +681,14 @@ mod tests {
     const fn provider_traits_are_object_safe() {
         assert_runtime_trait::<dyn VmProvider>();
         assert_runtime_trait::<dyn VmInstance>();
+    }
+
+    #[test]
+    fn runtime_git_remote_url_contains_only_route_metadata() {
+        let bridge = RuntimeGitBridge::new(Uuid::nil(), 19_100);
+        assert_eq!(
+            bridge.remote_url(),
+            "http://127.0.0.1:19100/00000000-0000-0000-0000-000000000000"
+        );
     }
 }

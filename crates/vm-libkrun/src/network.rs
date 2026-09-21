@@ -217,6 +217,7 @@ mod tests {
             service_gid: 1001,
             startup_timeout: Duration::from_secs(1),
             broker_socket_path: None,
+            runtime_git_socket_path: None,
         };
         let arguments = passt_arguments(
             &config,

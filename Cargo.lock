@@ -5733,6 +5733,7 @@ name = "vm-libkrun"
 version = "0.1.0"
 dependencies = [
  "async-trait",
+ "base64",
  "brokered-egress-client",
  "bytes",
  "ciborium",

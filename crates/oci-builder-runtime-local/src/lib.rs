@@ -507,6 +507,7 @@ fn builder_vm_spec(
             working_dir: None,
         },
         runtime_authority: None,
+        runtime_git_bridge: None,
         private_http_service: None,
         labels: BTreeMap::from([
             (
@@ -580,6 +581,7 @@ fn verifier_vm_spec(
             working_dir: None,
         },
         runtime_authority: None,
+        runtime_git_bridge: None,
         private_http_service: None,
         labels: operation_labels("repository_oci_verifier", request.job_id),
     }
