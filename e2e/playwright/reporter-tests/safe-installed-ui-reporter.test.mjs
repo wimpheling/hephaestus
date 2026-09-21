@@ -91,3 +91,60 @@ test("known installed test title maps to a fixed ID", () => {
     retry: 0,
   });
 });
+
+test("new session chat title maps to a fixed ID", () => {
+  const sink = recorder();
+  const reporter = new SafeInstalledUiReporter({output: sink.output});
+  reporter.onTestEnd(
+    {title: "cooking new session chat creates and opens a real Git-backed browser session"},
+    {status: "passed", duration: 1, retry: 0},
+  );
+
+  assert.deepEqual(JSON.parse(sink.text()), {
+    event: "test",
+    test_id: "session_chat_new",
+    status: "passed",
+    duration_ms: 1,
+    retry: 0,
+  });
+});
+
+test("installed session chat title maps to a fixed ID", () => {
+  const sink = recorder();
+  const reporter = new SafeInstalledUiReporter({output: sink.output});
+  reporter.onTestEnd(
+    {title: "cooking session-chat installed UI initializes and reconnects ordinary Git history"},
+    {status: "passed", duration: 1, retry: 0},
+  );
+
+  assert.deepEqual(JSON.parse(sink.text()), {
+    event: "test",
+    test_id: "session_chat_ui",
+    status: "passed",
+    duration_ms: 1,
+    retry: 0,
+  });
+});
+
+test("session chat stages map to fixed IDs", () => {
+  const sink = recorder();
+  const reporter = new SafeInstalledUiReporter({output: sink.output});
+  for (const title of [
+    "session-chat-initialize",
+    "session-chat-send",
+    "session-chat-response",
+    "session-chat-reconnect",
+  ]) {
+    reporter.onStepBegin({}, {}, {title});
+  }
+
+  assert.deepEqual(
+    sink.text().trim().split("\n").map(JSON.parse),
+    [
+      {event: "stage", stage_id: "session_chat_initialize", status: "pending"},
+      {event: "stage", stage_id: "session_chat_send", status: "pending"},
+      {event: "stage", stage_id: "session_chat_response", status: "pending"},
+      {event: "stage", stage_id: "session_chat_reconnect", status: "pending"},
+    ],
+  );
+});

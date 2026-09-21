@@ -3,7 +3,11 @@ import base from "./playwright.config.js";
 export default {
   ...base,
   testDir: "./cooking-tests",
-  testMatch: "cooking-installed-ui.spec.ts",
+  testMatch: [
+    "cooking-installed-ui.spec.ts",
+    "session-chat-installed-ui.spec.ts",
+    "session-chat-new-installed-ui.spec.ts",
+  ],
   // Keep Playwright's automatic error-context artifact outside the mounted
   // evidence tree. Only the two explicit screenshots below are retained.
   outputDir: "/tmp/heph-installed-ui-playwright-private",

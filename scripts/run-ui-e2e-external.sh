@@ -22,6 +22,22 @@ case "${phase}" in
     post-operation) test_grep='cooking post-operation controls' ;;
     *) printf 'unsupported cooking browser phase: %s\n' "${phase}" >&2; exit 1 ;;
 esac
+if [[ "${HEPHAESTUS_E2E_BROWSER_RUNNER:-legacy}" == installed-ui ]]; then
+    test_grep="${HEPHAESTUS_INSTALLED_UI_BROWSER_GREP:-cooking installed UI TLS}"
+    [[ "${#test_grep}" -le 256 && "${test_grep}" != *$'\n'* && "${test_grep}" != *$'\r'* ]] || {
+        printf 'installed UI browser grep is invalid\n' >&2
+        exit 1
+    }
+    case "${test_grep}" in
+        "cooking installed UI TLS"|\
+        "cooking session-chat installed UI initializes and reconnects ordinary Git history"|\
+        "cooking new session chat creates and opens a real Git-backed browser session") ;;
+        *)
+            printf 'unsupported installed UI browser selector\n' >&2
+            exit 1
+            ;;
+    esac
+fi
 
 if [[ -n "${HEPHAESTUS_COOKING_BROWSER_BRIDGE_DIR:-}" ]]; then
     bridge_dir="${HEPHAESTUS_COOKING_BROWSER_BRIDGE_DIR}"
@@ -170,6 +186,9 @@ payload = {
     "ui_namespace": os.environ["HEPHAESTUS_UI_NAMESPACE"],
     "ui_port": os.environ["HEPHAESTUS_UI_PORT"],
     "ca_cert": os.environ["HEPHAESTUS_BROWSER_CA_NAME"],
+    "installed_ui_browser_grep": os.environ.get(
+        "HEPHAESTUS_INSTALLED_UI_BROWSER_GREP", "cooking installed UI TLS"
+    ),
 }
 with open(sys.argv[1], "x", opener=lambda path, flags: os.open(path, flags, 0o600), encoding="utf-8") as stream:
     json.dump(payload, stream, separators=(",", ":"))

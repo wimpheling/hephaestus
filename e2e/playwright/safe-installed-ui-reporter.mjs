@@ -1,8 +1,14 @@
 const TEST_IDS = new Map([
   ["cooking installed UI TLS full-page and managed iframe smoke", "installed_ui_tls_smoke"],
+  ["cooking session-chat installed UI initializes and reconnects ordinary Git history", "session_chat_ui"],
+  ["cooking new session chat creates and opens a real Git-backed browser session", "session_chat_new"],
 ]);
 
 const STAGE_IDS = new Map([
+  ["session-chat-initialize", "session_chat_initialize"],
+  ["session-chat-send", "session_chat_send"],
+  ["session-chat-response", "session_chat_response"],
+  ["session-chat-reconnect", "session_chat_reconnect"],
   ["signin", "signin"],
   ["signin-platform", "signin_platform"],
   ["signin-redirect", "signin_redirect"],
@@ -193,7 +199,7 @@ const SAFE_STATUSES = new Set(["passed", "failed", "skipped", "interrupted", "ti
  * Minimal reporter for the installed UI proof.
  *
  * It intentionally has no stdout/stderr, error, attachment, URL, or raw
- * title handling. The installed UI test must use the fixed test title above
+ * title handling. Installed UI tests must use one of the fixed test titles above
  * and may use only the fixed test.step labels in STAGE_IDS.
  */
 export class SafeInstalledUiReporter {

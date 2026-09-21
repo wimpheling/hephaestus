@@ -17,6 +17,16 @@ oidc_client_id="${HEPHAESTUS_E2E_EXTERNAL_OIDC_CLIENT_ID:-hephaestus-web}"
 oidc_client_secret="${HEPHAESTUS_E2E_EXTERNAL_OIDC_CLIENT_SECRET:-development-secret}"
 web_port="${HEPHAESTUS_E2E_EXTERNAL_WEB_PORT:?set HEPHAESTUS_E2E_EXTERNAL_WEB_PORT to the reserved Phoenix port}"
 phase="${HEPHAESTUS_E2E_COOKING_PHASE:-initial}"
+browser_grep="${HEPHAESTUS_INSTALLED_UI_BROWSER_GREP:-cooking installed UI TLS}"
+case "${browser_grep}" in
+    "cooking installed UI TLS") browser_fixture_mode="installed_reference_uis" ;;
+    "cooking session-chat installed UI initializes and reconnects ordinary Git history") browser_fixture_mode="session_chat_ui" ;;
+    "cooking new session chat creates and opens a real Git-backed browser session") browser_fixture_mode="session_chat_new" ;;
+    *)
+        printf 'unsupported installed UI browser selector\n' >&2
+        exit 1
+        ;;
+esac
 case "${phase}" in
     initial) true ;;
     *) printf 'installed UI smoke supports only the initial phase\n' >&2; exit 1 ;;
@@ -127,17 +137,32 @@ cleanup() {
 trap cleanup EXIT
 
 [[ -f "${fixture}" ]] || { printf 'fixture manifest is missing: %s\n' "${fixture}" >&2; exit 1; }
-python3 - "${fixture}" <<'PY'
+[[ "${#browser_grep}" -le 256 && "${browser_grep}" != *$'\n'* && "${browser_grep}" != *$'\r'* ]] || {
+    printf 'installed UI browser grep is invalid\n' >&2
+    exit 1
+}
+python3 - "${fixture}" "${browser_fixture_mode}" <<'PY'
 import json, sys
 with open(sys.argv[1], encoding="utf-8") as stream:
     value = json.load(stream)
-required = ("installed_reference_uis",)
-missing = [key for key in required if key not in value or value[key] in (None, "")]
-if missing:
-    raise SystemExit("fixture manifest missing installed UI fields: " + ", ".join(missing))
-installed = value["installed_reference_uis"]
-if not isinstance(installed, dict) or any(not isinstance(installed.get(key), str) or not installed[key] for key in ("project_id", "static_installation_id", "managed_installation_id")):
-    raise SystemExit("fixture installed_reference_uis fields are invalid")
+fixture_mode = sys.argv[2]
+if fixture_mode == "session_chat_new":
+    session = value.get("session_chat_new")
+    required = ("project_id", "release_agent_id", "model_import_id", "agent_response_text", "ui_path")
+    if not isinstance(session, dict) or any(not isinstance(session.get(key), str) or not session[key] for key in required):
+        raise SystemExit("fixture session_chat_new fields are invalid")
+elif fixture_mode == "session_chat_ui":
+    session = value.get("session_chat_ui")
+    required = ("project_id", "repository_id", "installation_id", "generation_id", "actor_id", "ui_path", "agent_response_text")
+    if not isinstance(session, dict) or any(not isinstance(session.get(key), str) or not session[key] for key in required):
+        raise SystemExit("fixture session_chat_ui fields are invalid")
+elif fixture_mode == "installed_reference_uis":
+    installed = value.get("installed_reference_uis")
+    required = ("project_id", "static_installation_id", "managed_installation_id")
+    if not isinstance(installed, dict) or any(not isinstance(installed.get(key), str) or not installed[key] for key in required):
+        raise SystemExit("fixture installed_reference_uis fields are invalid")
+else:
+    raise SystemExit("unsupported installed UI fixture mode")
 PY
 
 # The Phoenix container mounts the host asset tree and must receive the
@@ -218,6 +243,8 @@ cp -- \
     "${browser_project}/"
 cp -- \
     "${repo_root}/e2e/playwright/cooking-tests/cooking-installed-ui.spec.ts" \
+    "${repo_root}/e2e/playwright/cooking-tests/session-chat-installed-ui.spec.ts" \
+    "${repo_root}/e2e/playwright/cooking-tests/session-chat-new-installed-ui.spec.ts" \
     "${browser_project}/cooking-tests/"
 cp -- "${fixture}" "${fixture_root}/fixture.json"
 cp -- "${ca_cert}" "${fixture_root}/caddy-ca.pem"
@@ -239,6 +266,7 @@ if podman run --rm --name "${browser_container}" \
     --env HEPHAESTUS_COOKING_BROWSER_FIXTURE=/run/heph-fixture/fixture.json \
     --env HEPHAESTUS_E2E_EVIDENCE_DIR=/run/heph-fixture/playwright-results \
     --env HEPHAESTUS_SAFE_SCREENSHOT_DIR=/run/heph-fixture/playwright-results \
+    --env HEPHAESTUS_INSTALLED_UI_BROWSER_GREP="${browser_grep}" \
     "${browser_image}" \
     sh -euc '
         command -v certutil >/dev/null || { echo "browser image lacks certutil (libnss3-tools)" >&2; exit 78; }
@@ -254,7 +282,8 @@ if podman run --rm --name "${browser_container}" \
         HEPHAESTUS_INSTALLED_UI_CONTROL_DIR="$HEPHAESTUS_INSTALLED_UI_CONTROL_DIR" \
         HEPHAESTUS_COOKING_BROWSER_FIXTURE="$HEPHAESTUS_COOKING_BROWSER_FIXTURE" \
         HEPHAESTUS_E2E_EVIDENCE_DIR="$HEPHAESTUS_E2E_EVIDENCE_DIR" \
-        ./node_modules/.bin/playwright test --config=playwright.installed-ui.config.ts --grep "cooking installed UI TLS" \
+        ./node_modules/.bin/playwright test --config=playwright.installed-ui.config.ts \
+        --grep "${HEPHAESTUS_INSTALLED_UI_BROWSER_GREP}" \
         >/run/heph-fixture/playwright.log 2>/dev/null
     ' >/dev/null 2>&1
 then
