@@ -1,0 +1,31 @@
+version = 1
+
+[[uis]]
+key = "session-chat"
+scope = "repository"
+label = "Session chat"
+icon = "chat"
+presentation = "full_page"
+route_base = "session-chat"
+ui_kit_version = 1
+cache = "no_store"
+repository_git_access = "read_write"
+
+[uis.content]
+kind = "static"
+entrypoint = "index.html"
+
+[[uis.content.files]]
+route = "index.html"
+artifact = "dist/index.html"
+media_type = "text/html"
+
+[[uis.content.files]]
+route = "dist/session-chat-ui.js"
+artifact = "dist/session-chat-ui.js"
+media_type = "text/javascript"
+
+[[uis.content.files]]
+route = "dist/session-chat-ui.css"
+artifact = "dist/session-chat-ui.css"
+media_type = "text/css"

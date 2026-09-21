@@ -22,6 +22,21 @@ profile = "disabled"
 path = "bin/session-chat"
 kind = "directory"
 
+[[build.artifacts]]
+path = "dist/index.html"
+kind = "file"
+media_type = "text/html"
+
+[[build.artifacts]]
+path = "dist/session-chat-ui.js"
+kind = "file"
+media_type = "text/javascript"
+
+[[build.artifacts]]
+path = "dist/session-chat-ui.css"
+kind = "file"
+media_type = "text/css"
+
 [guest]
 image = { key = "python-ubuntu" }
 command = "bin/session-chat/session-chat-agent"

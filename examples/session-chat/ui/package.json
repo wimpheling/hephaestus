@@ -1,0 +1,17 @@
+{
+  "name": "@hephaestus/reference-session-chat-ui",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "build": "esbuild src/index.js --bundle --format=esm --target=es2022 --outfile=dist/session-chat-ui.js",
+    "test": "node --test test/*.test.js",
+    "check": "npm test && npm run build"
+  },
+  "dependencies": {
+    "@isomorphic-git/lightning-fs": "4.9.0",
+    "isomorphic-git": "1.42.2"
+  },
+  "devDependencies": {
+    "esbuild": "0.28.2"
+  }
+}
