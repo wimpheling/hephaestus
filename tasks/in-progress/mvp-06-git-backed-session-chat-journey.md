@@ -99,6 +99,10 @@ the review rather than assumed to be complete.
     retention/tombstone behavior, and safe repository fork semantics.
 
 - [ ] **3. Build the chat distribution flow**
+  - [ ] Provide explicitly declared and installation-acknowledged repository
+    Git access on the host-owned installed UI origin. Revalidate the live child
+    session, exact repository target and human grants for each operation; never
+    expose a platform credential to release content.
   - [ ] Add the authorized “new chat” workflow: create repository, create the
     session instance, bind its repository capability, let the release initialize
     its repository, and open the release's chat route.
@@ -111,6 +115,13 @@ the review rather than assumed to be complete.
     workflow model.
 
 - [ ] **4. Build the reference chat release**
+  - [ ] Complete the prerequisite exact-run worktree and internal Git remote:
+    a dedicated guest-to-host bridge must work with disabled or broker-only
+    networking, use the existing guarded Git receive path and keep credentials
+    out of arguments, environment values, Git configuration and logs.
+  - [ ] Persist runtime receive provenance from the immutable authority
+    snapshot, suppress the originating attachment and reject downstream
+    trigger candidates without explicit execution authority.
   - [ ] Build and publish a small ordinary chat-agent release that defines and
     reads its session protocol, calls its model API through MVP 04, and
     commits its response with normal Git.
@@ -197,6 +208,15 @@ The MVP-01.2 record is in `done/` but retains unchecked implementation items;
 its location is not evidence that the missing guest/runtime transitions work.
 Keep the full journey and its negative cases open until exercised.
 
+The deeper VM audit found no existing internal Git bridge: broker-only vsock
+port 19001 carries the secret broker protocol, and private service port 19002
+has the opposite direction and cannot carry runtime authority. The selected
+implementation adds a dedicated guest-to-host Git bridge without enabling
+external network egress. Runtime receive provenance must resolve the immutable
+Git snapshot's repository, not assume it equals the triggering attachment's
+repository. Runtime-originated downstream triggers must not bypass execution
+authorization through an absent human identity.
+
 ### Reference protocol and local Git adapter (2026-09-21)
 
 Commit `64dc01a` adds `examples/session-chat/PROTOCOL.md`, validated canonical
@@ -211,6 +231,24 @@ for concurrent human writes, stale-agent rejection/fresh-run retry, and fork
 history without inherited remotes. This is local protocol/Git evidence only;
 it does not exercise production capabilities, the released VM agent, browser
 or model egress. Published release packaging and full acceptance remain open.
+
+### Explicit installed UI repository Git authority (2026-09-21)
+
+Commit `7161538` adds the release declaration, explicit installation
+acknowledgement, immutable generation approval and live repository Git verifier.
+Existing UIs default to no Git access. The verifier reuses existing child
+session/binding authentication and checks the exact repository and current
+human read/write grants. The host smart-HTTP request handler remains pending.
+
+The focused configuration parser and digest tests, nine release-service tests,
+and checks of release-postgres, release-service, control-plane-postgres and
+agent-config passed. On a disposable PostgreSQL 17 container, the actual
+`ui_browser_repository_git_authority_is_explicit_and_live` matrix passed
+explicit/no opt-in, wrong repository, read-only write denial, approved write,
+revoked write grant, stale generation, expired child, revoked parent, disabled
+installation, revoked release and revoked grant cases. The test emitted
+`REAL_UI_BROWSER_REPOSITORY_GIT_AUTHORITY=1`; the container was removed after
+execution. This proves the verifier matrix, not browser Git or full MVP-06.
 
 The completed task records the released protocol version and source revision;
 browser and real-Git evidence for session creation, turns, restart, and fork;
