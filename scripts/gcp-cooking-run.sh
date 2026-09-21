@@ -995,6 +995,7 @@ if [[ "$selected_cooking_scenario" == session-chat ]]; then
     unset HEPHAESTUS_APP_COOKING_E2E
     workload_scenario_env=(
         "--setenv=HEPHAESTUS_APP_SESSION_CHAT_E2E=1"
+        "--setenv=HEPHAESTUS_APP_SESSION_CHAT_NEGATIVE_E2E=1"
         "--setenv=HEPHAESTUS_APP_LIBKRUN_E2E=1"
         "--setenv=HEPHAESTUS_APP_COOKING_BUILD_PROOF=1"
         "--setenv=HEPHAESTUS_APP_SESSION_CHAT_BROWSER_E2E=1"

@@ -82,6 +82,7 @@ set_phase_timing_workload_requirements() {
       --require-workload-phase browser-recovery
       --require-workload-phase browser-concurrency
       --require-workload-phase browser-fork
+      --require-workload-phase guest-negative-capability
     )
   else
     phase_timing_workload_required_args=(
@@ -468,6 +469,7 @@ _download_diagnostics() {
   local status_path="${GCP_DIAGNOSTICS_STATUS:-${RUNNER_TEMP:-/tmp}/gcp-diagnostics-status.json}"
   local extract_root="${destination}.extract" output digest archive_bytes download_timeout
   local phase_timing_status='not-applicable' phase_timing_error='' phase_timing_object phase_timing_destination phase_timing_staging
+  local session_chat_negative_status='not-applicable'
   local cooking_scenario="${GCP_COOKING_SCENARIO:-cooking}"
   validate_cooking_scenario "$cooking_scenario"
   local expected_mode="${GCP_DIAGNOSTICS_EXPECT_MODE:-}"
@@ -655,6 +657,51 @@ PYGATE
       "$DIAGNOSTICS_BUCKET" "$object" "$archive_bytes" "$digest" "$extract_root/cooking-diagnostics/manifest.json" >"$status_path"
     return 1
   fi
+  if [[ "$cooking_scenario" == session-chat ]]; then
+    session_chat_negative_status='passed'
+    if ! python3 - "$extract_root/cooking-diagnostics" "$DIAGNOSTICS_COLLECTOR_SCRIPT" <<'PYNEG'
+import importlib.util
+import json
+from pathlib import Path
+import sys
+
+root = Path(sys.argv[1])
+collector_path = Path(sys.argv[2])
+spec = importlib.util.spec_from_file_location("session_chat_collector", collector_path)
+if spec is None or spec.loader is None:
+    raise SystemExit("session-chat negative summary validator is unavailable")
+collector = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(collector)
+with (root / "manifest.json").open(encoding="utf-8") as stream:
+    manifest = json.load(stream, object_pairs_hook=collector._reject_duplicate_json_keys)
+records = [
+    record
+    for record in manifest.get("sources", [])
+    if isinstance(record, dict) and record.get("label") == "session-chat-negative-summary"
+]
+if len(records) != 1:
+    raise SystemExit("session-chat negative summary source is duplicated or missing")
+record = records[0]
+if not isinstance(record, dict):
+    raise SystemExit("session-chat negative summary source is missing")
+relative = record.get("path")
+if not isinstance(relative, str) or relative.startswith("/") or ".." in Path(relative).parts:
+    raise SystemExit("session-chat negative summary source path is unsafe")
+source = root / relative
+if not source.is_file() or source.is_symlink():
+    raise SystemExit("session-chat negative summary source is unavailable")
+with source.open(encoding="utf-8") as stream:
+    value = json.load(stream, object_pairs_hook=collector._reject_duplicate_json_keys)
+validated = collector._validate_session_chat_negative_summary(value)
+if validated.get("status") != "passed":
+    raise SystemExit("session-chat negative summary is not a typed passed result")
+PYNEG
+    then
+      session_chat_negative_status='failed'
+      diagnostics_download_error='session-chat-negative-summary-failed'
+      diagnostics_triage_state='failed'
+    fi
+  fi
   if [[ "$expected_mode" == gcp-cooking && "${GCP_EXPECT_PHASE_TIMING:-false}" == true ]]; then
     set_phase_timing_workload_requirements "$cooking_scenario"
     # Timing is required for acceptance, but a missing or invalid projection
@@ -700,12 +747,12 @@ PYGATE
       phase_timing_status='passed'
     fi
   fi
-  if ! python3 - "$status_path" "$triage_path" "$DIAGNOSTICS_BUCKET" "$object" "$archive_bytes" "$digest" "$extract_root/cooking-diagnostics/manifest.json" "$phase_timing_status" "$phase_timing_error" <<'PY'
+  if ! python3 - "$status_path" "$triage_path" "$DIAGNOSTICS_BUCKET" "$object" "$archive_bytes" "$digest" "$extract_root/cooking-diagnostics/manifest.json" "$phase_timing_status" "$phase_timing_error" "$session_chat_negative_status" <<'PY'
 import json
 from pathlib import Path
 import sys
 
-status_path, triage_path, bucket, object_name, archive_bytes, digest, manifest, phase_timing, phase_timing_error = sys.argv[1:]
+status_path, triage_path, bucket, object_name, archive_bytes, digest, manifest, phase_timing, phase_timing_error, session_chat_negative = sys.argv[1:]
 triage = json.loads(Path(triage_path).read_text(encoding="utf-8"))
 if not isinstance(triage, dict) or triage.get("schema") != 1:
     raise SystemExit("triage projection has an invalid schema")
@@ -726,6 +773,10 @@ if phase_timing != "not-applicable":
 if phase_timing_error:
     status["error"] = phase_timing_error
     status["timingAcceptance"] = "failed"
+if session_chat_negative != "not-applicable":
+    status["sessionChatNegative"] = session_chat_negative
+    if session_chat_negative != "passed" and "error" not in status:
+        status["error"] = "session-chat-negative-summary-failed"
 Path(status_path).write_text(json.dumps(status, separators=(",", ":")) + "\n", encoding="utf-8")
 PY
   then
@@ -793,6 +844,9 @@ PYGATE_ACCEPT
   fi
   if [[ -n "$phase_timing_error" ]]; then
     # The detailed status is already durable; keep the timing gate failed.
+    return 1
+  fi
+  if [[ "$session_chat_negative_status" != not-applicable && "$session_chat_negative_status" != passed ]]; then
     return 1
   fi
   diagnostics_triage_state='passed'

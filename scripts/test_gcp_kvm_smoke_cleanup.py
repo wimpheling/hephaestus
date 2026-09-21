@@ -4,8 +4,10 @@ from __future__ import annotations
 
 from pathlib import Path
 import hashlib
+import json
 import os
 import subprocess
+import tarfile
 import tempfile
 import unittest
 
@@ -15,6 +17,148 @@ SMOKE = ROOT / "gcp-kvm-smoke.sh"
 
 
 class GcpKvmSmokeCleanupTests(unittest.TestCase):
+    @staticmethod
+    def _session_chat_archive(root: Path, *, passed: bool) -> Path:
+        sources = root / "archive-sources"
+        output = root / ("bundle-passed" if passed else "bundle-failed")
+        archive = root / ("passed.tar.gz" if passed else "failed.tar.gz")
+        sources.mkdir(exist_ok=True)
+        summary = (
+            {
+                "schema": 1,
+                "scenario": "session-chat-negative-capability",
+                "status": "passed",
+                "reason": "validated",
+                "validated_checks": 10,
+                "refs": "unchanged",
+                "receives": "unchanged",
+                "golden_test": "bearer_push_starts_run_through_production_bootstrap",
+                "golden_test_passes": 1,
+                "runner_exit_status": 0,
+            }
+            if passed
+            else {
+                "schema": 1,
+                "scenario": "session-chat-negative-capability",
+                "status": "failed",
+                "reason": "golden_test_failed",
+                "runner_exit_status": 17,
+            }
+        )
+        files = {
+            "serial": "HEPH_GCP_COOKING event=workload-result phase=cooking status=passed\n",
+            "host-journal": "host journal unavailable\n",
+            "runtime-structured": "HEPH_GCP_DIAGNOSTICS event=collection status=pass\n",
+            "browser-summary": '{"status":"passed","phase":"browser","test":"browser-report","exit_code":0}\n',
+            "session-chat-negative-summary": json.dumps(summary, separators=(",", ":")) + "\n",
+        }
+        arguments = [
+            "python3",
+            str(ROOT / "collect-cooking-diagnostics.py"),
+            "--output-dir",
+            str(output),
+        ]
+        for label, content in files.items():
+            source = sources / label
+            source.write_text(content, encoding="utf-8")
+            arguments += ["--source", f"{label}={source}"]
+        arguments += ["--archive", str(archive)]
+        result = subprocess.run(arguments, text=True, capture_output=True, check=False)
+        if result.returncode != 0:
+            raise AssertionError(result.stdout + result.stderr)
+        return archive
+
+    def _run_session_chat_download(self, root: Path, archive: Path) -> tuple[subprocess.CompletedProcess[str], dict[str, object]]:
+        fake_bin = root / "bin"
+        fake_bin.mkdir(exist_ok=True)
+        fake_gcloud = fake_bin / "gcloud"
+        fake_gcloud.write_text(
+            "#!/usr/bin/env bash\n"
+            "set -Eeuo pipefail\n"
+            "case \" $* \" in\n"
+            "  *' instances describe '*) printf \"The resource 'projects/hephaestus-508000/zones/europe-west1-d/instances/heph-kvm-smoke-%s-%s' was not found\\n\" \"$GITHUB_RUN_ID\" \"$GITHUB_RUN_ATTEMPT\" >&2; exit 1 ;;\n"
+            "  *' storage cp '*) cp \"$GCP_FIXTURE_ARCHIVE\" \"$4\"; exit 0 ;;\n"
+            "  *) exit 2 ;;\n"
+            "esac\n",
+            encoding="utf-8",
+        )
+        fake_gcloud.chmod(0o700)
+        destination = root / "downloaded.tar.gz"
+        status_path = root / "status.json"
+        environment = {
+            **os.environ,
+            "PATH": f"{fake_bin}:{os.environ['PATH']}",
+            "GCP_FIXTURE_ARCHIVE": str(archive),
+            "GCP_COOKING_SCENARIO": "session-chat",
+            "GITHUB_RUN_ID": "34599999991",
+            "GITHUB_RUN_ATTEMPT": "1",
+            "GITHUB_SHA": "a" * 40,
+            "GCP_ZONE": "europe-west1-d",
+            "GCP_DIAGNOSTICS_ARCHIVE": str(destination),
+            "GCP_DIAGNOSTICS_STATUS": str(status_path),
+            "RUNNER_TEMP": str(root),
+        }
+        result = subprocess.run(
+            [str(SMOKE), "download-diagnostics"],
+            cwd=ROOT.parent,
+            env=environment,
+            text=True,
+            capture_output=True,
+            check=False,
+        )
+        return result, json.loads(status_path.read_text(encoding="utf-8"))
+
+    @staticmethod
+    def _rewrite_session_chat_archive(root: Path, archive: Path, mutation: str) -> Path:
+        unpacked = root / f"unpacked-{mutation}"
+        unpacked.mkdir()
+        with tarfile.open(archive, "r:gz") as source:
+            source.extractall(unpacked)
+        bundle = unpacked / "cooking-diagnostics"
+        manifest_path = bundle / "manifest.json"
+        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+        summary_path = bundle / "sources" / "session-chat-negative-summary"
+        if mutation == "boolean-schema":
+            summary = json.loads(summary_path.read_text(encoding="utf-8"))
+            summary["schema"] = True
+            summary_path.write_text(json.dumps(summary, separators=(",", ":")) + "\n", encoding="utf-8")
+        elif mutation == "duplicate-status":
+            summary_text = summary_path.read_text(encoding="utf-8")
+            summary_path.write_text(summary_text.replace('"status":"passed"', '"status":"passed","status":"failed"', 1), encoding="utf-8")
+        elif mutation == "duplicate-source":
+            manifest["sources"].append(dict(next(record for record in manifest["sources"] if record["label"] == "session-chat-negative-summary")))
+        else:
+            raise AssertionError(f"unknown archive mutation: {mutation}")
+        for record in manifest["sources"]:
+            if record["label"] == "session-chat-negative-summary":
+                record["bytes"] = summary_path.stat().st_size
+                record["sha256"] = hashlib.sha256(summary_path.read_bytes()).hexdigest()
+        manifest_path.write_text(json.dumps(manifest, separators=(",", ":")) + "\n", encoding="utf-8")
+        mutated = root / f"{mutation}.tar.gz"
+        with tarfile.open(mutated, "w:gz") as target:
+            target.add(bundle, arcname="cooking-diagnostics")
+        return mutated
+
+    def test_session_chat_download_accepts_only_typed_passed_negative_summary(self) -> None:
+        with tempfile.TemporaryDirectory(prefix="heph-gcp-session-negative-gate-") as raw:
+            root = Path(raw)
+            passed = self._session_chat_archive(root, passed=True)
+            result, status = self._run_session_chat_download(root, passed)
+            self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+            self.assertEqual(status["sessionChatNegative"], "passed")
+
+            failed = self._session_chat_archive(root, passed=False)
+            result, status = self._run_session_chat_download(root, failed)
+            self.assertNotEqual(result.returncode, 0)
+            self.assertEqual(status["sessionChatNegative"], "failed")
+            self.assertEqual(status["error"], "session-chat-negative-summary-failed")
+
+            for mutation in ("boolean-schema", "duplicate-status", "duplicate-source"):
+                malformed = self._rewrite_session_chat_archive(root, passed, mutation)
+                result, status = self._run_session_chat_download(root, malformed)
+                self.assertNotEqual(result.returncode, 0, mutation)
+                self.assertEqual(status["sessionChatNegative"], "failed", mutation)
+
     def test_missing_vm_describe_error_does_not_use_unset_json_data(self) -> None:
         run_id = "34599999999"
         name = f"heph-kvm-smoke-{run_id}-1"

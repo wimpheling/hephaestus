@@ -12,7 +12,6 @@ import unittest
 
 ROOT = Path(__file__).resolve().parent
 SCRIPT = ROOT / "run-libkrun-integration.sh"
-GCP_RUNNER = ROOT / "gcp-cooking-run.sh"
 SELECTED_TEST = "bearer_push_starts_run_through_production_bootstrap"
 SECRET_OUTPUT = "SESSION_SECRET_SHOULD_NOT_REACH_CONSOLE"
 
@@ -21,7 +20,6 @@ class LibkrunNegativeOrchestrationTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls) -> None:
         cls.script = SCRIPT.read_text(encoding="utf-8")
-        cls.gcp_runner = GCP_RUNNER.read_text(encoding="utf-8")
 
     def negative_block(self) -> str:
         first_end = self.script.index("phase_timing_end golden-tests passed")
@@ -298,8 +296,7 @@ class LibkrunNegativeOrchestrationTests(unittest.TestCase):
         self.assertNotIn("HEPH_SESSION_CHAT_NEGATIVE status=passed", completed.stdout)
         self.assertNotIn(SECRET_OUTPUT, completed.stdout + completed.stderr)
 
-    def test_gcp_does_not_enable_opt_in_or_capture_extra_stdout(self) -> None:
-        self.assertNotIn("HEPHAESTUS_APP_SESSION_CHAT_NEGATIVE_E2E=1", self.gcp_runner)
+    def test_negative_block_does_not_tee_or_duplicate_child_timing(self) -> None:
         block = self.negative_block()
         self.assertNotIn("tee", block)
         self.assertIn("-- --exact --nocapture", block)

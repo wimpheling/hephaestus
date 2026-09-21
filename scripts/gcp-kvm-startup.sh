@@ -634,6 +634,7 @@ collect_diagnostics() {
       browser-setup runtime-guest-build oci-image-materialization
       gateway-services-ready runtime-worker-build gateway-readiness
       golden-tests database-tests browser-initial browser-recovery browser-concurrency browser-fork
+      guest-negative-capability
     )
   else
     required_workload_phases=(
@@ -725,6 +726,9 @@ collect_diagnostics() {
   fi
   if [[ -f "$phase_timing_input" ]]; then
     collector_args+=(--source "phase-timing=$phase_timing_input")
+  fi
+  if [[ "$selected_cooking_scenario" == session-chat ]]; then
+    collector_args+=(--source "session-chat-negative-summary=${cooking_evidence_root}/session-chat-negative-summary.json")
   fi
   local snapshot_args=()
   if [[ "$test_mode" == diagnostic ]]; then

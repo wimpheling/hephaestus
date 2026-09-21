@@ -26,6 +26,7 @@ SESSION_PHASES = (
     "browser-recovery",
     "browser-concurrency",
     "browser-fork",
+    "guest-negative-capability",
 )
 SESSION_BROWSER_PHASES = (
     "browser-initial",
@@ -68,6 +69,7 @@ PHASE_DOMAINS = {
     "browser-recovery": "workload-libkrun",
     "browser-concurrency": "workload-libkrun",
     "browser-fork": "workload-libkrun",
+    "guest-negative-capability": "workload-libkrun",
     "browser-post-operation": "workload-libkrun",
 }
 
@@ -125,6 +127,7 @@ class GcpCookingScenarioContractTests(unittest.TestCase):
         self.assertNotIn("workload_script=", session_branch)
         for flag in (
             "HEPHAESTUS_APP_SESSION_CHAT_E2E=1",
+            "HEPHAESTUS_APP_SESSION_CHAT_NEGATIVE_E2E=1",
             "HEPHAESTUS_APP_LIBKRUN_E2E=1",
             "HEPHAESTUS_APP_COOKING_BUILD_PROOF=1",
             "HEPHAESTUS_APP_SESSION_CHAT_BROWSER_E2E=1",
@@ -169,6 +172,10 @@ class GcpCookingScenarioContractTests(unittest.TestCase):
             self.assertIn(phase, session_startup)
         for phase in SESSION_PHASES:
             self.assertIn(f"--require-workload-phase {phase}", smoke)
+        self.assertIn(
+            '--source "session-chat-negative-summary=${cooking_evidence_root}/session-chat-negative-summary.json"',
+            startup,
+        )
         for phase in SESSION_BROWSER_PHASES:
             self.assertIn(f"--require-workload-phase {phase}", smoke)
         for phase in ("production-project-build", "gateway-edge-ready", "browser-initial", "browser-post-operation"):
