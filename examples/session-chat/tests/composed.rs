@@ -1092,6 +1092,7 @@ pub async fn exercise(
     .expect("build and publish session-chat release through production workers");
     assert!(!built.release_id.is_nil());
     assert!(!built.release_agent_id.is_nil());
+    grant_session_capability(pool, project, identity).await;
     let denial_source_repository_id = denial_probe.then_some(built.repository_id.as_uuid());
     if browser_e2e {
         eprintln!("HEPH_SESSION_CHAT_BROWSER stage=branch-selected mode=session_chat_new");
@@ -1261,21 +1262,6 @@ pub async fn exercise(
     .into_owned();
     let attachment_id = response_id(attachment.attachment_id.into_option(), "session attachment")
         .expect("session attachment ID");
-
-    // Capability delegation is a separate project authority from ordinary
-    // project maintenance. Seed the fixture role, then exercise the
-    // production ReviseCapabilities RPC below to create the immutable
-    // capability revision.
-    sqlx::query(
-        "INSERT INTO project_capability_granters (project_id, user_id, created_by)
-         VALUES ($1, $2, $2)
-         ON CONFLICT (project_id, user_id) DO NOTHING",
-    )
-    .bind(project.as_uuid())
-    .bind(identity.user_id.as_uuid())
-    .execute(pool)
-    .await
-    .expect("session capability delegation role");
 
     let revised = instance_client(
         running,
@@ -1503,6 +1489,25 @@ pub async fn exercise(
         );
     }
     None
+}
+
+async fn grant_session_capability(
+    pool: &PgPool,
+    project: ProjectId,
+    identity: &AuthenticatedIdentity,
+) {
+    // Browser OIDC resolves golden-subject to this same identity; the explicit
+    // project grant authorizes the user-selected repository capability.
+    sqlx::query(
+        "INSERT INTO project_capability_granters (project_id, user_id, created_by)
+         VALUES ($1, $2, $2)
+         ON CONFLICT (project_id, user_id) DO NOTHING",
+    )
+    .bind(project.as_uuid())
+    .bind(identity.user_id.as_uuid())
+    .execute(pool)
+    .await
+    .expect("session capability delegation role");
 }
 
 enum SessionChatBrowserMode {
