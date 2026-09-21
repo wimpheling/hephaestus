@@ -943,3 +943,34 @@ This localizes the failure to `getRemoteInfo` before initialization, clone, or
 history reading; the underlying cause remains unresolved. No browser-backed
 turn is proven. Safe sidecar:
 `/var/tmp/sessionchat-browser-final24/browser.SAx5AU/playwright-results/session-chat-safe-diagnostics.jsonl`.
+
+The discovery failure is reproduced against a real empty Git HTTP backend:
+the browser bundle lacked the `Buffer` global required by isomorphic-git's
+stream reader. Adding a direct pinned `buffer` dependency and installing that
+global lets Chromium complete discovery, initialization, push, and read. The
+permanent smoke also checks the pushed manifest and participants; restoring the
+old bundle reproduces `MissingBufferDependency`.
+
+Final25's first launcher lacked the browser export and was interrupted before
+browser execution; it is not acceptance evidence. The corrected run under
+`/var/tmp/sessionchat-browser-final25-corrected/` enables browser, restart,
+concurrency, and fork. Installed-browser initialization and send pass, then the
+first response wait times out. Cleanup completes; no recovery, concurrency, or
+fork acceptance is inferred. Investigation now follows the first response path.
+
+Commits `9e6cd6e`, `41ca4a9`, `957ba52`, and `7cfd1e7` add an opt-in separate
+negative guest process and its typed evidence pipeline. The process selects one
+exact golden test, removes browser and nested timing flags, and keeps its log
+private. Success requires that test to pass and exactly one ten-check host
+validation marker. The projector is tested against real libtest output; runner
+contracts pass 36 tests, and collector/triage checks pass 93. GCP enablement and
+fresh combined runtime evidence remain pending.
+
+Commit `6fadc0b` contains the focused Buffer fix and packaged Chromium/Git smoke;
+temporary client and server diagnostic instrumentation has been removed.
+The corrected final25 execution log records the initialization receive, human
+receive, a runtime-principal receive, and successful worker exit/cleanup
+(`cooking-execution.vR9DpQ.log:446-465`). The agent publishes only after its model
+call, so this narrows the remaining failure to browser refresh/display rather
+than an absent runtime publication. It does not replace the canonical host turn
+assertions, which the failed browser phase prevented from running.
