@@ -109,6 +109,7 @@ defmodule HephaestusWeb.RPC.Client do
     CreateUiBrowserHandoffRequest,
     GetReleaseRequest,
     GlobalUiInstallationTarget,
+    InstallUiRequest,
     ListRepositoryReleasesRequest,
     ListUiInstallationsRequest,
     PublishReleaseRequest,
@@ -525,6 +526,50 @@ defmodule HephaestusWeb.RPC.Client do
              "installations" => Enum.map(response.installations, &project_ui_installation/1),
              "page" => Projection.to_value(response.page)
            }}
+
+        {:error, error} ->
+          {:error, error}
+      end
+    end
+  end
+
+  @doc "Installs one release-owned UI for an explicit organization target."
+  def install_ui(identity, organization_id, target, release_id, ui_key, options \\ []) do
+    with {:ok, target_message} <- ui_installation_target(target),
+         {:ok, acknowledge_repository_git_access} <-
+           boolean_option(options, :acknowledge_repository_git_access, false) do
+      {context, request_id} = request_context()
+
+      request = %InstallUiRequest{
+        context: context,
+        organization_id: id(organization_id),
+        target: target_message,
+        release_id: id(release_id),
+        ui_key: ui_key,
+        acknowledge_repository_git_access: acknowledge_repository_git_access
+      }
+
+      stub_call = Keyword.get(options, :stub_call, &ReleaseService.Stub.install_ui/3)
+
+      invoke_options =
+        options
+        |> Keyword.take([:channel_provider, :channel_reset, :timeout, :maximum_response_bytes])
+        |> Keyword.merge(
+          request_id: request_id,
+          maximum_request_bytes: 1_048_576,
+          maximum_response_bytes: 65_536
+        )
+
+      case Invoke.unary(
+             identity,
+             "/hephaestus.release.v1.ReleaseService/InstallUi",
+             request,
+             stub_call,
+             invoke_options
+           ) do
+        {:ok, response} ->
+          result = Projection.to_value(response)
+          {:ok, Map.update(result, "lifecycle", "unspecified", &ui_lifecycle/1)}
 
         {:error, error} ->
           {:error, error}
@@ -1791,6 +1836,13 @@ defmodule HephaestusWeb.RPC.Client do
       memory_mib: policy["memory_mib"],
       network: network_policy!(policy["network"])
     }
+  end
+
+  defp boolean_option(options, key, default) do
+    case Keyword.get(options, key, default) do
+      value when is_boolean(value) -> {:ok, value}
+      _invalid -> {:error, Error.local(:invalid)}
+    end
   end
 
   defp network_policy!("disabled"), do: NetworkPolicy.value(:NETWORK_POLICY_DISABLED)

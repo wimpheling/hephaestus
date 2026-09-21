@@ -6,6 +6,7 @@ defmodule HephaestusWeb.RPC.UiClientTest do
   alias Hephaestus.Release.V1.{
     CreateUiBrowserHandoffResponse,
     GlobalUiInstallationTarget,
+    InstallUiResponse,
     ListUiInstallationsResponse,
     ReleaseUiIcon,
     ReleaseUiPresentation,
@@ -142,6 +143,79 @@ defmodule HephaestusWeb.RPC.UiClientTest do
     assert global["presentation"] == "iframe"
     assert global["content_kind"] == "static"
     assert global["launchable"]
+  end
+
+  test "install sends explicit target and projects enabled lifecycle" do
+    caller = self()
+
+    stub = fn _channel, request, options ->
+      send(caller, {:install_call, request, options})
+
+      {:ok,
+       %InstallUiResponse{
+         installation_id: %OpaqueId{value: @installation},
+         generation_id: %OpaqueId{value: @generation},
+         lifecycle: UiInstallationLifecycle.value(:UI_INSTALLATION_LIFECYCLE_ENABLED)
+       }}
+    end
+
+    assert {:ok,
+            %{
+              "installation_id" => @installation,
+              "generation_id" => @generation,
+              "lifecycle" => "enabled"
+            }} =
+             Client.install_ui(
+               identity(),
+               @organization,
+               {:repository, @installation},
+               "70000000-0000-4000-8000-000000000007",
+               "reference-session-chat",
+               stub_call: stub,
+               channel_provider: channel_provider()
+             )
+
+    assert_receive {:install_call, request, options}
+    assert request.organization_id.value == @organization
+    assert request.target.target == {:repository_id, %OpaqueId{value: @installation}}
+    assert request.release_id.value == "70000000-0000-4000-8000-000000000007"
+    assert request.ui_key == "reference-session-chat"
+    assert request.acknowledge_repository_git_access == false
+    assert options[:metadata]["x-request-id"] =~ ~r/\A[0-9a-f-]{36}\z/i
+  end
+
+  test "install forwards repository Git acknowledgement only when explicitly enabled" do
+    caller = self()
+
+    stub = fn _channel, request, _options ->
+      send(caller, {:acknowledgement, request.acknowledge_repository_git_access})
+      {:ok, %InstallUiResponse{}}
+    end
+
+    assert {:ok, _} =
+             Client.install_ui(
+               identity(),
+               @organization,
+               {:repository, @installation},
+               @generation,
+               "session-chat",
+               acknowledge_repository_git_access: true,
+               stub_call: stub,
+               channel_provider: channel_provider()
+             )
+
+    assert_receive {:acknowledgement, true}
+  end
+
+  test "install rejects an unsupported target before making an RPC" do
+    assert {:error, %HephaestusWeb.RPC.Error{kind: :invalid}} =
+             Client.install_ui(
+               identity(),
+               @organization,
+               {:organization, @organization},
+               @installation,
+               "reference-session-chat"
+             )
   end
 
   test "handoff sends fresh request context, empty idempotency, exact secret, and no retry" do

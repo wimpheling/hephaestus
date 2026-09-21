@@ -72,6 +72,21 @@ defmodule Hephaestus.Release.V1.ReleaseUiCachePolicy do
   field(:RELEASE_UI_CACHE_POLICY_NO_STORE, 1)
 end
 
+defmodule Hephaestus.Release.V1.ReleaseUiRepositoryGitAccess do
+  @moduledoc false
+
+  use Protobuf,
+    enum: true,
+    full_name: "hephaestus.release.v1.ReleaseUiRepositoryGitAccess",
+    protoc_gen_elixir_version: "0.17.0",
+    syntax: :proto3
+
+  field(:RELEASE_UI_REPOSITORY_GIT_ACCESS_UNSPECIFIED, 0)
+  field(:RELEASE_UI_REPOSITORY_GIT_ACCESS_NONE, 1)
+  field(:RELEASE_UI_REPOSITORY_GIT_ACCESS_READ, 2)
+  field(:RELEASE_UI_REPOSITORY_GIT_ACCESS_READ_WRITE, 3)
+end
+
 defmodule Hephaestus.Release.V1.UiInstallationLifecycle do
   @moduledoc false
 
@@ -227,6 +242,12 @@ defmodule Hephaestus.Release.V1.ReleaseUiDescriptor do
   )
 
   field(:apis, 12, repeated: true, type: Hephaestus.Release.V1.ReleaseUiApiBinding)
+
+  field(:repository_git_access, 13,
+    type: Hephaestus.Release.V1.ReleaseUiRepositoryGitAccess,
+    json_name: "repositoryGitAccess",
+    enum: true
+  )
 end
 
 defmodule Hephaestus.Release.V1.ReleaseUiStaticContent do
@@ -323,6 +344,11 @@ defmodule Hephaestus.Release.V1.InstallUiRequest do
   field(:target, 3, type: Hephaestus.Release.V1.UiInstallationTarget)
   field(:release_id, 4, type: Hephaestus.Common.V1.OpaqueId, json_name: "releaseId")
   field(:ui_key, 5, type: :string, json_name: "uiKey")
+
+  field(:acknowledge_repository_git_access, 6,
+    type: :bool,
+    json_name: "acknowledgeRepositoryGitAccess"
+  )
 end
 
 defmodule Hephaestus.Release.V1.InstallUiResponse do
