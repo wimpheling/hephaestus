@@ -11,7 +11,7 @@ defmodule HephaestusWeb.RPC.ProjectionTest do
     RuntimeMetric
   }
 
-  alias Hephaestus.Secret.V1.SecretSummary
+  alias Hephaestus.Secret.V1.{ImportSummary, SecretPolicy, SecretSummary, SecretTarget}
   alias Hephaestus.Run.V1.{ResultProposal, Run, RunMetrics, RunResult}
   alias Hephaestus.Gateway.V1.{GatewayIngressOutcome, GatewayLifecycle, GatewaySummary}
 
@@ -213,5 +213,43 @@ defmodule HephaestusWeb.RPC.ProjectionTest do
                "immutable_reference" => "registry.forge.example/" <> _
              }
            } = Projection.to_value(publication)
+  end
+
+  test "normalizes decoded secret policy enums without changing atom or nil contracts" do
+    target = %SecretTarget{target: {:project_id, %OpaqueId{value: "project"}}}
+
+    numeric_policy = %SecretPolicy{
+      delivery_modes: [2],
+      phases: [1],
+      destinations: ["api.model.example"]
+    }
+
+    encoded_import = %ImportSummary{target: target, policy: numeric_policy}
+
+    decoded_import =
+      encoded_import |> ImportSummary.encode() |> IO.iodata_to_binary() |> ImportSummary.decode()
+
+    assert %{
+             "delivery_modes" => ["brokered"],
+             "phases" => ["normal"],
+             "destinations" => ["api.model.example"]
+           } = Projection.to_value(decoded_import)
+
+    atom_policy = %SecretPolicy{
+      delivery_modes: [:DELIVERY_MODE_BROKERED],
+      phases: [:DELIVERY_PHASE_NORMAL],
+      destinations: []
+    }
+
+    assert %{"delivery_modes" => ["brokered"], "phases" => ["normal"]} =
+             Projection.to_value(%ImportSummary{target: target, policy: atom_policy})
+
+    unknown_policy = %SecretPolicy{delivery_modes: [99], phases: [99]}
+
+    assert %{"delivery_modes" => ["unspecified"], "phases" => ["unspecified"]} =
+             Projection.to_value(%ImportSummary{target: target, policy: unknown_policy})
+
+    assert %{"target_id" => "project"} =
+             Projection.to_value(%ImportSummary{target: target, policy: nil})
   end
 end
