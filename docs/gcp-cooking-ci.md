@@ -682,7 +682,9 @@ Leave `runner_image` empty to use the authoritative `vars.GCP_RUNNER_IMAGE`,
 or provide one validated immutable image explicitly; do not replace that
 repository variable with a changing image name. The trusted path carries the
 selector through `GCP_COOKING_SCENARIO`, validates it in smoke/startup, and
-passes it to the runtime and browser projector. It retains WIF pinned to the
+passes it to the runtime and browser projector. Session-chat also enables
+`HEPHAESTUS_APP_SESSION_CHAT_CONCURRENT_E2E=1` alongside its browser and
+restart flags. It retains WIF pinned to the
 `main` workflow reference, exact repository `1312377552` and head-SHA checks,
 private evidence collection and scanning, cleanup/post-delete verification,
 and the existing typed gate schema.
@@ -690,12 +692,16 @@ and the existing typed gate schema.
 Session validation must observe the actual emitted workload phases
 `browser-setup`, `runtime-guest-build`, `oci-image-materialization`,
 `gateway-services-ready`, `runtime-worker-build`, `gateway-readiness`,
-`golden-tests`, and `database-tests`. The browser projector uses
-`--scenario session-chat` and requires the strict two-turn `session_chat_new`
-contract: initialize, send, response, second send, second response, and
-reconnect, with complete initial browser evidence. These commits provide the
+`golden-tests`, and `database-tests`. The trusted session-chat path also
+requires the three browser workload phases `browser-initial`,
+`browser-recovery`, and `browser-concurrency`. The browser
+projector uses `--scenario session-chat` and requires complete typed evidence
+for the initial `session_chat_new`, recovery `session_chat_ui`, and
+concurrency `session_chat_concurrent` journeys. These commits provide the
 selection and validators only; no session-chat cloud run or full browser/VM
-acceptance is recorded here.
+acceptance is recorded here. The current final18 local browser attempt reached
+successful server creation but failed during UI initialization, so runtime
+acceptance remains incomplete; no cloud run or merge is claimed.
 
 PR mode requires the reviewed runner image with browser dependencies already
 baked. It fails closed on the stock image because installing Playwright

@@ -39,6 +39,36 @@ env -u HEPHAESTUS_APP_COOKING_E2E \
 
 The default deterministic session run does not enable the denial probe.
 
+The browser-backed restart and concurrency phases are separately opt-in. They
+require the browser and restart phases together, and the concurrency phase
+uses the same installation, repository, and session after recovery. Prepare
+the KVM, Podman, Rust musl target, digest-pinned guest images, and browser
+dependencies using [`examples/cooking/README.md`](../cooking/README.md) and
+[`docs/vm-libkrun.md`](../../docs/vm-libkrun.md). The shared runner provisions
+the OIDC/Caddy bridge and installed-UI fixture; choose a free Caddy port and
+keep the HTTPS origin equal to that port:
+
+```sh
+CADDY_PORT=4443
+env -u HEPHAESTUS_APP_SESSION_CHAT_DENIAL_PROBE_E2E \
+  HEPHAESTUS_COOKING_SCENARIO=session-chat \
+  HEPHAESTUS_COOKING_INSTALLED_UI_FIXTURE=1 \
+  HEPHAESTUS_COOKING_BROWSER_E2E=1 \
+  HEPHAESTUS_CADDY_TEST_TLS=1 \
+  HEPHAESTUS_CADDY_TEST_PUBLIC_PORT="$CADDY_PORT" \
+  HEPHAESTUS_PLATFORM_HTTPS_ORIGIN="https://platform.localhost:${CADDY_PORT}" \
+  HEPHAESTUS_APP_SESSION_CHAT_RESTART_E2E=1 \
+  HEPHAESTUS_APP_SESSION_CHAT_CONCURRENT_E2E=1 \
+  HEPHAESTUS_LIBKRUN_UBUNTU_IMAGE='...@sha256:<python-image-digest>' \
+  HEPHAESTUS_LIBKRUN_RUST_BUILDER_IMAGE='...@sha256:<rust-builder-image-digest>' \
+  examples/cooking/run.sh
+```
+
+The two image values must be exact compatible digests prepared as described in
+the linked Cooking setup; the placeholders above are not runnable values. This
+command exercises the local production path only. The full runtime, browser,
+recovery, and concurrency acceptance journey remains incomplete.
+
 `build.sh` compiles the three Python modules and stages them as one directory
 artifact. The resulting `agent.toml` declares a required `runtime_git` session
 repository capability scoped to `refs/heads/main`, the agent record/context
