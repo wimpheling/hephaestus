@@ -171,8 +171,8 @@ over repositories and content capabilities later.
   VM runtime with the deterministic fake HTTPS model endpoint; keep an
   OpenRouter smoke test separately opt-in and use only placeholder
   substitution.
-- [ ] Run `cargo fmt --all -- --check`.
-- [ ] Run `cargo clippy --workspace --all-targets --all-features`.
+- [x] Run `cargo fmt --all -- --check`.
+- [x] Run `cargo clippy --workspace --all-targets --all-features`.
 - [ ] Run `cargo test --workspace --all-features`.
 - [ ] Run `cargo doc --workspace --all-features --no-deps`.
 - [ ] Run applicable UI checks when the reference distribution adapter changes.
@@ -974,3 +974,27 @@ receive, a runtime-principal receive, and successful worker exit/cleanup
 call, so this narrows the remaining failure to browser refresh/display rather
 than an absent runtime publication. It does not replace the canonical host turn
 assertions, which the failed browser phase prevented from running.
+
+Commit `af87743` enables the separate negative process for GCP session-chat and
+requires both `guest-negative-capability` timing and the strict typed summary.
+The final gate uses the collector's shared validator after cleanup/download;
+missing, failed, duplicate, and incorrectly typed evidence is rejected. The
+combined negative/GCP contract suites pass 162 tests
+(`/tmp/heph-session-negative-crossstage-20260921.log`). No cloud acceptance is
+claimed.
+
+Workspace formatting and `cargo clippy --workspace --all-targets --all-features`
+pass (`/var/tmp/hephaestus-cargo-{fmt-check,clippy-workspace-all}-gcp-sessionchat.log`).
+The first workspace test run stopped because `HEPHAESTUS_POSTGRES_TEST_URL` was
+unset, after 1,195 passed tests, one failure, and five ignored tests. It is not
+a passing workspace gate; a rerun with a disposable PostgreSQL fixture is pending.
+
+Commit `809ae39` fixes the next browser failure: the response controller stored
+unbound browser timer functions and invoked them with the controller as receiver,
+causing `Illegal invocation` after the human push. Receiver-safe wrappers fix it.
+The packaged Chromium smoke now publishes a human record, accepts a native Git
+assistant commit, fetches/reads it, and displays both correlated records. The
+old Buffer-fixed bundle fails with `Illegal invocation`; the new bundle passes
+(`/var/tmp/sessionchat-refresh-{old,new}-bundle-smoke.log`). All 20 UI tests
+pass from an external dependency tree, and two generated bundle builds match
+byte-for-byte. A fresh full installed-browser/VM run remains required.
