@@ -2448,6 +2448,7 @@ dependencies = [
  "runtime-git-authority-postgres",
  "runtime-handoff-local",
  "runtime-types",
+ "rustix",
  "rustls",
  "secret-application",
  "secret-broker",
