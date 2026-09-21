@@ -66,7 +66,11 @@ def report(file_name: str, title: str, status: str, *, error_location: bool = Tr
 
 
 def safe_session_report(
-    *, test_status: str = "passed", missing_stage: str | None = None, failed_stage: str | None = None
+    *,
+    test_status: str = "passed",
+    missing_stage: str | None = None,
+    failed_stage: str | None = None,
+    terminal_status: str | None = None,
 ) -> str:
     records = [{"event": "run_started", "test_count": 1}]
     for stage_id in PROJECTOR.SESSION_CHAT_STAGES:
@@ -96,7 +100,13 @@ def safe_session_report(
         counts["skipped"] = 1
     else:
         counts["other"] = 1
-    records.append({"event": "run_finished", "status": test_status, "counts": counts})
+    records.append(
+        {
+            "event": "run_finished",
+            "status": terminal_status or test_status,
+            "counts": counts,
+        }
+    )
     return "".join(json.dumps(record, separators=(",", ":")) + "\n" for record in records)
 
 
@@ -400,6 +410,24 @@ class BrowserSummaryTests(unittest.TestCase):
             timed_out = PROJECTOR.project(root, "session-chat")
             self.assertEqual(timed_out["status"], "timed_out")
             self.assertEqual(timed_out["counts"]["timed_out"], 1)
+
+            # The installed reporter emits this terminal pair for a real
+            # timeout: the test is timed_out while the run is failed with one
+            # result in Playwright's `other` bucket.
+            log.write_text(
+                safe_session_report(
+                    test_status="timed_out",
+                    failed_stage="session_chat_initialize",
+                    terminal_status="failed",
+                ),
+                encoding="utf-8",
+            )
+            reporter_timeout = PROJECTOR.project(root, "session-chat")
+            self.assertEqual(reporter_timeout["status"], "timed_out")
+            self.assertEqual(reporter_timeout["report_state"], "complete")
+            self.assertEqual(reporter_timeout["observed_phases"], ["initial"])
+            self.assertEqual(reporter_timeout["passed_phases"], [])
+            self.assertEqual(reporter_timeout["counts"]["timed_out"], 1)
 
             log.write_text(safe_session_report().replace('"test_count":1', '"test_count":true'), encoding="utf-8")
             bool_count = PROJECTOR.project(root, "session-chat")

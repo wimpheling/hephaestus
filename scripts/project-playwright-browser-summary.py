@@ -314,7 +314,16 @@ def _safe_summary(records: list[dict[str, Any]]) -> dict[str, Any] | None:
         expected_counts["skipped"] = 1
     else:
         expected_counts["other"] = 1
-    if counts != expected_counts or finished_status != test["status"]:
+    # Playwright's safe reporter records a timed-out test as ``timed_out`` but
+    # closes the run as ``failed`` with the result in ``other``.  Accept only
+    # that exact terminal combination; all other status/count mismatches stay
+    # fail-closed.
+    terminal_status_matches = finished_status == test["status"] or (
+        test["status"] == "timed_out"
+        and finished_status == "failed"
+        and counts == {"passed": 0, "failed": 0, "skipped": 0, "other": 1}
+    )
+    if counts != expected_counts or not terminal_status_matches:
         return None
 
     projected_counts = {
