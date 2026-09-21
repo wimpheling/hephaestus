@@ -34,6 +34,38 @@ def result(returncode: int, stderr: str) -> subprocess.CompletedProcess[str]:
 
 
 class DeniedProbeTests(unittest.TestCase):
+    def test_source_checkout_absent_accepts_missing_or_empty_real_directory_only(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            missing = root / "missing"
+            with patch.object(PROBE, "SOURCE_CHECKOUT", missing):
+                self.assertTrue(PROBE._source_absent())
+
+            empty = root / "empty"
+            empty.mkdir()
+            with patch.object(PROBE, "SOURCE_CHECKOUT", empty):
+                self.assertTrue(PROBE._source_absent())
+                (empty / "checkout-file").write_text("source", encoding="utf-8")
+                self.assertFalse(PROBE._source_absent())
+
+            symlink = root / "symlink"
+            symlink.symlink_to(empty, target_is_directory=True)
+            with patch.object(PROBE, "SOURCE_CHECKOUT", symlink):
+                self.assertFalse(PROBE._source_absent())
+
+            regular_file = root / "file"
+            regular_file.write_text("source", encoding="utf-8")
+            with patch.object(PROBE, "SOURCE_CHECKOUT", regular_file):
+                self.assertFalse(PROBE._source_absent())
+
+            mount_candidate = root / "mount-candidate"
+            mount_candidate.mkdir()
+            with (
+                patch.object(PROBE, "SOURCE_CHECKOUT", mount_candidate),
+                patch.object(PROBE.os.path, "ismount", return_value=True),
+            ):
+                self.assertFalse(PROBE._source_absent())
+
     def test_failed_authorized_control_cannot_be_hidden_by_denials(self):
         with (
             patch.object(PROBE, "_source_absent", return_value=True),

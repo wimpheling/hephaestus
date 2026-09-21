@@ -14,6 +14,10 @@ push denials. ``--other-repository-id`` is another repository used for the
 same denials. Runtime control and secret paths remain the fixed production
 guest paths, and ``HEPH_RUNTIME_GIT_HOST``/``HEPH_RUNTIME_GIT_PATH`` remain the
 heph-init supplied credential-helper contract.
+
+``/workspace/source`` may be absent or an empty real directory in the base
+image. A symlink, file, mount, or nonempty directory at that path is treated as
+an unexpected source checkout.
 """
 
 from __future__ import annotations
@@ -89,7 +93,21 @@ def _remote(repository_id: str) -> str:
 
 
 def _source_absent() -> bool:
-    return not SOURCE_CHECKOUT.exists() and not SOURCE_CHECKOUT.is_symlink()
+    try:
+        SOURCE_CHECKOUT.lstat()
+    except FileNotFoundError:
+        return True
+    except OSError:
+        return False
+    if not SOURCE_CHECKOUT.is_dir() or SOURCE_CHECKOUT.is_symlink() or os.path.ismount(SOURCE_CHECKOUT):
+        return False
+    try:
+        next(SOURCE_CHECKOUT.iterdir())
+    except StopIteration:
+        return True
+    except OSError:
+        return False
+    return False
 
 
 def _fixed_git_denial(result: subprocess.CompletedProcess[str]) -> bool:
