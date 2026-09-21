@@ -118,6 +118,13 @@ defmodule HephaestusWebWeb.DesignSystem.Pages.ProjectPage do
         >
           <.glyph name="hero-plus" /> Create repository
         </.action>
+        <.action
+          id="new-session-chat-link"
+          destination={"/projects/#{@project_id}/session-chat/new"}
+          variant={:secondary}
+        >
+          <.glyph name="hero-chat-bubble-left-right" /> New session chat
+        </.action>
       </:actions>
     </.page_heading>
     <.tab_navigation id="project-tabs" label="Project" active={@active} items={tabs(@project_id)} />

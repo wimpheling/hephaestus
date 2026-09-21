@@ -171,6 +171,7 @@ defmodule HephaestusWeb.RPC.UiClientTest do
                {:repository, @installation},
                "70000000-0000-4000-8000-000000000007",
                "reference-session-chat",
+               idempotency_key: "attempt-1:install_ui",
                stub_call: stub,
                channel_provider: channel_provider()
              )
@@ -181,6 +182,7 @@ defmodule HephaestusWeb.RPC.UiClientTest do
     assert request.release_id.value == "70000000-0000-4000-8000-000000000007"
     assert request.ui_key == "reference-session-chat"
     assert request.acknowledge_repository_git_access == false
+    assert request.context.idempotency_key == "attempt-1:install_ui"
     assert options[:metadata]["x-request-id"] =~ ~r/\A[0-9a-f-]{36}\z/i
   end
 
