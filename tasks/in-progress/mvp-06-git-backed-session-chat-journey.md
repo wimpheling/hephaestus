@@ -471,22 +471,42 @@ timeout cannot establish whether the agent itself succeeded, because that
 run's lifecycle evidence was lost during fixture teardown. The corrected
 scenario must retain bounded lifecycle diagnostics before teardown on failure.
 
-### Current composed acceptance diagnosis (2026-09-21)
+### Current composed acceptance status (2026-09-21)
 
-The subsequent instrumented real-libkrun run reached `cleaned_up` but ended
-with outcome `failed` and the typed failure `run runtime operation failed:
-runtime provenance query failed`. It recorded no exit code or signal. This is
-production lifecycle failure evidence and is separate from the earlier
-invalid `result.completed` assertion. The current defect is that runtime
-provenance is written during secret resolution after runtime preparation and
-is skipped for the secretless path; the run-* fix is in progress, so this run
-does not establish a successful chat turn.
+The earlier corrected real-libkrun run (`167d60b7...`) reached a real run,
+passed the application socket metadata/`vm.ready` and provenance-boundary
+checks, and failed before `run.succeeded` with exit 1. Its golden suite ended
+with 34 passed, 1 failed and 1 ignored. The runtime-provenance defect from a
+preceding attempt is fixed by `b4bd671`; this historical run does not
+establish a successful chat turn or assistant commit and remains separate from
+the invalid `result.completed` assertion.
 
-The trusted-shell setup audit also shows that `ReviseInstance` carries forward
-secret bindings but not model rules. The trusted-shell new-chat flow therefore
-still needs the model-rule setup correction through a proposed additive
-`requested_rule_id` RPC field; that correction is underway and has no
-acceptance evidence yet.
+The latest retained diagnostic (`/var/tmp/sessionchat-typed-diagnostic.log`)
+is run `b7db6b79-b0b6-4103-9bc4-6ccd0b6e4318`. It reached `vm.ready`, then
+cleaned up with outcome `failed`, exit 1, no guest exit signal, and
+`safe_agent_failures=["LocalGitError"]`. The run still did not reach
+`run.succeeded` or prove an assistant commit; the next investigation is the
+local-Git failure, not the already-fixed provenance boundary.
+
+The model-rule setup correction is implemented and pushed in `aff1233` through
+the additive `requested_rule_id` RPC field. Its command and RPC unit checks
+pass, but the full production composed turn and browser proof remain open.
+
+Commits `b4bd671`, `aff1233`, `7992e83` and `d1318e2` are reflected in the
+current evidence: socket metadata and the provenance boundary are fixed and
+the latest lint-only change removes UI/documentation warnings. A global guest
+`PATH` change was rejected and reverted; interpreter launch remains
+release-owned work in progress and is not claimed as validated. Strict
+workspace Clippy is still pending.
+
+The focused web rerun passed 7 tests with 0 failures (`/tmp/heph-web-focused-tests-rerun.log`);
+the latest pre-commit web run passed 315 tests with 0 failures
+(`/tmp/heph-web-precommit-latest.log`).
+The requested-rule command and RPC checks each passed one test, recorded in
+`/tmp/heph-requested-rule-command-test.log` and
+`/tmp/heph-requested-rule-rpc-test.log`.
+These focused checks do not establish full released-agent, browser, VM/model,
+or GCP journey acceptance.
 
 Commit `48cc1e7` bounds libkrun diagnostics and preserves interrupted cleanup.
 Commit `6ed9c2c` adds the focused real PostgreSQL runtime Git denial matrix.
@@ -500,6 +520,12 @@ are retained at `/tmp/forge-smart-http-runtime-matrix-migrations98-final4.log`
 and `/tmp/forge-smart-http-runtime-matrix-clippy-migrations98.log`. These are
 focused authority/denial checks, not full released-agent, browser, VM/model,
 or GCP journey acceptance.
+
+Content references currently carry validated metadata and are rendered as
+metadata; the text-chat path does not dereference blobs or verify their local
+presence/hash. Blob dereferencing is outside this bounded text-chat scope and
+adds no new MVP-06 acceptance requirement. The session transcript/context
+ownership boundary and the incomplete acceptance boxes remain unchanged.
 
 ### Interactive-path ownership and transition audit (2026-09-21)
 
@@ -516,7 +542,7 @@ repository readers can still read those context files.
 | Transition | Current classification and evidence |
 | --- | --- |
 | Durable human input → trigger/run | **Supported through the composed trigger.** The latest composed attempt reached a real run; its failure occurred during subsequent runtime preparation/provenance lookup, not at Git input acceptance. The release adapter's human append and expected-parent retry are implemented in [`examples/session-chat/ui/src/git-client.js`](../../examples/session-chat/ui/src/git-client.js#L162). |
-| Trigger/run → isolated runtime and model | **Partially supported, composition still failing.** The packaged agent reads the authorized checkout/control context and uses the brokered model path ([`examples/session-chat/agent.py`](../../examples/session-chat/agent.py#L180)); the latest run ended with `run runtime operation failed: runtime provenance query failed`, without establishing a response. |
+| Trigger/run → isolated runtime and model | **Partially supported, composition still failing.** The packaged agent reads the authorized checkout/control context and uses the brokered model path ([`examples/session-chat/agent.py`](../../examples/session-chat/agent.py#L180)); the latest diagnostic reached `vm.ready` but ended with `LocalGitError`, without establishing a response. |
 | Runtime → assistant Git response | **Release protocol supported; production acceptance missing.** Responses require `in_reply_to` and `correlation_id`, reject stale runs, and publish in one scoped batch ([`examples/session-chat/PROTOCOL.md`](../../examples/session-chat/PROTOCOL.md#ordering-responses-and-concurrent-writers), [`examples/session-chat/git_adapter.py`](../../examples/session-chat/git_adapter.py#L287)). No successful composed assistant commit has yet been correlated with runtime receive provenance. |
 | Assistant Git response → browser refresh/reconnect | **Adapter supported; end-to-end browser evidence missing.** The UI reads first-parent history and polls for the correlated response ([`examples/session-chat/ui/src/response-refresh.js`](../../examples/session-chat/ui/src/response-refresh.js#L47), [`examples/session-chat/ui/src/index.js`](../../examples/session-chat/ui/src/index.js#L42)). Local adapter/UI checks passed, but real browser HTTP and VM response acceptance remain open. |
 
