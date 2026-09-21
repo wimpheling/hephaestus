@@ -99,7 +99,7 @@ the review rather than assumed to be complete.
     retention/tombstone behavior, and safe repository fork semantics.
 
 - [ ] **3. Build the chat distribution flow**
-  - [ ] Provide explicitly declared and installation-acknowledged repository
+  - [x] Provide explicitly declared and installation-acknowledged repository
     Git access on the host-owned installed UI origin. Revalidate the live child
     session, exact repository target and human grants for each operation; never
     expose a platform credential to release content.
@@ -356,6 +356,25 @@ socket-pair broker test verifies wire framing and the sanitized response shape;
 it does not exercise the production broker, provider substitution or VM model
 path. Actual build/install/dispatch and deterministic model acceptance are the
 next composed scenario, not evidence supplied by these package tests.
+
+### Installed UI Git transport (2026-09-21)
+
+Commit `06d8aeb` serves the reserved same-origin Git routes using the live
+installed-UI child session and exact repository approval. Browser credentials
+terminate at that boundary; the shared Git service receives the verified human
+identity and performs its normal repository authorization. Successful discovery
+returns the verified human actor ID. Migration 0097 provides complete verified
+child context for durable UI audit records.
+
+The focused router/unit suite passed six tests, including missing-cookie and
+cross-origin denials. With fresh disposable PostgreSQL 17, the shared resource
+matrix passed two tests and the live UI Git route test passed with the actual
+PostgreSQL Git authorizer. Git CLI clone/fetch and push traversed the production
+router; durable receive actor/request ID and the matching full-context audit
+record were verified. The push fixture's maintainer grant is local to that
+test, preserving shared revocation-test authority. Focused Clippy and formatting
+passed. This proves the host route, not the release browser adapter or the
+complete browser/VM/model journey.
 
 The completed task records the released protocol version and source revision;
 browser and real-Git evidence for session creation, turns, restart, and fork;
