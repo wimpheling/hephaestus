@@ -92,10 +92,10 @@ the review rather than assumed to be complete.
     agent-owned model context and internal workflow state.
 
 - [ ] **2. Define the reference chat release's repository protocol**
-  - [ ] Document the reference release's session layout, message identity/order,
+  - [x] Document the reference release's session layout, message identity/order,
     user and agent records, correlation IDs, content references, branch/fork
     rules, concurrent-writer behavior, and compatibility/versioning behavior.
-  - [ ] Define release-owned initialization, participant policy,
+  - [x] Define release-owned initialization, participant policy,
     retention/tombstone behavior, and safe repository fork semantics.
 
 - [ ] **3. Build the chat distribution flow**
@@ -196,6 +196,21 @@ event and instance adapters under `crates/hephaestus-app/src/rpc/`.
 The MVP-01.2 record is in `done/` but retains unchecked implementation items;
 its location is not evidence that the missing guest/runtime transitions work.
 Keep the full journey and its negative cases open until exercised.
+
+### Reference protocol and local Git adapter (2026-09-21)
+
+Commit `64dc01a` adds `examples/session-chat/PROTOCOL.md`, validated canonical
+records, and a local ordinary-Git adapter. The release owns the manifest,
+participant, human/agent record namespaces, initialization, response
+correlation, context separation, fork and retention rules. Actor fields remain
+presentation claims, distinct from authenticated host receive attribution.
+
+`PYTHONDONTWRITEBYTECODE=1 python3 -m unittest discover -s examples/session-chat -p 'test_*.py' -v`
+passed 14 tests, including temporary bare repositories and competing clones
+for concurrent human writes, stale-agent rejection/fresh-run retry, and fork
+history without inherited remotes. This is local protocol/Git evidence only;
+it does not exercise production capabilities, the released VM agent, browser
+or model egress. Published release packaging and full acceptance remain open.
 
 The completed task records the released protocol version and source revision;
 browser and real-Git evidence for session creation, turns, restart, and fork;
