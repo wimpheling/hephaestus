@@ -2,6 +2,9 @@ defmodule HephaestusWebWeb.SessionChatNewStateTest do
   use ExUnit.Case, async: true
 
   alias HephaestusWebWeb.SessionChatNewState
+  alias Hephaestus.Common.V1.OpaqueId
+  alias Hephaestus.Secret.V1.{ImportSummary, SecretPolicy, SecretTarget}
+  alias HephaestusWeb.RPC.Projection
 
   @covered_statuses [
     :initial,
@@ -221,13 +224,21 @@ defmodule HephaestusWebWeb.SessionChatNewStateTest do
   end
 
   defp model_import do
-    %{
-      "id" => "import-1",
-      "policy" => %{
-        "delivery_modes" => ["brokered"],
-        "phases" => ["normal"],
-        "destinations" => ["api.model.example"]
+    encoded =
+      %ImportSummary{
+        target: %SecretTarget{target: {:project_id, %OpaqueId{value: "project-1"}}},
+        policy: %SecretPolicy{
+          delivery_modes: [2],
+          phases: [1],
+          destinations: ["api.model.example"]
+        }
       }
-    }
+      |> ImportSummary.encode()
+      |> IO.iodata_to_binary()
+
+    encoded
+    |> ImportSummary.decode()
+    |> Projection.to_value()
+    |> Map.put("id", "import-1")
   end
 end

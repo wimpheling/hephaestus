@@ -701,7 +701,7 @@ defmodule HephaestusWebWeb.SessionChatNewState do
   end
 
   defp compatible_model_import?(import) do
-    policy = import["policy"] || %{}
+    policy = import
 
     if "brokered" in (policy["delivery_modes"] || []) and
          "normal" in (policy["phases"] || []) and
