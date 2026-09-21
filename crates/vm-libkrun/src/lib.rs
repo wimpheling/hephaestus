@@ -11,6 +11,8 @@ mod framing;
 mod network;
 pub mod protocol;
 mod provider;
+#[allow(clippy::redundant_pub_crate)]
+pub(crate) mod service_transport;
 mod validation;
 mod worker;
 

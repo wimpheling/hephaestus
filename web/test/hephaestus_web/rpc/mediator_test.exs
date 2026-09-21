@@ -26,6 +26,7 @@ defmodule HephaestusWeb.RPC.MediatorTest do
              "iss" => "hephaestus-web-mediator",
              "aud" => @audience,
              "sub" => @user_id,
+             "sid" => "20000000-0000-4000-8000-000000000002",
              "jti" => "bf1e332e-d37d-4c11-8f4f-da2f68143de7",
              "iat" => 1_700_000_000,
              "nbf" => 1_700_000_000,
@@ -82,6 +83,14 @@ defmodule HephaestusWeb.RPC.MediatorTest do
     assert jwt.fields["email_verified"] == attributes.email_verified
   end
 
+  test "assertion rejects an identity without a durable session ID" do
+    identity = struct!(identity(), sid: nil)
+
+    assert_raise ArgumentError, ~r/session ID/, fn ->
+      Mediator.assertion(identity, @audience, secret: @secret)
+    end
+  end
+
   test "assertion rejects broad audiences and excessive lifetimes" do
     assert_raise ArgumentError, fn ->
       Mediator.assertion(identity(), "hephaestus.projects.v1.ProjectService", secret: @secret)
@@ -101,7 +110,9 @@ defmodule HephaestusWeb.RPC.MediatorTest do
       user_id: @user_id,
       issuer: "https://issuer.example",
       subject: "external-subject",
-      display_name: "Reviewer"
+      display_name: "Reviewer",
+      sid: "20000000-0000-4000-8000-000000000002",
+      session_expires_at: 4_000_000_000
     }
   end
 end

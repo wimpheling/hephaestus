@@ -8,6 +8,7 @@ use connectrpc::{
     Protocol,
     client::{CallOptions, ClientConfig, Http2Connection, SharedHttp2Connection},
 };
+use identity_domain::BrowserSessionSid;
 use jsonwebtoken::{Algorithm, EncodingKey, Header, encode};
 use rpc_proto::{
     connect::hephaestus::instance::v1::AgentInstanceServiceClient,
@@ -79,6 +80,7 @@ pub async fn create_draining_update(
     client: &UpdateRpcClient,
     instance: &UpdateAdmissionInstance,
     actor: uuid::Uuid,
+    sid: BrowserSessionSid,
 ) -> (uuid::Uuid, Option<uuid::Uuid>) {
     let now = OffsetDateTime::now_utc().unix_timestamp();
     let token = encode(
@@ -90,7 +92,8 @@ pub async fn create_draining_update(
             "iat": now,
             "nbf": now,
             "exp": now + 25,
-            "jti": uuid::Uuid::new_v4().to_string()
+            "jti": uuid::Uuid::new_v4().to_string(),
+            "sid": sid.to_protocol_string()
         }),
         &EncodingKey::from_secret(&hephaestus_app::rpc::mediator_signing_key(
             b"golden-internal-command-token-with-sufficient-entropy",
@@ -154,6 +157,7 @@ pub async fn create_draining_update(
 pub async fn recover_update(
     client: &UpdateRpcClient,
     actor: Uuid,
+    sid: BrowserSessionSid,
     update_id: Uuid,
     action: RecoveryAction,
     idempotency_key: &str,
@@ -172,7 +176,8 @@ pub async fn recover_update(
             "iat": now,
             "nbf": now,
             "exp": now + 25,
-            "jti": uuid::Uuid::new_v4().to_string()
+            "jti": uuid::Uuid::new_v4().to_string(),
+            "sid": sid.to_protocol_string()
         }),
         &EncodingKey::from_secret(&hephaestus_app::rpc::mediator_signing_key(
             b"golden-internal-command-token-with-sufficient-entropy",

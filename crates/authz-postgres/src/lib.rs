@@ -125,6 +125,31 @@ pub async fn begin_actor_transaction<'pool>(
     identity: &AuthenticatedIdentity,
 ) -> Result<Transaction<'pool, Postgres>, sqlx::Error> {
     let mut transaction = pool.begin().await?;
+    set_actor_context(&mut transaction, identity).await?;
+    Ok(transaction)
+}
+
+/// Begins a repeatable-read request transaction and sets transaction-local
+/// actor provenance before any application query runs.
+///
+/// # Errors
+///
+/// Returns a database error when the transaction or context cannot be created.
+pub async fn begin_repeatable_read_actor_transaction<'pool>(
+    pool: &'pool PgPool,
+    identity: &AuthenticatedIdentity,
+) -> Result<Transaction<'pool, Postgres>, sqlx::Error> {
+    let mut transaction = pool
+        .begin_with("BEGIN ISOLATION LEVEL REPEATABLE READ")
+        .await?;
+    set_actor_context(&mut transaction, identity).await?;
+    Ok(transaction)
+}
+
+async fn set_actor_context(
+    transaction: &mut Transaction<'_, Postgres>,
+    identity: &AuthenticatedIdentity,
+) -> Result<(), sqlx::Error> {
     sqlx::query(
         "SELECT set_config('hephaestus.actor_id', $1, true),
                 set_config('hephaestus.subject_type', 'user', true),
@@ -134,9 +159,9 @@ pub async fn begin_actor_transaction<'pool>(
     .bind(identity.user_id.to_string())
     .bind(identity.request_id.to_string())
     .bind(identity.idempotency_id.to_string())
-    .execute(&mut *transaction)
+    .execute(&mut **transaction)
     .await?;
-    Ok(transaction)
+    Ok(())
 }
 
 /// Begins a transaction scoped to an already-authenticated exact runtime.

@@ -20,7 +20,7 @@ defmodule HephaestusWeb.RPC.Projection do
   }
 
   alias Hephaestus.Instance.V1.{InstanceRevision, RefSelector, SecretImport, UpdateEvent}
-  alias Hephaestus.Release.V1.Release
+  alias Hephaestus.Release.V1.{Release, ReleaseUiDescriptor}
   alias Hephaestus.Run.V1.{Run, RunEvent}
   alias Hephaestus.Secret.V1.{GrantSummary, ImportSummary, SecretSummary, SecretTarget}
 
@@ -59,6 +59,12 @@ defmodule HephaestusWeb.RPC.Projection do
     GIT_OPERATION_
     GATEWAY_LIFECYCLE_
     GATEWAY_INGRESS_OUTCOME_
+    RELEASE_UI_SCOPE_
+    RELEASE_UI_ICON_
+    RELEASE_UI_PRESENTATION_
+    RELEASE_UI_CACHE_POLICY_
+    UI_INSTALLATION_LIFECYCLE_
+    UI_INSTALLATION_CONTENT_KIND_
   )
 
   @spec to_value(term()) :: term()
@@ -212,6 +218,13 @@ defmodule HephaestusWeb.RPC.Projection do
     })
   end
 
+  def to_value(%ReleaseUiDescriptor{content: content} = descriptor) do
+    descriptor
+    |> message_map()
+    |> Map.delete("content")
+    |> Map.merge(ui_content(content))
+  end
+
   def to_value(%Run{result: result, metrics: metrics} = run) do
     projected = message_map(run)
     result_map = message_map(result)
@@ -288,6 +301,11 @@ defmodule HephaestusWeb.RPC.Projection do
   defp event_payload({:diagnostic, diagnostic}), do: to_value(diagnostic)
   defp event_payload({:operation_state, state}), do: %{"state" => to_value(state)}
   defp event_payload(nil), do: %{}
+
+  defp ui_content({kind, content}) when kind in [:static_content, :managed_service],
+    do: %{Atom.to_string(kind) => to_value(content)}
+
+  defp ui_content(nil), do: %{}
 
   defp target_kind(:project_id), do: "project"
   defp target_kind(:repository_id), do: "repository"

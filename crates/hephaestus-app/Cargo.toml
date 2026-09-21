@@ -18,6 +18,7 @@ test-fixtures = []
 
 [dependencies]
 agent-config = { path = "../agent-config" }
+base64.workspace = true
 builder-catalog-application = { path = "../builder-catalog-application" }
 builder-catalog-domain = { path = "../builder-catalog-domain" }
 builder-catalog-postgres = { path = "../builder-catalog-postgres" }
@@ -41,6 +42,7 @@ forge-service = { path = "../forge-service" }
 forge-postgres = { path = "../forge-postgres" }
 forge-domain = { path = "../forge-domain" }
 gateway-edge = { path = "../gateway-edge" }
+gateway-domain = { path = "../gateway-domain" }
 gateway-postgres = { path = "../gateway-postgres" }
 futures-util.workspace = true
 git-http = { path = "../git-http" }
@@ -127,6 +129,8 @@ rcgen = "0.13.2"
 rustls = "0.23"
 tokio-rustls = "0.26"
 reqwest.workspace = true
+url = "2.5.8"
+tower = { version = "0.5", features = ["util"] }
 
 [[bin]]
 name = "hephaestusd"

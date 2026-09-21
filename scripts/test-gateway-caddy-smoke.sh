@@ -65,7 +65,8 @@ done
 HEPHAESTUS_CADDY_TEST_ADMIN_URL="${admin_url}" \
 HEPHAESTUS_CADDY_TEST_PUBLIC_URL="${public_url}" \
 HEPHAESTUS_CADDY_TEST_LISTEN="${public_listen}" \
+HEPHAESTUS_CADDY_TEST_UI=1 \
 cargo test --manifest-path "${repo_root}/Cargo.toml" \
-    --package gateway-edge --test caddy_ingress -- --nocapture
+    --package gateway-edge --test caddy_ingress -- --nocapture --test-threads=1
 
 printf 'shared Caddy gateway ingress smoke test passed\n'

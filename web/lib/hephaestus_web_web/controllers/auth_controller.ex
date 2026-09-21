@@ -41,19 +41,60 @@ defmodule HephaestusWebWeb.AuthController do
 
     with {:ok, %{user: claims}} <- OIDC.callback(config, params),
          issuer <- Keyword.fetch!(config, :base_url),
-         {:ok, identity} <- IdentityBootstrap.resolve(issuer, claims) do
+         sid <- HephaestusWeb.RPC.UUID.generate(),
+         conn <-
+           complete_verified_callback(
+             conn,
+             issuer,
+             claims,
+             sid,
+             &IdentityBootstrap.resolve/2,
+             &IdentityBootstrap.create_session/3
+           ) do
       conn
-      |> delete_session(:oidc_session_params)
-      |> put_session(:identity, Identity.to_session(identity))
-      |> configure_session(renew: true)
-      |> redirect(to: ~p"/organizations")
     else
-      {:error, _reason} ->
-        conn
-        |> clear_session()
-        |> put_flash(:error, "Sign-in failed. Start the sign-in flow again.")
-        |> redirect(to: ~p"/")
+      {:error, _reason} -> failure_redirect(conn)
     end
+  end
+
+  @doc false
+  @spec complete_verified_callback(
+          Plug.Conn.t(),
+          String.t(),
+          map(),
+          String.t(),
+          (String.t(), map() -> {:ok, Identity.t()} | {:error, term()}),
+          (String.t(), map(), String.t() -> {:ok, map()} | {:error, term()})
+        ) :: Plug.Conn.t()
+  def complete_verified_callback(conn, issuer, claims, sid, resolve, create)
+      when is_binary(issuer) and is_map(claims) and is_binary(sid) and
+             is_function(resolve, 2) and is_function(create, 3) do
+    case establish_identity(issuer, claims, sid, resolve, create) do
+      {:ok, identity} ->
+        conn
+        |> delete_session(:oidc_session_params)
+        |> put_session(:identity, Identity.to_session(identity))
+        |> configure_session(renew: true)
+        |> redirect(to: ~p"/organizations")
+
+      {:error, _reason} ->
+        failure_redirect(conn)
+    end
+  end
+
+  defp establish_identity(issuer, claims, sid, resolve, create) do
+    with {:ok, identity} <- resolve.(issuer, claims),
+         {:ok, session} <- create.(issuer, claims, sid),
+         {:ok, identity} <- Identity.attach_session(identity, sid, session) do
+      {:ok, identity}
+    end
+  end
+
+  defp failure_redirect(conn) do
+    conn
+    |> clear_session()
+    |> put_flash(:error, "Sign-in failed. Start the sign-in flow again.")
+    |> redirect(to: ~p"/")
   end
 
   defp reject_expired_callback(conn) do
@@ -71,6 +112,11 @@ defmodule HephaestusWebWeb.AuthController do
   end
 
   def logout(conn, _params) do
+    case Map.get(conn.assigns, :current_identity) do
+      %Identity{} = identity -> _ = IdentityBootstrap.revoke_session(identity)
+      _missing_or_invalid_identity -> :ok
+    end
+
     conn
     |> clear_session()
     |> configure_session(renew: true)

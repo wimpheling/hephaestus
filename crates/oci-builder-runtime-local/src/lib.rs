@@ -507,6 +507,7 @@ fn builder_vm_spec(
             working_dir: None,
         },
         runtime_authority: None,
+        private_http_service: None,
         labels: BTreeMap::from([
             (
                 String::from("hephaestus.kind"),
@@ -579,6 +580,7 @@ fn verifier_vm_spec(
             working_dir: None,
         },
         runtime_authority: None,
+        private_http_service: None,
         labels: operation_labels("repository_oci_verifier", request.job_id),
     }
 }

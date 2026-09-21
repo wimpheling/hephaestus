@@ -1,0 +1,17 @@
+SELECT session_id,
+       parent_session_id,
+       actor_id,
+       organization_id,
+       installation_id,
+       generation_id,
+       session_route,
+       expires_at,
+       canonical_path,
+       matched_kind,
+       artifact_id,
+       storage_key,
+       content_hash,
+       size_bytes,
+       media_type,
+       cache_policy
+FROM public.resolve_ui_browser_resource($1, $2, $3, $4)

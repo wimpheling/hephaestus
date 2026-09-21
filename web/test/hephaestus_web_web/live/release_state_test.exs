@@ -43,6 +43,31 @@ defmodule HephaestusWebWeb.ReleaseStateTest do
     assert presentation.state == :ready
     assert presentation.release["id"] == "release-1"
     assert presentation.draft_version == %{"version" => "v1.0.0"}
+    assert presentation.ui_descriptors == []
+  end
+
+  test "preserves declared UI metadata through load and mutation refreshes" do
+    ui_descriptors = [ui_descriptor()]
+    state = ReleaseState.new("release-1")
+    {loading, [{:load, generation, "release-1"}]} = ReleaseState.reduce(state, :load)
+
+    {ready, []} =
+      ReleaseState.reduce(loading, {
+        :loaded,
+        generation,
+        {:ok, Map.put(release(), "ui_descriptors", ui_descriptors)}
+      })
+
+    assert ReleaseState.present(ready).ui_descriptors == ui_descriptors
+
+    {refreshed, []} =
+      ReleaseState.reduce(ready, {
+        :mutation,
+        generation,
+        {:ok, %{"release" => Map.put(release(), "ui_descriptors", ui_descriptors)}}
+      })
+
+    assert ReleaseState.present(refreshed).ui_descriptors == ui_descriptors
   end
 
   test "presents reconnecting and revoked access without domain work" do
@@ -93,7 +118,19 @@ defmodule HephaestusWebWeb.ReleaseStateTest do
       "project_id" => "project-1",
       "source_ref" => "refs/heads/main",
       "artifacts" => [],
-      "agents" => []
+      "agents" => [],
+      "ui_descriptors" => []
+    }
+  end
+
+  defp ui_descriptor do
+    %{
+      "key" => "dashboard",
+      "label" => "Dashboard",
+      "scope" => "project",
+      "presentation" => "iframe",
+      "static_content" => %{"files" => []},
+      "apis" => []
     }
   end
 end

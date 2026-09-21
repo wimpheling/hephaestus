@@ -15,6 +15,14 @@ defmodule HephaestusWeb.RPC.ProjectionTest do
   alias Hephaestus.Run.V1.{ResultProposal, Run, RunMetrics, RunResult}
   alias Hephaestus.Gateway.V1.{GatewayIngressOutcome, GatewayLifecycle, GatewaySummary}
 
+  alias Hephaestus.Release.V1.{
+    ReleaseUiApiBinding,
+    ReleaseUiDescriptor,
+    ReleaseUiManagedService,
+    ReleaseUiPresentation,
+    ReleaseUiScope
+  }
+
   alias Hephaestus.Pat.V1.{
     CreatePersonalAccessTokenResponse,
     PersonalAccessTokenValue
@@ -76,6 +84,25 @@ defmodule HephaestusWeb.RPC.ProjectionTest do
 
     assert "timed_out" =
              Projection.to_value(GatewayIngressOutcome.GATEWAY_INGRESS_OUTCOME_TIMED_OUT)
+  end
+
+  test "projects release UI enums and oneof metadata into page values" do
+    descriptor = %ReleaseUiDescriptor{
+      key: "dashboard",
+      scope: ReleaseUiScope.RELEASE_UI_SCOPE_PROJECT,
+      label: "Dashboard",
+      presentation: ReleaseUiPresentation.RELEASE_UI_PRESENTATION_IFRAME,
+      content: {:managed_service, %ReleaseUiManagedService{gateway_name: "dashboard"}},
+      apis: [%ReleaseUiApiBinding{key: "summary", method: "GET", route: "/summary"}]
+    }
+
+    assert %{
+             "key" => "dashboard",
+             "scope" => "project",
+             "presentation" => "iframe",
+             "managed_service" => %{"gateway_name" => "dashboard"},
+             "apis" => [%{"key" => "summary", "method" => "GET", "route" => "/summary"}]
+           } = Projection.to_value(descriptor)
   end
 
   test "projects runtime metric labels as a bounded string map" do

@@ -2,6 +2,7 @@ syntax = "proto3";
 
 package hephaestus.identity.v1;
 
+import "google/protobuf/timestamp.proto";
 import "hephaestus/common/v1/common.proto";
 import "hephaestus/options/v1/options.proto";
 
@@ -14,6 +15,28 @@ service IdentityService {
     };
     option (hephaestus.options.v1.operation_kind) = OPERATION_KIND_MUTATION;
     option (hephaestus.options.v1.max_request_bytes) = 16384;
+    option (hephaestus.options.v1.max_response_bytes) = 4096;
+  }
+
+  rpc CreateBrowserSession(CreateBrowserSessionRequest) returns (CreateBrowserSessionResponse) {
+    option (hephaestus.options.v1.authorization) = {
+      permission: "identity.session.create"
+      audience: "/hephaestus.identity.v1.IdentityService/CreateBrowserSession"
+      actor_source: ACTOR_SOURCE_VERIFIED_OIDC_BOOTSTRAP_ASSERTION
+    };
+    option (hephaestus.options.v1.operation_kind) = OPERATION_KIND_MUTATION;
+    option (hephaestus.options.v1.max_request_bytes) = 16384;
+    option (hephaestus.options.v1.max_response_bytes) = 4096;
+  }
+
+  rpc RevokeBrowserSession(RevokeBrowserSessionRequest) returns (RevokeBrowserSessionResponse) {
+    option (hephaestus.options.v1.authorization) = {
+      permission: "identity.session.revoke"
+      audience: "/hephaestus.identity.v1.IdentityService/RevokeBrowserSession"
+      actor_source: ACTOR_SOURCE_MEDIATOR_JWT_METADATA
+    };
+    option (hephaestus.options.v1.operation_kind) = OPERATION_KIND_MUTATION;
+    option (hephaestus.options.v1.max_request_bytes) = 4096;
     option (hephaestus.options.v1.max_response_bytes) = 4096;
   }
 }
@@ -31,4 +54,26 @@ message ResolveIdentityResponse {
   hephaestus.common.v1.OpaqueId user_id = 1;
   string display_name = 2;
   hephaestus.common.v1.MutationReceipt receipt = 3;
+}
+
+message CreateBrowserSessionRequest {
+  hephaestus.common.v1.RequestContext context = 1;
+  string issuer = 2;
+  string subject = 3;
+  bytes sid = 4 [(hephaestus.options.v1.sensitive) = true];
+}
+
+message CreateBrowserSessionResponse {
+  hephaestus.common.v1.OpaqueId user_id = 1;
+  hephaestus.common.v1.OpaqueId session_id = 2;
+  google.protobuf.Timestamp expires_at = 3;
+  hephaestus.common.v1.MutationReceipt receipt = 4;
+}
+
+message RevokeBrowserSessionRequest {
+  hephaestus.common.v1.RequestContext context = 1;
+}
+
+message RevokeBrowserSessionResponse {
+  hephaestus.common.v1.MutationReceipt receipt = 1;
 }

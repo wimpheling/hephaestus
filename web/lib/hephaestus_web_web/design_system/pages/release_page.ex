@@ -11,6 +11,7 @@ defmodule HephaestusWebWeb.DesignSystem.Pages.ReleasePage do
   attr :release, :map, default: nil
   attr :artifacts, :any, required: true
   attr :agents, :any, required: true
+  attr :ui_descriptors, :list, default: []
   attr :organization_index_destination, :string, default: nil
   attr :organization_destination, :string, default: nil
   attr :project_destination, :string, default: nil
@@ -126,6 +127,38 @@ defmodule HephaestusWebWeb.DesignSystem.Pages.ReleasePage do
       </.frame>
 
       <.page_heading
+        eyebrow="Declared release interfaces"
+        title="Release interfaces"
+        description="User interfaces provided by this release."
+        level="h2"
+      />
+      <.resource_list id="release-ui-descriptors" layout={:projects}>
+        <:header>
+          <.text as="span" variant={:sr_only}>Declared release UI surfaces</.text>
+        </:header>
+        <:empty :if={@ui_descriptors == []}>No UI surfaces are declared.</:empty>
+        <.frame
+          :for={{descriptor, index} <- Enum.with_index(@ui_descriptors)}
+          as="article"
+          id={"release-ui-descriptor-#{index}"}
+          variant={:table_row}
+        >
+          <.frame variant={:resource_primary}>
+            <.glyph name="hero-computer-desktop-micro" />
+            <.frame variant={:resource_detail}>
+              <.text as="strong">{descriptor["label"]}</.text>
+              <.text as="small" variant={:muted}>{descriptor["key"]}</.text>
+            </.frame>
+          </.frame>
+          <.text as="span">
+            {ui_scope_label(descriptor["scope"])} · {ui_presentation_label(descriptor["presentation"])}
+          </.text>
+          <.text as="span">{ui_content_kind(descriptor)}</.text>
+          <.text as="span">{ui_api_count(descriptor["apis"])}</.text>
+        </.frame>
+      </.resource_list>
+
+      <.page_heading
         eyebrow="Immutable release contents"
         title="Imported runtime files"
         description="Files copied from the sealed build output and stored immutably."
@@ -207,4 +240,24 @@ defmodule HephaestusWebWeb.DesignSystem.Pages.ReleasePage do
   defp state_tone(value) when value in ["published", "drafted", "succeeded"], do: "success"
   defp state_tone(value) when value in ["revoked", "failed"], do: "danger"
   defp state_tone(_value), do: "neutral"
+
+  defp ui_content_kind(%{"static_content" => %{}}), do: "static files"
+  defp ui_content_kind(%{"managed_service" => %{}}), do: "managed service"
+  defp ui_content_kind(_descriptor), do: "unavailable"
+
+  defp ui_scope_label("project"), do: "Project"
+  defp ui_scope_label("repository"), do: "Repository"
+  defp ui_scope_label("global"), do: "Global"
+  defp ui_scope_label(value), do: value
+
+  defp ui_presentation_label("iframe"), do: "Embedded"
+  defp ui_presentation_label("full_page"), do: "Full page"
+  defp ui_presentation_label(value), do: value
+
+  defp ui_api_count(apis) do
+    case length(apis || []) do
+      1 -> "1 declared API"
+      count -> "#{count} declared APIs"
+    end
+  end
 end

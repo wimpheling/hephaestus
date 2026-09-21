@@ -24,10 +24,14 @@ connectrpc = { version = "=0.8.1", features = ["server"] }
 connectrpc-reflection = "=0.8.0"
 futures-util = "0.3"
 gix = { version = "0.72", default-features = false, features = ["revision"] }
+http-body-util = "0.1"
 http = "1"
 hmac = "0.12"
+hyper = { version = "1.11", default-features = false, features = ["client", "http1"] }
+hyper-util = { version = "0.1", default-features = false, features = ["tokio"] }
 jsonwebtoken = "9"
 proptest = "1"
+proc-macro2 = { version = "1", features = ["span-locations"] }
 # HTTPS broker transports must have a certificate-verifying TLS backend.  Keep
 # the platform's native trust-store integration explicit instead of relying on
 # reqwest defaults.

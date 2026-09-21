@@ -467,6 +467,57 @@ fn validate_spec(spec: &VmSpec) -> Result<(), VmError> {
     {
         return invalid_spec("runtime_authority.generation", "must be greater than zero");
     }
+    if let Some(service) = &spec.private_http_service {
+        if !(1024..=u16::MAX).contains(&service.loopback_port) {
+            return invalid_spec(
+                "private_http_service.loopback_port",
+                "must be between 1024 and 65535",
+            );
+        }
+        if !(1..=64).contains(&service.max_connections) {
+            return invalid_spec(
+                "private_http_service.max_connections",
+                "must be between 1 and 64",
+            );
+        }
+        let connect_timeout_ms =
+            u64::try_from(service.connect_timeout.as_millis()).map_err(|_| {
+                VmError::InvalidSpec {
+                    field: "private_http_service.connect_timeout".to_owned(),
+                    reason: "must be representable as milliseconds".to_owned(),
+                }
+            })?;
+        if service.connect_timeout != std::time::Duration::from_millis(connect_timeout_ms)
+            || !(1..=30_000).contains(&connect_timeout_ms)
+        {
+            return invalid_spec(
+                "private_http_service.connect_timeout",
+                "must be a whole duration between 1ms and 30s",
+            );
+        }
+        if spec.runtime_authority.is_some() {
+            return invalid_spec(
+                "runtime_authority",
+                "service mode cannot receive runtime authority",
+            );
+        }
+        if spec
+            .labels
+            .get("hephaestus.gateway.handler-contract")
+            .is_some_and(|value| value == "http.v1")
+        {
+            return invalid_spec(
+                "private_http_service",
+                "service mode cannot combine with the stateless gateway handler",
+            );
+        }
+        if !matches!(spec.network, NetworkMode::Disabled) {
+            return invalid_spec(
+                "network",
+                "initial service mode requires disabled guest networking",
+            );
+        }
+    }
 
     match &spec.root {
         RootFilesystem::Directory { host_path } | RootFilesystem::Disk { host_path, .. } => {
@@ -598,8 +649,8 @@ mod tests {
     use vm_conformance::ProviderHarness;
     use vm_trait::{
         DiskFormat, GuestCommand, NetworkMode, PortForward, PortProtocol, PrivateHttpRequest,
-        PrivateHttpResponse, RootFilesystem, VmDisk, VmError, VmId, VmMount, VmProvider,
-        VmResources, VmSpec,
+        PrivateHttpResponse, PrivateHttpServiceSpec, RootFilesystem, VmDisk, VmError, VmId,
+        VmMount, VmProvider, VmResources, VmSpec,
     };
 
     struct FakeHarness {
@@ -681,6 +732,7 @@ mod tests {
                 working_dir: Some(PathBuf::from("/workspace")),
             },
             runtime_authority: None,
+            private_http_service: None,
             labels: BTreeMap::new(),
         }
     }
@@ -694,6 +746,72 @@ mod tests {
         assert!(matches!(
             provider.provision(invalid).await,
             Err(VmError::InvalidSpec { field, .. }) if field == "command.working_dir"
+        ));
+    }
+
+    #[tokio::test]
+    async fn private_http_service_requires_disabled_networking_and_bounded_values() {
+        let provider = FakeProvider::new();
+        for (name, service, field) in [
+            (
+                "port",
+                PrivateHttpServiceSpec {
+                    loopback_port: 80,
+                    max_connections: 1,
+                    connect_timeout: std::time::Duration::from_secs(1),
+                },
+                "private_http_service.loopback_port",
+            ),
+            (
+                "connections",
+                PrivateHttpServiceSpec {
+                    loopback_port: 8080,
+                    max_connections: 65,
+                    connect_timeout: std::time::Duration::from_secs(1),
+                },
+                "private_http_service.max_connections",
+            ),
+            (
+                "timeout",
+                PrivateHttpServiceSpec {
+                    loopback_port: 8080,
+                    max_connections: 1,
+                    connect_timeout: std::time::Duration::from_millis(30_001),
+                },
+                "private_http_service.connect_timeout",
+            ),
+            (
+                "precision",
+                PrivateHttpServiceSpec {
+                    loopback_port: 8080,
+                    max_connections: 1,
+                    connect_timeout: std::time::Duration::from_nanos(1),
+                },
+                "private_http_service.connect_timeout",
+            ),
+        ] {
+            let mut invalid = spec(&format!("private-http-invalid-{name}"));
+            invalid.private_http_service = Some(service);
+            assert!(matches!(
+                provider.provision(invalid).await,
+                Err(VmError::InvalidSpec { field: actual, .. }) if actual == field
+            ));
+        }
+
+        let mut invalid_network = spec("private-http-network");
+        invalid_network.network = NetworkMode::Disabled;
+        invalid_network.private_http_service = Some(PrivateHttpServiceSpec {
+            loopback_port: 8080,
+            max_connections: 4,
+            connect_timeout: std::time::Duration::from_secs(1),
+        });
+        invalid_network.network = NetworkMode::UserMode {
+            ingress: Vec::new(),
+        };
+
+        assert!(matches!(
+            provider.provision(invalid_network).await,
+            Err(VmError::InvalidSpec { field, .. }) if field == "network"
         ));
     }
 

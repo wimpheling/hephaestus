@@ -13,7 +13,7 @@ use run_orchestrator::{
     RunRuntimeCatalog, RunRuntimeCatalogError, RunRuntimeError, RunRuntimeInput, RunRuntimeManager,
 };
 use runtime_types::RunId;
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::{
     fs::{self, OpenOptions},
@@ -31,6 +31,11 @@ const RELEASE_TAG_PREFIX: &str = "rel";
 const CONTEXT_TAG_PREFIX: &str = "ctx";
 const PREVIOUS_RELEASE_TAG_PREFIX: &str = "old";
 const GATEWAY_RELEASE_TAG_PREFIX: &str = "gwr";
+const GATEWAY_SERVICE_NAMESPACE: &str = "gateway-services";
+const GATEWAY_SERVICE_STAGING_PREFIX: &str = ".prepare-";
+const GATEWAY_SERVICE_METADATA: &str = "identity.json";
+const GATEWAY_SERVICE_SCHEMA_VERSION: u8 = 1;
+const MAX_GATEWAY_SERVICE_METADATA_BYTES: u64 = 1_024;
 
 /// Filesystem roots used for per-run runtime materialization.
 #[derive(Debug, Clone)]
@@ -58,6 +63,70 @@ pub struct LocalRunRuntimeManager {
 pub struct LocalGatewayReleaseRuntime {
     runtime_root: PathBuf,
     release_artifact_root: PathBuf,
+}
+
+/// Immutable identity of one host-owned persistent gateway service instance.
+///
+/// A new launch attempt receives a new `instance_id`; the gateway and revision
+/// IDs remain sealed in the materialized tree for recovery and cleanup.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct GatewayServiceIdentity {
+    /// Unique host-owned launch-attempt identity.
+    pub instance_id: Uuid,
+    /// Durable gateway aggregate identity.
+    pub gateway_id: Uuid,
+    /// Immutable gateway revision selected for this instance.
+    pub revision_id: Uuid,
+}
+
+/// One validated persistent-service tree discovered during recovery.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct GatewayServiceInstanceRecord {
+    /// Sealed identity read from the tree metadata.
+    pub identity: GatewayServiceIdentity,
+    /// Host path below the dedicated service namespace.
+    pub path: PathBuf,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+struct GatewayServiceIdentityFile {
+    schema_version: u8,
+    instance_id: Uuid,
+    gateway_id: Uuid,
+    revision_id: Uuid,
+}
+
+impl From<GatewayServiceIdentity> for GatewayServiceIdentityFile {
+    fn from(identity: GatewayServiceIdentity) -> Self {
+        Self {
+            schema_version: GATEWAY_SERVICE_SCHEMA_VERSION,
+            instance_id: identity.instance_id,
+            gateway_id: identity.gateway_id,
+            revision_id: identity.revision_id,
+        }
+    }
+}
+
+impl TryFrom<GatewayServiceIdentityFile> for GatewayServiceIdentity {
+    type Error = RunRuntimeError;
+
+    fn try_from(metadata: GatewayServiceIdentityFile) -> Result<Self, Self::Error> {
+        if metadata.schema_version != GATEWAY_SERVICE_SCHEMA_VERSION
+            || metadata.instance_id.is_nil()
+            || metadata.gateway_id.is_nil()
+            || metadata.revision_id.is_nil()
+        {
+            return Err(runtime_error(
+                "gateway service identity metadata is invalid",
+            ));
+        }
+        Ok(Self {
+            instance_id: metadata.instance_id,
+            gateway_id: metadata.gateway_id,
+            revision_id: metadata.revision_id,
+        })
+    }
 }
 
 impl LocalRunRuntimeManager {
@@ -233,6 +302,262 @@ impl LocalGatewayReleaseRuntime {
         self.runtime_root
             .join("gateways")
             .join(invocation_id.to_string())
+    }
+
+    fn service_namespace(&self) -> PathBuf {
+        self.runtime_root.join(GATEWAY_SERVICE_NAMESPACE)
+    }
+
+    fn service_path(&self, instance_id: Uuid) -> PathBuf {
+        self.service_namespace().join(instance_id.to_string())
+    }
+
+    fn ensure_service_namespace(&self) -> Result<PathBuf, RunRuntimeError> {
+        ensure_existing_directory(&self.runtime_root)?;
+        let namespace = self.service_namespace();
+        match fs::symlink_metadata(&namespace) {
+            Ok(metadata)
+                if metadata.file_type().is_dir()
+                    && !metadata.file_type().is_symlink()
+                    && metadata.permissions().mode() & 0o022 == 0 =>
+            {
+                Ok(namespace)
+            }
+            Ok(_) => Err(runtime_error("gateway service namespace is unsafe")),
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                create_directory(&namespace, 0o700)?;
+                Ok(namespace)
+            }
+            Err(error) => Err(filesystem(error)),
+        }
+    }
+
+    fn existing_service_namespace(&self) -> Result<Option<PathBuf>, RunRuntimeError> {
+        ensure_existing_directory(&self.runtime_root)?;
+        let namespace = self.service_namespace();
+        match fs::symlink_metadata(&namespace) {
+            Ok(metadata)
+                if metadata.file_type().is_dir()
+                    && !metadata.file_type().is_symlink()
+                    && metadata.permissions().mode() & 0o022 == 0 =>
+            {
+                Ok(Some(namespace))
+            }
+            Ok(_) => Err(runtime_error("gateway service namespace is unsafe")),
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(None),
+            Err(error) => Err(filesystem(error)),
+        }
+    }
+
+    fn validate_service_identity(identity: GatewayServiceIdentity) -> Result<(), RunRuntimeError> {
+        if identity.instance_id.is_nil()
+            || identity.gateway_id.is_nil()
+            || identity.revision_id.is_nil()
+        {
+            return Err(runtime_error("gateway service identity is invalid"));
+        }
+        Ok(())
+    }
+
+    /// Materializes one persistent service instance in the dedicated
+    /// `gateway-services` namespace. Existing instance paths fail closed;
+    /// retries must use a fresh instance identity after explicit cleanup.
+    ///
+    /// The identity metadata is host-only and is not included in the guest
+    /// mounts. Release and control trees are sealed before activation.
+    ///
+    /// # Errors
+    ///
+    /// Returns a redacted runtime error when the identity, artifact set,
+    /// namespace, staging tree, or sealed materialization is invalid.
+    pub fn prepare_service(
+        &self,
+        identity: GatewayServiceIdentity,
+        artifacts: &[RunRuntimeArtifact],
+        parameters: &serde_json::Value,
+    ) -> Result<Vec<VmMount>, RunRuntimeError> {
+        Self::validate_service_identity(identity)?;
+        if artifacts.is_empty() || artifacts.len() > MAX_RUNTIME_ARTIFACTS {
+            return Err(runtime_error("release artifact count is invalid"));
+        }
+        let parameter_bytes = serde_json::to_vec(parameters)
+            .map_err(|_| runtime_error("gateway parameters are invalid"))?;
+        if !parameters.is_object() || parameter_bytes.len() > 65_536 {
+            return Err(runtime_error("gateway parameters exceed the object bound"));
+        }
+        let namespace = self.ensure_service_namespace()?;
+        let active = namespace.join(identity.instance_id.to_string());
+        match fs::symlink_metadata(&active) {
+            Ok(_) => return Err(runtime_error("gateway service instance already exists")),
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+            Err(error) => return Err(filesystem(error)),
+        }
+        let staging = namespace.join(format!(
+            "{GATEWAY_SERVICE_STAGING_PREFIX}{}",
+            identity.instance_id
+        ));
+        match fs::symlink_metadata(&staging) {
+            Ok(_) => return Err(runtime_error("gateway service staging already exists")),
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+            Err(error) => return Err(filesystem(error)),
+        }
+        create_directory(&staging, 0o700)?;
+        let release = staging.join("release");
+        let control = staging.join("control");
+        let result = (|| {
+            create_directory(&release, 0o700)?;
+            let mut total = 0_u64;
+            for artifact in artifacts {
+                total = total
+                    .checked_add(artifact.size_bytes)
+                    .ok_or_else(|| runtime_error("release artifact size is invalid"))?;
+                if total > MAX_RUNTIME_BYTES {
+                    return Err(runtime_error("release artifact size is invalid"));
+                }
+                materialize_artifact(&self.release_artifact_root, &release, artifact)?;
+            }
+            make_tree_read_only(&release)?;
+            create_directory(&control, 0o700)?;
+            write_bytes(&control.join("parameters.json"), &parameter_bytes)?;
+            make_tree_read_only(&control)?;
+            let metadata: GatewayServiceIdentityFile = identity.into();
+            write_json(&staging.join(GATEWAY_SERVICE_METADATA), &metadata)?;
+            make_tree_read_only(&staging)?;
+            fs::rename(&staging, &active).map_err(filesystem)?;
+            fs::set_permissions(&active, fs::Permissions::from_mode(0o500)).map_err(filesystem)?;
+            Ok::<_, RunRuntimeError>(vec![
+                VmMount {
+                    tag: gateway_service_mount_tag("gws", identity.instance_id),
+                    host_path: active.join("release"),
+                    guest_path: PathBuf::from("/release"),
+                    read_only: true,
+                },
+                VmMount {
+                    tag: gateway_service_mount_tag("gwt", identity.instance_id),
+                    host_path: active.join("control"),
+                    guest_path: PathBuf::from("/run/hephaestus"),
+                    read_only: true,
+                },
+            ])
+        })();
+        if result.is_err()
+            && let Ok(metadata) = fs::symlink_metadata(&staging)
+            && metadata.file_type().is_dir()
+            && !metadata.file_type().is_symlink()
+            && make_tree_removable(&staging).is_ok()
+        {
+            let _cleanup = fs::remove_dir_all(&staging);
+        }
+        result
+    }
+
+    /// Enumerates validated active service trees in the dedicated namespace.
+    /// Staging trees are handled separately by [`Self::cleanup_service_staging`].
+    ///
+    /// # Errors
+    ///
+    /// Returns a redacted runtime error when the namespace, identity metadata,
+    /// or an active service tree is unsafe or malformed.
+    pub fn enumerate_service_instances(
+        &self,
+    ) -> Result<Vec<GatewayServiceInstanceRecord>, RunRuntimeError> {
+        let Some(namespace) = self.existing_service_namespace()? else {
+            return Ok(Vec::new());
+        };
+        let entries = fs::read_dir(&namespace).map_err(filesystem)?;
+        let mut records = Vec::new();
+        for entry in entries {
+            let entry = entry.map_err(filesystem)?;
+            let name = entry
+                .file_name()
+                .into_string()
+                .map_err(|_| runtime_error("gateway service entry is invalid"))?;
+            if name.starts_with(GATEWAY_SERVICE_STAGING_PREFIX) {
+                continue;
+            }
+            let instance_id = Uuid::parse_str(&name)
+                .map_err(|_| runtime_error("gateway service entry is invalid"))?;
+            let path = entry.path();
+            let metadata = fs::symlink_metadata(&path).map_err(filesystem)?;
+            if !metadata.file_type().is_dir()
+                || metadata.file_type().is_symlink()
+                || metadata.permissions().mode() & 0o222 != 0
+            {
+                return Err(runtime_error("gateway service tree is unsafe"));
+            }
+            let identity = read_service_identity(&path.join(GATEWAY_SERVICE_METADATA))?;
+            if identity.instance_id != instance_id {
+                return Err(runtime_error(
+                    "gateway service identity does not match path",
+                ));
+            }
+            validate_sealed_service_subtree(&path.join("release"))?;
+            validate_sealed_service_subtree(&path.join("control"))?;
+            records.push(GatewayServiceInstanceRecord { identity, path });
+        }
+        records.sort_by_key(|record| record.identity.instance_id);
+        Ok(records)
+    }
+
+    /// Destroys one service tree only after its exact sealed identity matches.
+    /// Callers must confirm provider ownership is quiescent before invoking it.
+    ///
+    /// # Errors
+    ///
+    /// Returns a redacted runtime error when the identity does not match or
+    /// the selected tree is unsafe to remove.
+    pub fn destroy_service(&self, identity: GatewayServiceIdentity) -> Result<(), RunRuntimeError> {
+        Self::validate_service_identity(identity)?;
+        let _namespace = self.ensure_service_namespace()?;
+        let active = self.service_path(identity.instance_id);
+        match fs::symlink_metadata(&active) {
+            Ok(metadata) => {
+                if !metadata.file_type().is_dir() || metadata.file_type().is_symlink() {
+                    return Err(runtime_error("gateway service tree is unsafe"));
+                }
+                if read_service_identity(&active.join(GATEWAY_SERVICE_METADATA))? != identity {
+                    return Err(runtime_error("gateway service identity mismatch"));
+                }
+                make_tree_removable(&active)?;
+                fs::remove_dir_all(active).map_err(filesystem)
+            }
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
+            Err(error) => Err(filesystem(error)),
+        }
+    }
+
+    /// Removes only stale staging trees below `gateway-services`.
+    ///
+    /// The service supervisor must call this only after establishing that no
+    /// materialization operation is still running.
+    ///
+    /// # Errors
+    ///
+    /// Returns a redacted runtime error when the namespace or a staging tree
+    /// is unsafe or malformed.
+    pub fn cleanup_service_staging(&self) -> Result<usize, RunRuntimeError> {
+        let Some(namespace) = self.existing_service_namespace()? else {
+            return Ok(0);
+        };
+        let entries = fs::read_dir(&namespace).map_err(filesystem)?;
+        let mut cleaned = 0;
+        for entry in entries {
+            let entry = entry.map_err(filesystem)?;
+            let name = entry
+                .file_name()
+                .into_string()
+                .map_err(|_| runtime_error("gateway service staging entry is invalid"))?;
+            let Some(instance) = name.strip_prefix(GATEWAY_SERVICE_STAGING_PREFIX) else {
+                continue;
+            };
+            Uuid::parse_str(instance)
+                .map_err(|_| runtime_error("gateway service staging entry is invalid"))?;
+            let staging = entry.path();
+            make_tree_removable(&staging)?;
+            fs::remove_dir_all(staging).map_err(filesystem)?;
+            cleaned += 1;
+        }
+        Ok(cleaned)
     }
 
     /// Materializes verified artifacts and exact revision parameters into
@@ -482,6 +807,74 @@ fn materialize_mailbox_event(
     write_bytes(&control.join("mailbox-body"), &event.body)
 }
 
+fn ensure_existing_directory(path: &Path) -> Result<(), RunRuntimeError> {
+    let metadata = fs::symlink_metadata(path).map_err(filesystem)?;
+    if !metadata.file_type().is_dir() || metadata.file_type().is_symlink() {
+        return Err(runtime_error("runtime directory is unsafe"));
+    }
+    Ok(())
+}
+
+fn read_service_identity(path: &Path) -> Result<GatewayServiceIdentity, RunRuntimeError> {
+    let initial = fs::symlink_metadata(path).map_err(filesystem)?;
+    validate_service_identity_metadata(&initial)?;
+    let file = OpenOptions::new()
+        .read(true)
+        .custom_flags(o_nofollow() | o_nonblock())
+        .open(path)
+        .map_err(filesystem)?;
+    let metadata = file.metadata().map_err(filesystem)?;
+    validate_service_identity_metadata(&metadata)?;
+    let limit =
+        usize::try_from(MAX_GATEWAY_SERVICE_METADATA_BYTES).expect("metadata limit fits in usize");
+    let mut bytes = Vec::with_capacity(limit);
+    file.take(MAX_GATEWAY_SERVICE_METADATA_BYTES + 1)
+        .read_to_end(&mut bytes)
+        .map_err(filesystem)?;
+    if bytes.len() > limit {
+        return Err(runtime_error(
+            "gateway service identity metadata is too large",
+        ));
+    }
+    let metadata: GatewayServiceIdentityFile = serde_json::from_slice(&bytes)
+        .map_err(|_| runtime_error("gateway service identity metadata is invalid"))?;
+    metadata.try_into()
+}
+
+fn validate_service_identity_metadata(metadata: &std::fs::Metadata) -> Result<(), RunRuntimeError> {
+    if !metadata.file_type().is_file()
+        || metadata.nlink() != 1
+        || metadata.permissions().mode() & 0o222 != 0
+        || metadata.len() > MAX_GATEWAY_SERVICE_METADATA_BYTES
+    {
+        return Err(runtime_error("gateway service identity metadata is unsafe"));
+    }
+    Ok(())
+}
+
+fn validate_sealed_service_subtree(path: &Path) -> Result<(), RunRuntimeError> {
+    let metadata = fs::symlink_metadata(path).map_err(filesystem)?;
+    if !metadata.file_type().is_dir()
+        || metadata.file_type().is_symlink()
+        || metadata.permissions().mode() & 0o222 != 0
+    {
+        return Err(runtime_error("gateway service mount tree is unsafe"));
+    }
+    for entry in fs::read_dir(path).map_err(filesystem)? {
+        let entry = entry.map_err(filesystem)?;
+        let metadata = fs::symlink_metadata(entry.path()).map_err(filesystem)?;
+        if metadata.file_type().is_dir() {
+            if metadata.file_type().is_symlink() {
+                return Err(runtime_error("gateway service mount tree is unsafe"));
+            }
+            validate_sealed_service_subtree(&entry.path())?;
+        } else if !metadata.file_type().is_file() || metadata.permissions().mode() & 0o222 != 0 {
+            return Err(runtime_error("gateway service mount tree is unsafe"));
+        }
+    }
+    Ok(())
+}
+
 fn materialize_artifact(
     store_root: &Path,
     release_root: &Path,
@@ -630,6 +1023,10 @@ fn gateway_runtime_mount_tag(invocation_id: Uuid) -> String {
     format!("{GATEWAY_RELEASE_TAG_PREFIX}-{}", invocation_id.simple())
 }
 
+fn gateway_service_mount_tag(prefix: &str, instance_id: Uuid) -> String {
+    format!("{prefix}-{}", instance_id.simple())
+}
+
 #[cfg(target_os = "linux")]
 const fn o_nofollow() -> i32 {
     0o400_000 | 0o2_000_000
@@ -637,6 +1034,16 @@ const fn o_nofollow() -> i32 {
 
 #[cfg(not(target_os = "linux"))]
 const fn o_nofollow() -> i32 {
+    0
+}
+
+#[cfg(target_os = "linux")]
+const fn o_nonblock() -> i32 {
+    0o000_4000
+}
+
+#[cfg(not(target_os = "linux"))]
+const fn o_nonblock() -> i32 {
     0
 }
 
@@ -671,15 +1078,20 @@ fn serialization(_error: serde_json::Error) -> RunRuntimeError {
 #[cfg(test)]
 mod tests {
     use super::{
-        CONTEXT_TAG_PREFIX, LocalGatewayReleaseRuntime, PREVIOUS_RELEASE_TAG_PREFIX,
-        RELEASE_TAG_PREFIX, make_tree_read_only, materialize_artifact, materialize_mailbox_event,
-        runtime_mount_tag,
+        CONTEXT_TAG_PREFIX, GATEWAY_SERVICE_METADATA, GATEWAY_SERVICE_SCHEMA_VERSION,
+        GATEWAY_SERVICE_STAGING_PREFIX, GatewayServiceIdentity, LocalGatewayReleaseRuntime,
+        MAX_GATEWAY_SERVICE_METADATA_BYTES, PREVIOUS_RELEASE_TAG_PREFIX, RELEASE_TAG_PREFIX,
+        make_tree_read_only, materialize_artifact, materialize_mailbox_event, runtime_mount_tag,
     };
     use release_artifact_store::LocalArtifactStore;
     use run_orchestrator::{MailboxRuntimeEvent, RunRuntimeArtifact, RunRuntimeArtifactKind};
     use runtime_types::RunId;
     use sha2::{Digest, Sha256};
-    use std::{fs, os::unix::fs::PermissionsExt, process::Command};
+    use std::{
+        fs,
+        os::unix::fs::{PermissionsExt, symlink},
+        process::Command,
+    };
     use uuid::Uuid;
 
     #[test]
@@ -804,6 +1216,250 @@ mod tests {
                 .join(invocation.to_string())
                 .exists()
         );
+    }
+
+    fn service_fixture() -> (
+        tempfile::TempDir,
+        LocalGatewayReleaseRuntime,
+        RunRuntimeArtifact,
+    ) {
+        let fixture = tempfile::tempdir().expect("fixture");
+        let runtime_root = fixture.path().join("runtime");
+        let store_root = fixture.path().join("store");
+        fs::create_dir(&runtime_root).expect("runtime root");
+        fs::create_dir(&store_root).expect("store root");
+        let key = Uuid::new_v4();
+        let bytes = b"persistent gateway service executable";
+        fs::write(store_root.join(key.simple().to_string()), bytes).expect("object");
+        let runtime = LocalGatewayReleaseRuntime {
+            runtime_root,
+            release_artifact_root: store_root,
+        };
+        let artifact = RunRuntimeArtifact {
+            path: String::from("bin/server"),
+            kind: RunRuntimeArtifactKind::Executable,
+            mode: 0o555,
+            content_hash: Sha256::digest(bytes).into(),
+            size_bytes: u64::try_from(bytes.len()).expect("length"),
+            storage_key: key,
+        };
+        (fixture, runtime, artifact)
+    }
+
+    fn service_identity() -> GatewayServiceIdentity {
+        GatewayServiceIdentity {
+            instance_id: Uuid::new_v4(),
+            gateway_id: Uuid::new_v4(),
+            revision_id: Uuid::new_v4(),
+        }
+    }
+
+    #[test]
+    fn service_materialization_seals_identity_and_mounts_only_guest_trees() {
+        let (_fixture, runtime, artifact) = service_fixture();
+        let identity = service_identity();
+        let mounts = runtime
+            .prepare_service(identity, &[artifact], &serde_json::json!({"port": 8080}))
+            .expect("materialize service");
+        assert_eq!(mounts.len(), 2);
+        assert!(mounts.iter().all(|mount| mount.read_only));
+        assert!(mounts.iter().all(|mount| mount.tag.len() <= 36));
+        assert_eq!(mounts[0].guest_path, std::path::PathBuf::from("/release"));
+        assert_eq!(
+            mounts[1].guest_path,
+            std::path::PathBuf::from("/run/hephaestus")
+        );
+        assert!(
+            mounts
+                .iter()
+                .all(|mount| !mount.host_path.ends_with(GATEWAY_SERVICE_METADATA))
+        );
+
+        let active = runtime.service_path(identity.instance_id);
+        let identity_path = active.join(GATEWAY_SERVICE_METADATA);
+        let metadata: serde_json::Value =
+            serde_json::from_slice(&fs::read(&identity_path).expect("identity metadata"))
+                .expect("identity JSON");
+        assert_eq!(metadata["schema_version"], GATEWAY_SERVICE_SCHEMA_VERSION);
+        assert_eq!(metadata["gateway_id"], identity.gateway_id.to_string());
+        assert_eq!(
+            fs::metadata(identity_path)
+                .expect("identity mode")
+                .permissions()
+                .mode()
+                & 0o222,
+            0
+        );
+        assert_eq!(runtime.enumerate_service_instances().unwrap().len(), 1);
+    }
+
+    #[test]
+    fn service_identity_rejects_writable_oversized_and_nonregular_metadata() {
+        let (_fixture, runtime, artifact) = service_fixture();
+        let identity = service_identity();
+        runtime
+            .prepare_service(identity, &[artifact], &serde_json::json!({}))
+            .expect("materialize service");
+        fs::set_permissions(
+            runtime
+                .service_path(identity.instance_id)
+                .join(GATEWAY_SERVICE_METADATA),
+            fs::Permissions::from_mode(0o644),
+        )
+        .expect("make identity writable");
+        assert!(runtime.enumerate_service_instances().is_err());
+
+        let (_fixture, runtime, artifact) = service_fixture();
+        let identity = service_identity();
+        runtime
+            .prepare_service(identity, &[artifact], &serde_json::json!({}))
+            .expect("materialize service");
+        let active = runtime.service_path(identity.instance_id);
+        fs::set_permissions(&active, fs::Permissions::from_mode(0o700)).expect("open active");
+        let metadata_path = active.join(GATEWAY_SERVICE_METADATA);
+        fs::remove_file(&metadata_path).expect("remove identity");
+        fs::write(
+            &metadata_path,
+            vec![
+                b'x';
+                usize::try_from(MAX_GATEWAY_SERVICE_METADATA_BYTES)
+                    .expect("metadata limit fits in usize")
+                    + 1
+            ],
+        )
+        .expect("write oversized identity");
+        fs::set_permissions(&metadata_path, fs::Permissions::from_mode(0o444))
+            .expect("seal oversized identity");
+        assert!(runtime.enumerate_service_instances().is_err());
+
+        let (_fixture, runtime, artifact) = service_fixture();
+        let identity = service_identity();
+        runtime
+            .prepare_service(identity, &[artifact], &serde_json::json!({}))
+            .expect("materialize service");
+        let active = runtime.service_path(identity.instance_id);
+        fs::set_permissions(&active, fs::Permissions::from_mode(0o700)).expect("open active");
+        let metadata_path = active.join(GATEWAY_SERVICE_METADATA);
+        fs::remove_file(&metadata_path).expect("remove identity");
+        assert!(
+            Command::new("mkfifo")
+                .arg(&metadata_path)
+                .status()
+                .expect("mkfifo")
+                .success()
+        );
+        assert!(runtime.enumerate_service_instances().is_err());
+    }
+
+    #[test]
+    fn service_instances_coexist_and_identity_mismatch_fails_closed() {
+        let (_fixture, runtime, artifact) = service_fixture();
+        let first = service_identity();
+        let second = service_identity();
+        runtime
+            .prepare_service(
+                first,
+                std::slice::from_ref(&artifact),
+                &serde_json::json!({}),
+            )
+            .expect("first service");
+        runtime
+            .prepare_service(
+                second,
+                std::slice::from_ref(&artifact),
+                &serde_json::json!({}),
+            )
+            .expect("second service");
+
+        let records = runtime.enumerate_service_instances().unwrap();
+        assert_eq!(records.len(), 2);
+        let mismatch = GatewayServiceIdentity {
+            gateway_id: Uuid::new_v4(),
+            ..first
+        };
+        assert!(
+            runtime
+                .prepare_service(
+                    mismatch,
+                    std::slice::from_ref(&artifact),
+                    &serde_json::json!({})
+                )
+                .is_err()
+        );
+        assert!(runtime.destroy_service(mismatch).is_err());
+        assert!(runtime.service_path(first.instance_id).exists());
+
+        runtime.destroy_service(first).expect("first cleanup");
+        assert!(runtime.service_path(second.instance_id).exists());
+        runtime.destroy_service(second).expect("second cleanup");
+        assert!(runtime.enumerate_service_instances().unwrap().is_empty());
+    }
+
+    #[test]
+    fn service_symlinks_and_malicious_paths_fail_without_cross_namespace_deletion() {
+        let (_fixture, runtime, artifact) = service_fixture();
+        let identity = service_identity();
+        let outside = runtime.runtime_root.join("outside");
+        fs::create_dir(&outside).expect("outside");
+        fs::write(outside.join("keep"), b"keep").expect("outside sentinel");
+        let namespace = runtime.ensure_service_namespace().expect("namespace");
+        symlink(&outside, namespace.join(identity.instance_id.to_string()))
+            .expect("instance symlink");
+        assert!(runtime.destroy_service(identity).is_err());
+        assert!(outside.join("keep").exists());
+        assert!(runtime.enumerate_service_instances().is_err());
+
+        fs::remove_file(namespace.join(identity.instance_id.to_string())).expect("symlink");
+        let staging_id = Uuid::new_v4();
+        let staging = namespace.join(format!("{GATEWAY_SERVICE_STAGING_PREFIX}{staging_id}"));
+        symlink(&outside, &staging).expect("staging symlink");
+        assert!(runtime.cleanup_service_staging().is_err());
+        assert!(outside.join("keep").exists());
+        fs::remove_file(&staging).expect("staging symlink");
+
+        let broken = namespace.join(identity.instance_id.to_string());
+        symlink("missing-target", &broken).expect("broken instance symlink");
+        assert!(
+            runtime
+                .prepare_service(identity, &[artifact], &serde_json::json!({}))
+                .is_err()
+        );
+        fs::remove_file(&broken).expect("broken instance symlink");
+
+        fs::remove_dir(&namespace).expect("namespace");
+        symlink(&outside, &namespace).expect("namespace symlink");
+        assert!(runtime.enumerate_service_instances().is_err());
+        assert!(runtime.cleanup_service_staging().is_err());
+        assert!(outside.join("keep").exists());
+    }
+
+    #[test]
+    fn failed_service_materialization_cleans_staging_and_scoped_cleanup_is_safe() {
+        let (_fixture, runtime, mut artifact) = service_fixture();
+        artifact.content_hash = [0; 32];
+        let identity = service_identity();
+        assert!(
+            runtime
+                .prepare_service(
+                    identity,
+                    std::slice::from_ref(&artifact),
+                    &serde_json::json!({})
+                )
+                .is_err()
+        );
+        let namespace = runtime.service_namespace();
+        assert_eq!(fs::read_dir(&namespace).unwrap().count(), 0);
+
+        let staging_id = Uuid::new_v4();
+        let staging = namespace.join(format!("{GATEWAY_SERVICE_STAGING_PREFIX}{staging_id}"));
+        fs::create_dir(&staging).expect("staging");
+        fs::write(staging.join("partial"), b"partial").expect("partial");
+        let outside = runtime.runtime_root.join("outside");
+        fs::create_dir(&outside).expect("outside");
+        fs::write(outside.join("keep"), b"keep").expect("outside sentinel");
+        assert_eq!(runtime.cleanup_service_staging().unwrap(), 1);
+        assert!(!staging.exists());
+        assert!(outside.join("keep").exists());
     }
 
     #[test]

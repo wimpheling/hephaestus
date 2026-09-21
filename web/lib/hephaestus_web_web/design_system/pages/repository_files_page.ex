@@ -12,6 +12,15 @@ defmodule HephaestusWebWeb.DesignSystem.Pages.RepositoryFilesPage do
   attr :branch_form, :any, required: true
   attr :select_branch_event, :string, required: true, values: ["select-branch"]
 
+  attr :installed_ui, :map,
+    default: %{
+      state: :loading,
+      installations: [],
+      error: nil,
+      has_more: false,
+      loading_more: false
+    }
+
   def repository_files(assigns) do
     assigns = assign(assigns, :tree, decorate_tree(assigns.model.tree, assigns.model))
 
@@ -88,6 +97,14 @@ defmodule HephaestusWebWeb.DesignSystem.Pages.RepositoryFilesPage do
           </.frame>
         </:content>
       </.repository_browser>
+      <.installed_ui_navigation
+        scope={:repository}
+        state={@installed_ui.state}
+        installations={@installed_ui.installations}
+        error={@installed_ui.error}
+        has_more={@installed_ui.has_more}
+        loading_more={@installed_ui.loading_more}
+      />
     </.repository_shell>
     """
   end

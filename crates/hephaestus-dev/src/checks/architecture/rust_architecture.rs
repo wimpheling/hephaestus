@@ -228,6 +228,9 @@ fn validate_source(path: &Path, source: &str, active: &[&str], diagnostics: &mut
             ],
         )
         && !is_storage_path(path)
+        // ARCH-FILESYSTEM-ONLY-IN-ADAPTERS: this build script reads migrations only to fingerprint
+        // SQLx's compile-time embedding; it performs no runtime filesystem I/O.
+        && !is_migration_fingerprint_build_script(path)
     {
         report(
             diagnostics,
@@ -386,6 +389,10 @@ fn is_storage_path(path: &Path) -> bool {
         })
 }
 
+fn is_migration_fingerprint_build_script(path: &Path) -> bool {
+    path == Path::new("crates/runtime-authority-postgres/build.rs")
+}
+
 #[cfg(test)]
 mod tests {
     use super::{RULES, validate_source};
@@ -414,6 +421,34 @@ mod tests {
         assert!(
             diagnostics.is_empty(),
             "unexpected diagnostics: {diagnostics:?}"
+        );
+    }
+
+    #[test]
+    fn migration_fingerprint_exception_is_exactly_scoped_to_its_build_script() {
+        let active = all_rules();
+        let source = "use std::fs; fn main() { let _ = fs::read_dir(\"migrations\"); let _ = fs::read(\"migration.sql\"); }";
+
+        let mut build_script_diagnostics = Vec::new();
+        validate_source(
+            Path::new("crates/runtime-authority-postgres/build.rs"),
+            source,
+            &active,
+            &mut build_script_diagnostics,
+        );
+        assert!(build_script_diagnostics.is_empty());
+
+        let mut neighboring_diagnostics = Vec::new();
+        validate_source(
+            Path::new("crates/other-adapter/build.rs"),
+            source,
+            &active,
+            &mut neighboring_diagnostics,
+        );
+        assert!(
+            neighboring_diagnostics
+                .iter()
+                .any(|diagnostic| diagnostic.rule_id == "ARCH-FILESYSTEM-ONLY-IN-ADAPTERS")
         );
     }
 

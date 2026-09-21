@@ -22,6 +22,30 @@ pub type OwnedGetGatewayResponseView = ::buffa::view::OwnedView<
         'static,
     >,
 >;
+///Shorthand for `OwnedView<ListGatewayServiceLogsRequestView<'static>>`.
+pub type OwnedListGatewayServiceLogsRequestView = ::buffa::view::OwnedView<
+    crate::messages::hephaestus::gateway::v1::__buffa::view::ListGatewayServiceLogsRequestView<
+        'static,
+    >,
+>;
+///Shorthand for `OwnedView<ListGatewayServiceLogsResponseView<'static>>`.
+pub type OwnedListGatewayServiceLogsResponseView = ::buffa::view::OwnedView<
+    crate::messages::hephaestus::gateway::v1::__buffa::view::ListGatewayServiceLogsResponseView<
+        'static,
+    >,
+>;
+///Shorthand for `OwnedView<GetProjectServiceLogMetadataRequestView<'static>>`.
+pub type OwnedGetProjectServiceLogMetadataRequestView = ::buffa::view::OwnedView<
+    crate::messages::hephaestus::gateway::v1::__buffa::view::GetProjectServiceLogMetadataRequestView<
+        'static,
+    >,
+>;
+///Shorthand for `OwnedView<GetProjectServiceLogMetadataResponseView<'static>>`.
+pub type OwnedGetProjectServiceLogMetadataResponseView = ::buffa::view::OwnedView<
+    crate::messages::hephaestus::gateway::v1::__buffa::view::GetProjectServiceLogMetadataResponseView<
+        'static,
+    >,
+>;
 ///Shorthand for `OwnedView<InstallReleaseGatewaysRequestView<'static>>`.
 pub type OwnedInstallReleaseGatewaysRequestView = ::buffa::view::OwnedView<
     crate::messages::hephaestus::gateway::v1::__buffa::view::InstallReleaseGatewaysRequestView<
@@ -162,6 +186,62 @@ impl ::connectrpc::Encodable<
 >
 for ::buffa::view::OwnedView<
     crate::messages::hephaestus::gateway::v1::__buffa::view::GetGatewayResponseView<
+        'static,
+    >,
+> {
+    fn encode(
+        &self,
+        codec: ::connectrpc::CodecFormat,
+    ) -> ::std::result::Result<::buffa::bytes::Bytes, ::connectrpc::ConnectError> {
+        ::connectrpc::__codegen::encode_view_body(self.reborrow(), codec)
+    }
+}
+impl ::connectrpc::Encodable<
+    crate::messages::hephaestus::gateway::v1::ListGatewayServiceLogsResponse,
+>
+for crate::messages::hephaestus::gateway::v1::__buffa::view::ListGatewayServiceLogsResponseView<
+    '_,
+> {
+    fn encode(
+        &self,
+        codec: ::connectrpc::CodecFormat,
+    ) -> ::std::result::Result<::buffa::bytes::Bytes, ::connectrpc::ConnectError> {
+        ::connectrpc::__codegen::encode_view_body(self, codec)
+    }
+}
+impl ::connectrpc::Encodable<
+    crate::messages::hephaestus::gateway::v1::ListGatewayServiceLogsResponse,
+>
+for ::buffa::view::OwnedView<
+    crate::messages::hephaestus::gateway::v1::__buffa::view::ListGatewayServiceLogsResponseView<
+        'static,
+    >,
+> {
+    fn encode(
+        &self,
+        codec: ::connectrpc::CodecFormat,
+    ) -> ::std::result::Result<::buffa::bytes::Bytes, ::connectrpc::ConnectError> {
+        ::connectrpc::__codegen::encode_view_body(self.reborrow(), codec)
+    }
+}
+impl ::connectrpc::Encodable<
+    crate::messages::hephaestus::gateway::v1::GetProjectServiceLogMetadataResponse,
+>
+for crate::messages::hephaestus::gateway::v1::__buffa::view::GetProjectServiceLogMetadataResponseView<
+    '_,
+> {
+    fn encode(
+        &self,
+        codec: ::connectrpc::CodecFormat,
+    ) -> ::std::result::Result<::buffa::bytes::Bytes, ::connectrpc::ConnectError> {
+        ::connectrpc::__codegen::encode_view_body(self, codec)
+    }
+}
+impl ::connectrpc::Encodable<
+    crate::messages::hephaestus::gateway::v1::GetProjectServiceLogMetadataResponse,
+>
+for ::buffa::view::OwnedView<
+    crate::messages::hephaestus::gateway::v1::__buffa::view::GetProjectServiceLogMetadataResponseView<
         'static,
     >,
 > {
@@ -416,6 +496,24 @@ pub const GATEWAY_SERVICE_GET_GATEWAY_SPEC: ::connectrpc::Spec = ::connectrpc::S
         ::connectrpc::StreamType::Unary,
     )
     .with_idempotency_level(::connectrpc::IdempotencyLevel::NoSideEffects);
+/// Static [`Spec`](::connectrpc::Spec) for the server-side `ListGatewayServiceLogs` RPC.
+///
+/// The dispatcher surfaces this on
+/// [`RequestContext::spec`](::connectrpc::RequestContext::spec).
+pub const GATEWAY_SERVICE_LIST_GATEWAY_SERVICE_LOGS_SPEC: ::connectrpc::Spec = ::connectrpc::Spec::server(
+        "/hephaestus.gateway.v1.GatewayService/ListGatewayServiceLogs",
+        ::connectrpc::StreamType::Unary,
+    )
+    .with_idempotency_level(::connectrpc::IdempotencyLevel::NoSideEffects);
+/// Static [`Spec`](::connectrpc::Spec) for the server-side `GetProjectServiceLogMetadata` RPC.
+///
+/// The dispatcher surfaces this on
+/// [`RequestContext::spec`](::connectrpc::RequestContext::spec).
+pub const GATEWAY_SERVICE_GET_PROJECT_SERVICE_LOG_METADATA_SPEC: ::connectrpc::Spec = ::connectrpc::Spec::server(
+        "/hephaestus.gateway.v1.GatewayService/GetProjectServiceLogMetadata",
+        ::connectrpc::StreamType::Unary,
+    )
+    .with_idempotency_level(::connectrpc::IdempotencyLevel::NoSideEffects);
 /// Static [`Spec`](::connectrpc::Spec) for the server-side `InstallReleaseGateways` RPC.
 ///
 /// The dispatcher surfaces this on
@@ -488,9 +586,10 @@ pub const GATEWAY_SERVICE_LIST_MAILBOX_PUBLICATIONS_SPEC: ::connectrpc::Spec = :
         ::connectrpc::StreamType::Unary,
     )
     .with_idempotency_level(::connectrpc::IdempotencyLevel::NoSideEffects);
-/// Project-scoped management and redacted ingress inspection for repository
-/// gateways. Public request payloads and provider credentials are never part of
-/// this API.
+/// Project-scoped management, redacted ingress inspection, and explicitly
+/// opted-in application output for repository gateways. Ingress inspection
+/// remains value-free; application-emitted log bytes require app-owned
+/// redaction, and the platform does not promise universal secret detection.
 ///
 /// # Implementing handlers
 ///
@@ -584,6 +683,56 @@ pub trait GatewayService: Send + Sync + 'static {
         Output = ::connectrpc::ServiceResult<
             impl ::connectrpc::Encodable<
                 crate::messages::hephaestus::gateway::v1::GetGatewayResponse,
+            > + Send + use<'a, Self>,
+        >,
+    > + Send;
+    /// Lists bounded, explicitly opted-in application output for one exact
+    /// service-instance fencing epoch. The application owner is responsible for
+    /// redaction of emitted bytes; ingress request values remain value-free.
+    ///
+    /// `'a` lets the response body borrow from `&self` (e.g. server-resident state).
+    ///
+    /// `request` is borrowed from the request body and is valid for the
+    /// duration of the call; message fields are read directly on it
+    /// (zero-copy). The response cannot borrow from `request` — use
+    /// `.to_owned_message()` (or copy the specific fields) for anything
+    /// returned, stored, or moved into `tokio::spawn`.
+    fn list_gateway_service_logs<'a>(
+        &'a self,
+        ctx: ::connectrpc::RequestContext,
+        request: ::connectrpc::ServiceRequest<
+            '_,
+            crate::messages::hephaestus::gateway::v1::ListGatewayServiceLogsRequest,
+        >,
+    ) -> impl ::std::future::Future<
+        Output = ::connectrpc::ServiceResult<
+            impl ::connectrpc::Encodable<
+                crate::messages::hephaestus::gateway::v1::ListGatewayServiceLogsResponse,
+            > + Send + use<'a, Self>,
+        >,
+    > + Send;
+    /// Returns project-wide service-log storage-loss counters. The project
+    /// reader is authorized with project.read because the aggregate spans every
+    /// gateway in the project and survives exact epoch retention cleanup.
+    ///
+    /// `'a` lets the response body borrow from `&self` (e.g. server-resident state).
+    ///
+    /// `request` is borrowed from the request body and is valid for the
+    /// duration of the call; message fields are read directly on it
+    /// (zero-copy). The response cannot borrow from `request` — use
+    /// `.to_owned_message()` (or copy the specific fields) for anything
+    /// returned, stored, or moved into `tokio::spawn`.
+    fn get_project_service_log_metadata<'a>(
+        &'a self,
+        ctx: ::connectrpc::RequestContext,
+        request: ::connectrpc::ServiceRequest<
+            '_,
+            crate::messages::hephaestus::gateway::v1::GetProjectServiceLogMetadataRequest,
+        >,
+    ) -> impl ::std::future::Future<
+        Output = ::connectrpc::ServiceResult<
+            impl ::connectrpc::Encodable<
+                crate::messages::hephaestus::gateway::v1::GetProjectServiceLogMetadataResponse,
             > + Send + use<'a, Self>,
         >,
     > + Send;
@@ -868,6 +1017,64 @@ impl<S: GatewayService> GatewayServiceExt for S {
                 },
             )
             .with_spec(GATEWAY_SERVICE_GET_GATEWAY_SPEC)
+            .route_view_idempotent(
+                GATEWAY_SERVICE_SERVICE_NAME,
+                "ListGatewayServiceLogs",
+                {
+                    let svc = ::std::sync::Arc::clone(&self);
+                    ::connectrpc::view_handler_fn(move |
+                        ctx,
+                        req: ::buffa::view::OwnedView<
+                            crate::messages::hephaestus::gateway::v1::__buffa::view::ListGatewayServiceLogsRequestView<
+                                'static,
+                            >,
+                        >,
+                        format|
+                    {
+                        let svc = ::std::sync::Arc::clone(&svc);
+                        async move {
+                            let sreq = ::connectrpc::ServiceRequest::<
+                                crate::messages::hephaestus::gateway::v1::ListGatewayServiceLogsRequest,
+                            >::from_parts(req.reborrow(), req.bytes());
+                            svc.list_gateway_service_logs(ctx, sreq)
+                                .await?
+                                .encode::<
+                                    crate::messages::hephaestus::gateway::v1::ListGatewayServiceLogsResponse,
+                                >(format)
+                        }
+                    })
+                },
+            )
+            .with_spec(GATEWAY_SERVICE_LIST_GATEWAY_SERVICE_LOGS_SPEC)
+            .route_view_idempotent(
+                GATEWAY_SERVICE_SERVICE_NAME,
+                "GetProjectServiceLogMetadata",
+                {
+                    let svc = ::std::sync::Arc::clone(&self);
+                    ::connectrpc::view_handler_fn(move |
+                        ctx,
+                        req: ::buffa::view::OwnedView<
+                            crate::messages::hephaestus::gateway::v1::__buffa::view::GetProjectServiceLogMetadataRequestView<
+                                'static,
+                            >,
+                        >,
+                        format|
+                    {
+                        let svc = ::std::sync::Arc::clone(&svc);
+                        async move {
+                            let sreq = ::connectrpc::ServiceRequest::<
+                                crate::messages::hephaestus::gateway::v1::GetProjectServiceLogMetadataRequest,
+                            >::from_parts(req.reborrow(), req.bytes());
+                            svc.get_project_service_log_metadata(ctx, sreq)
+                                .await?
+                                .encode::<
+                                    crate::messages::hephaestus::gateway::v1::GetProjectServiceLogMetadataResponse,
+                                >(format)
+                        }
+                    })
+                },
+            )
+            .with_spec(GATEWAY_SERVICE_GET_PROJECT_SERVICE_LOG_METADATA_SPEC)
             .route_view(
                 GATEWAY_SERVICE_SERVICE_NAME,
                 "InstallReleaseGateways",
@@ -1166,6 +1373,18 @@ impl<T: GatewayService> ::connectrpc::Dispatcher for GatewayServiceServer<T> {
                         .with_spec(GATEWAY_SERVICE_GET_GATEWAY_SPEC),
                 )
             }
+            "ListGatewayServiceLogs" => {
+                Some(
+                    ::connectrpc::dispatcher::codegen::MethodDescriptor::unary(true)
+                        .with_spec(GATEWAY_SERVICE_LIST_GATEWAY_SERVICE_LOGS_SPEC),
+                )
+            }
+            "GetProjectServiceLogMetadata" => {
+                Some(
+                    ::connectrpc::dispatcher::codegen::MethodDescriptor::unary(true)
+                        .with_spec(GATEWAY_SERVICE_GET_PROJECT_SERVICE_LOG_METADATA_SPEC),
+                )
+            }
             "InstallReleaseGateways" => {
                 Some(
                     ::connectrpc::dispatcher::codegen::MethodDescriptor::unary(false)
@@ -1269,6 +1488,48 @@ impl<T: GatewayService> ::connectrpc::Dispatcher for GatewayServiceServer<T> {
                         .await?
                         .encode::<
                             crate::messages::hephaestus::gateway::v1::GetGatewayResponse,
+                        >(format)
+                })
+            }
+            "ListGatewayServiceLogs" => {
+                let svc = ::std::sync::Arc::clone(&self.inner);
+                Box::pin(async move {
+                    let body = ::connectrpc::dispatcher::codegen::request_proto_bytes::<
+                        crate::messages::hephaestus::gateway::v1::ListGatewayServiceLogsRequest,
+                    >(request.encoded()?, format)?;
+                    let req: crate::messages::hephaestus::gateway::v1::__buffa::view::ListGatewayServiceLogsRequestView<
+                        '_,
+                    > = ::connectrpc::dispatcher::codegen::decode_borrowed_request_view(
+                        &body,
+                    )?;
+                    let req = ::connectrpc::ServiceRequest::<
+                        crate::messages::hephaestus::gateway::v1::ListGatewayServiceLogsRequest,
+                    >::from_parts(&req, &body);
+                    svc.list_gateway_service_logs(ctx, req)
+                        .await?
+                        .encode::<
+                            crate::messages::hephaestus::gateway::v1::ListGatewayServiceLogsResponse,
+                        >(format)
+                })
+            }
+            "GetProjectServiceLogMetadata" => {
+                let svc = ::std::sync::Arc::clone(&self.inner);
+                Box::pin(async move {
+                    let body = ::connectrpc::dispatcher::codegen::request_proto_bytes::<
+                        crate::messages::hephaestus::gateway::v1::GetProjectServiceLogMetadataRequest,
+                    >(request.encoded()?, format)?;
+                    let req: crate::messages::hephaestus::gateway::v1::__buffa::view::GetProjectServiceLogMetadataRequestView<
+                        '_,
+                    > = ::connectrpc::dispatcher::codegen::decode_borrowed_request_view(
+                        &body,
+                    )?;
+                    let req = ::connectrpc::ServiceRequest::<
+                        crate::messages::hephaestus::gateway::v1::GetProjectServiceLogMetadataRequest,
+                    >::from_parts(&req, &body);
+                    svc.get_project_service_log_metadata(ctx, req)
+                        .await?
+                        .encode::<
+                            crate::messages::hephaestus::gateway::v1::GetProjectServiceLogMetadataResponse,
                         >(format)
                 })
             }
@@ -1658,6 +1919,96 @@ where
                 &self.config,
                 GATEWAY_SERVICE_SERVICE_NAME,
                 "GetGateway",
+                request,
+                options,
+            )
+            .await
+    }
+    /// Call the ListGatewayServiceLogs RPC. Sends a request to /hephaestus.gateway.v1.GatewayService/ListGatewayServiceLogs.
+    pub async fn list_gateway_service_logs(
+        &self,
+        request: crate::messages::hephaestus::gateway::v1::ListGatewayServiceLogsRequest,
+    ) -> Result<
+        ::connectrpc::client::UnaryResponse<
+            ::buffa::view::OwnedView<
+                crate::messages::hephaestus::gateway::v1::__buffa::view::ListGatewayServiceLogsResponseView<
+                    'static,
+                >,
+            >,
+        >,
+        ::connectrpc::ConnectError,
+    > {
+        self.list_gateway_service_logs_with_options(
+                request,
+                ::connectrpc::client::CallOptions::default(),
+            )
+            .await
+    }
+    /// Call the ListGatewayServiceLogs RPC with explicit per-call options. Options override [`ClientConfig`](::connectrpc::client::ClientConfig) defaults.
+    pub async fn list_gateway_service_logs_with_options(
+        &self,
+        request: crate::messages::hephaestus::gateway::v1::ListGatewayServiceLogsRequest,
+        options: ::connectrpc::client::CallOptions,
+    ) -> Result<
+        ::connectrpc::client::UnaryResponse<
+            ::buffa::view::OwnedView<
+                crate::messages::hephaestus::gateway::v1::__buffa::view::ListGatewayServiceLogsResponseView<
+                    'static,
+                >,
+            >,
+        >,
+        ::connectrpc::ConnectError,
+    > {
+        ::connectrpc::client::call_unary(
+                &self.transport,
+                &self.config,
+                GATEWAY_SERVICE_SERVICE_NAME,
+                "ListGatewayServiceLogs",
+                request,
+                options,
+            )
+            .await
+    }
+    /// Call the GetProjectServiceLogMetadata RPC. Sends a request to /hephaestus.gateway.v1.GatewayService/GetProjectServiceLogMetadata.
+    pub async fn get_project_service_log_metadata(
+        &self,
+        request: crate::messages::hephaestus::gateway::v1::GetProjectServiceLogMetadataRequest,
+    ) -> Result<
+        ::connectrpc::client::UnaryResponse<
+            ::buffa::view::OwnedView<
+                crate::messages::hephaestus::gateway::v1::__buffa::view::GetProjectServiceLogMetadataResponseView<
+                    'static,
+                >,
+            >,
+        >,
+        ::connectrpc::ConnectError,
+    > {
+        self.get_project_service_log_metadata_with_options(
+                request,
+                ::connectrpc::client::CallOptions::default(),
+            )
+            .await
+    }
+    /// Call the GetProjectServiceLogMetadata RPC with explicit per-call options. Options override [`ClientConfig`](::connectrpc::client::ClientConfig) defaults.
+    pub async fn get_project_service_log_metadata_with_options(
+        &self,
+        request: crate::messages::hephaestus::gateway::v1::GetProjectServiceLogMetadataRequest,
+        options: ::connectrpc::client::CallOptions,
+    ) -> Result<
+        ::connectrpc::client::UnaryResponse<
+            ::buffa::view::OwnedView<
+                crate::messages::hephaestus::gateway::v1::__buffa::view::GetProjectServiceLogMetadataResponseView<
+                    'static,
+                >,
+            >,
+        >,
+        ::connectrpc::ConnectError,
+    > {
+        ::connectrpc::client::call_unary(
+                &self.transport,
+                &self.config,
+                GATEWAY_SERVICE_SERVICE_NAME,
+                "GetProjectServiceLogMetadata",
                 request,
                 options,
             )

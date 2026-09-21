@@ -189,6 +189,60 @@ impl LocalArtifactStore {
         }
         Ok(path)
     }
+
+    /// Reads one opaque object only after verifying its complete contents.
+    ///
+    /// The object is opened once with no-follow semantics, bounded by the
+    /// caller's limit, and hashed before any bytes are returned. The returned
+    /// buffer therefore cannot refer to a path that was swapped after a
+    /// metadata check or contain bytes that were not covered by verification.
+    ///
+    /// # Errors
+    ///
+    /// Rejects objects over `max_bytes`, missing or unsafe objects, length or
+    /// hash mismatches, and filesystem failures.
+    pub fn read_verified(
+        &self,
+        storage_key: Uuid,
+        expected_hash: ContentHash,
+        expected_size: u64,
+        max_bytes: u64,
+    ) -> Result<Vec<u8>, ArtifactStoreError> {
+        if expected_size > max_bytes {
+            return Err(ArtifactStoreError::ReadLimit);
+        }
+        let path = self.root.join(storage_key.simple().to_string());
+        let file = OpenOptions::new()
+            .read(true)
+            .custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK)
+            .open(path)
+            .map_err(io_error)?;
+        let metadata = file.metadata().map_err(io_error)?;
+        if !metadata.file_type().is_file() || metadata.nlink() != 1 {
+            return Err(ArtifactStoreError::UnsafeObject);
+        }
+        if metadata.len() != expected_size {
+            return Err(ArtifactStoreError::ObjectConflict);
+        }
+        let expected_length =
+            usize::try_from(expected_size).map_err(|_| ArtifactStoreError::ReadLimit)?;
+        let capacity = expected_length
+            .checked_add(1)
+            .ok_or(ArtifactStoreError::ReadLimit)?;
+        let mut bytes = Vec::new();
+        bytes
+            .try_reserve_exact(capacity)
+            .map_err(|_| ArtifactStoreError::ReadLimit)?;
+        file.take(expected_size.saturating_add(1))
+            .read_to_end(&mut bytes)
+            .map_err(io_error)?;
+        if bytes.len() != expected_length
+            || Sha256::digest(&bytes).as_slice() != expected_hash.as_bytes()
+        {
+            return Err(ArtifactStoreError::ObjectConflict);
+        }
+        Ok(bytes)
+    }
 }
 
 fn stable_storage_key(operation_id: Uuid, relative: &str, hash: &[u8; 32]) -> Uuid {
@@ -378,6 +432,9 @@ pub enum ArtifactStoreError {
     /// A stable opaque identity already names different canonical bytes.
     #[error("release artifact storage identity conflicts with canonical bytes")]
     ObjectConflict,
+    /// A caller's verified-read byte limit was exceeded.
+    #[error("release artifact verified-read limit is invalid")]
+    ReadLimit,
     /// Artifact count is empty or exceeds its bound.
     #[error("release artifact count is invalid")]
     FileCount,
@@ -392,6 +449,7 @@ pub enum ArtifactStoreError {
 #[cfg(test)]
 mod tests {
     use super::{ArtifactStoreError, LocalArtifactStore, MAX_ARTIFACT_BYTES, MAX_ARTIFACT_FILES};
+    use release_domain::ContentHash;
     use std::{
         fs::{self, hard_link},
         os::unix::{
@@ -465,6 +523,113 @@ mod tests {
             .expect("retry import");
 
         assert_eq!(first, second);
+    }
+
+    #[test]
+    fn read_verified_returns_owned_hash_verified_bytes_at_limit() {
+        let (temporary, store) = fixture();
+        let key = Uuid::new_v4();
+        let bytes = b"verified artifact";
+        let object = temporary
+            .path()
+            .join("store")
+            .join(key.simple().to_string());
+        fs::write(&object, bytes).expect("canonical object");
+
+        let returned = store
+            .read_verified(
+                key,
+                ContentHash::digest(bytes),
+                u64::try_from(bytes.len()).expect("fixture length"),
+                u64::try_from(bytes.len()).expect("fixture length"),
+            )
+            .expect("verified read");
+        fs::write(object, b"changed after read").expect("mutate fixture object");
+        assert_eq!(returned, bytes);
+    }
+
+    #[test]
+    fn read_verified_rejects_hash_length_and_limit_mismatches() {
+        let (temporary, store) = fixture();
+        let key = Uuid::new_v4();
+        let bytes = b"tampered";
+        let object = temporary
+            .path()
+            .join("store")
+            .join(key.simple().to_string());
+        fs::write(&object, bytes).expect("canonical object");
+        let size = u64::try_from(bytes.len()).expect("fixture length");
+
+        assert_eq!(
+            store.read_verified(key, ContentHash::digest(b"expected"), size, size),
+            Err(ArtifactStoreError::ObjectConflict)
+        );
+        assert_eq!(
+            store.read_verified(key, ContentHash::digest(bytes), size + 1, size + 1),
+            Err(ArtifactStoreError::ObjectConflict)
+        );
+        assert_eq!(
+            store.read_verified(key, ContentHash::digest(bytes), size, size - 1),
+            Err(ArtifactStoreError::ReadLimit)
+        );
+    }
+
+    #[test]
+    fn read_verified_rejects_symlink_and_hardlink_objects() {
+        let (temporary, store) = fixture();
+        let bytes = b"canonical bytes";
+        let outside = temporary.path().join("outside");
+        fs::write(&outside, bytes).expect("outside object");
+        let symlink_key = Uuid::new_v4();
+        symlink(
+            &outside,
+            temporary
+                .path()
+                .join("store")
+                .join(symlink_key.simple().to_string()),
+        )
+        .expect("object symlink");
+        let size = u64::try_from(bytes.len()).expect("fixture length");
+        assert!(
+            store
+                .read_verified(symlink_key, ContentHash::digest(bytes), size, size)
+                .is_err()
+        );
+
+        let hardlink_key = Uuid::new_v4();
+        let object = temporary
+            .path()
+            .join("store")
+            .join(hardlink_key.simple().to_string());
+        fs::write(&object, bytes).expect("hardlink object");
+        hard_link(&object, temporary.path().join("store/alias")).expect("hardlink alias");
+        assert_eq!(
+            store.read_verified(hardlink_key, ContentHash::digest(bytes), size, size),
+            Err(ArtifactStoreError::UnsafeObject)
+        );
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn read_verified_rejects_fifo_without_blocking() {
+        let (temporary, store) = fixture();
+        let key = Uuid::new_v4();
+        let fifo = temporary
+            .path()
+            .join("store")
+            .join(key.simple().to_string());
+        assert!(
+            Command::new("mkfifo")
+                .arg(&fifo)
+                .status()
+                .expect("execute mkfifo")
+                .success(),
+            "create FIFO"
+        );
+        assert_eq!(
+            store.read_verified(key, ContentHash::digest(b""), 0, 0),
+            Err(ArtifactStoreError::UnsafeObject)
+        );
     }
 
     #[test]

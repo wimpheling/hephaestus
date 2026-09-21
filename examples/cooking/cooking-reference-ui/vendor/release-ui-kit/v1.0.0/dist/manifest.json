@@ -1,0 +1,14 @@
+{
+  "schema_version": 1,
+  "package": "@hephaestus/release-ui-kit",
+  "version": "1.0.0",
+  "css_file": "heph-ui-kit-v1.0.0.css",
+  "js_file": "heph-ui-kit-v1.0.0.js",
+  "css_sha256": "777b9bbaf8bd1fbf3a121b8f4252a1e3c389dd2d2078d98309bd2a625e36571f",
+  "token_source": "../css/design_system/tokens.css",
+  "token_sha256": "aaeee8eff870a2418fd936893ab26a52ead2b995b726d6af65d0358c535652d6",
+  "component_source": "src/components.css",
+  "component_sha256": "5ef3128841c58acd1b984e374de16983c2d41baf6d387ea3adcdd0ad72c97376",
+  "helper_source": "src/theme.js",
+  "helper_sha256": "6736df299e4cdd4f1c0428cab30acd261adbdba796ef38bfc4d0362ba17a048f"
+}

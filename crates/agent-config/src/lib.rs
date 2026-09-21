@@ -6,8 +6,8 @@ use capability_domain::{
 };
 use forge_domain::GitRef;
 use gateway_domain::{
-    Exposure, GatewayDeclaration, GatewayMailboxPublicationSlot, GatewayName, HttpMethod,
-    RouteIntent, RoutePath,
+    Exposure, GatewayDeclaration, GatewayMailboxPublicationSlot, GatewayName, GatewayServiceConfig,
+    HttpMethod, RouteIntent, RoutePath, ServiceLogCaptureMode, ServiceProbePath,
 };
 use git_capability_domain::{
     BranchRefPolicy, BranchUpdatePolicy, ChangedPathGlob, GitCapabilityCeiling,
@@ -17,6 +17,13 @@ use git_capability_domain::{
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::{collections::HashSet, fmt::Write as _, path::Path};
+
+pub mod build_identity;
+pub mod ui;
+pub use ui::{
+    ParsedRepositoryUis, parse_repository_uis, validate_repository_uis_against_gateways,
+    validate_ui_route_collisions,
+};
 
 /// Reusable release and typed-instance configuration version.
 pub const REUSABLE_RELEASE_VERSION: u32 = 2;
@@ -200,8 +207,12 @@ pub struct RepositoryGatewayConfig {
     pub name: String,
     /// Exact released agent key whose immutable runtime contract handles HTTP.
     pub agent_name: String,
-    /// Versioned handler contract. Only `http.v1` is currently supported.
+    /// Versioned handler contract (`http.v1` or `http.service.v1`).
     pub handler_contract: String,
+    /// Required only for the `http.service.v1` contract. Runtime wiring is
+    /// intentionally deferred until the service transport is integrated.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub service: Option<RepositoryGatewayServiceConfig>,
     /// Whether the future provider exposes the route publicly or through
     /// Hephaestus authentication.
     pub exposure: Exposure,
@@ -217,6 +228,32 @@ pub struct RepositoryGatewayConfig {
     /// only bind one explicit mailbox and producer identity at installation.
     #[serde(default)]
     pub mailbox_publication_slots: Vec<RepositoryGatewayMailboxPublicationSlot>,
+}
+
+/// Repository-declared settings for a long-lived HTTP gateway service.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct RepositoryGatewayServiceConfig {
+    /// Exact TCP port on `127.0.0.1` inside the guest.
+    pub loopback_port: u16,
+    /// Origin path used to establish service readiness.
+    pub readiness_path: String,
+    /// Origin path used for ongoing service health checks.
+    pub health_path: String,
+    /// Optional project-scoped application log capture policy.
+    #[serde(default, skip_serializing_if = "ServiceLogCaptureMode::is_disabled")]
+    pub log_capture_mode: ServiceLogCaptureMode,
+}
+
+impl RepositoryGatewayServiceConfig {
+    fn to_declaration(&self) -> Result<GatewayServiceConfig, gateway_domain::GatewayError> {
+        Ok(GatewayServiceConfig::new(
+            self.loopback_port,
+            ServiceProbePath::parse(self.readiness_path.clone())?,
+            ServiceProbePath::parse(self.health_path.clone())?,
+        )?
+        .with_log_capture_mode(self.log_capture_mode))
+    }
 }
 
 /// One repository-declared required mailbox publication slot for a gateway.
@@ -262,6 +299,11 @@ impl RepositoryGatewayConfig {
                 .as_str()
                 .to_owned(),
             handler_contract: self.handler_contract.clone(),
+            service: self
+                .service
+                .as_ref()
+                .map(RepositoryGatewayServiceConfig::to_declaration)
+                .transpose()?,
             exposure: self.exposure,
             routes,
             parameters: serde_json::to_value(&self.parameters)
@@ -1068,7 +1110,7 @@ pub fn parse_repository_gateways(source: &[u8]) -> ParsedRepositoryGateways {
     };
     let mut diagnostics = validate_repository_gateways(&config);
     let normalized_hash = if diagnostics.is_empty() {
-        let normalized = normalized_repository_gateways(config.clone());
+        let normalized = canonical_repository_gateways(&config);
         toml::to_string(&normalized).map_or_else(
             |_| {
                 diagnostics.push(Diagnostic {
@@ -1089,6 +1131,21 @@ pub fn parse_repository_gateways(source: &[u8]) -> ParsedRepositoryGateways {
         config: diagnostics.is_empty().then_some(config),
         diagnostics,
     }
+}
+
+/// Returns the canonical declaration used for repository gateway identity.
+///
+/// The parser deliberately returns the original validated declaration so
+/// source-facing callers retain their input shape. Persistence code that
+/// needs an immutable normalized snapshot should use this canonical clone.
+/// Serialize this value as canonical TOML when reproducing
+/// [`ParsedRepositoryGateways::normalized_hash`]; that hash intentionally
+/// retains the parser's existing TOML serialization contract.
+#[must_use]
+pub fn canonical_repository_gateways(
+    config: &RepositoryGatewaysConfig,
+) -> RepositoryGatewaysConfig {
+    normalized_repository_gateways(config.clone())
 }
 
 fn hash(source: &[u8]) -> ConfigHash {
@@ -1283,7 +1340,7 @@ fn validate_repository_gateways(config: &RepositoryGatewaysConfig) -> Vec<Diagno
                         &mut diagnostics,
                         "invalid_repository_gateway_declaration",
                         format!("gateways[{gateway_index}]"),
-                        "gateway declarations must use the supported HTTP contract with unique bounded routes and symbolic secret slots",
+                        "gateway declarations must use a supported HTTP contract with matching service settings, unique bounded routes, and symbolic secret slots",
                     );
                 }
             }
@@ -1876,10 +1933,12 @@ const fn default_true() -> bool {
 mod tests {
     use super::{
         CapabilityOperation, CapabilityResourceKind, PublicationMode,
-        REPOSITORY_OCI_IMAGES_VERSION, REUSABLE_RELEASE_VERSION, parse, parse_repository_gateways,
-        parse_repository_oci_images,
+        REPOSITORY_OCI_IMAGES_VERSION, REUSABLE_RELEASE_VERSION, canonical_repository_gateways,
+        parse, parse_repository_gateways, parse_repository_oci_images,
     };
     use forge_domain::GitRef;
+    use gateway_domain::ServiceLogCaptureMode;
+    use sha2::{Digest, Sha256};
 
     const VALID: &str = r#"
 version = 2
@@ -2559,6 +2618,134 @@ methods = ["GET", "POST"]
             reordered.diagnostics
         );
         assert_eq!(parsed.normalized_hash, reordered.normalized_hash);
+
+        let canonical = canonical_repository_gateways(&config);
+        let reordered_config = reordered.config.expect("valid reordered gateway manifest");
+        assert_eq!(canonical, canonical_repository_gateways(&reordered_config));
+        let canonical_toml = toml::to_string(&canonical).expect("canonical gateway TOML");
+        let canonical_hash: [u8; 32] = Sha256::digest(canonical_toml.as_bytes()).into();
+        let parser_hash = parsed
+            .normalized_hash
+            .expect("normalized gateway hash")
+            .as_str()
+            .as_bytes()
+            .chunks_exact(2)
+            .map(|pair| {
+                let high = u8::try_from((pair[0] as char).to_digit(16).expect("hex high"))
+                    .expect("hex high fits");
+                let low = u8::try_from((pair[1] as char).to_digit(16).expect("hex low"))
+                    .expect("hex low fits");
+                high << 4 | low
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(parser_hash, canonical_hash);
+    }
+
+    #[test]
+    fn parses_typed_service_gateway_settings_and_rejects_mismatched_contracts() {
+        let service_manifest = r#"
+version = 1
+
+[[gateways]]
+name = "chat"
+agent_name = "chat-handler"
+handler_contract = "http.service.v1"
+exposure = "heph_authenticated"
+
+[[gateways.routes]]
+path = "/chat"
+methods = ["GET", "POST"]
+
+[gateways.service]
+loopback_port = 8080
+readiness_path = "/ready"
+health_path = "/health"
+"#;
+        let parsed = parse_repository_gateways(service_manifest.as_bytes());
+        assert!(parsed.diagnostics.is_empty(), "{:?}", parsed.diagnostics);
+        let service = parsed
+            .config
+            .expect("valid service manifest")
+            .gateways
+            .pop()
+            .expect("service gateway")
+            .to_declaration()
+            .expect("typed service declaration");
+        assert_eq!(service.handler_contract, "http.service.v1");
+        let service = service.service.expect("service settings");
+        assert_eq!(service.loopback_port, 8080);
+        assert_eq!(service.readiness_path.as_str(), "/ready");
+        assert_eq!(service.health_path.as_str(), "/health");
+        assert_eq!(service.log_capture_mode, ServiceLogCaptureMode::Disabled);
+
+        let disabled_manifest = service_manifest.replace(
+            "[gateways.service]\n",
+            "[gateways.service]\nlog_capture_mode = \"disabled\"\n",
+        );
+        let disabled = parse_repository_gateways(disabled_manifest.as_bytes());
+        assert_eq!(parsed.normalized_hash, disabled.normalized_hash);
+
+        let application_manifest = service_manifest.replace(
+            "[gateways.service]\n",
+            "[gateways.service]\nlog_capture_mode = \"application\"\n",
+        );
+        let application = parse_repository_gateways(application_manifest.as_bytes());
+        assert!(
+            application.diagnostics.is_empty(),
+            "{:?}",
+            application.diagnostics
+        );
+        let application_service = application
+            .config
+            .expect("application logging manifest")
+            .gateways
+            .pop()
+            .expect("application logging gateway")
+            .to_declaration()
+            .expect("application logging declaration")
+            .service
+            .expect("application logging service");
+        assert_eq!(
+            application_service.log_capture_mode,
+            ServiceLogCaptureMode::Application
+        );
+        assert_ne!(parsed.normalized_hash, application.normalized_hash);
+
+        let unknown_mode_manifest = service_manifest.replace(
+            "[gateways.service]\n",
+            "[gateways.service]\nlog_capture_mode = \"future\"\n",
+        );
+        let unknown_mode = parse_repository_gateways(unknown_mode_manifest.as_bytes());
+        assert!(unknown_mode.config.is_none());
+        assert!(
+            unknown_mode
+                .diagnostics
+                .iter()
+                .any(|diagnostic| diagnostic.code == "invalid_toml")
+        );
+
+        let stateless_with_service = service_manifest.replace("http.service.v1", "http.v1");
+        let parsed = parse_repository_gateways(stateless_with_service.as_bytes());
+        assert!(parsed.config.is_none());
+        assert!(
+            parsed
+                .diagnostics
+                .iter()
+                .any(|diagnostic| diagnostic.code == "invalid_repository_gateway_declaration")
+        );
+
+        let service_without_settings = service_manifest.replace(
+            "[gateways.service]\nloopback_port = 8080\nreadiness_path = \"/ready\"\nhealth_path = \"/health\"\n",
+            "",
+        );
+        let parsed = parse_repository_gateways(service_without_settings.as_bytes());
+        assert!(parsed.config.is_none());
+        assert!(
+            parsed
+                .diagnostics
+                .iter()
+                .any(|diagnostic| diagnostic.code == "invalid_repository_gateway_declaration")
+        );
     }
 
     #[test]

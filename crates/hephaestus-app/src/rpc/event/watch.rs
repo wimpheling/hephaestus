@@ -444,7 +444,10 @@ mod tests {
         };
         use async_nats::jetstream;
         use event_postgres::PostgresProductEventOutbox;
-        use identity_domain::{AuthenticatedIdentity, RequestId, UserId};
+        use identity_domain::{
+            AuthenticatedIdentity, BrowserSessionSid, RequestId, UserId,
+            browser_session_identity_binding_digest, browser_session_sid_digest,
+        };
         use serde_json::json;
         use sqlx::postgres::PgPoolOptions;
         use std::{sync::Arc, time::Duration};
@@ -460,6 +463,32 @@ mod tests {
             .connect(&database_url)
             .await
             .expect("connect watch PostgreSQL");
+        let worker_pool = PgPoolOptions::new()
+            .max_connections(2)
+            .after_connect(|connection, _metadata| {
+                Box::pin(async move {
+                    sqlx::query("SET ROLE hephaestus_worker")
+                        .execute(connection)
+                        .await
+                        .map(|_| ())
+                })
+            })
+            .connect(&database_url)
+            .await
+            .expect("connect watch worker PostgreSQL");
+        let application_pool = PgPoolOptions::new()
+            .max_connections(2)
+            .after_connect(|connection, _metadata| {
+                Box::pin(async move {
+                    sqlx::query("SET ROLE hephaestus_app")
+                        .execute(connection)
+                        .await
+                        .map(|_| ())
+                })
+            })
+            .connect(&database_url)
+            .await
+            .expect("connect watch application PostgreSQL");
         let nats = async_nats::connect(nats_url)
             .await
             .expect("connect watch NATS");
@@ -505,6 +534,26 @@ mod tests {
             json!({}),
             RequestId::new(),
         );
+        let sid = BrowserSessionSid::new();
+        sqlx::query(
+            "INSERT INTO human_browser_sessions
+                (id, sid_digest, creation_idempotency_id, creation_request_id,
+                 identity_binding_digest, user_id, issued_at, expires_at)
+             VALUES ($1, $2, $3, $4, $5, $6, now(), now() + interval '12 hours')",
+        )
+        .bind(Uuid::new_v4())
+        .bind(browser_session_sid_digest(sid).as_bytes().to_vec())
+        .bind(Uuid::new_v4())
+        .bind(Uuid::new_v4())
+        .bind(
+            browser_session_identity_binding_digest(&identity)
+                .as_bytes()
+                .to_vec(),
+        )
+        .bind(user_id)
+        .execute(&worker_pool)
+        .await
+        .expect("seed active watch browser session");
         let scope = EventScope {
             kind: ScopeKind::Organization,
             id: organization_id,
@@ -548,12 +597,13 @@ mod tests {
         let barrier_cursor = barrier.committed_cursor;
         drop(receiver);
 
-        mutate_organization(&pool, user_id, organization_id, "one").await;
-        mutate_organization(&pool, user_id, organization_id, "two").await;
-        publisher
-            .publish_pending(100)
-            .await
-            .expect("publish disconnected changes");
+        let first_request = mutate_organization(&pool, user_id, organization_id, "one").await;
+        let second_request = mutate_organization(&pool, user_id, organization_id, "two").await;
+        let disconnected_events = vec![
+            product_event_id(&pool, first_request).await,
+            product_event_id(&pool, second_request).await,
+        ];
+        publish_events_until_published(&pool, &publisher, &disconnected_events).await;
 
         let restarted_application =
             EventApplication::new(pool.clone(), Arc::new(NatsEventWakeups::new(nats.clone())));
@@ -611,11 +661,9 @@ mod tests {
                 .is_err(),
             "duplicate wakeups must not duplicate a durable event"
         );
-        mutate_organization(&pool, user_id, organization_id, "three").await;
-        publisher
-            .publish_pending(100)
-            .await
-            .expect("publish post-duplicate event");
+        let third_request = mutate_organization(&pool, user_id, organization_id, "three").await;
+        let third_event = product_event_id(&pool, third_request).await;
+        publish_events_until_published(&pool, &publisher, &[third_event]).await;
         let unique = duplicate_safe
             .recv()
             .await
@@ -630,9 +678,15 @@ mod tests {
             &publisher,
             user_id,
             organization_id,
+            &application_pool,
+            &worker_pool,
             [11; 32],
+            sid,
         )
         .await;
+
+        worker_pool.close().await;
+        application_pool.close().await;
 
         sqlx::query(
             "UPDATE application_events SET retained_until = now() - interval '1 second'
@@ -703,10 +757,12 @@ mod tests {
         .execute(&pool)
         .await
         .expect("revoke membership");
-        publisher
-            .publish_pending(100)
-            .await
-            .expect("publish revocation");
+        let revocation_events = unpublished_scope_event_ids(&pool, organization_id).await;
+        assert!(
+            !revocation_events.is_empty(),
+            "membership revocation event exists"
+        );
+        publish_events_until_published(&pool, &publisher, &revocation_events).await;
         // The membership deletion races a read that began while the watch was
         // still authorized. That read may deliver its already-committed event;
         // the next authorization check must then terminate with revocation.
@@ -726,6 +782,73 @@ mod tests {
         .await
         .expect("event watch must observe revocation");
         assert!(matches!(terminal.delivery, Delivery::Revoked(_)));
+    }
+
+    const TARGET_PUBLICATION_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(30);
+
+    async fn product_event_id(pool: &sqlx::PgPool, request: Uuid) -> Uuid {
+        sqlx::query_scalar(
+            "SELECT id FROM application_events
+               WHERE request_id = $1 AND aggregate_type = 'organization'
+               ORDER BY cursor DESC LIMIT 1",
+        )
+        .bind(request)
+        .fetch_one(pool)
+        .await
+        .expect("product event id")
+    }
+
+    async fn unpublished_scope_event_ids(pool: &sqlx::PgPool, scope_id: Uuid) -> Vec<Uuid> {
+        sqlx::query_scalar(
+            "SELECT event.id FROM product_event_outbox outbox
+               JOIN application_events event ON event.id = outbox.event_id
+              WHERE event.scope_kind = 'organization' AND event.scope_id = $1
+                AND outbox.published_at IS NULL
+                AND outbox.dead_lettered_at IS NULL
+              ORDER BY event.cursor",
+        )
+        .bind(scope_id)
+        .fetch_all(pool)
+        .await
+        .expect("unpublished scope event ids")
+    }
+
+    async fn publish_events_until_published(
+        pool: &sqlx::PgPool,
+        publisher: &crate::event_adapter::EventPublisher,
+        event_ids: &[Uuid],
+    ) {
+        assert!(!event_ids.is_empty(), "publication target is nonempty");
+        tokio::time::timeout(TARGET_PUBLICATION_TIMEOUT, async {
+            loop {
+                let (found, delivered_count, dead_lettered): (i64, i64, i64) = sqlx::query_as(
+                    "SELECT count(*),
+                            count(*) FILTER (WHERE published_at IS NOT NULL),
+                            count(*) FILTER (WHERE dead_lettered_at IS NOT NULL)
+                       FROM product_event_outbox
+                      WHERE event_id = ANY($1)",
+                )
+                .bind(event_ids.to_vec())
+                .fetch_one(pool)
+                .await
+                .expect("publication target status");
+                assert_eq!(
+                    found,
+                    i64::try_from(event_ids.len()).expect("event target count fits in i64"),
+                    "all publication targets have outbox rows"
+                );
+                assert_eq!(dead_lettered, 0, "publication targets were dead-lettered");
+                if delivered_count == found {
+                    return;
+                }
+                publisher
+                    .publish_pending(100)
+                    .await
+                    .expect("publish targeted events");
+            }
+        })
+        .await
+        .expect("targeted product events published before bounded timeout");
     }
 
     async fn mutate_organization(
@@ -757,25 +880,35 @@ mod tests {
         request
     }
 
-    #[allow(clippy::too_many_lines)]
+    // Keep the transport proof's real event, worker-session, and application
+    // pool handles explicit so it cannot silently fall back to a fake auth path.
+    #[allow(clippy::too_many_arguments, clippy::too_many_lines)]
     async fn assert_connect_transport_resume(
         pool: &sqlx::PgPool,
         nats: &async_nats::Client,
         publisher: &crate::event_adapter::EventPublisher,
         user_id: Uuid,
         organization_id: Uuid,
+        application_pool: &sqlx::PgPool,
+        worker_pool: &sqlx::PgPool,
         signing_key: [u8; 32],
+        sid: identity_domain::BrowserSessionSid,
     ) {
         use crate::{
             event_adapter::NatsEventWakeups,
-            rpc::{MediatorAuthenticator, event::EventRpc},
+            rpc::{
+                MediatorAuthenticationState, MediatorAuthenticator, event::EventRpc,
+                mediator_identity_middleware,
+            },
         };
+        use axum::middleware::from_fn_with_state;
         use buffa::Message as _;
         use connectrpc::{
             Protocol, Router,
             client::{CallOptions, ClientConfig, HttpClient},
         };
         use futures_util::StreamExt as _;
+        use identity_postgres::PostgresBrowserSessionStore;
         use rpc_proto::{
             connect::hephaestus::event::v1::{ProductEventServiceClient, ProductEventServiceExt},
             messages::hephaestus::{
@@ -788,19 +921,30 @@ mod tests {
         };
         use std::{sync::Arc, time::Duration};
 
+        let browser_sessions = Arc::new(PostgresBrowserSessionStore::new(
+            worker_pool.clone(),
+            application_pool.clone(),
+        ));
         let service = Arc::new(EventRpc::new(
             pool.clone(),
             MediatorAuthenticator::new(&signing_key),
             Arc::new(NatsEventWakeups::new(nats.clone())),
             signing_key,
         ));
-        let router = service.register(Router::new());
+        let auth_state = MediatorAuthenticationState::new(
+            MediatorAuthenticator::new(&signing_key),
+            browser_sessions,
+        );
+        let router = service
+            .register(Router::new())
+            .into_axum_router()
+            .layer(from_fn_with_state(auth_state, mediator_identity_middleware));
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
             .await
             .expect("bind Connect watch listener");
         let address = listener.local_addr().expect("Connect watch address");
         let server = tokio::spawn(async move {
-            axum::serve(listener, router.into_axum_router())
+            axum::serve(listener, router)
                 .await
                 .expect("serve Connect watch");
         });
@@ -811,7 +955,7 @@ mod tests {
             HttpClient::plaintext(),
             ClientConfig::new(uri).with_protocol(Protocol::Connect),
         );
-        let token = mediator_assertion(&signing_key, user_id);
+        let token = mediator_assertion(&signing_key, user_id, sid);
         let options = || {
             CallOptions::default()
                 .with_header("authorization", format!("Bearer {token}"))
@@ -871,10 +1015,7 @@ mod tests {
         .fetch_one(pool)
         .await
         .expect("Connect event id");
-        publisher
-            .publish_pending(100)
-            .await
-            .expect("publish Connect event");
+        publish_events_until_published(pool, publisher, &[expected_event_id]).await;
 
         let decoded = tokio::time::timeout(Duration::from_secs(5), async {
             loop {
@@ -935,7 +1076,11 @@ mod tests {
         let _result = server.await;
     }
 
-    fn mediator_assertion(signing_key: &[u8], user_id: Uuid) -> String {
+    fn mediator_assertion(
+        signing_key: &[u8],
+        user_id: Uuid,
+        sid: identity_domain::BrowserSessionSid,
+    ) -> String {
         use jsonwebtoken::{Algorithm, EncodingKey, Header, encode};
         use serde::Serialize;
         use time::OffsetDateTime;
@@ -949,6 +1094,7 @@ mod tests {
             iat: i64,
             nbf: i64,
             exp: i64,
+            sid: String,
         }
 
         let now = OffsetDateTime::now_utc().unix_timestamp();
@@ -962,6 +1108,7 @@ mod tests {
                 iat: now,
                 nbf: now,
                 exp: now + 30,
+                sid: sid.to_protocol_string(),
             },
             &EncodingKey::from_secret(signing_key),
         )

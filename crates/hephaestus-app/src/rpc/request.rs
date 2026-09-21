@@ -6,46 +6,30 @@ use identity_domain::{
     AuthenticatedIdentity, RequestId, actor_idempotency_id, mutation_idempotency_seed,
 };
 use rpc_proto::messages::hephaestus::common::v1::{OpaqueId, RequestContext};
-use serde_json::json;
 use std::str::FromStr;
 
 const MAX_IDEMPOTENCY_KEY_BYTES: usize = 256;
 
 pub(super) fn mutation_identity(
     transport: &TransportContext,
-    authenticator: &MediatorAuthenticator,
+    _authenticator: &MediatorAuthenticator,
     audience: &str,
     context: Option<&RequestContext>,
 ) -> Result<AuthenticatedIdentity, RpcError> {
-    let principal = transport
+    let mut identity = transport
         .extensions()
         .get::<AuthenticatedIdentity>()
         .cloned()
-        .map(|identity| super::MediatorPrincipal {
-            user_id: identity.user_id,
-            assertion_id: identity.request_id.as_uuid(),
-        });
-    let principal = match principal {
-        Some(principal) => principal,
-        None => authenticator
-            .authenticate(transport.headers(), audience)
-            .map_err(|_| RpcError::Unauthenticated)?,
-    };
+        .ok_or(RpcError::Unauthenticated)?;
     let context = context.ok_or(RpcError::InvalidArgument)?;
     let request_id = mutation_request_id(context)?;
     let idempotency_id = derive_idempotency_id(
-        principal.user_id.as_uuid().as_bytes(),
+        identity.user_id.as_uuid().as_bytes(),
         audience,
         &context.idempotency_key,
     );
-    Ok(AuthenticatedIdentity::new(
-        principal.user_id,
-        "hephaestus-web-mediator",
-        principal.user_id.to_string(),
-        json!({"mediator": "phoenix", "assertion_id": principal.assertion_id}),
-        request_id,
-    )
-    .with_idempotency_id(idempotency_id))
+    identity.request_id = request_id;
+    Ok(identity.with_idempotency_id(idempotency_id))
 }
 
 pub(super) fn derive_idempotency_id(
@@ -71,22 +55,24 @@ fn mutation_request_id(context: &RequestContext) -> Result<RequestId, RpcError> 
 
 pub(super) fn query_identity(
     transport: &TransportContext,
-    authenticator: &MediatorAuthenticator,
-    audience: &str,
+    _authenticator: &MediatorAuthenticator,
+    _audience: &str,
 ) -> Result<AuthenticatedIdentity, RpcError> {
-    if let Some(identity) = transport.extensions().get::<AuthenticatedIdentity>() {
-        return Ok(identity.clone());
-    }
-    let principal = authenticator
-        .authenticate(transport.headers(), audience)
-        .map_err(|_| RpcError::Unauthenticated)?;
-    Ok(AuthenticatedIdentity::new(
-        principal.user_id,
-        "hephaestus-web-mediator",
-        principal.user_id.to_string(),
-        json!({"mediator": "phoenix", "assertion_id": principal.assertion_id}),
-        RequestId::from_uuid(principal.assertion_id),
-    ))
+    transport
+        .extensions()
+        .get::<AuthenticatedIdentity>()
+        .cloned()
+        .ok_or(RpcError::Unauthenticated)
+}
+
+pub(super) fn verified_mediator_session(
+    transport: &TransportContext,
+) -> Result<super::VerifiedMediatorSession, RpcError> {
+    transport
+        .extensions()
+        .get::<super::VerifiedMediatorSession>()
+        .copied()
+        .ok_or(RpcError::Unauthenticated)
 }
 
 pub(super) fn required_id(value: Option<&OpaqueId>) -> Result<String, RpcError> {
@@ -97,7 +83,10 @@ pub(super) fn required_id(value: Option<&OpaqueId>) -> Result<String, RpcError> 
 
 #[cfg(test)]
 mod tests {
-    use super::{MAX_IDEMPOTENCY_KEY_BYTES, derive_idempotency_id, mutation_request_id};
+    use super::{
+        MAX_IDEMPOTENCY_KEY_BYTES, MediatorAuthenticator, derive_idempotency_id,
+        mutation_request_id,
+    };
     use rpc_proto::messages::hephaestus::common::v1::{OpaqueId, RequestContext};
     use uuid::Uuid;
 
@@ -122,6 +111,113 @@ mod tests {
         invalid.idempotency_key = String::from("browser-action");
         invalid.request_id.get_or_insert_default().value = String::from("not-a-uuid");
         assert!(mutation_request_id(&invalid).is_err());
+    }
+
+    #[test]
+    fn header_only_valid_jwt_cannot_supply_request_identity() {
+        use super::mutation_identity;
+        use crate::rpc::mediator_signing_key;
+        use connectrpc::RequestContext as TransportContext;
+        use http::{Extensions, HeaderMap, HeaderValue, header::AUTHORIZATION};
+        use identity_domain::{AuthenticatedIdentity, UserId};
+        use jsonwebtoken::{Algorithm, EncodingKey, Header, encode};
+        use serde::Serialize;
+        use serde_json::json;
+        use time::OffsetDateTime;
+
+        #[derive(Serialize)]
+        struct Claims {
+            iss: &'static str,
+            aud: &'static str,
+            sub: String,
+            jti: String,
+            iat: i64,
+            nbf: i64,
+            exp: i64,
+            sid: String,
+        }
+
+        let key = mediator_signing_key(b"request-helper-test-token-with-entropy");
+        let audience = "/hephaestus.project.v1.ProjectService/GetProject";
+        let now = OffsetDateTime::now_utc().unix_timestamp();
+        let token = encode(
+            &Header::new(Algorithm::HS256),
+            &Claims {
+                iss: "hephaestus-web-mediator",
+                aud: audience,
+                sub: Uuid::new_v4().to_string(),
+                jti: Uuid::new_v4().to_string(),
+                iat: now,
+                nbf: now,
+                exp: now + 30,
+                sid: Uuid::new_v4().to_string(),
+            },
+            &EncodingKey::from_secret(&key),
+        )
+        .expect("encode valid mediator assertion");
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            AUTHORIZATION,
+            HeaderValue::from_str(&format!("Bearer {token}")).expect("authorization header"),
+        );
+        let transport = TransportContext::new(headers);
+        let authenticator = MediatorAuthenticator::new(&key);
+        assert!(
+            authenticator
+                .authenticate(transport.headers(), audience)
+                .is_ok()
+        );
+        let context = RequestContext {
+            request_id: OpaqueId {
+                value: Uuid::new_v4().to_string(),
+                ..Default::default()
+            }
+            .into(),
+            idempotency_key: String::from("header-only"),
+            ..Default::default()
+        };
+        assert!(matches!(
+            mutation_identity(&transport, &authenticator, audience, Some(&context),),
+            Err(super::RpcError::Unauthenticated)
+        ));
+        assert!(matches!(
+            super::query_identity(&transport, &authenticator, audience),
+            Err(super::RpcError::Unauthenticated)
+        ));
+
+        let assertion_id = Uuid::new_v4();
+        let body_request_id = Uuid::new_v4();
+        let mut extensions = Extensions::new();
+        extensions.insert(AuthenticatedIdentity::new(
+            UserId::new(),
+            "hephaestus-web-mediator",
+            "subject",
+            json!({"assertion_id": assertion_id}),
+            identity_domain::RequestId::from_uuid(assertion_id),
+        ));
+        let authenticated_transport =
+            TransportContext::new(HeaderMap::new()).with_extensions(extensions);
+        let body = RequestContext {
+            request_id: OpaqueId {
+                value: body_request_id.to_string(),
+                ..Default::default()
+            }
+            .into(),
+            idempotency_key: String::from("distinct-request-id"),
+            ..Default::default()
+        };
+        let identity = mutation_identity(
+            &authenticated_transport,
+            &authenticator,
+            audience,
+            Some(&body),
+        )
+        .expect("body request context is authoritative");
+        assert_eq!(identity.request_id.as_uuid(), body_request_id);
+        assert_eq!(
+            identity.verified_claims["assertion_id"],
+            assertion_id.to_string()
+        );
     }
 
     #[test]

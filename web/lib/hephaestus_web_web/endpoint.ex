@@ -1,15 +1,9 @@
 defmodule HephaestusWebWeb.Endpoint do
   use Phoenix.Endpoint, otp_app: :hephaestus_web
 
-  # The session will be stored in the cookie and signed,
-  # this means its contents can be read but not tampered with.
-  # Set :encryption_salt if you would also like to encrypt it.
-  @session_options [
-    store: :cookie,
-    key: "_hephaestus_web_key",
-    signing_salt: "ptlYZxM4",
-    same_site: "Lax"
-  ]
+  @session_options HephaestusWebWeb.SessionOptions.for_profile(
+                     Application.compile_env!(:hephaestus_web, :browser_session_cookie_profile)
+                   )
 
   socket "/live", Phoenix.LiveView.Socket,
     websocket: [connect_info: [session: @session_options]],
@@ -51,4 +45,7 @@ defmodule HephaestusWebWeb.Endpoint do
   plug Plug.Head
   plug Plug.Session, @session_options
   plug HephaestusWebWeb.Router
+
+  @doc false
+  def session_options, do: @session_options
 end

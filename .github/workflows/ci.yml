@@ -33,7 +33,7 @@ jobs:
           components: clippy,rustfmt
       - uses: Swatinem/rust-cache@v2
       - name: Install integration dependencies
-        run: sudo apt-get update && sudo apt-get install -y e2fsprogs
+        run: sudo apt-get update && sudo apt-get install -y e2fsprogs postgresql-client
       - name: Start JetStream
         run: docker run --detach --rm --name hephaestus-nats --publish 4222:4222 docker.io/library/nats@sha256:e4bf19f15fd3218814a4e3c9e0064e1334bd8aa20d5984b9f1a0afd084f8cc00 -js
       - name: Verify Mélange generation
@@ -54,6 +54,12 @@ jobs:
         run: cargo clippy --workspace --all-targets --all-features
       - name: Tests
         run: cargo test --workspace --all-features -- --test-threads=1
+      - name: Browser-session RPC lifecycle integration
+        timeout-minutes: 5
+        run: scripts/test-browser-session-lifecycle.sh
+      - name: UI installation RPC integration
+        timeout-minutes: 5
+        run: scripts/test-ui-installation-rpc.sh
       - name: Deferred update admission and reconciler race
         timeout-minutes: 15
         env:
@@ -72,6 +78,7 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
         with:
           toolchain: "1.88"
+          components: clippy,rustfmt
       - uses: Swatinem/rust-cache@v2
       - name: Install musl toolchain
         run: sudo apt-get update && sudo apt-get install -y musl-tools
@@ -81,6 +88,14 @@ jobs:
         working-directory: examples/cooking/cooking-gateway
         run: |
           cargo test --locked --offline --all-features
+          cargo build --locked --offline --release --target x86_64-unknown-linux-musl
+      - name: Check cooking service
+        working-directory: examples/cooking/cooking-service
+        run: |
+          cargo fmt --check
+          cargo clippy --locked --offline --all-targets --all-features -- -D warnings
+          cargo test --locked --offline --all-features
+          cargo doc --locked --offline --all-features --no-deps
           cargo build --locked --offline --release --target x86_64-unknown-linux-musl
       - name: Test cooking agent, deterministic relay and Hugo output
         working-directory: examples/cooking/cooking-agent
@@ -116,6 +131,17 @@ jobs:
         run: |
           npm ci
           npx playwright install --with-deps chromium
+      - name: Test release UI kit
+        working-directory: web/assets/release_ui_kit
+        run: npm test
+      - name: Installed UI navigation and bootstrap Node tests
+        run: |
+          node --test --test-isolation=none --test-reporter=tap \
+            web/assets/js/design_system/hooks/installed_ui_navigation_test.mjs \
+            crates/hephaestus-app/tests/ui_bootstrap_script.mjs \
+            e2e/playwright/reporter-tests/safe-installed-ui-reporter.test.mjs
+      - name: Installed UI bridge protocol
+        run: scripts/test-ui-e2e-installed-bridge.sh
       - name: Phoenix and browser golden path
         env:
           HEPHAESTUS_PLAYWRIGHT_SKIP_BROWSER_INSTALL: "1"

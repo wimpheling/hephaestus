@@ -517,6 +517,16 @@ exception must follow the policy above.
 | `RPC-GENERATED-FILES-CLEAN` | Generation diff / harness | Proves shared bindings are reproducible and unedited; covers all generated Rust and Elixir outputs. | `cargo dev check protobuf` | None for hand edits; update proto/generator and regenerate. |
 | `EVT-NATS-ONLY-IN-EVENT-ADAPTERS` | Structural + semantic lint / harness | Gives product-event publication one controlled boundary; covers NATS construction and publish APIs. | `cargo dev check architecture` | Exact worker composition wiring only; move behavior to an event adapter/outbox publisher. |
 
+The dedicated loopback release-UI listener is a browser transport boundary.
+`/_heph/bootstrap` serves the fixed bootstrap document and exchanges its one-time
+handoff for a host-only child cookie. Its fallback serves only authenticated,
+immutable release artifacts or declared managed/API bindings on exact generation
+hosts. These HTTP routes are required for browser document, asset, and cookie
+semantics; installation and lifecycle commands remain generated Connect RPCs.
+The listener shares bounded request limits and validates current child authority
+before release serving. Caddy owns the public TLS entry point and forwards only
+the configured UI namespace to this listener.
+
 ### Semantic Rust
 
 | Rule | Class / state | Rationale and scope | Command | Exceptions and remediation |

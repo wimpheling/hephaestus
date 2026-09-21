@@ -11,6 +11,15 @@ defmodule HephaestusWebWeb.DesignSystem.Pages.OrganizationWorkspacePage do
   attr :organization, :map, default: nil
   attr :projects, :list, default: []
 
+  attr :installed_ui, :map,
+    default: %{
+      state: :loading,
+      installations: [],
+      error: nil,
+      has_more: false,
+      loading_more: false
+    }
+
   @doc "Renders the organization project collection."
   def organization_workspace_page(assigns) do
     ~H"""
@@ -71,6 +80,14 @@ defmodule HephaestusWebWeb.DesignSystem.Pages.OrganizationWorkspacePage do
             </.action>
           </:row>
         </.resource_list>
+        <.installed_ui_navigation
+          scope={:organization}
+          state={@installed_ui.state}
+          installations={@installed_ui.installations}
+          error={@installed_ui.error}
+          has_more={@installed_ui.has_more}
+          loading_more={@installed_ui.loading_more}
+        />
       </.frame>
     </.page_state>
     """

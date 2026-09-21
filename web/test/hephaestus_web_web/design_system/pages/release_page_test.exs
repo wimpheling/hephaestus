@@ -62,6 +62,32 @@ defmodule HephaestusWebWeb.DesignSystem.Pages.ReleasePageTest do
     assert html =~ "Publish release"
   end
 
+  test "renders declared UI metadata without launch controls" do
+    html =
+      render_component(
+        &ReleasePage.release/1,
+        Map.put(assigns(), :ui_descriptors, [static_ui(), managed_ui()])
+      )
+
+    assert html =~ ~s(id="release-ui-descriptors")
+    assert html =~ "Static dashboard"
+    assert html =~ "Managed console"
+    assert html =~ "Project · Embedded"
+    assert html =~ "Repository · Full page"
+    assert html =~ "static files"
+    assert html =~ "managed service"
+    assert html =~ "2 declared APIs"
+    assert html =~ "0 declared APIs"
+    refute html =~ "Launch"
+    refute html =~ "launch"
+  end
+
+  test "renders the legacy empty UI metadata state" do
+    html = render_component(&ReleasePage.release/1, assigns())
+
+    assert html =~ "No UI surfaces are declared."
+  end
+
   test "gateway installation is available only for published releases" do
     for state <- ["draft", "published", "revoked"] do
       data = assigns()
@@ -100,6 +126,7 @@ defmodule HephaestusWebWeb.DesignSystem.Pages.ReleasePageTest do
       },
       artifacts: [{"release-artifact-artifact-1", artifact()}],
       agents: [{"release-agent-agent-1", agent()}],
+      ui_descriptors: [],
       organization_index_destination: "/organizations",
       organization_destination: "/organizations/org-1",
       project_destination: "/projects/project-1",
@@ -128,6 +155,28 @@ defmodule HephaestusWebWeb.DesignSystem.Pages.ReleasePageTest do
       "requires_state" => true,
       "parameter_schema" => [],
       "secret_slot_schema" => []
+    }
+  end
+
+  defp static_ui do
+    %{
+      "key" => "dashboard",
+      "label" => "Static dashboard",
+      "scope" => "project",
+      "presentation" => "iframe",
+      "static_content" => %{"files" => []},
+      "apis" => [%{"key" => "summary"}, %{"key" => "activity"}]
+    }
+  end
+
+  defp managed_ui do
+    %{
+      "key" => "console",
+      "label" => "Managed console",
+      "scope" => "repository",
+      "presentation" => "full_page",
+      "managed_service" => %{"gateway_name" => "console"},
+      "apis" => []
     }
   end
 end

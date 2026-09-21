@@ -6,19 +6,155 @@
 
 use async_trait::async_trait;
 use bytes::Bytes;
-pub use gateway_domain::{GatewayInboundSecretResolver, InboundGatewaySecretRule};
+pub use gateway_domain::{Exposure, GatewayInboundSecretResolver, InboundGatewaySecretRule};
 use http::{HeaderMap, HeaderName, Method, StatusCode};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
-use std::{collections::BTreeSet, net::IpAddr, sync::Arc, time::Duration};
+use std::{
+    collections::BTreeSet,
+    net::{IpAddr, SocketAddr},
+    sync::Arc,
+    time::Duration,
+};
 use subtle::ConstantTimeEq;
 use tokio::time::timeout;
 use uuid::Uuid;
+
+mod ui_gateway_admission;
+pub use ui_gateway_admission::{
+    UiGatewayAdmission, UiGatewayAdmissionError, UiGatewayAdmissionProvider, UiGatewayAuthority,
+    UiGatewayRequest, UiGatewayRequestKind, admission_failure_response, prepare_gateway_request,
+    reject_ui_set_cookie, strip_ui_guest_headers, validate_ui_response,
+};
 use vm_trait::{PrivateHttpRequest, PrivateHttpResponse, PrivateMailboxPublication, VmInstance};
 
 mod integration;
+mod service_boot_recovery;
+mod service_capacity;
+mod service_claim_resolution;
+mod service_cleanup;
+mod service_cleanup_driver;
+mod service_coordinator;
+pub(crate) mod service_diagnostics;
+mod service_execution;
+mod service_expired_claim_recovery;
+mod service_failure;
+mod service_handler;
+mod service_http;
+mod service_instance;
+mod service_launch;
+mod service_lease;
+mod service_log_writer;
+mod service_logs;
+mod service_ownership;
+mod service_preparation;
+mod service_probe;
+mod service_registry;
+mod service_supervisor;
+mod service_targets;
 
 pub use integration::caddy::LocalCaddyAdministration;
+pub use service_boot_recovery::{
+    GatewayServiceBootRecovery, GatewayServiceBootRecoveryContext, GatewayServiceBootRecoveryError,
+    GatewayServiceBootRecoveryEvent, GatewayServiceBootRecoveryShutdown,
+    GatewayServiceBootRecoveryUnresolved, MAX_SERVICE_BOOT_RECOVERY_CLEANUPS,
+};
+pub use service_capacity::{
+    DEFAULT_SERVICE_DRAIN_TIMEOUT, DEFAULT_SERVICE_HEALTH_FAILURES,
+    DEFAULT_SERVICE_HEALTH_INTERVAL, DEFAULT_SERVICE_MAX_REVISIONS_PER_GATEWAY,
+    DEFAULT_SERVICE_MAX_STARTUPS, DEFAULT_SERVICE_REPLACEMENT_CAPACITY,
+    DEFAULT_SERVICE_REQUEST_CAPACITY, DEFAULT_SERVICE_SERVING_CAPACITY, GatewayServiceCapacity,
+    GatewayServiceCapacityError, GatewayServiceCapacitySnapshot, GatewayServiceCapacityToken,
+    GatewayServiceSupervisorPolicy,
+};
+pub use service_claim_resolution::GatewayServiceClaimResolutionStore;
+pub use service_cleanup::{GatewayServiceCleanup, GatewayServiceCleanupError};
+pub use service_cleanup_driver::{
+    GatewayServiceCleanupDriver, GatewayServiceCleanupDriverError,
+    GatewayServiceCleanupDriverOutcome, GatewayServiceCleanupDriverPolicy,
+    MAX_SERVICE_CLEANUP_DATABASE_WAIT,
+};
+pub use service_coordinator::{
+    GatewayServiceCoordinator, GatewayServiceCoordinatorControl, GatewayServiceCoordinatorError,
+    GatewayServiceCoordinatorFailure, GatewayServiceCoordinatorFailureReason,
+    GatewayServiceCoordinatorStatus, GatewayServiceLogWriterConfig, GatewayServiceStartupIntent,
+};
+pub use service_diagnostics::{ServiceDiagnosticsSnapshot, ServiceLifecycleEvidence};
+pub use service_execution::{
+    GatewayExecutionTarget, GatewayExecutionTargetError, GatewayExecutionTargetResolver,
+    GatewayServiceAuthorityBudget,
+};
+pub use service_expired_claim_recovery::GatewayServiceExpiredClaimRecovery;
+pub use service_failure::{
+    GatewayServiceFailure, GatewayServiceFailureCode, GatewayServiceFailureStore,
+    GatewayServiceFailureStoreError,
+};
+pub use service_handler::GatewayServiceHandler;
+pub use service_http::{ServiceHttpPolicy, exchange as exchange_private_service_http};
+pub use service_instance::{
+    ServiceInstance, ServiceInstanceError, ServiceInstanceHandle, ServiceInstancePolicy,
+    ServiceWorkerState, new_service_instance,
+};
+pub use service_launch::{
+    DEFAULT_SERVICE_CONNECT_TIMEOUT, DEFAULT_SERVICE_MAX_CONNECTIONS, GatewayServiceArtifact,
+    GatewayServiceArtifactKind, GatewayServiceIdentity, GatewayServiceLaunch,
+    GatewayServiceLaunchRequest, GatewayServiceLaunchResolver, GatewayServiceMaterializer,
+    service_transport_spec,
+};
+pub use service_lease::{
+    GatewayServiceLeaseControl, GatewayServiceLeaseError, GatewayServiceLeaseLossReason,
+    GatewayServiceLeaseMonitor, GatewayServiceLeasePolicy, GatewayServiceLeaseRetryReason,
+    GatewayServiceLeaseRunResult, GatewayServiceLeaseStatus,
+};
+pub use service_log_writer::{
+    DEFAULT_SERVICE_LOG_APPEND_TIMEOUT, DEFAULT_SERVICE_LOG_FINAL_FLUSH_TIMEOUT,
+    DEFAULT_SERVICE_LOG_MAX_RETRY_INTERVAL, DEFAULT_SERVICE_LOG_RETRY_INTERVAL, ServiceLogWriter,
+    ServiceLogWriterError, ServiceLogWriterFlush, ServiceLogWriterPolicy, ServiceLogWriterPoll,
+};
+pub use service_logs::{
+    GatewayServiceLogAppendBatch, GatewayServiceLogAppendOutcome, GatewayServiceLogMaintenance,
+    GatewayServiceLogMaintenanceError, GatewayServiceLogMaintenancePolicy,
+    GatewayServiceLogMaintenanceProjectPage, GatewayServiceLogMaintenanceProjectPageResult,
+    GatewayServiceLogMaintenanceProjects, GatewayServiceLogMaintenanceReport,
+    GatewayServiceLogProjectMetadata, GatewayServiceLogReadCursor, GatewayServiceLogReadMetadata,
+    GatewayServiceLogReadPage, GatewayServiceLogReadRecord, GatewayServiceLogReadRequest,
+    GatewayServiceLogReadScope, GatewayServiceLogStore, GatewayServiceLogStoreError,
+    MAX_SERVICE_LOG_CHUNK_BYTES, MAX_SERVICE_LOG_INSTANCE_BYTES, MAX_SERVICE_LOG_INSTANCE_CHUNKS,
+    MAX_SERVICE_LOG_MAINTENANCE_CHUNKS, MAX_SERVICE_LOG_MAINTENANCE_EPOCHS,
+    MAX_SERVICE_LOG_MAINTENANCE_PROJECT_PAGE_SIZE, MAX_SERVICE_LOG_PROJECT_BYTES,
+    MAX_SERVICE_LOG_PROJECT_CHUNKS, MAX_SERVICE_LOG_PROJECT_EPOCHS, MAX_SERVICE_LOG_QUEUE_BYTES,
+    MAX_SERVICE_LOG_QUEUE_CHUNKS, MAX_SERVICE_LOG_READ_PAGE_BYTES,
+    MAX_SERVICE_LOG_READ_PAGE_RECORDS, ServiceLogBufferHandle, ServiceLogBufferSnapshot,
+    ServiceLogLoss, ServiceLogRecord,
+};
+pub use service_ownership::{
+    GatewayServiceInstanceLease, GatewayServiceInstanceState, GatewayServiceOwner,
+    GatewayServiceOwnership, GatewayServiceOwnershipError, MAX_SERVICE_OWNER_HOST_BYTES,
+    MAX_SERVICE_OWNERSHIP_BATCH, MAX_SERVICE_OWNERSHIP_LEASE,
+};
+pub use service_preparation::{
+    PreparedGatewayService, ServicePreparation, ServicePreparationFailure,
+    ServicePreparationFailureReason, ServicePreparationHandle, new_service_preparation,
+};
+pub use service_probe::{
+    ServiceProbeError, ServiceProbePolicy, ServiceProbeSuccess, probe_private_service_http,
+};
+pub use service_registry::{
+    GatewayServiceInstanceKey, GatewayServiceRegistry, GatewayServiceRegistryError,
+    MAX_SERVICE_REGISTRY_CAPACITY, MAX_SERVICE_REQUEST_CAPACITY,
+};
+pub use service_supervisor::{
+    GatewayServiceStartupHandle, GatewayServiceStartupRequest, GatewayServiceSupervisor,
+    GatewayServiceSupervisorContext, GatewayServiceSupervisorError, GatewayServiceSupervisorEvent,
+    GatewayServiceSupervisorJobStatus, GatewayServiceSupervisorShutdown,
+    GatewayServiceSupervisorUnresolved,
+};
+pub use service_targets::{
+    GatewayServiceInstancePage, GatewayServiceInstancePageResult, GatewayServiceOwnedTarget,
+    GatewayServiceRevisionTarget, GatewayServiceTarget, GatewayServiceTargetPage,
+    GatewayServiceTargetPageResult, GatewayServiceTargetStore, MAX_SERVICE_INSTANCE_PAGE_SIZE,
+    MAX_SERVICE_TARGET_PAGE_SIZE,
+};
 
 /// Reserved public path prefix owned by gateway routing.
 pub const GATEWAY_NAMESPACE: &str = "/gateway/";
@@ -71,6 +207,10 @@ pub struct GatewayRouteBinding {
     pub route_id: Uuid,
     /// Exact immutable released handler revision to invoke.
     pub gateway_revision_id: Uuid,
+    /// Declared exposure carried from the authoritative revision. Reserved
+    /// authenticated routes must never enter the public Caddy or dispatcher
+    /// path.
+    pub exposure: Exposure,
     /// Normalized public path prefix below `/gateway/`.
     pub path_prefix: String,
     /// Permitted canonical HTTP methods.
@@ -629,6 +769,26 @@ pub trait GatewayInvocationRecorder: Send + Sync {
         route: &GatewayRouteBinding,
         request_id: Uuid,
     ) -> Result<Uuid, GatewayEdgeError>;
+    /// Records a UI-origin invocation only after the adapter has rechecked
+    /// the child authority and exact derived route in the same transaction as
+    /// the accepted invocation row. Existing recorders deny this path until
+    /// they implement that durable check.
+    ///
+    /// # Errors
+    ///
+    /// Returns a contract error when the recorder has not implemented the
+    /// durable UI authority check.
+    async fn accepted_ui(
+        &self,
+        route: &GatewayRouteBinding,
+        authority: &UiGatewayAuthority,
+        request_id: Uuid,
+    ) -> Result<Uuid, GatewayEdgeError> {
+        let _ = (route, authority, request_id);
+        Err(GatewayEdgeError::Contract(
+            "UI invocation acceptance is unsupported",
+        ))
+    }
     /// Records the terminal safe outcome.
     async fn completed(
         &self,
@@ -661,6 +821,44 @@ pub enum GatewayInvocationOutcome {
     TimedOut,
     /// Request was rejected before launch.
     Rejected,
+}
+
+/// Detailed disposition of one UI-origin dispatch.  This is an audit-facing
+/// semantic result; HTTP status is deliberately not used to infer admission.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum UiDispatchDisposition {
+    /// The durable UI authority provider rejected the request.
+    ProviderDenied,
+    /// The provider found no current declaration/route for the request.
+    ProviderNotFound,
+    /// The provider could not read current authority or gateway state.
+    ProviderUnavailable,
+    /// The typed request or selected admission violated the edge contract.
+    StructuralInvalid,
+    /// Durable `accepted_ui` could not record the invocation.
+    AcceptedUiFailure,
+    /// The invocation was admitted and its existing terminal outcome is known.
+    Admitted {
+        /// Existing invocation terminal outcome.
+        outcome: GatewayInvocationOutcome,
+        /// Whether the terminal outcome was durably persisted.
+        completion_persisted: bool,
+    },
+}
+
+/// Response plus the authoritative UI dispatch disposition.
+#[derive(Clone)]
+pub struct UiDispatchResult {
+    /// Safe response returned by the edge.
+    pub response: GatewayProviderResponse,
+    /// Typed admission/execution disposition for audit and response policy.
+    pub disposition: UiDispatchDisposition,
+}
+
+impl UiDispatchResult {
+    fn into_response(self) -> GatewayProviderResponse {
+        self.response
+    }
 }
 
 /// A synchronous dispatcher with deliberate response fallbacks.
@@ -722,6 +920,9 @@ where
         }) else {
             return fallback(StatusCode::NOT_FOUND);
         };
+        if route.exposure != Exposure::Public {
+            return fallback(StatusCode::NOT_FOUND);
+        }
         if let Err(error) = validate_request(&route, &request) {
             let _ = error;
             return fallback(StatusCode::BAD_REQUEST);
@@ -733,18 +934,136 @@ where
         else {
             return fallback(StatusCode::SERVICE_UNAVAILABLE);
         };
+        self.dispatch_admitted(route, request, invocation_id, false)
+            .await
+            .into_response()
+    }
+}
+
+impl<R, H, I> GatewayDispatcher<R, H, I> {
+    /// Dispatches a request from the trusted UI origin after durable UI
+    /// admission. Public dispatch remains restricted to `Exposure::Public`.
+    pub async fn dispatch_ui<A>(
+        &self,
+        request: UiGatewayRequest,
+        authority: &A,
+    ) -> GatewayProviderResponse
+    where
+        R: GatewayRouteResolver,
+        H: GatewayVmHandler,
+        I: GatewayInvocationRecorder,
+        A: UiGatewayAdmissionProvider + ?Sized,
+    {
+        self.dispatch_ui_detailed(request, authority)
+            .await
+            .into_response()
+    }
+
+    /// Dispatches one trusted UI request and retains the authoritative
+    /// admission/execution disposition for audit. The response-only
+    /// [`Self::dispatch_ui`] wrapper remains the compatibility surface.
+    pub async fn dispatch_ui_detailed<A>(
+        &self,
+        request: UiGatewayRequest,
+        authority: &A,
+    ) -> UiDispatchResult
+    where
+        R: GatewayRouteResolver,
+        H: GatewayVmHandler,
+        I: GatewayInvocationRecorder,
+        A: UiGatewayAdmissionProvider + ?Sized,
+    {
+        let admission = match authority.admit(&request).await {
+            Ok(admission) => admission,
+            Err(error) => {
+                return UiDispatchResult {
+                    response: GatewayProviderResponse {
+                        response: admission_failure_response(error),
+                        invocation_id: Uuid::nil(),
+                    },
+                    disposition: error.dispatch_disposition(),
+                };
+            }
+        };
+        let request_authority = request.authority.clone();
+        let Ok(request) = prepare_gateway_request(&request, &admission) else {
+            return UiDispatchResult {
+                response: GatewayProviderResponse {
+                    response: empty_response(StatusCode::BAD_REQUEST),
+                    invocation_id: Uuid::nil(),
+                },
+                disposition: UiDispatchDisposition::StructuralInvalid,
+            };
+        };
+        if validate_ui_request(&admission.route, &request).is_err() {
+            return UiDispatchResult {
+                response: GatewayProviderResponse {
+                    response: empty_response(StatusCode::BAD_REQUEST),
+                    invocation_id: Uuid::nil(),
+                },
+                disposition: UiDispatchDisposition::StructuralInvalid,
+            };
+        }
+        let Ok(invocation_id) = self
+            .recorder
+            .accepted_ui(
+                &admission.route,
+                &request_authority,
+                request.trusted.request_id,
+            )
+            .await
+        else {
+            return UiDispatchResult {
+                response: GatewayProviderResponse {
+                    response: empty_response(StatusCode::SERVICE_UNAVAILABLE),
+                    invocation_id: Uuid::nil(),
+                },
+                disposition: UiDispatchDisposition::AcceptedUiFailure,
+            };
+        };
+        self.dispatch_admitted(admission.route, request, invocation_id, true)
+            .await
+    }
+}
+
+impl<R: Sync, H: Sync, I: Sync> GatewayDispatcher<R, H, I> {
+    async fn dispatch_admitted(
+        &self,
+        route: GatewayRouteBinding,
+        request: GatewayRequest,
+        invocation_id: Uuid,
+        ui_response_policy: bool,
+    ) -> UiDispatchResult
+    where
+        H: GatewayVmHandler,
+        I: GatewayInvocationRecorder,
+    {
         let Ok(request) = self
             .rewrite_inbound_secrets(invocation_id, &route, request)
             .await
         else {
-            let _ = self
+            let completion_persisted = self
                 .recorder
                 .completed(invocation_id, GatewayInvocationOutcome::Rejected)
-                .await;
+                .await
+                .is_ok();
             // Missing, repeated, mismatched, revoked, and expired values
             // share a bounded authentication failure without exposing which
             // credential check failed. Unknown routes remain 404.
-            return fallback(StatusCode::UNAUTHORIZED);
+            return UiDispatchResult {
+                response: GatewayProviderResponse {
+                    response: empty_response(StatusCode::UNAUTHORIZED),
+                    invocation_id: if ui_response_policy {
+                        invocation_id
+                    } else {
+                        Uuid::nil()
+                    },
+                },
+                disposition: UiDispatchDisposition::Admitted {
+                    outcome: GatewayInvocationOutcome::Rejected,
+                    completion_persisted,
+                },
+            };
         };
         let result = timeout(
             route.limits.execution_timeout,
@@ -752,7 +1071,10 @@ where
         )
         .await;
         let (response, outcome) = match result {
-            Ok(Ok(mut response)) if validate_response(&route, &response).is_ok() => {
+            Ok(Ok(mut response))
+                if validate_response(&route, &response).is_ok()
+                    && (!ui_response_policy || validate_ui_response(&response).is_ok()) =>
+            {
                 if let Some(publication) = response.mailbox_publication.take() {
                     let publication_result = match &self.mailbox_publisher {
                         Some(publisher) => publisher.publish(invocation_id, publication).await,
@@ -784,25 +1106,27 @@ where
         // caller can safely retry: mailbox acceptance is deduplicated by the
         // bound producer/key, while this invocation remains visibly pending
         // for operator recovery rather than being silently forgotten.
-        if self
+        let completion_persisted = self
             .recorder
             .completed(invocation_id, outcome)
             .await
-            .is_err()
-        {
-            return GatewayProviderResponse {
-                response: empty_response(StatusCode::SERVICE_UNAVAILABLE),
+            .is_ok();
+        UiDispatchResult {
+            response: GatewayProviderResponse {
+                response: if completion_persisted {
+                    response
+                } else {
+                    empty_response(StatusCode::SERVICE_UNAVAILABLE)
+                },
                 invocation_id,
-            };
-        }
-        GatewayProviderResponse {
-            response,
-            invocation_id,
+            },
+            disposition: UiDispatchDisposition::Admitted {
+                outcome,
+                completion_persisted,
+            },
         }
     }
-}
 
-impl<R: Sync, H: Sync, I: Sync> GatewayDispatcher<R, H, I> {
     async fn rewrite_inbound_secrets(
         &self,
         invocation_id: Uuid,
@@ -871,7 +1195,7 @@ fn validate_gateway_prefix(prefix: &str) -> Result<(), GatewayEdgeError> {
             .any(|segment| segment.is_empty() || segment == "." || segment == "..")
         || !prefix
             .bytes()
-            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_' | b'/'))
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_' | b'.' | b'/'))
     {
         return Err(GatewayEdgeError::InvalidRoute(
             "path prefix must be normalized relative path",
@@ -903,6 +1227,13 @@ fn ensure_unique_routes(routes: &[GatewayRouteBinding]) -> Result<(), GatewayEdg
 pub struct LocalCaddyConfigurationTemplate {
     base: Value,
     server: String,
+    ui_namespace: Option<UiNamespaceConfiguration>,
+}
+
+#[derive(Clone)]
+struct UiNamespaceConfiguration {
+    namespace: String,
+    upstream: SocketAddr,
 }
 
 impl LocalCaddyConfigurationTemplate {
@@ -922,9 +1253,69 @@ impl LocalCaddyConfigurationTemplate {
         }
         let base: Value = serde_json::from_slice(configuration)
             .map_err(|_| GatewayEdgeError::InvalidCaddyConfiguration)?;
-        let template = Self { base, server };
+        let template = Self {
+            base,
+            server,
+            ui_namespace: None,
+        };
         template.gateway_subroute_index()?;
         Ok(template)
+    }
+
+    /// Enables the optional terminal UI namespace route.
+    ///
+    /// The operator baseline must reserve exactly one top-level
+    /// `group = "hephaestus.ui"` route at index zero. The private upstream is
+    /// restricted to a loopback socket; the UI service remains responsible for
+    /// canonical host-to-generation resolution and unknown-host denial.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the namespace, reserved Caddy slot, or upstream
+    /// socket is invalid.
+    pub fn with_ui_namespace(
+        mut self,
+        namespace: &str,
+        upstream: SocketAddr,
+    ) -> Result<Self, GatewayEdgeError> {
+        let namespace = namespace.to_ascii_lowercase();
+        validate_ui_namespace(&namespace)?;
+        if !upstream.ip().is_loopback() || upstream.port() == 0 {
+            return Err(GatewayEdgeError::InvalidCaddyConfiguration);
+        }
+        self.ui_namespace_slot_index()?;
+        self.ui_namespace = Some(UiNamespaceConfiguration {
+            namespace,
+            upstream,
+        });
+        Ok(self)
+    }
+
+    fn ui_namespace_slot_index(&self) -> Result<usize, GatewayEdgeError> {
+        let routes = self.server_routes()?;
+        let indices: Vec<_> = routes
+            .iter()
+            .enumerate()
+            .filter_map(|(index, route)| {
+                (route.get("group").and_then(Value::as_str) == Some("hephaestus.ui"))
+                    .then_some(index)
+            })
+            .collect();
+        let [index] = indices.as_slice() else {
+            return Err(GatewayEdgeError::InvalidCaddyConfiguration);
+        };
+        if *index != 0 {
+            return Err(GatewayEdgeError::InvalidCaddyConfiguration);
+        }
+        let handler = routes[*index]
+            .get("handle")
+            .and_then(Value::as_array)
+            .and_then(|handlers| handlers.first())
+            .filter(|handler| handler.get("handler").and_then(Value::as_str) == Some("subroute"));
+        if handler.is_none() {
+            return Err(GatewayEdgeError::InvalidCaddyConfiguration);
+        }
+        Ok(*index)
     }
 
     fn gateway_subroute_index(&self) -> Result<usize, GatewayEdgeError> {
@@ -967,6 +1358,15 @@ impl LocalCaddyConfigurationTemplate {
             return Err(GatewayEdgeError::Unavailable);
         }
         let mut configuration = self.base.clone();
+        if let Some(ui_namespace) = &self.ui_namespace {
+            let slot = self.ui_namespace_slot_index()?;
+            let pointer = format!("/apps/http/servers/{}/routes", self.server);
+            let target = configuration
+                .pointer_mut(&pointer)
+                .and_then(Value::as_array_mut)
+                .ok_or(GatewayEdgeError::InvalidCaddyConfiguration)?;
+            target[slot] = caddy_ui_namespace_route(ui_namespace);
+        }
         let slot = self.gateway_subroute_index()?;
         let routes = caddy_gateway_routes(desired, dispatcher_upstream);
         let pointer = format!(
@@ -981,6 +1381,44 @@ impl LocalCaddyConfigurationTemplate {
     }
 }
 
+fn validate_ui_namespace(namespace: &str) -> Result<(), GatewayEdgeError> {
+    if namespace.is_empty() || namespace.len() > 253 || namespace.ends_with('.') {
+        return Err(GatewayEdgeError::InvalidCaddyConfiguration);
+    }
+    for label in namespace.split('.') {
+        if label.is_empty()
+            || label.len() > 63
+            || label.starts_with('-')
+            || label.ends_with('-')
+            || !label
+                .bytes()
+                .all(|byte| byte.is_ascii_lowercase() || byte.is_ascii_digit() || byte == b'-')
+        {
+            return Err(GatewayEdgeError::InvalidCaddyConfiguration);
+        }
+    }
+    Ok(())
+}
+
+fn caddy_ui_namespace_route(configuration: &UiNamespaceConfiguration) -> Value {
+    let suffix = configuration.namespace.replace('.', "[.]");
+    let pattern = format!("(?i)^(?:.*[.])?{suffix}[.]?(?::[0-9]{{1,5}})?$");
+    serde_json::json!({
+        "group": "hephaestus.ui",
+        "match": [{
+            "expression": {
+                "name": "ui_namespace",
+                "expr": format!("header_regexp('Host', '{pattern}')")
+            }
+        }],
+        "handle": [{
+            "handler": "reverse_proxy",
+            "upstreams": [{ "dial": configuration.upstream.to_string() }]
+        }],
+        "terminal": true
+    })
+}
+
 fn caddy_gateway_routes(
     desired: &GatewayDesiredConfiguration,
     dispatcher_upstream: &str,
@@ -989,6 +1427,7 @@ fn caddy_gateway_routes(
     routes.sort_by(|left, right| left.path_prefix.cmp(&right.path_prefix));
     routes
         .into_iter()
+        .filter(|route| route.exposure == Exposure::Public)
         .map(|route| {
             let path = route.public_path();
             serde_json::json!({
@@ -1007,6 +1446,26 @@ fn validate_request(
     route: &GatewayRouteBinding,
     request: &GatewayRequest,
 ) -> Result<(), GatewayEdgeError> {
+    validate_request_for_exposure(route, request, Exposure::Public)
+}
+
+fn validate_ui_request(
+    route: &GatewayRouteBinding,
+    request: &GatewayRequest,
+) -> Result<(), GatewayEdgeError> {
+    validate_request_for_exposure(route, request, Exposure::HephAuthenticated)
+}
+
+fn validate_request_for_exposure(
+    route: &GatewayRouteBinding,
+    request: &GatewayRequest,
+    expected_exposure: Exposure,
+) -> Result<(), GatewayEdgeError> {
+    if route.exposure != expected_exposure {
+        return Err(GatewayEdgeError::Contract(
+            "gateway exposure does not match dispatcher boundary",
+        ));
+    }
     if !request.path_and_query.starts_with('/')
         || request.path_and_query.contains("//")
         || request
@@ -1153,7 +1612,7 @@ mod tests {
     use std::{
         collections::BTreeMap,
         sync::{
-            Mutex,
+            Arc, Mutex,
             atomic::{AtomicUsize, Ordering},
         },
     };
@@ -1176,10 +1635,31 @@ mod tests {
     fn route() -> GatewayRouteBinding {
         GatewayRouteBinding {
             route_id: Uuid::new_v4(),
+            exposure: gateway_domain::Exposure::Public,
             gateway_revision_id: Uuid::new_v4(),
             path_prefix: "echo".to_owned(),
             methods: BTreeSet::from([Method::POST]),
             limits: limits(),
+        }
+    }
+
+    #[test]
+    fn route_prefix_allows_dots_inside_segments_but_not_dot_segments_or_escapes() {
+        for prefix in ["http.service.v1", "release-1.0/service.v1"] {
+            let mut binding = route();
+            binding.path_prefix = prefix.to_owned();
+            binding.validate().expect("schema-valid dotted route");
+        }
+        for prefix in [
+            ".",
+            "..",
+            "release/./service",
+            "release/../service",
+            "release%2Fservice",
+        ] {
+            let mut binding = route();
+            binding.path_prefix = prefix.to_owned();
+            assert!(binding.validate().is_err(), "unsafe route prefix: {prefix}");
         }
     }
 
@@ -1202,6 +1682,136 @@ mod tests {
         .expect("valid shared Caddy template")
     }
 
+    fn caddy_template_with_ui_slot() -> LocalCaddyConfigurationTemplate {
+        LocalCaddyConfigurationTemplate::new(
+            serde_json::json!({
+                "apps": { "http": { "servers": { "shared": {
+                    "listen": ["127.0.0.1:443"],
+                    "routes": [
+                        { "group": "hephaestus.ui", "handle": [{ "handler": "subroute", "routes": [] }] },
+                        { "match": [{ "path": ["/platform/*"] }], "handle": [{ "handler": "static_response", "body": "platform" }] },
+                        { "group": "hephaestus.gateway", "handle": [{ "handler": "subroute", "routes": [] }] },
+                        { "handle": [{ "handler": "static_response", "status_code": 404 }] }
+                    ]
+                } } } }
+            })
+            .to_string()
+            .as_bytes(),
+            String::from("shared"),
+        )
+        .expect("valid shared Caddy template with UI slot")
+    }
+
+    #[test]
+    fn ui_namespace_replaces_first_slot_and_preserves_gateway_routes() {
+        let template = caddy_template_with_ui_slot()
+            .with_ui_namespace(
+                "ui.example",
+                "127.0.0.1:19091".parse().expect("loopback upstream"),
+            )
+            .expect("valid UI namespace configuration");
+        let rendered = template
+            .render(
+                &GatewayDesiredConfiguration {
+                    revision: GatewayConfigRevision::new(),
+                    routes: vec![route()],
+                },
+                "127.0.0.1:19090",
+            )
+            .expect("render UI and gateway routes");
+        let configuration: Value = serde_json::from_slice(&rendered).expect("rendered JSON");
+        let routes = configuration
+            .pointer("/apps/http/servers/shared/routes")
+            .and_then(Value::as_array)
+            .expect("shared routes");
+        assert_eq!(routes[0]["group"], "hephaestus.ui");
+        assert_eq!(routes[0]["terminal"], true);
+        assert_eq!(routes[0]["handle"][0]["handler"], "reverse_proxy");
+        assert_eq!(
+            routes[0]["handle"][0]["upstreams"][0]["dial"],
+            "127.0.0.1:19091"
+        );
+        assert_eq!(routes[2]["group"], "hephaestus.gateway");
+        assert_eq!(
+            routes[2]["handle"][0]["routes"][0]["match"][0]["path"][0],
+            "/gateway/echo"
+        );
+        assert_eq!(routes[0]["match"][0]["expression"]["name"], "ui_namespace");
+        assert!(
+            routes[0]["match"][0]["expression"]["expr"]
+                .as_str()
+                .expect("UI expression")
+                .contains("header_regexp('Host'")
+        );
+    }
+
+    #[test]
+    fn ui_namespace_requires_unique_first_slot_and_loopback_upstream() {
+        let mut duplicate = serde_json::json!({
+            "apps": { "http": { "servers": { "shared": {
+                "routes": [
+                    { "group": "hephaestus.ui", "handle": [{ "handler": "subroute", "routes": [] }] },
+                    { "group": "hephaestus.ui", "handle": [{ "handler": "subroute", "routes": [] }] },
+                    { "group": "hephaestus.gateway", "handle": [{ "handler": "subroute", "routes": [] }] }
+                ]
+            } } } }
+        });
+        assert!(
+            LocalCaddyConfigurationTemplate::new(
+                duplicate.to_string().as_bytes(),
+                String::from("shared")
+            )
+            .expect("gateway slot")
+            .with_ui_namespace("ui.example", "127.0.0.1:19091".parse().expect("address"))
+            .is_err()
+        );
+
+        duplicate["apps"]["http"]["servers"]["shared"]["routes"] = serde_json::json!([
+            { "group": "hephaestus.gateway", "handle": [{ "handler": "subroute", "routes": [] }] },
+            { "group": "hephaestus.ui", "handle": [{ "handler": "subroute", "routes": [] }] }
+        ]);
+        assert!(
+            LocalCaddyConfigurationTemplate::new(
+                duplicate.to_string().as_bytes(),
+                String::from("shared")
+            )
+            .expect("gateway slot")
+            .with_ui_namespace("ui.example", "127.0.0.1:19091".parse().expect("address"))
+            .is_err()
+        );
+
+        assert!(
+            caddy_template()
+                .with_ui_namespace("ui.example", "127.0.0.1:19091".parse().expect("address"))
+                .is_err()
+        );
+
+        let template = caddy_template_with_ui_slot();
+        assert!(
+            template
+                .clone()
+                .with_ui_namespace("ui..example", "127.0.0.1:19091".parse().expect("address"))
+                .is_err()
+        );
+        assert!(
+            template
+                .clone()
+                .with_ui_namespace("-ui.example", "127.0.0.1:19091".parse().expect("address"))
+                .is_err()
+        );
+        assert!(
+            template
+                .clone()
+                .with_ui_namespace("ui.example", "0.0.0.0:19091".parse().expect("address"))
+                .is_err()
+        );
+        assert!(
+            template
+                .with_ui_namespace("ui.example", "[::1]:19091".parse().expect("IPv6 loopback"))
+                .is_ok()
+        );
+    }
+
     #[test]
     fn shared_caddy_template_requires_one_dedicated_gateway_subroute() {
         let missing = serde_json::json!({
@@ -1213,6 +1823,40 @@ mod tests {
             Err(GatewayEdgeError::InvalidCaddyConfiguration)
         ));
     }
+
+    #[test]
+    fn reserved_authenticated_routes_are_not_publicly_rendered_or_admitted() {
+        let public = route();
+        let mut reserved = route();
+        reserved.path_prefix = String::from("reserved");
+        reserved.exposure = Exposure::HephAuthenticated;
+        let rendered = caddy_gateway_routes(
+            &GatewayDesiredConfiguration {
+                revision: GatewayConfigRevision::new(),
+                routes: vec![public, reserved.clone()],
+            },
+            "127.0.0.1:19090",
+        );
+        assert_eq!(rendered.len(), 1);
+        assert_eq!(rendered[0]["match"][0]["path"][0], "/gateway/echo");
+        assert!(validate_request(&reserved, &request("/gateway/reserved")).is_err());
+    }
+
+    #[tokio::test]
+    async fn dispatcher_returns_not_found_for_reserved_authenticated_route() {
+        let mut reserved = route();
+        reserved.exposure = Exposure::HephAuthenticated;
+        let calls = Arc::new(AtomicUsize::new(0));
+        let dispatcher = GatewayDispatcher::new(
+            Resolver(reserved),
+            CountingHandler(Arc::clone(&calls)),
+            Recorder,
+        );
+        let response = dispatcher.dispatch(request("/gateway/echo")).await.response;
+        assert_eq!(response.status, StatusCode::NOT_FOUND);
+        assert_eq!(calls.load(Ordering::SeqCst), 0);
+    }
+
     fn request(path: &str) -> GatewayRequest {
         GatewayRequest {
             method: Method::POST,
@@ -1254,6 +1898,21 @@ mod tests {
         calls: AtomicUsize,
         delay: Duration,
     }
+
+    struct CountingHandler(Arc<AtomicUsize>);
+    #[async_trait]
+    impl GatewayVmHandler for CountingHandler {
+        async fn invoke(
+            &self,
+            _: &GatewayRouteBinding,
+            _: Uuid,
+            _: GatewayRequest,
+        ) -> Result<GatewayResponse, GatewayEdgeError> {
+            self.0.fetch_add(1, Ordering::SeqCst);
+            Ok(empty_response(StatusCode::CREATED))
+        }
+    }
+
     #[async_trait]
     impl GatewayVmHandler for Handler {
         async fn invoke(
@@ -1294,6 +1953,15 @@ mod tests {
         async fn accepted(
             &self,
             _: &GatewayRouteBinding,
+            _: Uuid,
+        ) -> Result<Uuid, GatewayEdgeError> {
+            Ok(Uuid::new_v4())
+        }
+
+        async fn accepted_ui(
+            &self,
+            _: &GatewayRouteBinding,
+            _: &UiGatewayAuthority,
             _: Uuid,
         ) -> Result<Uuid, GatewayEdgeError> {
             Ok(Uuid::new_v4())
@@ -1465,6 +2133,7 @@ mod tests {
                 working_dir: None,
             },
             runtime_authority: None,
+            private_http_service: None,
             labels: BTreeMap::new(),
         }
     }
@@ -1751,5 +2420,435 @@ mod tests {
         })
         .await
         .expect("timed-out gateway VM was cleaned up");
+    }
+
+    struct UiProvider {
+        admission: UiGatewayAdmission,
+    }
+
+    #[async_trait]
+    impl UiGatewayAdmissionProvider for UiProvider {
+        async fn admit(
+            &self,
+            _: &UiGatewayRequest,
+        ) -> Result<UiGatewayAdmission, UiGatewayAdmissionError> {
+            Ok(self.admission.clone())
+        }
+    }
+
+    struct DenyingUiProvider {
+        calls: Arc<AtomicUsize>,
+    }
+
+    #[async_trait]
+    impl UiGatewayAdmissionProvider for DenyingUiProvider {
+        async fn admit(
+            &self,
+            _: &UiGatewayRequest,
+        ) -> Result<UiGatewayAdmission, UiGatewayAdmissionError> {
+            self.calls.fetch_add(1, Ordering::SeqCst);
+            Err(UiGatewayAdmissionError::Denied)
+        }
+    }
+
+    struct ErrorUiProvider(UiGatewayAdmissionError);
+
+    #[async_trait]
+    impl UiGatewayAdmissionProvider for ErrorUiProvider {
+        async fn admit(
+            &self,
+            _: &UiGatewayRequest,
+        ) -> Result<UiGatewayAdmission, UiGatewayAdmissionError> {
+            Err(self.0)
+        }
+    }
+
+    struct UiRecorder {
+        accepted: Arc<AtomicUsize>,
+        completed: Arc<Mutex<Vec<GatewayInvocationOutcome>>>,
+    }
+
+    #[async_trait]
+    impl GatewayInvocationRecorder for UiRecorder {
+        async fn accepted(
+            &self,
+            _: &GatewayRouteBinding,
+            _: Uuid,
+        ) -> Result<Uuid, GatewayEdgeError> {
+            Ok(Uuid::new_v4())
+        }
+
+        async fn accepted_ui(
+            &self,
+            route: &GatewayRouteBinding,
+            authority: &UiGatewayAuthority,
+            _: Uuid,
+        ) -> Result<Uuid, GatewayEdgeError> {
+            assert_eq!(route.exposure, Exposure::HephAuthenticated);
+            assert!(!authority.child_session_id.is_nil());
+            self.accepted.fetch_add(1, Ordering::SeqCst);
+            Ok(Uuid::new_v4())
+        }
+
+        async fn completed(
+            &self,
+            _: Uuid,
+            outcome: GatewayInvocationOutcome,
+        ) -> Result<(), GatewayEdgeError> {
+            self.completed
+                .lock()
+                .expect("completion lock")
+                .push(outcome);
+            Ok(())
+        }
+    }
+
+    struct SetCookieHandler;
+
+    #[async_trait]
+    impl GatewayVmHandler for SetCookieHandler {
+        async fn invoke(
+            &self,
+            _: &GatewayRouteBinding,
+            _: Uuid,
+            request: GatewayRequest,
+        ) -> Result<GatewayResponse, GatewayEdgeError> {
+            for name in [
+                "authorization",
+                "cookie",
+                "host",
+                "proxy-authorization",
+                "x-api-key",
+                "x-auth-token",
+                "x-access-token",
+                "forwarded",
+                "x-forwarded-for",
+                "x-forwarded-host",
+                "x-forwarded-proto",
+                "x-forwarded-port",
+                "x-forwarded-prefix",
+                "x-forwarded-server",
+            ] {
+                assert!(
+                    !request.headers.contains_key(name),
+                    "leaked UI header: {name}"
+                );
+            }
+            let mut headers = HeaderMap::new();
+            headers.insert("set-cookie", HeaderValue::from_static("sid=guest"));
+            Ok(GatewayResponse {
+                status: StatusCode::OK,
+                headers,
+                body: Bytes::new(),
+                mailbox_publication: None,
+            })
+        }
+    }
+
+    struct ForbiddenHandler;
+
+    #[async_trait]
+    impl GatewayVmHandler for ForbiddenHandler {
+        async fn invoke(
+            &self,
+            _: &GatewayRouteBinding,
+            _: Uuid,
+            _: GatewayRequest,
+        ) -> Result<GatewayResponse, GatewayEdgeError> {
+            Ok(GatewayResponse {
+                status: StatusCode::FORBIDDEN,
+                headers: HeaderMap::new(),
+                body: Bytes::from_static(b"denied"),
+                mailbox_publication: None,
+            })
+        }
+    }
+
+    fn ui_request(path: &str) -> UiGatewayRequest {
+        UiGatewayRequest {
+            authority: UiGatewayAuthority {
+                child_session_id: Uuid::new_v4(),
+                actor_id: Uuid::new_v4(),
+                organization_id: Uuid::new_v4(),
+                installation_id: Uuid::new_v4(),
+                generation_id: Uuid::new_v4(),
+                canonical_request_path: "echo/index.html".to_owned(),
+                request_kind: UiGatewayRequestKind::Managed,
+                method: Method::GET,
+            },
+            method: Method::GET,
+            request_path_and_query: path.to_owned(),
+            headers: {
+                let mut headers = HeaderMap::new();
+                headers.insert("authorization", HeaderValue::from_static("secret"));
+                headers.insert("cookie", HeaderValue::from_static("sid=secret"));
+                headers
+            },
+            body: Bytes::new(),
+            trusted: TrustedRequestMetadata {
+                scheme: GatewayScheme::Https,
+                authority: "ui.heph.test".to_owned(),
+                client_address: "127.0.0.1".parse().expect("address"),
+                request_id: Uuid::new_v4(),
+            },
+        }
+    }
+
+    fn ui_admission() -> UiGatewayAdmission {
+        let mut route = route();
+        route.exposure = Exposure::HephAuthenticated;
+        route.methods = BTreeSet::from([Method::GET]);
+        UiGatewayAdmission {
+            route,
+            gateway_path_and_query: "/gateway/echo/index.html".to_owned(),
+        }
+    }
+
+    #[tokio::test]
+    async fn ui_set_cookie_is_failed_and_completed_after_ui_acceptance() {
+        let accepted = Arc::new(AtomicUsize::new(0));
+        let completed = Arc::new(Mutex::new(Vec::new()));
+        let recorder = UiRecorder {
+            accepted: Arc::clone(&accepted),
+            completed: Arc::clone(&completed),
+        };
+        let dispatcher =
+            GatewayDispatcher::new(Resolver(ui_admission().route), SetCookieHandler, recorder);
+        let result = dispatcher
+            .dispatch_ui_detailed(
+                ui_request("echo/index.html"),
+                &UiProvider {
+                    admission: ui_admission(),
+                },
+            )
+            .await;
+        assert_eq!(result.response.response.status, StatusCode::BAD_GATEWAY);
+        assert_eq!(
+            result.disposition,
+            UiDispatchDisposition::Admitted {
+                outcome: GatewayInvocationOutcome::Failed,
+                completion_persisted: true,
+            }
+        );
+        assert_eq!(accepted.load(Ordering::SeqCst), 1);
+        assert_eq!(
+            completed.lock().expect("completion lock").as_slice(),
+            &[GatewayInvocationOutcome::Failed]
+        );
+    }
+
+    #[tokio::test]
+    async fn ui_authority_path_mismatch_fails_before_ui_acceptance() {
+        let accepted = Arc::new(AtomicUsize::new(0));
+        let completed = Arc::new(Mutex::new(Vec::new()));
+        let recorder = UiRecorder {
+            accepted: Arc::clone(&accepted),
+            completed: Arc::clone(&completed),
+        };
+        let dispatcher =
+            GatewayDispatcher::new(Resolver(ui_admission().route), SetCookieHandler, recorder);
+        let result = dispatcher
+            .dispatch_ui_detailed(
+                ui_request("echo/other.html"),
+                &UiProvider {
+                    admission: ui_admission(),
+                },
+            )
+            .await;
+        assert_eq!(result.response.response.status, StatusCode::BAD_REQUEST);
+        assert_eq!(result.disposition, UiDispatchDisposition::StructuralInvalid);
+        assert_eq!(accepted.load(Ordering::SeqCst), 0);
+        assert!(completed.lock().expect("completion lock").is_empty());
+    }
+
+    #[tokio::test]
+    async fn ui_acceptance_is_default_deny_for_existing_recorders() {
+        let calls = Arc::new(AtomicUsize::new(0));
+        let dispatcher = GatewayDispatcher::new(
+            Resolver(ui_admission().route),
+            CountingHandler(Arc::clone(&calls)),
+            Recorder,
+        );
+        let result = dispatcher
+            .dispatch_ui_detailed(
+                ui_request("echo/index.html"),
+                &UiProvider {
+                    admission: ui_admission(),
+                },
+            )
+            .await;
+        assert_eq!(
+            result.response.response.status,
+            StatusCode::SERVICE_UNAVAILABLE
+        );
+        assert_eq!(result.disposition, UiDispatchDisposition::AcceptedUiFailure);
+        assert_eq!(calls.load(Ordering::SeqCst), 0);
+    }
+
+    #[tokio::test]
+    async fn ui_denial_provider_is_called_once_before_handler() {
+        let provider_calls = Arc::new(AtomicUsize::new(0));
+        let handler_calls = Arc::new(AtomicUsize::new(0));
+        let dispatcher = GatewayDispatcher::new(
+            Resolver(ui_admission().route),
+            CountingHandler(Arc::clone(&handler_calls)),
+            Recorder,
+        );
+        let result = dispatcher
+            .dispatch_ui_detailed(
+                ui_request("echo/index.html"),
+                &DenyingUiProvider {
+                    calls: Arc::clone(&provider_calls),
+                },
+            )
+            .await;
+        assert_eq!(result.response.response.status, StatusCode::UNAUTHORIZED);
+        assert_eq!(result.disposition, UiDispatchDisposition::ProviderDenied);
+        assert_eq!(provider_calls.load(Ordering::SeqCst), 1);
+        assert_eq!(handler_calls.load(Ordering::SeqCst), 0);
+    }
+
+    #[tokio::test]
+    async fn ui_provider_classes_are_preserved_without_status_inference() {
+        let dispatcher = GatewayDispatcher::new(
+            Resolver(ui_admission().route),
+            CountingHandler(Arc::new(AtomicUsize::new(0))),
+            Recorder,
+        );
+        for (error, expected) in [
+            (
+                UiGatewayAdmissionError::NotFound,
+                UiDispatchDisposition::ProviderNotFound,
+            ),
+            (
+                UiGatewayAdmissionError::Unavailable,
+                UiDispatchDisposition::ProviderUnavailable,
+            ),
+        ] {
+            let result = dispatcher
+                .dispatch_ui_detailed(ui_request("echo/index.html"), &ErrorUiProvider(error))
+                .await;
+            assert_eq!(result.disposition, expected);
+        }
+    }
+
+    #[tokio::test]
+    async fn ui_guest_forbidden_is_completed_not_provider_denied() {
+        let completed = Arc::new(Mutex::new(Vec::new()));
+        let recorder = UiRecorder {
+            accepted: Arc::new(AtomicUsize::new(0)),
+            completed: Arc::clone(&completed),
+        };
+        let dispatcher =
+            GatewayDispatcher::new(Resolver(ui_admission().route), ForbiddenHandler, recorder);
+        let result = dispatcher
+            .dispatch_ui_detailed(
+                ui_request("echo/index.html"),
+                &UiProvider {
+                    admission: ui_admission(),
+                },
+            )
+            .await;
+        assert_eq!(result.response.response.status, StatusCode::FORBIDDEN);
+        assert_eq!(
+            result.disposition,
+            UiDispatchDisposition::Admitted {
+                outcome: GatewayInvocationOutcome::Completed,
+                completion_persisted: true,
+            }
+        );
+    }
+
+    #[tokio::test]
+    async fn ui_rejected_inbound_secret_is_admitted_and_completed_as_rejected() {
+        let completed = Arc::new(Mutex::new(Vec::new()));
+        let recorder = UiRecorder {
+            accepted: Arc::new(AtomicUsize::new(0)),
+            completed: Arc::clone(&completed),
+        };
+        let dispatcher =
+            GatewayDispatcher::new(Resolver(ui_admission().route), EchoHandler, recorder)
+                .with_inbound_secret_resolver(Arc::new(InboundRules));
+        let mut request = ui_request("echo/index.html");
+        request
+            .headers
+            .insert("x-hook-secret", HeaderValue::from_static("wrong-secret"));
+        let result = dispatcher
+            .dispatch_ui_detailed(
+                request,
+                &UiProvider {
+                    admission: ui_admission(),
+                },
+            )
+            .await;
+        assert_eq!(result.response.response.status, StatusCode::UNAUTHORIZED);
+        assert_eq!(
+            result.disposition,
+            UiDispatchDisposition::Admitted {
+                outcome: GatewayInvocationOutcome::Rejected,
+                completion_persisted: true,
+            }
+        );
+        assert_eq!(
+            completed.lock().expect("completion lock").as_slice(),
+            &[GatewayInvocationOutcome::Rejected]
+        );
+    }
+
+    #[tokio::test]
+    async fn ui_completion_store_failure_is_admitted_but_not_persisted() {
+        let recorder = CompletionFailureRecorder {
+            completions: AtomicUsize::new(0),
+        };
+        let dispatcher =
+            GatewayDispatcher::new(Resolver(ui_admission().route), EchoHandler, recorder);
+        let result = dispatcher
+            .dispatch_ui_detailed(
+                ui_request("echo/index.html"),
+                &UiProvider {
+                    admission: ui_admission(),
+                },
+            )
+            .await;
+        assert_eq!(
+            result.response.response.status,
+            StatusCode::SERVICE_UNAVAILABLE
+        );
+        assert_eq!(
+            result.disposition,
+            UiDispatchDisposition::Admitted {
+                outcome: GatewayInvocationOutcome::Completed,
+                completion_persisted: false,
+            }
+        );
+    }
+
+    #[tokio::test]
+    async fn ui_success_exposes_safe_admitted_metadata() {
+        let dispatcher = GatewayDispatcher::new(
+            Resolver(ui_admission().route),
+            EchoHandler,
+            UiRecorder {
+                accepted: Arc::new(AtomicUsize::new(0)),
+                completed: Arc::new(Mutex::new(Vec::new())),
+            },
+        );
+        let result = dispatcher
+            .dispatch_ui_detailed(
+                ui_request("echo/index.html"),
+                &UiProvider {
+                    admission: ui_admission(),
+                },
+            )
+            .await;
+        assert_eq!(result.response.response.status, StatusCode::ACCEPTED);
+        assert_ne!(result.response.invocation_id, Uuid::nil());
+        assert_eq!(
+            result.disposition,
+            UiDispatchDisposition::Admitted {
+                outcome: GatewayInvocationOutcome::Completed,
+                completion_persisted: true,
+            }
+        );
     }
 }

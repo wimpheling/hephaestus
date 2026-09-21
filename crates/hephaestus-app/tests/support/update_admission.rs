@@ -10,6 +10,10 @@ use super::rpc::update_admission::{
 use hephaestus_app::test_hooks::{
     CreateUpdateAdmissionBarrier, install_create_update_admission_barrier,
 };
+use identity_domain::{
+    AuthenticatedIdentity, BrowserSessionSid, RequestId, UserId,
+    browser_session_identity_binding_digest, browser_session_sid_digest,
+};
 #[cfg(feature = "test-fixtures")]
 use std::sync::Arc;
 use std::time::Duration;
@@ -23,12 +27,13 @@ pub async fn exercise(
     running: &hephaestus_app::RunningHephaestus,
     instance: &UpdateAdmissionInstance,
     actor: uuid::Uuid,
+    sid: BrowserSessionSid,
 ) -> UpdateAdmissionResult {
     let (client, active_run, update_id) =
-        prepare_update_admission(pool, running, instance, actor).await;
+        prepare_update_admission(pool, running, instance, actor, sid).await;
     let hook_run_id = admit_first_update_hook(pool, active_run, update_id).await;
     let retry_hook_run_id =
-        retry_update_hook(pool, &client, instance, actor, update_id, hook_run_id).await;
+        retry_update_hook(pool, &client, instance, actor, sid, update_id, hook_run_id).await;
     reject_revoked_update_admission(pool, instance, actor, update_id, retry_hook_run_id).await;
     recover_update_with_new_owner(
         pool,
@@ -54,6 +59,7 @@ pub async fn exercise_reconciler_wins_race(
     running: &hephaestus_app::RunningHephaestus,
     instance: &UpdateAdmissionInstance,
     actor: Uuid,
+    sid: BrowserSessionSid,
 ) -> UpdateAdmissionResult {
     let barrier = Arc::new(CreateUpdateAdmissionBarrier::new());
     let _guard = install_create_update_admission_barrier(Arc::clone(&barrier));
@@ -61,7 +67,9 @@ pub async fn exercise_reconciler_wins_race(
     let client = app_instance_client(running).await;
     let instance_copy = *instance;
     let create_task =
-        tokio::spawn(async move { create_draining_update(&client, &instance_copy, actor).await });
+        tokio::spawn(
+            async move { create_draining_update(&client, &instance_copy, actor, sid).await },
+        );
     let update_id = barrier.wait_committed().await;
     sqlx::query(
         "UPDATE runs SET state = 'cleaned_up', outcome = 'succeeded', updated_at = now()
@@ -128,11 +136,12 @@ async fn prepare_update_admission(
     running: &hephaestus_app::RunningHephaestus,
     instance: &UpdateAdmissionInstance,
     actor: uuid::Uuid,
+    sid: BrowserSessionSid,
 ) -> (UpdateRpcClient, uuid::Uuid, uuid::Uuid) {
     let active_run = seed_active_run(pool, instance).await;
 
     let client = app_instance_client(running).await;
-    let (update_id, hook_run_id) = create_draining_update(&client, instance, actor).await;
+    let (update_id, hook_run_id) = create_draining_update(&client, instance, actor, sid).await;
     let before_cleanup: (String, Option<uuid::Uuid>) =
         sqlx::query_as("SELECT state, hook_run_id FROM agent_updates WHERE id = $1")
             .bind(update_id)
@@ -203,6 +212,7 @@ async fn retry_update_hook(
     client: &UpdateRpcClient,
     instance: &UpdateAdmissionInstance,
     actor: uuid::Uuid,
+    sid: BrowserSessionSid,
     update_id: uuid::Uuid,
     hook_run_id: uuid::Uuid,
 ) -> uuid::Uuid {
@@ -235,6 +245,7 @@ async fn retry_update_hook(
     recover_update(
         client,
         actor,
+        sid,
         update_id,
         RecoveryAction::Retry,
         "app-update-admission-retry",
@@ -373,6 +384,7 @@ async fn recover_update_with_new_owner(
     // subsequent durable admission reauthorizes that owner rather than the
     // revoked creator.
     let recovery_actor = uuid::Uuid::new_v4();
+    let recovery_sid = BrowserSessionSid::new();
     let project_id: uuid::Uuid =
         sqlx::query_scalar("SELECT project_id FROM agent_instances WHERE id = $1")
             .bind(instance.instance_id)
@@ -384,6 +396,7 @@ async fn recover_update_with_new_owner(
         .execute(pool)
         .await
         .expect("seed recovery owner");
+    seed_update_browser_session(pool, recovery_actor, recovery_sid).await;
     sqlx::query("INSERT INTO project_maintainers (project_id, user_id) VALUES ($1, $2)")
         .bind(project_id)
         .bind(recovery_actor)
@@ -393,6 +406,7 @@ async fn recover_update_with_new_owner(
     recover_update(
         client,
         recovery_actor,
+        recovery_sid,
         update_id,
         RecoveryAction::Retry,
         "app-update-admission-owner-retry",
@@ -415,4 +429,37 @@ async fn recover_update_with_new_owner(
         retried_hook_run_id: retry_hook_run_id,
         owner_recovery_hook_run_id: owner_retry_hook_run_id,
     }
+}
+
+async fn seed_update_browser_session(
+    pool: &sqlx::PgPool,
+    user_id: uuid::Uuid,
+    sid: BrowserSessionSid,
+) {
+    let verified = AuthenticatedIdentity::new(
+        UserId::from_uuid(user_id),
+        "https://issuer.golden.invalid",
+        format!("update-{user_id}"),
+        serde_json::Value::Null,
+        RequestId::new(),
+    );
+    sqlx::query(
+        "INSERT INTO human_browser_sessions
+            (id, sid_digest, creation_idempotency_id, creation_request_id,
+             identity_binding_digest, user_id, issued_at, expires_at)
+         VALUES ($1, $2, $3, $4, $5, $6, now(), now() + interval '12 hours')",
+    )
+    .bind(uuid::Uuid::new_v4())
+    .bind(browser_session_sid_digest(sid).as_bytes().to_vec())
+    .bind(uuid::Uuid::new_v4())
+    .bind(uuid::Uuid::new_v4())
+    .bind(
+        browser_session_identity_binding_digest(&verified)
+            .as_bytes()
+            .to_vec(),
+    )
+    .bind(user_id)
+    .execute(pool)
+    .await
+    .expect("seed update recovery browser session");
 }

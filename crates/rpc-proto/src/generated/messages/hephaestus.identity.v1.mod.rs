@@ -24,6 +24,10 @@ pub mod __buffa {
     pub fn register_types(reg: &mut ::buffa::type_registry::TypeRegistry) {
         reg.register_json_any(super::__RESOLVE_IDENTITY_REQUEST_JSON_ANY);
         reg.register_json_any(super::__RESOLVE_IDENTITY_RESPONSE_JSON_ANY);
+        reg.register_json_any(super::__CREATE_BROWSER_SESSION_REQUEST_JSON_ANY);
+        reg.register_json_any(super::__CREATE_BROWSER_SESSION_RESPONSE_JSON_ANY);
+        reg.register_json_any(super::__REVOKE_BROWSER_SESSION_REQUEST_JSON_ANY);
+        reg.register_json_any(super::__REVOKE_BROWSER_SESSION_RESPONSE_JSON_ANY);
     }
 }
 #[doc(inline)]
@@ -34,5 +38,21 @@ pub use self::__buffa::view::ResolveIdentityRequestOwnedView;
 pub use self::__buffa::view::ResolveIdentityResponseView;
 #[doc(inline)]
 pub use self::__buffa::view::ResolveIdentityResponseOwnedView;
+#[doc(inline)]
+pub use self::__buffa::view::CreateBrowserSessionRequestView;
+#[doc(inline)]
+pub use self::__buffa::view::CreateBrowserSessionRequestOwnedView;
+#[doc(inline)]
+pub use self::__buffa::view::CreateBrowserSessionResponseView;
+#[doc(inline)]
+pub use self::__buffa::view::CreateBrowserSessionResponseOwnedView;
+#[doc(inline)]
+pub use self::__buffa::view::RevokeBrowserSessionRequestView;
+#[doc(inline)]
+pub use self::__buffa::view::RevokeBrowserSessionRequestOwnedView;
+#[doc(inline)]
+pub use self::__buffa::view::RevokeBrowserSessionResponseView;
+#[doc(inline)]
+pub use self::__buffa::view::RevokeBrowserSessionResponseOwnedView;
 #[doc(inline)]
 pub use self::__buffa::register_types;

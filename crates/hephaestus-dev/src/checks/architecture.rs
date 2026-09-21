@@ -214,7 +214,8 @@ pub fn run(context: &DevContext) -> Result<()> {
                     .join(", ")
             );
         }
-        let database_audit = db_architecture::audit(root, &metadata);
+        let usable_exceptions = usable_exceptions(root, &configuration);
+        let database_audit = db_architecture::audit(root, &metadata, &usable_exceptions);
         if database_audit.is_empty() {
             println!("migration-gated database structural dry-run: clean");
         } else {
@@ -314,12 +315,14 @@ fn validate_repository(
     validate_rule_registry(document, configuration, &mut diagnostics);
     validate_configuration(configuration, &mut diagnostics);
     validate_exceptions(root, configuration, &mut diagnostics);
+    let usable_exceptions = usable_exceptions(root, configuration);
     validate_metadata(root, metadata, &mut diagnostics);
     layer_architecture::validate(&configuration.enabled_rules, metadata, &mut diagnostics);
     db_architecture::validate(
         root,
         &configuration.enabled_rules,
         metadata,
+        &usable_exceptions,
         &mut diagnostics,
     );
     event_architecture::validate(root, &configuration.enabled_rules, &mut diagnostics);
@@ -327,6 +330,58 @@ fn validate_repository(
     rust_architecture::validate(root, &configuration.enabled_rules, &mut diagnostics);
     diagnostics.sort();
     diagnostics
+}
+
+/// Returns only exception records that passed every validity check.
+///
+/// Validation deliberately remains diagnostic-producing and does not stop the
+/// rest of the architecture audit.  The scanner therefore receives this
+/// separately filtered view so a malformed, expired, or unaccountable record
+/// can never suppress a finding while its diagnostic is being reported.
+fn usable_exceptions<'a>(
+    root: &Path,
+    configuration: &'a ArchitectureConfiguration,
+) -> Vec<&'a ArchitectureException> {
+    let mut seen = BTreeSet::new();
+    configuration
+        .exceptions
+        .iter()
+        .filter(|exception| {
+            known_rule_ids().contains(exception.rule_id.as_str())
+                && !exception.rationale.trim().is_empty()
+                && !exception.owner.trim().is_empty()
+                && (exception
+                    .expires
+                    .as_deref()
+                    .is_some_and(|expiry| !expiry.trim().is_empty())
+                    || exception
+                        .tracking_task
+                        .as_deref()
+                        .is_some_and(|task| !task.trim().is_empty()))
+        })
+        .filter(|exception| {
+            let expiry_valid = exception
+                .expires
+                .as_deref()
+                .is_none_or(|expiry| date_shape(expiry) && !expiry_has_passed(expiry));
+            let tracking_valid = exception
+                .tracking_task
+                .as_deref()
+                .is_none_or(|task| validate_tracking_task(root, task).is_ok());
+            let scope_valid = if exception.rule_id == "DB-STATIC-SQL" {
+                validate_exact_scope_shape(root, &exception.scope).is_ok()
+            } else {
+                validate_exact_scope(root, &exception.scope).is_ok()
+            };
+            expiry_valid
+                && tracking_valid
+                && scope_valid
+                && (exception.rule_id != "DB-STATIC-SQL"
+                    || db_architecture::validate_exception_scope(root, &exception.scope).is_ok())
+                && seen.insert((&exception.rule_id, &exception.scope))
+        })
+        .filter(|exception| exception.rule_id == "DB-STATIC-SQL")
+        .collect()
 }
 
 fn validate_rule_registry(
@@ -562,15 +617,40 @@ fn validate_exceptions(
                 ),
             ));
         }
-        if let Err(reason) = validate_exact_scope(root, &exception.scope) {
-            diagnostics.push(Diagnostic::new(
+        let scope_validation = if exception.rule_id == "DB-STATIC-SQL" {
+            validate_exact_scope_shape(root, &exception.scope)
+        } else {
+            validate_exact_scope(root, &exception.scope)
+        };
+        match scope_validation {
+            Err(reason) => diagnostics.push(Diagnostic::new(
                 "ARCH-EXCEPTION-FORMAT",
                 format!(
                     "exception for {} has invalid scope `{}`: {reason}",
                     exception.rule_id, exception.scope
                 ),
-            ));
+            )),
+            Ok(()) => validate_db_exception_scope(root, exception, diagnostics),
         }
+    }
+}
+
+fn validate_db_exception_scope(
+    root: &Path,
+    exception: &ArchitectureException,
+    diagnostics: &mut Vec<Diagnostic>,
+) {
+    if exception.rule_id != "DB-STATIC-SQL" {
+        return;
+    }
+    if let Err(reason) = db_architecture::validate_exception_scope(root, &exception.scope) {
+        diagnostics.push(Diagnostic::new(
+            "ARCH-EXCEPTION-FORMAT",
+            format!(
+                "exception for {} has invalid Rust item scope `{}`: {reason}",
+                exception.rule_id, exception.scope
+            ),
+        ));
     }
 }
 
@@ -635,6 +715,49 @@ fn validate_exact_scope(root: &Path, scope: &str) -> std::result::Result<(), &'s
             return Err("scoped line is beyond the end of the file");
         }
         ExceptionSelector::Item(_) | ExceptionSelector::Line(_) => {}
+    }
+    Ok(())
+}
+
+/// Validates file and selector shape while leaving Rust item resolution to the
+/// DB checker, where module and type qualification can be parsed structurally.
+fn validate_exact_scope_shape(root: &Path, scope: &str) -> std::result::Result<(), &'static str> {
+    if scope.contains(['*', '?', '[', ']']) {
+        return Err("globs are forbidden");
+    }
+    let (path_text, selector) = if let Some((path, item)) = scope.split_once('#') {
+        if item.trim().is_empty() {
+            return Err("the item selector is empty");
+        }
+        (path, ExceptionSelector::Item(item))
+    } else if let Some((path, line)) = scope.rsplit_once(':') {
+        let Ok(line) = line.parse::<usize>() else {
+            return Err("the line selector is invalid");
+        };
+        if line == 0 {
+            return Err("the line selector is invalid");
+        }
+        (path, ExceptionSelector::Line(line))
+    } else {
+        return Err("use path:line or path#item");
+    };
+    let relative = Path::new(path_text);
+    if relative.is_absolute()
+        || relative
+            .components()
+            .any(|component| matches!(component, Component::ParentDir | Component::RootDir))
+    {
+        return Err("scope must be a repository-relative path without parent traversal");
+    }
+    let target = root.join(relative);
+    if target.is_dir() {
+        return Err("directory-wide exceptions are forbidden");
+    }
+    let source = fs::read_to_string(target).map_err(|_| "scoped file is not readable text")?;
+    if let ExceptionSelector::Line(line) = selector {
+        if source.lines().count() < line {
+            return Err("scoped line is beyond the end of the file");
+        }
     }
     Ok(())
 }
@@ -775,12 +898,14 @@ fn render_diagnostics(diagnostics: &[Diagnostic]) -> String {
 #[cfg(test)]
 mod tests {
     use super::{
-        ArchitectureConfiguration, CargoDependency, CargoMetadata, CargoPackage, Diagnostic,
-        REQUIRED_RULE_IDS, known_rule_ids, migration_gated_rule_count, read_configuration,
-        validate_exact_scope, validate_metadata, validate_repository,
+        ArchitectureConfiguration, ArchitectureException, CargoDependency, CargoMetadata,
+        CargoPackage, Diagnostic, REQUIRED_RULE_IDS, known_rule_ids, migration_gated_rule_count,
+        read_configuration, usable_exceptions, validate_exact_scope, validate_metadata,
+        validate_repository,
     };
     use serde_json::Value;
-    use std::path::Path;
+    use std::{fs, path::Path};
+    use tempfile::tempdir;
 
     fn fixture(name: &str) -> std::path::PathBuf {
         Path::new(env!("CARGO_MANIFEST_DIR"))
@@ -995,5 +1120,51 @@ mod tests {
         assert!(!super::date_shape("2026-02-29"));
         assert!(!super::date_shape("2026-13-01"));
         assert!(super::date_shape("2028-02-29"));
+    }
+
+    #[test]
+    fn invalid_exception_records_are_not_usable_by_scanners() {
+        let root = fixture("valid");
+        let configuration = ArchitectureConfiguration {
+            version: 1,
+            enabled_rules: Vec::new(),
+            maximum_file_lines: std::iter::once((String::from("domain"), 500)).collect(),
+            exceptions: vec![ArchitectureException {
+                rule_id: String::from("DB-STATIC-SQL"),
+                scope: String::from("src/lib.rs#GENERATED_TABLE"),
+                rationale: String::from("expired fixture exception"),
+                owner: String::from("architecture-test"),
+                expires: Some(String::from("2020-01-01")),
+                tracking_task: None,
+            }],
+        };
+        assert!(usable_exceptions(&root, &configuration).is_empty());
+    }
+
+    #[test]
+    fn usable_exceptions_accepts_a_valid_module_qualified_db_item() {
+        let root = tempdir().expect("temporary repository root");
+        let source_path = root.path().join("src/lib.rs");
+        fs::create_dir_all(source_path.parent().expect("source parent"))
+            .expect("create source parent");
+        fs::write(
+            &source_path,
+            "mod one { struct Thing; impl Thing { fn run() {} } }\n",
+        )
+        .expect("write Rust source");
+        let configuration = ArchitectureConfiguration {
+            version: 1,
+            enabled_rules: Vec::new(),
+            maximum_file_lines: std::iter::once((String::from("domain"), 500)).collect(),
+            exceptions: vec![ArchitectureException {
+                rule_id: String::from("DB-STATIC-SQL"),
+                scope: String::from("src/lib.rs#one::Thing::run"),
+                rationale: String::from("qualified fixture exception"),
+                owner: String::from("architecture-test"),
+                expires: Some(String::from("2099-01-01")),
+                tracking_task: None,
+            }],
+        };
+        assert_eq!(usable_exceptions(root.path(), &configuration).len(), 1);
     }
 }

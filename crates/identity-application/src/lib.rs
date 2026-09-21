@@ -1,5 +1,13 @@
 //! Provider-neutral identity application operations and persistence ports.
 
+mod session;
+
+pub use session::{
+    BrowserSessionAuthenticationError, BrowserSessionStore, CreateBrowserSession,
+    CreateBrowserSessionError, CreatedBrowserSession, RevokeBrowserSession,
+    RevokeBrowserSessionError, RevokedBrowserSession, VerifiedBrowserIdentity,
+};
+
 use async_trait::async_trait;
 use identity_domain::{AuthenticatedIdentity, RequestId, UserId};
 use serde_json::{Value, json};

@@ -36,7 +36,7 @@ defmodule HephaestusWeb.RPC.Invoke do
     end
   end
 
-  @doc "Invokes the single identity-bootstrap RPC with verified OIDC metadata."
+  @doc "Invokes an identity-bootstrap RPC with verified OIDC metadata."
   def bootstrap_unary(issuer, attributes, audience, request, stub_call, options \\ [])
       when is_binary(issuer) and is_map(attributes) and is_struct(request) and
              is_function(stub_call, 3) do
@@ -130,12 +130,12 @@ defmodule HephaestusWeb.RPC.Invoke do
   defp call(request, stub_call, call_options, options) do
     channel_provider = Keyword.get(options, :channel_provider, &Channel.get/0)
 
-    with {:ok, channel} <- channel_provider.() do
-      try do
+    try do
+      with {:ok, channel} <- channel_provider.() do
         stub_call.(channel, request, call_options)
-      catch
-        :exit, _reason -> {:error, :transport_exit}
       end
+    catch
+      :exit, _reason -> {:error, :transport_exit}
     end
   end
 

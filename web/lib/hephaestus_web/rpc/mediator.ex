@@ -42,17 +42,28 @@ defmodule HephaestusWeb.RPC.Mediator do
 
   @doc "Signs an assertion scoped to one exact generated RPC method."
   @spec assertion(Identity.t(), String.t(), keyword()) :: String.t()
-  def assertion(%Identity{user_id: user_id}, audience, options \\ []) do
+  def assertion(identity, audience, options \\ [])
+
+  def assertion(%Identity{user_id: user_id, sid: sid}, audience, options)
+      when is_binary(sid) do
     validate_audience!(audience)
+
+    if not Identity.valid_session_id?(sid) do
+      raise ArgumentError, "active browser identity must carry a valid session ID"
+    end
 
     %{
       "iss" => @issuer,
       "aud" => audience,
       "sub" => user_id,
+      "sid" => sid,
       "jti" => Keyword.get_lazy(options, :jti, &UUID.generate/0)
     }
     |> sign(options)
   end
+
+  def assertion(%Identity{}, _audience, _options),
+    do: raise(ArgumentError, "active browser identity must carry a session ID")
 
   @doc false
   @spec bootstrap_assertion(String.t(), map(), String.t(), keyword()) :: String.t()

@@ -10,6 +10,7 @@ layer = "adapter"
 context = "release"
 
 [dependencies]
+libc.workspace = true
 release-domain = { path = "../release-domain" }
 sha2.workspace = true
 thiserror.workspace = true

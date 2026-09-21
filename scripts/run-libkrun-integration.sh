@@ -17,6 +17,15 @@ script_dir="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)"
 readonly script_dir
 repo_root="$(cd -- "${script_dir}/.." && pwd -P)"
 readonly repo_root
+if [[ "${CARGO_TARGET_DIR:-}" = /* ]]; then
+    cargo_target_dir="${CARGO_TARGET_DIR}"
+elif [[ -n "${CARGO_TARGET_DIR:-}" ]]; then
+    cargo_target_dir="${repo_root}/${CARGO_TARGET_DIR}"
+else
+    cargo_target_dir="${repo_root}/target"
+fi
+readonly cargo_target_dir
+export CARGO_TARGET_DIR="${cargo_target_dir}"
 source "${repo_root}/scripts/shell-failure-diagnostics.sh"
 heph_shell_failure_init libkrun-integration libkrun
 ubuntu_image="${HEPHAESTUS_LIBKRUN_UBUNTU_IMAGE:-${DEFAULT_UBUNTU_IMAGE}}"
@@ -180,10 +189,10 @@ load_repository_image_workflow() {
 prepare_guest_root() {
     local root="$1"
     install -D -m 0755 \
-        "${repo_root}/target/${GUEST_TARGET}/release/heph-init" \
+        "${cargo_target_dir}/${GUEST_TARGET}/release/heph-init" \
         "${root}/usr/libexec/hephaestus/heph-init"
     install -D -m 0755 \
-        "${repo_root}/target/${GUEST_TARGET}/release/heph-integration-check" \
+        "${cargo_target_dir}/${GUEST_TARGET}/release/heph-integration-check" \
         "${root}/usr/libexec/hephaestus/integration-check.payload"
     # libkrun's embedded DHCP setup runs before this workload. Keep the
     # fixture diagnostic immediately before the check so a network failure
@@ -483,15 +492,23 @@ postgres_lifecycle_snapshot() {
     # by failure diagnostics.
     [[ -n "${postgres_container_name}" ]] || return 0
 
-    local destination='/dev/stderr'
+    local destination_fd
     local retained=false
     if [[ -n "${diagnostics_dir}" ]]; then
+        local destination
         destination="$(mktemp "${diagnostics_dir}/libkrun-postgres-${PPID}.XXXXXX")" || {
             printf 'postgres lifecycle snapshot unavailable\n' >&2
             return 0
         }
         chmod 600 -- "${destination}"
+        if ! exec {destination_fd}>"${destination}"; then
+            rm -f -- "${destination}"
+            printf 'postgres lifecycle snapshot unavailable\n' >&2
+            return 0
+        fi
         retained=true
+    else
+        exec {destination_fd}>&2
     fi
 
     # psql emits one JSON object per line. VM log bytes are decoded and passed
@@ -508,7 +525,7 @@ postgres_lifecycle_snapshot() {
         --no-align \
         --field-separator='|' \
         --set=ON_ERROR_STOP=1 \
-        2>/dev/null <<'SQL' | python3 "${repo_root}/scripts/redact-run-snapshot.py" >"${destination}"
+        2>/dev/null <<'SQL' | python3 "${repo_root}/scripts/redact-run-snapshot.py" >&"${destination_fd}"
 SET statement_timeout = '3s';
 SET lock_timeout = '1s';
 SELECT json_build_object('surface', 'runs', 'count', count(*))::text FROM runs;
@@ -685,6 +702,7 @@ SELECT json_build_object(
 SQL
     pipeline_status=("${PIPESTATUS[@]}")
     set -e
+    exec {destination_fd}>&-
     if [[ "${pipeline_status[0]}" -ne 0 || "${pipeline_status[1]}" -ne 0 ]]; then
         if [[ "${retained}" == true ]]; then
             rm -f -- "${destination}"
@@ -894,8 +912,25 @@ if [[ "${HEPHAESTUS_APP_LIBKRUN_E2E:-0}" == "1" ]]; then
         --manifest-path "${repo_root}/Cargo.toml" \
         --package vm-libkrun \
         --bin hephaestus-vm-libkrun-worker
+    if [[ "${HEPHAESTUS_APP_GATEWAY_SERVICE_EXTERNAL_E2E:-0}" == "1" ]]; then
+        cargo build \
+            --manifest-path "${repo_root}/Cargo.toml" \
+            --package hephaestus-app \
+            --bin hephaestusd
+        target_directory="$(cargo metadata \
+            --manifest-path "${repo_root}/Cargo.toml" \
+            --no-deps --format-version 1 | \
+            python3 -c 'import json, sys; print(json.load(sys.stdin)["target_directory"])')"
+        export HEPHAESTUS_DAEMON_BINARY="${target_directory}/debug/hephaestusd"
+        export HEPHAESTUS_EXTERNAL_DAEMON_LOG="${HEPHAESTUS_EXTERNAL_DAEMON_LOG:-${fixture_root}/external-hephaestusd.log}"
+    fi
     phase_timing_end runtime-worker-build passed
     phase_timing_start golden-tests
+    golden_features=()
+    if [[ "${HEPHAESTUS_APP_GATEWAY_SERVICE_LOG_GUEST_E2E:-0}" == "1" ||
+        "${HEPHAESTUS_APP_GATEWAY_SERVICE_LOG_RPC_E2E:-0}" == "1" ]]; then
+        golden_features+=(--features test-fixtures)
+    fi
     run_as_guest_owner env \
         HEPHAESTUS_APP_LIBKRUN_E2E=1 \
         HEPHAESTUS_POSTGRES_TEST_URL="${postgres_url}" \
@@ -907,7 +942,8 @@ if [[ "${HEPHAESTUS_APP_LIBKRUN_E2E:-0}" == "1" ]]; then
         HEPHAESTUS_LIBKRUN_DISK_ROOT="${fixture_root}/disks" \
         HEPHAESTUS_LIBKRUN_MOUNT_ROOT="${fixture_root}/mounts" \
         HEPHAESTUS_LIBKRUN_CGROUP_ROOT="${cgroup_root}" \
-        HEPHAESTUS_LIBKRUN_WORKER="${repo_root}/target/debug/hephaestus-vm-libkrun-worker" \
+        HEPHAESTUS_LIBKRUN_WORKER="${target_directory:-${cargo_target_dir}}/debug/hephaestus-vm-libkrun-worker" \
+        HEPHAESTUS_GUEST_INIT_BINARY="${cargo_target_dir}/${GUEST_TARGET}/release/heph-init" \
         HEPHAESTUS_TEST_OCI_BUILDER_VM_IMAGE="${builder_vm_image}" \
         HEPHAESTUS_TEST_OCI_VERIFIER_VM_IMAGE="${verifier_vm_image}" \
         HEPHAESTUS_TEST_OCI_BASE_LAYOUT_MANIFEST="${base_layout_manifest}" \
@@ -920,6 +956,7 @@ if [[ "${HEPHAESTUS_APP_LIBKRUN_E2E:-0}" == "1" ]]; then
         --manifest-path "${repo_root}/Cargo.toml" \
         --package hephaestus-app \
         --test golden \
+        "${golden_features[@]}" \
         -- --nocapture
     phase_timing_end golden-tests passed
     # Reuse the same disposable authority database and JetStream fixture for
@@ -951,7 +988,7 @@ elif [[ "${HEPHAESTUS_PHASE1B_INTEGRATION:-0}" == "1" ]]; then
         HEPHAESTUS_LIBKRUN_DISK_ROOT="${fixture_root}/disks" \
         HEPHAESTUS_LIBKRUN_MOUNT_ROOT="${fixture_root}/mounts" \
         HEPHAESTUS_LIBKRUN_CGROUP_ROOT="${cgroup_root}" \
-        HEPHAESTUS_LIBKRUN_WORKER="${repo_root}/target/debug/hephaestus-vm-libkrun-worker" \
+        HEPHAESTUS_LIBKRUN_WORKER="${cargo_target_dir}/debug/hephaestus-vm-libkrun-worker" \
         cargo test \
         --manifest-path "${repo_root}/Cargo.toml" \
         --package run-postgres \
@@ -987,6 +1024,39 @@ runtime_entries=''
 if ! runtime_entries="$(find "${fixture_root}/runtime" -mindepth 1 -print -quit)"; then
     heph_shell_failure_die runtime-cleanup read-failed 1 "${LINENO}"
     die "runtime cleanup directory cannot be inspected"
+fi
+# The local run-runtime manager owns these empty namespace directories for
+# recovery and future launches. They are persistent roots, rather than a
+# materialized run; reject every other entry and let non-empty namespace
+# children surface as leaks.
+if [[ -n "${runtime_entries}" ]]; then
+    runtime_entries="$(find "${fixture_root}/runtime" -mindepth 1 -print | while IFS= read -r entry; do
+        case "${entry}" in
+            "${fixture_root}/runtime/exact-runs")
+                if [[ -L "${entry}" || ! -d "${entry}" ]]; then
+                    printf '%s\n' "${entry}"
+                    break
+                fi
+                ;;
+            "${fixture_root}/runtime/exact-runs/active"|\
+            "${fixture_root}/runtime/exact-runs/gateway-services"|\
+            "${fixture_root}/runtime/authority-handoffs")
+                if [[ -L "${entry}" || ! -d "${entry}" ]]; then
+                    printf '%s\n' "${entry}"
+                    break
+                fi
+                nested_entry="$(find "${entry}" -mindepth 1 -print -quit)"
+                if [[ -n "${nested_entry}" ]]; then
+                    printf '%s\n' "${nested_entry}"
+                    break
+                fi
+                ;;
+            *)
+                printf '%s\n' "${entry}"
+                break
+                ;;
+        esac
+    done)"
 fi
 if [[ -n "${runtime_entries}" ]]; then
     heph_shell_failure_die runtime-cleanup assertion-mismatch 1 "${LINENO}"

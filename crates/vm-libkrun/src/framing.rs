@@ -92,7 +92,8 @@ mod tests {
     use super::{read_sync, write_sync};
     use crate::protocol::{
         GuestCommandMessage, GuestLogStream, GuestMessage, GuestMount, HostMessage, MAX_FRAME_SIZE,
-        PROTOCOL_VERSION, RuntimeAuthorityMessage,
+        PRIVATE_SERVICE_CHALLENGE_BYTES, PROTOCOL_VERSION, PrivateHttpServiceMessage,
+        PrivateServiceChallenge, PrivateServiceConnectionMessage, RuntimeAuthorityMessage,
     };
     use serde::Serialize;
     use std::{collections::BTreeMap, io::Cursor, path::PathBuf};
@@ -139,6 +140,7 @@ mod tests {
                     runtime_git_credential: Some([0xB6; vm_trait::RUNTIME_GIT_CREDENTIAL_BYTES]),
                 })),
                 gateway_handler: true,
+                private_http_service: None,
             },
             HostMessage::Cancel { timeout_ms: 500 },
             HostMessage::HealthPing { nonce: 42 },
@@ -151,10 +153,40 @@ mod tests {
                     body: vec![1, 2, 3],
                 },
             },
+            HostMessage::OpenPrivateServiceConnection {
+                connection: PrivateServiceConnectionMessage {
+                    connection_id: uuid::Uuid::nil(),
+                    challenge: PrivateServiceChallenge([0xA5; PRIVATE_SERVICE_CHALLENGE_BYTES]),
+                },
+            },
         ];
         for message in messages {
             round_trip(&message);
         }
+    }
+
+    #[test]
+    fn private_http_service_start_round_trips_with_protocol_v8_fields() {
+        let message = HostMessage::Start {
+            version: PROTOCOL_VERSION,
+            command: GuestCommandMessage {
+                program: String::from("/bin/server"),
+                args: Vec::new(),
+                env: BTreeMap::new(),
+                working_dir: None,
+            },
+            mounts: Vec::new(),
+            state_volume: None,
+            runtime_authority: None,
+            gateway_handler: false,
+            private_http_service: Some(PrivateHttpServiceMessage {
+                loopback_port: 8080,
+                max_connections: 16,
+                connect_timeout_ms: 1500,
+            }),
+        };
+
+        round_trip(&message);
     }
 
     #[test]

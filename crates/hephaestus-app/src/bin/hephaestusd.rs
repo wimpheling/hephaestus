@@ -3,10 +3,11 @@
 use builder_catalog_domain::OciImageReference;
 use hephaestus_app::{
     AppConfig, GatewayEdgeConfig, HephaestusApp, OciBuilderWorkerConfig, OidcConfig,
-    RegistryConfig, VmBackendConfig,
+    RegistryConfig, UiOriginConfig, VmBackendConfig,
 };
 use jsonwebtoken::{Algorithm, DecodingKey};
 use oci_builder_runtime_local::LocalOciRuntimeConfig;
+use release_service::{UiNamespace, UiPublicPort};
 use run_runtime_local::LocalRunRuntimeConfig;
 use secret_application::BrokerAdapter;
 use secret_broker::{BrokeredHttpsAdapterRegistry, BrokeredHttpsUpstream, DenyingBrokerAdapter};
@@ -39,8 +40,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
         )
         .init();
     let config = environment_config()?;
-    let app = HephaestusApp::build(config).await?;
-    let running = app.start().await?;
+    let running = HephaestusApp::build(config).await?.start().await?;
     eprintln!("hephaestusd ready at http://{}", running.http_addr());
     tokio::signal::ctrl_c().await?;
     running.shutdown().await?;
@@ -59,6 +59,8 @@ fn environment_config() -> Result<AppConfig, Box<dyn Error>> {
         env::var("HEPHAESTUS_VM_BACKEND").unwrap_or_else(|_| String::from("libkrun"));
     let mut root_images = root_images_from_environment(&backend_name)?;
     let runtime_root = path("HEPHAESTUS_RUNTIME_ROOT")?;
+    let run_runtime_root = runtime_root.join("exact-runs");
+    std::fs::create_dir_all(&run_runtime_root)?;
     let oci_builder = oci_builder_from_environment(&repository_root, &runtime_root)?;
     if let Some(worker) = &oci_builder {
         for (reference, root) in repository_root_images(&worker.root_manifest, &worker.rootfs_root)?
@@ -83,7 +85,11 @@ fn environment_config() -> Result<AppConfig, Box<dyn Error>> {
         "fixture" => VmBackendConfig::FixtureResult,
         "libkrun" => {
             let mut image_roots: Vec<_> = root_images.values().map(root_filesystem_path).collect();
-            let mut mount_roots = vec![workspace_root.clone(), secret_mount_root.clone()];
+            let mut mount_roots = vec![
+                workspace_root.clone(),
+                secret_mount_root.clone(),
+                run_runtime_root.clone(),
+            ];
             if let Some(worker) = &oci_builder {
                 image_roots.push(worker.rootfs_root.clone());
                 append_repository_image_mount_roots(
@@ -199,7 +205,7 @@ fn environment_config() -> Result<AppConfig, Box<dyn Error>> {
         volumes: LocalVolumeConfig {
             volume_root,
             transient_runtime_roots: vec![
-                runtime_root.clone(),
+                runtime_root,
                 workspace_root.clone(),
                 secret_mount_root.clone(),
             ],
@@ -215,7 +221,7 @@ fn environment_config() -> Result<AppConfig, Box<dyn Error>> {
             limits: WorkspaceLimits::default(),
         },
         run_runtime: LocalRunRuntimeConfig {
-            runtime_root: runtime_root.join("exact-runs"),
+            runtime_root: run_runtime_root,
             release_artifact_root: artifact_root.join("releases"),
         },
         runtime_authority_handoff_root,
@@ -268,18 +274,75 @@ fn broker_adapter_from_environment() -> Result<Arc<dyn BrokerAdapter>, Box<dyn E
 }
 
 fn gateway_edge_from_environment() -> Result<Option<GatewayEdgeConfig>, Box<dyn Error>> {
-    let Some(caddy_admin_url) = env::var_os("HEPHAESTUS_CADDY_ADMIN_URL") else {
+    let caddy_admin_url = optional_environment("HEPHAESTUS_CADDY_ADMIN_URL")?;
+    let ui_listen = optional_environment("HEPHAESTUS_UI_ORIGIN_LISTEN")?;
+    let ui_namespace = optional_environment("HEPHAESTUS_UI_NAMESPACE")?;
+    let ui_port = optional_environment("HEPHAESTUS_UI_PORT")?;
+    let ui_platform_origin = optional_environment("HEPHAESTUS_PLATFORM_HTTPS_ORIGIN")?;
+    let ui_origin = parse_ui_origin_config(
+        caddy_admin_url.is_some(),
+        ui_listen.as_deref(),
+        ui_namespace.as_deref(),
+        ui_port.as_deref(),
+        ui_platform_origin.as_deref(),
+    )?;
+    let Some(caddy_admin_url) = caddy_admin_url else {
         return Ok(None);
     };
     Ok(Some(GatewayEdgeConfig {
-        caddy_admin_url: caddy_admin_url
-            .into_string()
-            .map_err(|_| "HEPHAESTUS_CADDY_ADMIN_URL must be valid UTF-8")?,
+        caddy_admin_url,
         dispatcher_listen: required("HEPHAESTUS_GATEWAY_DISPATCHER_LISTEN")?.parse()?,
         public_authority: required("HEPHAESTUS_GATEWAY_PUBLIC_AUTHORITY")?,
         caddy_configuration_template: std::fs::read(path("HEPHAESTUS_CADDY_CONFIGURATION_FILE")?)?,
         caddy_server_name: required("HEPHAESTUS_CADDY_SERVER_NAME")?,
+        ui_origin,
     }))
+}
+
+fn optional_environment(name: &str) -> Result<Option<String>, Box<dyn Error>> {
+    match env::var_os(name) {
+        Some(value) => Ok(Some(
+            value
+                .into_string()
+                .map_err(|_| format!("{name} must be valid UTF-8"))?,
+        )),
+        None => Ok(None),
+    }
+}
+
+fn parse_ui_origin_config(
+    caddy_configured: bool,
+    listen: Option<&str>,
+    namespace: Option<&str>,
+    port: Option<&str>,
+    platform_origin: Option<&str>,
+) -> Result<Option<UiOriginConfig>, Box<dyn Error>> {
+    let enabled =
+        listen.is_some() || namespace.is_some() || port.is_some() || platform_origin.is_some();
+    if !enabled {
+        return Ok(None);
+    }
+    if !caddy_configured {
+        return Err("UI origin configuration requires the existing Caddy configuration".into());
+    }
+    let listen: SocketAddr = listen
+        .ok_or("HEPHAESTUS_UI_ORIGIN_LISTEN is required when UI origin is enabled")?
+        .parse()?;
+    if !listen.ip().is_loopback() || listen.port() == 0 {
+        return Err("HEPHAESTUS_UI_ORIGIN_LISTEN must be a nonzero loopback address".into());
+    }
+    let namespace = UiNamespace::parse(
+        namespace.ok_or("HEPHAESTUS_UI_NAMESPACE is required when UI origin is enabled")?,
+    )?;
+    let port = port.map_or_else(
+        || Ok(UiPublicPort::https_default()),
+        UiPublicPort::parse_text,
+    )?;
+    let platform_origin = platform_origin
+        .ok_or("HEPHAESTUS_PLATFORM_HTTPS_ORIGIN is required when UI origin is enabled")?;
+    Ok(Some(
+        UiOriginConfig::new(namespace, port, platform_origin)?.with_listener(listen),
+    ))
 }
 
 fn fixed_key(path: PathBuf) -> Result<[u8; 32], Box<dyn Error>> {
@@ -834,7 +897,7 @@ fn load_secret_keys(
 
 #[cfg(test)]
 mod tests {
-    use super::{append_repository_image_mount_roots, load_secret_keys};
+    use super::{append_repository_image_mount_roots, load_secret_keys, parse_ui_origin_config};
     use oci_builder_runtime_local::LocalOciRuntimeConfig;
     use secret_store::KeyProvider;
     use std::{collections::BTreeMap, fs, os::unix::fs::PermissionsExt, path::PathBuf};
@@ -902,6 +965,74 @@ mod tests {
                 PathBuf::from("/private/verification"),
                 PathBuf::from("/private/bases/approved"),
             ]
+        );
+    }
+
+    #[test]
+    fn ui_origin_parser_is_opt_in_without_global_environment() {
+        assert!(
+            parse_ui_origin_config(false, None, None, None, None)
+                .expect("disabled")
+                .is_none()
+        );
+        assert!(
+            parse_ui_origin_config(
+                false,
+                Some("127.0.0.1:19091"),
+                Some("ui.example.test"),
+                None,
+                Some("https://example.test"),
+            )
+            .is_err()
+        );
+    }
+
+    #[test]
+    fn ui_origin_parser_rejects_partial_and_non_loopback_configuration() {
+        assert!(
+            parse_ui_origin_config(
+                true,
+                Some("127.0.0.1:19091"),
+                Some("ui.example.test"),
+                None,
+                None,
+            )
+            .is_err()
+        );
+        assert!(
+            parse_ui_origin_config(
+                true,
+                Some("0.0.0.0:19091"),
+                Some("ui.example.test"),
+                None,
+                Some("https://example.test"),
+            )
+            .is_err()
+        );
+    }
+
+    #[test]
+    fn ui_origin_parser_accepts_independent_canonical_ports() {
+        let config = parse_ui_origin_config(
+            true,
+            Some("127.0.0.1:19091"),
+            Some("ui.example.test"),
+            Some("9443"),
+            Some("https://example.test:8443"),
+        )
+        .expect("valid UI origin")
+        .expect("enabled UI origin");
+        assert_eq!(config.public_port().get(), 9443);
+        assert_eq!(config.platform_origin(), "https://example.test:8443");
+        assert!(
+            parse_ui_origin_config(
+                true,
+                Some("127.0.0.1:19091"),
+                Some("ui.example.test"),
+                Some("09443"),
+                Some("https://example.test"),
+            )
+            .is_err()
         );
     }
 }

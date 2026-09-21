@@ -9,9 +9,12 @@ use forge_postgres::PgForgeRepository;
 use forge_service::{CreateRepository, GitStorage};
 use hephaestus_app::{
     AppConfig, GatewayEdgeConfig, HephaestusApp, OciBuilderWorkerConfig, OidcConfig,
-    RegistryConfig, RunEventKind, VmBackendConfig,
+    RegistryConfig, RunEventKind, UiOriginConfig, VmBackendConfig,
 };
-use identity_domain::{AuthenticatedIdentity, RequestId, UserId};
+use identity_domain::{
+    AuthenticatedIdentity, BrowserSessionSid, RequestId, UserId,
+    browser_session_identity_binding_digest, browser_session_sid_digest,
+};
 use jsonwebtoken::{Algorithm, EncodingKey, Header, encode};
 use mailbox_domain::{
     BodyReference, BodyReferenceId, ContentMetadata, DeduplicationKey, EnvelopeMethod,
@@ -22,6 +25,10 @@ use oci_builder_runtime_local::LocalOciRuntimeConfig;
 use registry_domain::{RegistryAuthority, SupplyChainPolicy};
 use registry_publisher::PublisherConfiguration;
 use registry_token::{RegistryTokenIssuer, SigningKey, TokenLifetime};
+use release_service::{
+    UiNamespace, UiPublicPort, UiRequestAuditDecision, UiRequestAuditOutcome, UiRequestAuditReason,
+    UiRequestAuditSurface,
+};
 use run_runtime_local::LocalRunRuntimeConfig;
 use secret_application::{
     BindSecret, CreateSecret, DeclareBrokeredHttpsRule, GrantAndAcceptSecretImport,
@@ -41,7 +48,10 @@ use sqlx::{Row, postgres::PgPoolOptions};
 use std::{
     collections::BTreeMap,
     env,
+    fs::{self, OpenOptions},
+    os::unix::fs::PermissionsExt,
     path::{Path, PathBuf},
+    process::Stdio,
     sync::{
         Arc,
         atomic::{AtomicBool, Ordering},
@@ -56,9 +66,19 @@ use tokio::{
     sync::Notify,
 };
 use tokio_rustls::TlsAcceptor;
+use url::Url;
 use vm_trait::RootFilesystem;
 use volume_local::LocalVolumeConfig;
 use workspace_local::{LocalWorkspaceConfig, WorkspaceLimits};
+
+#[cfg(feature = "test-fixtures")]
+#[path = "composition/gateway_service_log.rs"]
+mod gateway_service_log_rpc;
+#[cfg(feature = "test-fixtures")]
+use gateway_service_log_rpc::{
+    GUEST_SERVICE_LOG_STDERR_MARKER, GUEST_SERVICE_LOG_STDOUT_MARKER, GatewayServiceGuestLogProof,
+    GatewayServiceLogRpcFixture, marker_count,
+};
 
 // Wait for both bounded preparation branches even if an assertion or an
 // expected-result check panics. Dropping the sibling could abandon published
@@ -342,6 +362,16 @@ fn cooking_oci_worker_config(
     .expect("configure cooking OCI publisher")
     .with_registry_origin(&registry_origin)
     .expect("configure cooking OCI registry origin");
+    let guest_init = env::var_os("HEPHAESTUS_GUEST_INIT_BINARY").map_or_else(
+        || {
+            let target_dir = env::var_os("CARGO_TARGET_DIR")
+                .map(PathBuf::from)
+                .filter(|path| path.is_absolute())
+                .unwrap_or_else(|| PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../target"));
+            target_dir.join("x86_64-unknown-linux-musl/release/heph-init")
+        },
+        PathBuf::from,
+    );
     let config = OciBuilderWorkerConfig {
         runtime: LocalOciRuntimeConfig {
             repository_root: repository_root.to_path_buf(),
@@ -382,8 +412,7 @@ fn cooking_oci_worker_config(
         materialization_worker_name: String::from("golden-cooking-oci-materialization"),
         rootfs_root,
         root_manifest: root.join("repository-builder-roots.json"),
-        guest_init: PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-            .join("../../target/x86_64-unknown-linux-musl/release/heph-init"),
+        guest_init,
         lease: Duration::from_secs(900),
         poll_interval: Duration::from_millis(100),
     };
@@ -467,8 +496,12 @@ mod cooking_ingress_loss;
 mod cooking_inspection;
 #[path = "../../../examples/cooking/tests/retirement.rs"]
 mod cooking_retirement;
+#[path = "../../../examples/cooking/tests/service_build.rs"]
+mod cooking_service_build;
 #[path = "../../../examples/cooking/tests/updates.rs"]
 mod cooking_updates;
+#[path = "service_helpers/revocation.rs"]
+mod service_revocation;
 // The integration-test support tree is private to this test crate; its
 // `pub(crate)` child boundaries are required by sibling fixture modules.
 #[allow(clippy::redundant_pub_crate)]
@@ -491,6 +524,8 @@ const BROKERED_E2E_RULE_ID: uuid::Uuid = uuid::uuid!("00000000-0000-0000-0000-00
 const BROKERED_E2E_SENTINEL: &str = "golden-brokered-provider-sentinel-5d1a";
 const GATEWAY_HANDLER: &str =
     "#!/bin/sh\nexec /usr/libexec/hephaestus/integration-check --private-http-brokered-mailbox\n";
+const SERVICE_GATEWAY_HANDLER: &str =
+    "#!/bin/sh\nexec /usr/libexec/hephaestus/integration-check --serve-service\n";
 
 async fn restart_application(config: AppConfig) -> hephaestus_app::RunningHephaestus {
     HephaestusApp::build(config)
@@ -499,6 +534,3956 @@ async fn restart_application(config: AppConfig) -> hephaestus_app::RunningHephae
         .start()
         .await
         .expect("restart ready application")
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+struct ProductOutboxCensus {
+    total: i64,
+    pending: i64,
+    published: i64,
+    dead_lettered: i64,
+    pending_fingerprint: String,
+}
+
+struct IsolatedGoldenDatabase {
+    database_name: String,
+    maintenance_url: String,
+    target_url: String,
+}
+
+/// Verifies only the redacted, safe context emitted by the installed UI
+/// browser flow. The request audit stream deliberately has no route, query,
+/// cookie, credential, or response-payload columns for this observer to read.
+async fn assert_installed_ui_audit_success(
+    pool: &sqlx::PgPool,
+    actor_id: uuid::Uuid,
+    organization_id: uuid::Uuid,
+    installation_id: uuid::Uuid,
+    generation_id: uuid::Uuid,
+    surface: UiRequestAuditSurface,
+    child_required: bool,
+) -> Vec<uuid::Uuid> {
+    type AuditRow = (
+        uuid::Uuid,
+        Option<uuid::Uuid>,
+        Option<uuid::Uuid>,
+        Option<uuid::Uuid>,
+        Option<uuid::Uuid>,
+        Option<uuid::Uuid>,
+        Option<uuid::Uuid>,
+        Option<uuid::Uuid>,
+    );
+    let rows: Vec<AuditRow> = sqlx::query_as(
+        "SELECT request_id, actor_id, organization_id, installation_id,
+                generation_id, child_session_id, gateway_id, gateway_revision_id
+           FROM ui_request_audit_events
+          WHERE installation_id = $1
+            AND generation_id = $2
+            AND surface = $3
+            AND decision = $4
+            AND outcome = $5
+            AND reason_code = $6
+          ORDER BY occurred_at, id",
+    )
+    .bind(installation_id)
+    .bind(generation_id)
+    .bind(surface.as_str())
+    .bind(UiRequestAuditDecision::Allowed.as_str())
+    .bind(UiRequestAuditOutcome::Succeeded.as_str())
+    .bind(UiRequestAuditReason::None.as_str())
+    .fetch_all(pool)
+    .await
+    .expect("read installed UI request audit rows");
+    assert!(
+        !rows.is_empty(),
+        "installed UI must emit a successful {} audit row",
+        surface.as_str()
+    );
+    for row in &rows {
+        assert_eq!(row.1, Some(actor_id), "{} audit actor", surface.as_str());
+        assert_eq!(
+            row.2,
+            Some(organization_id),
+            "{} audit organization",
+            surface.as_str()
+        );
+        assert_eq!(
+            row.3,
+            Some(installation_id),
+            "{} audit installation",
+            surface.as_str()
+        );
+        assert_eq!(
+            row.4,
+            Some(generation_id),
+            "{} audit generation",
+            surface.as_str()
+        );
+        assert_eq!(
+            row.5.is_some(),
+            child_required,
+            "{} audit child-session context",
+            surface.as_str()
+        );
+        assert_eq!(
+            row.6.is_some(),
+            row.7.is_some(),
+            "{} audit gateway context must be paired",
+            surface.as_str()
+        );
+    }
+    rows.into_iter().map(|row| row.0).collect()
+}
+
+struct InstalledUiBrowserContext<'a> {
+    pool: &'a sqlx::PgPool,
+    running: &'a hephaestus_app::RunningHephaestus,
+    database_url: &'a str,
+    rpc_token: &'a (dyn Fn(&str) -> String + Send + Sync),
+    organization_id: OrganizationId,
+    installed_uis: cooking_builds::InstalledCookingReferenceUis,
+    actor_id: uuid::Uuid,
+    workload_phase_timing: bool,
+    service_materializer_root: &'a Path,
+}
+
+const INSTALLED_UI_CONTROL_MARKERS: [&str; 25] = [
+    "managed-ready",
+    "guest-policy-ready",
+    "guest-policy-start",
+    "guest-policy-complete",
+    "guest-policy-verified",
+    "disable-complete",
+    "stale-cookie-denied",
+    "reactivate-complete",
+    "old-generation-denied-after-reactivate",
+    "old-generation-denial-verified",
+    "new-generation-ready",
+    "new-generation-verified",
+    "parent-revoke-ready",
+    "parent-revoke-permitted",
+    "parent-revoked-denied",
+    "parent-revocation-verified",
+    "parent-new-child-ready",
+    "remove-ready",
+    "remove-complete",
+    "removed-host-denied",
+    "removed-card-absent",
+    "managed-restart-ready",
+    "managed-restart-complete",
+    "managed-restart-verified",
+    "managed-restart-audit-verified",
+];
+const INSTALLED_UI_LIFECYCLE_DEADLINE: Duration = Duration::from_secs(360);
+type InstalledUiDenialRow = (
+    String,
+    String,
+    String,
+    String,
+    Option<uuid::Uuid>,
+    Option<uuid::Uuid>,
+    Option<uuid::Uuid>,
+    Option<uuid::Uuid>,
+    Option<uuid::Uuid>,
+    Option<uuid::Uuid>,
+    Option<uuid::Uuid>,
+);
+type GuestPolicyAuditRow = (
+    uuid::Uuid,
+    uuid::Uuid,
+    uuid::Uuid,
+    uuid::Uuid,
+    uuid::Uuid,
+    uuid::Uuid,
+    uuid::Uuid,
+    String,
+    String,
+    String,
+    Option<uuid::Uuid>,
+    Option<uuid::Uuid>,
+    uuid::Uuid,
+    uuid::Uuid,
+    uuid::Uuid,
+    String,
+);
+
+fn prepare_installed_ui_control_dir(fixture_path: &Path) -> PathBuf {
+    let parent = fixture_path
+        .parent()
+        .expect("installed UI fixture must have a parent directory");
+    let control_dir = parent.join("installed-ui-control");
+    assert!(
+        fs::symlink_metadata(&control_dir).is_err(),
+        "installed UI control directory already exists"
+    );
+    fs::create_dir(&control_dir).expect("create installed UI control directory");
+    fs::set_permissions(&control_dir, fs::Permissions::from_mode(0o700))
+        .expect("lock installed UI control directory");
+    control_dir
+}
+
+async fn write_installed_ui_control_marker(control_dir: &Path, marker: &str) {
+    assert!(INSTALLED_UI_CONTROL_MARKERS.contains(&marker));
+    let path = control_dir.join(marker);
+    let mut file = tokio::fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .mode(0o600)
+        .open(&path)
+        .await
+        .expect("create installed UI control marker");
+    file.write_all(b"ok\n")
+        .await
+        .expect("write installed UI control marker");
+    file.sync_all()
+        .await
+        .expect("sync installed UI control marker");
+    let metadata = tokio::fs::symlink_metadata(&path)
+        .await
+        .expect("read installed UI control marker metadata");
+    assert!(
+        metadata.is_file(),
+        "installed UI marker must be a regular file"
+    );
+    assert!(
+        !metadata.file_type().is_symlink(),
+        "installed UI marker must not be a symlink"
+    );
+}
+
+async fn wait_for_installed_ui_control_marker(
+    control_dir: &Path,
+    marker: &str,
+    deadline: tokio::time::Instant,
+) {
+    assert!(INSTALLED_UI_CONTROL_MARKERS.contains(&marker));
+    let path = control_dir.join(marker);
+    loop {
+        if let Ok(metadata) = tokio::fs::symlink_metadata(&path).await {
+            assert!(
+                metadata.is_file(),
+                "installed UI marker must be a regular file"
+            );
+            assert!(
+                !metadata.file_type().is_symlink(),
+                "installed UI marker must not be a symlink"
+            );
+            return;
+        }
+        assert!(
+            tokio::time::Instant::now() < deadline,
+            "timed out waiting for installed UI control marker {marker}"
+        );
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+}
+
+async fn assert_installed_ui_disable_did_not_reach_gateway(
+    context: &InstalledUiBrowserContext<'_>,
+    baseline_managed_audit_ids: &[uuid::Uuid],
+    baseline_managed_invocations: i64,
+) {
+    let managed_audit_ids: Vec<uuid::Uuid> = sqlx::query_scalar(
+        "SELECT id
+           FROM ui_request_audit_events
+          WHERE installation_id = $1 AND generation_id = $2
+          ORDER BY occurred_at, id",
+    )
+    .bind(context.installed_uis.managed_ui.installation_id)
+    .bind(context.installed_uis.managed_ui.generation_id)
+    .fetch_all(context.pool)
+    .await
+    .expect("read managed installed UI audits after disable");
+    assert_eq!(
+        managed_audit_ids, baseline_managed_audit_ids,
+        "stale managed child must not create a managed-context audit"
+    );
+    let managed_invocations: i64 = sqlx::query_scalar(
+        "SELECT count(*)
+           FROM gateway_invocations
+          WHERE gateway_id = $1",
+    )
+    .bind(context.installed_uis.managed_gateway_id)
+    .fetch_one(context.pool)
+    .await
+    .expect("count managed gateway invocations after disable");
+    assert_eq!(
+        managed_invocations, baseline_managed_invocations,
+        "stale managed child must not invoke the disabled gateway"
+    );
+}
+
+async fn installed_ui_audit_ids(context: &InstalledUiBrowserContext<'_>) -> Vec<uuid::Uuid> {
+    sqlx::query_scalar(
+        "SELECT id
+           FROM ui_request_audit_events
+          WHERE installation_id = $1
+          ORDER BY occurred_at, id",
+    )
+    .bind(context.installed_uis.managed_ui.installation_id)
+    .fetch_all(context.pool)
+    .await
+    .expect("read all managed installation audits")
+}
+
+async fn installed_ui_gateway_invocations(context: &InstalledUiBrowserContext<'_>) -> i64 {
+    sqlx::query_scalar(
+        "SELECT count(*)
+           FROM gateway_invocations
+          WHERE gateway_id = $1",
+    )
+    .bind(context.installed_uis.managed_gateway_id)
+    .fetch_one(context.pool)
+    .await
+    .expect("count managed gateway invocations")
+}
+
+async fn assert_installed_ui_stale_cookie_denial(
+    context: &InstalledUiBrowserContext<'_>,
+    disabled_at: OffsetDateTime,
+    baseline_content_audit_ids: &[uuid::Uuid],
+    expected_reason: UiRequestAuditReason,
+) {
+    let fresh_denials: Vec<InstalledUiDenialRow> = sqlx::query_as(
+        "SELECT surface, decision, outcome, reason_code,
+                actor_id, organization_id, installation_id, generation_id,
+                child_session_id, gateway_id, gateway_revision_id
+           FROM ui_request_audit_events
+          WHERE occurred_at >= $1
+            AND surface = 'content'
+            AND NOT (id = ANY($2))
+          ORDER BY occurred_at, id",
+    )
+    .bind(disabled_at)
+    .bind(baseline_content_audit_ids)
+    .fetch_all(context.pool)
+    .await
+    .expect("read stale managed child denial audit");
+    assert_eq!(
+        fresh_denials.len(),
+        1,
+        "stale managed child must emit exactly one fresh content denial"
+    );
+    let denial = &fresh_denials[0];
+    assert_eq!(denial.0, "content");
+    assert_eq!(denial.1, UiRequestAuditDecision::Denied.as_str());
+    assert_eq!(denial.2, UiRequestAuditOutcome::NotAttempted.as_str());
+    // The caller supplies the expected closed-vocabulary reason. Disabled or
+    // removed hosts use not-found; revoked parents fail child authentication.
+    assert_eq!(denial.3, expected_reason.as_str());
+    assert!(denial.4.is_none(), "stale denial actor must be anonymous");
+    assert!(
+        denial.5.is_none(),
+        "stale denial organization must be anonymous"
+    );
+    assert!(
+        denial.6.is_none(),
+        "stale denial installation must be anonymous"
+    );
+    assert!(
+        denial.7.is_none(),
+        "stale denial generation must be anonymous"
+    );
+    assert!(
+        denial.8.is_none(),
+        "stale denial child session must be anonymous"
+    );
+    assert!(denial.9.is_none(), "stale denial gateway must be anonymous");
+    assert!(
+        denial.10.is_none(),
+        "stale denial gateway revision must be anonymous"
+    );
+}
+
+async fn run_installed_ui_disable_phase(
+    context: &InstalledUiBrowserContext<'_>,
+    control_dir: &Path,
+    deadline: tokio::time::Instant,
+) -> (Vec<uuid::Uuid>, i64, Vec<uuid::Uuid>) {
+    wait_for_installed_ui_control_marker(control_dir, "managed-ready", deadline).await;
+    let baseline_managed_audit_ids: Vec<uuid::Uuid> = sqlx::query_scalar(
+        "SELECT id
+           FROM ui_request_audit_events
+          WHERE installation_id = $1 AND generation_id = $2
+          ORDER BY occurred_at, id",
+    )
+    .bind(context.installed_uis.managed_ui.installation_id)
+    .bind(context.installed_uis.managed_ui.generation_id)
+    .fetch_all(context.pool)
+    .await
+    .expect("snapshot managed installed UI audits before disable");
+    let baseline_content_audit_ids: Vec<uuid::Uuid> = sqlx::query_scalar(
+        "SELECT id
+           FROM ui_request_audit_events
+          WHERE surface = 'content'
+          ORDER BY occurred_at, id",
+    )
+    .fetch_all(context.pool)
+    .await
+    .expect("snapshot content audit IDs before disable");
+    let baseline_managed_invocations: i64 = sqlx::query_scalar(
+        "SELECT count(*)
+           FROM gateway_invocations
+          WHERE gateway_id = $1",
+    )
+    .bind(context.installed_uis.managed_gateway_id)
+    .fetch_one(context.pool)
+    .await
+    .expect("snapshot managed gateway invocations before disable");
+    let disabled_at: OffsetDateTime = sqlx::query_scalar("SELECT clock_timestamp()")
+        .fetch_one(context.pool)
+        .await
+        .expect("read installed UI disable audit boundary");
+    let disabled = cooking_builds::disable_installed_ui(
+        context.running,
+        context.rpc_token,
+        context.installed_uis.managed_ui,
+    )
+    .await
+    .expect("disable managed installed UI through owner RPC");
+    assert_eq!(
+        disabled.installation_id, context.installed_uis.managed_ui.installation_id,
+        "disable must retain the managed installation"
+    );
+    let lifecycle: String = sqlx::query_scalar(
+        "SELECT lifecycle
+           FROM ui_installations
+          WHERE id = $1",
+    )
+    .bind(disabled.installation_id)
+    .fetch_one(context.pool)
+    .await
+    .expect("read disabled installed UI lifecycle");
+    assert_eq!(lifecycle, "disabled", "managed UI lifecycle after disable");
+    write_installed_ui_control_marker(control_dir, "disable-complete").await;
+    wait_for_installed_ui_control_marker(control_dir, "stale-cookie-denied", deadline).await;
+
+    assert_installed_ui_disable_did_not_reach_gateway(
+        context,
+        &baseline_managed_audit_ids,
+        baseline_managed_invocations,
+    )
+    .await;
+    assert_installed_ui_stale_cookie_denial(
+        context,
+        disabled_at,
+        &baseline_content_audit_ids,
+        UiRequestAuditReason::NotFound,
+    )
+    .await;
+
+    let reactivation_content_audit_ids: Vec<uuid::Uuid> = sqlx::query_scalar(
+        "SELECT id
+           FROM ui_request_audit_events
+          WHERE surface = 'content'
+          ORDER BY occurred_at, id",
+    )
+    .fetch_all(context.pool)
+    .await
+    .expect("snapshot content audit IDs before reactivation");
+    (
+        baseline_managed_audit_ids,
+        baseline_managed_invocations,
+        reactivation_content_audit_ids,
+    )
+}
+
+async fn run_installed_ui_reactivation_phase(
+    context: &InstalledUiBrowserContext<'_>,
+    control_dir: &Path,
+    deadline: tokio::time::Instant,
+    baseline_managed_audit_ids: &[uuid::Uuid],
+    baseline_managed_invocations: i64,
+    reactivation_content_audit_ids: &[uuid::Uuid],
+) -> cooking_builds::InstalledCookingUi {
+    let reactivated_at: OffsetDateTime = sqlx::query_scalar("SELECT clock_timestamp()")
+        .fetch_one(context.pool)
+        .await
+        .expect("read installed UI reactivation audit boundary");
+    let reactivated = cooking_builds::activate_installed_ui(
+        context.running,
+        context.rpc_token,
+        context.installed_uis.managed_ui,
+        context.installed_uis.managed_release_id,
+    )
+    .await
+    .expect("reactivate managed installed UI through owner RPC");
+    let current_generation: uuid::Uuid = sqlx::query_scalar(
+        "SELECT current_generation_id
+           FROM ui_installations
+          WHERE id = $1 AND lifecycle = 'enabled'",
+    )
+    .bind(reactivated.installation_id)
+    .fetch_one(context.pool)
+    .await
+    .expect("read reactivated managed UI generation");
+    assert_eq!(
+        current_generation, reactivated.generation_id,
+        "reactivation must publish its fresh enabled generation"
+    );
+    write_installed_ui_control_marker(control_dir, "reactivate-complete").await;
+    wait_for_installed_ui_control_marker(
+        control_dir,
+        "old-generation-denied-after-reactivate",
+        deadline,
+    )
+    .await;
+    assert_installed_ui_disable_did_not_reach_gateway(
+        context,
+        baseline_managed_audit_ids,
+        baseline_managed_invocations,
+    )
+    .await;
+    assert_installed_ui_stale_cookie_denial(
+        context,
+        reactivated_at,
+        reactivation_content_audit_ids,
+        UiRequestAuditReason::NotFound,
+    )
+    .await;
+    write_installed_ui_control_marker(control_dir, "old-generation-denial-verified").await;
+    wait_for_installed_ui_control_marker(control_dir, "new-generation-ready", deadline).await;
+    reactivated
+}
+
+async fn installed_ui_current_generation_children(
+    context: &InstalledUiBrowserContext<'_>,
+) -> Vec<(uuid::Uuid, uuid::Uuid)> {
+    sqlx::query_as(
+        "SELECT id, parent_session_id
+           FROM ui_browser_sessions
+          WHERE installation_id = $1
+            AND generation_id = $2
+          ORDER BY issued_at, id",
+    )
+    .bind(context.installed_uis.managed_ui.installation_id)
+    .bind(context.installed_uis.managed_ui.generation_id)
+    .fetch_all(context.pool)
+    .await
+    .expect("read current-generation installed UI children")
+}
+
+type InstalledUiServiceEvidence = (String, Option<String>, Option<i32>, Option<i32>);
+
+fn installed_ui_service_resource_paths(
+    instance_id: uuid::Uuid,
+    materializer_root: &Path,
+) -> (PathBuf, PathBuf, PathBuf) {
+    let vm_id = format!("gateway-service-{instance_id}");
+    let runtime_root = PathBuf::from(
+        env::var("HEPHAESTUS_LIBKRUN_RUNTIME_ROOT")
+            .expect("libkrun runtime root for installed UI service replacement"),
+    );
+    let cgroup_root = PathBuf::from(
+        env::var("HEPHAESTUS_LIBKRUN_CGROUP_ROOT")
+            .expect("libkrun cgroup root for installed UI service replacement"),
+    );
+    (
+        runtime_root.join(&vm_id),
+        cgroup_root.join(&vm_id),
+        materializer_root
+            .join("run-runtime")
+            .join("gateway-services")
+            .join(instance_id.to_string()),
+    )
+}
+
+fn kill_exact_installed_ui_service_guest(instance_id: uuid::Uuid) -> PathBuf {
+    let cgroup_root = PathBuf::from(
+        env::var("HEPHAESTUS_LIBKRUN_CGROUP_ROOT")
+            .expect("delegated libkrun cgroup root for installed UI replacement"),
+    );
+    let vm_id = format!("gateway-service-{instance_id}");
+    let cgroup_path = cgroup_root.join(&vm_id);
+    let root_metadata =
+        fs::symlink_metadata(&cgroup_root).expect("read delegated libkrun cgroup root metadata");
+    assert!(
+        root_metadata.is_dir() && !root_metadata.file_type().is_symlink(),
+        "installed UI replacement requires a real delegated cgroup root"
+    );
+    let cgroup_metadata = fs::symlink_metadata(&cgroup_path)
+        .expect("read exact installed UI service cgroup metadata");
+    assert!(
+        cgroup_metadata.is_dir() && !cgroup_metadata.file_type().is_symlink(),
+        "installed UI replacement target must be the exact service cgroup directory"
+    );
+    let kill_path = cgroup_path.join("cgroup.kill");
+    let kill_metadata = fs::symlink_metadata(&kill_path)
+        .expect("read exact installed UI service cgroup.kill metadata");
+    assert!(
+        !kill_metadata.file_type().is_symlink(),
+        "installed UI replacement must not follow a cgroup.kill symlink"
+    );
+    fs::write(&kill_path, b"1\n").expect("SIGKILL exact installed UI service cgroup");
+    cgroup_path
+}
+
+async fn wait_for_installed_ui_service_replacement(
+    context: &InstalledUiBrowserContext<'_>,
+    old_instance_id: uuid::Uuid,
+    old_instance_ids: &[uuid::Uuid],
+    old_paths: &(PathBuf, PathBuf, PathBuf),
+    deadline: tokio::time::Instant,
+) -> (uuid::Uuid, (PathBuf, PathBuf, PathBuf)) {
+    let gateway_id = context.installed_uis.managed_gateway_id;
+    let revision_id = context.installed_uis.managed_gateway_revision_id;
+    loop {
+        let old: Option<InstalledUiServiceEvidence> = sqlx::query_as(
+            "SELECT state, failure_code, exit_code, exit_signal
+               FROM gateway_service_instances
+              WHERE id = $1 AND gateway_id = $2 AND revision_id = $3",
+        )
+        .bind(old_instance_id)
+        .bind(gateway_id)
+        .bind(revision_id)
+        .fetch_optional(context.pool)
+        .await
+        .expect("read replaced installed UI service evidence");
+        let rows: Vec<(uuid::Uuid, String, uuid::Uuid)> = sqlx::query_as(
+            "SELECT id, state, revision_id
+               FROM gateway_service_instances
+              WHERE gateway_id = $1 AND revision_id = $2
+              ORDER BY created_at, id",
+        )
+        .bind(gateway_id)
+        .bind(revision_id)
+        .fetch_all(context.pool)
+        .await
+        .expect("read installed UI service replacement rows");
+        let fresh_ready: Vec<(uuid::Uuid, String, uuid::Uuid)> = rows
+            .iter()
+            .filter(|row| !old_instance_ids.contains(&row.0) && row.1 == "ready")
+            .cloned()
+            .collect();
+        let active_revision: Option<uuid::Uuid> =
+            sqlx::query_scalar("SELECT active_revision_id FROM gateways WHERE id = $1")
+                .bind(gateway_id)
+                .fetch_one(context.pool)
+                .await
+                .expect("read installed UI active gateway revision");
+        if let Some((new_instance_id, state, new_revision_id)) = fresh_ready.first()
+            && fresh_ready.len() == 1
+            && rows.iter().filter(|row| row.1 != "cleaned").count() == 1
+            && active_revision == Some(revision_id)
+            && *new_revision_id == revision_id
+            && old
+                == Some((
+                    String::from("cleaned"),
+                    Some(String::from("unexpected_exit")),
+                    None,
+                    Some(9),
+                ))
+            && !old_paths.0.exists()
+            && !old_paths.1.exists()
+            && !old_paths.2.exists()
+        {
+            let new_paths = installed_ui_service_resource_paths(
+                *new_instance_id,
+                context.service_materializer_root,
+            );
+            if new_paths.0.is_dir() && new_paths.1.is_dir() && new_paths.2.is_dir() {
+                assert_eq!(state, "ready");
+                return (*new_instance_id, new_paths);
+            }
+        }
+        assert!(
+            tokio::time::Instant::now() < deadline,
+            "timed out replacing the installed UI service guest"
+        );
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+}
+
+type InstalledUiReplacementAuditRow = (
+    uuid::Uuid,
+    uuid::Uuid,
+    String,
+    uuid::Uuid,
+    uuid::Uuid,
+    uuid::Uuid,
+    uuid::Uuid,
+    uuid::Uuid,
+    String,
+    String,
+    String,
+    String,
+    uuid::Uuid,
+    uuid::Uuid,
+    uuid::Uuid,
+    Option<uuid::Uuid>,
+);
+
+// This keeps the replacement proof's snapshot, kill, barrier, and exact
+// correlation assertions in one ordered lifecycle boundary.
+#[allow(clippy::cognitive_complexity, clippy::too_many_lines)]
+async fn run_installed_ui_live_service_replacement(
+    context: &InstalledUiBrowserContext<'_>,
+    control_dir: &Path,
+    deadline: tokio::time::Instant,
+) {
+    let replacement_deadline = deadline.min(
+        tokio::time::Instant::now()
+            .checked_add(Duration::from_secs(90))
+            .expect("installed UI replacement deadline"),
+    );
+    wait_for_installed_ui_control_marker(
+        control_dir,
+        "managed-restart-ready",
+        replacement_deadline,
+    )
+    .await;
+    let children_before = installed_ui_current_generation_children(context).await;
+    assert_eq!(
+        children_before.len(),
+        1,
+        "live service replacement requires exactly one existing UI child"
+    );
+    let old_instance_ids: Vec<uuid::Uuid> = sqlx::query_scalar(
+        "SELECT id
+           FROM gateway_service_instances
+          WHERE gateway_id = $1 AND revision_id = $2
+          ORDER BY created_at, id",
+    )
+    .bind(context.installed_uis.managed_gateway_id)
+    .bind(context.installed_uis.managed_gateway_revision_id)
+    .fetch_all(context.pool)
+    .await
+    .expect("snapshot installed UI service instance IDs");
+    let old_ready: Vec<uuid::Uuid> = sqlx::query_scalar(
+        "SELECT instance.id
+           FROM gateway_service_instances AS instance
+           JOIN gateways AS gateway ON gateway.id = instance.gateway_id
+          WHERE instance.gateway_id = $1
+            AND instance.revision_id = $2
+            AND instance.state = 'ready'
+            AND gateway.active_revision_id = $2
+          ORDER BY instance.created_at, instance.id",
+    )
+    .bind(context.installed_uis.managed_gateway_id)
+    .bind(context.installed_uis.managed_gateway_revision_id)
+    .fetch_all(context.pool)
+    .await
+    .expect("read active installed UI service instance");
+    assert_eq!(
+        old_ready.len(),
+        1,
+        "installed UI service must have exactly one active ready instance before replacement"
+    );
+    let old_instance_id = old_ready[0];
+    let old_paths =
+        installed_ui_service_resource_paths(old_instance_id, context.service_materializer_root);
+    assert!(old_paths.0.is_dir() && old_paths.1.is_dir() && old_paths.2.is_dir());
+    let baseline_audits: Vec<uuid::Uuid> = sqlx::query_scalar(
+        "SELECT id
+           FROM ui_request_audit_events
+          WHERE installation_id = $1 AND generation_id = $2
+          ORDER BY occurred_at, id",
+    )
+    .bind(context.installed_uis.managed_ui.installation_id)
+    .bind(context.installed_uis.managed_ui.generation_id)
+    .fetch_all(context.pool)
+    .await
+    .expect("snapshot installed UI audits before service replacement");
+    let baseline_invocations: Vec<uuid::Uuid> = sqlx::query_scalar(
+        "SELECT id
+           FROM gateway_invocations
+          WHERE gateway_id = $1
+          ORDER BY accepted_at, id",
+    )
+    .bind(context.installed_uis.managed_gateway_id)
+    .fetch_all(context.pool)
+    .await
+    .expect("snapshot all installed UI gateway invocations before replacement");
+
+    let _old_cgroup = kill_exact_installed_ui_service_guest(old_instance_id);
+    let (new_instance_id, new_paths) = wait_for_installed_ui_service_replacement(
+        context,
+        old_instance_id,
+        &old_instance_ids,
+        &old_paths,
+        replacement_deadline,
+    )
+    .await;
+    assert_ne!(old_instance_id, new_instance_id);
+    write_installed_ui_control_marker(control_dir, "managed-restart-complete").await;
+    wait_for_installed_ui_control_marker(
+        control_dir,
+        "managed-restart-verified",
+        replacement_deadline,
+    )
+    .await;
+
+    let children_after = installed_ui_current_generation_children(context).await;
+    assert_eq!(
+        children_after, children_before,
+        "service replacement must preserve the existing browser child exactly"
+    );
+    let fresh_rows: Vec<InstalledUiReplacementAuditRow> = sqlx::query_as(
+        "SELECT audit.id, audit.request_id, audit.surface,
+                audit.actor_id, audit.organization_id, audit.installation_id,
+                audit.generation_id, audit.child_session_id,
+                audit.decision, audit.outcome, audit.reason_code,
+                invocation.outcome, invocation.id, invocation.gateway_id,
+                invocation.gateway_revision_id, invocation.service_instance_id
+           FROM ui_request_audit_events AS audit
+           JOIN gateway_invocations AS invocation
+             ON invocation.request_id = audit.request_id
+          WHERE audit.installation_id = $1
+            AND audit.generation_id = $2
+            AND audit.child_session_id = $3
+            AND audit.surface IN ('managed', 'api')
+            AND audit.decision = 'allowed'
+            AND audit.outcome = 'succeeded'
+            AND audit.reason_code = 'none'
+            AND NOT (audit.id = ANY($4))
+          ORDER BY audit.occurred_at, audit.id",
+    )
+    .bind(context.installed_uis.managed_ui.installation_id)
+    .bind(context.installed_uis.managed_ui.generation_id)
+    .bind(children_before[0].0)
+    .bind(&baseline_audits)
+    .fetch_all(context.pool)
+    .await
+    .expect("read installed UI audits correlated to replacement service");
+    let fresh_audit_ids: Vec<uuid::Uuid> = sqlx::query_scalar(
+        "SELECT id
+           FROM ui_request_audit_events
+          WHERE installation_id = $1
+            AND generation_id = $2
+            AND NOT (id = ANY($3))
+          ORDER BY occurred_at, id",
+    )
+    .bind(context.installed_uis.managed_ui.installation_id)
+    .bind(context.installed_uis.managed_ui.generation_id)
+    .bind(&baseline_audits)
+    .fetch_all(context.pool)
+    .await
+    .expect("read all fresh installed UI replacement audits");
+    assert_eq!(
+        fresh_rows.len(),
+        2,
+        "replacement must produce exactly two fresh UI audits"
+    );
+    let mut surfaces = fresh_rows
+        .iter()
+        .map(|row| row.2.as_str())
+        .collect::<Vec<_>>();
+    surfaces.sort_unstable();
+    assert_eq!(surfaces, ["api", "managed"]);
+    let mut joined_audit_ids = fresh_rows.iter().map(|row| row.0).collect::<Vec<_>>();
+    joined_audit_ids.sort_unstable();
+    let mut fresh_audit_ids = fresh_audit_ids;
+    fresh_audit_ids.sort_unstable();
+    assert_eq!(
+        joined_audit_ids, fresh_audit_ids,
+        "every fresh installation audit must be one of the two correlated replacement audits"
+    );
+    for row in &fresh_rows {
+        assert_eq!(row.3, context.actor_id);
+        assert_eq!(row.4, context.organization_id.as_uuid());
+        assert_eq!(row.5, context.installed_uis.managed_ui.installation_id);
+        assert_eq!(row.6, context.installed_uis.managed_ui.generation_id);
+        assert_eq!(row.7, children_before[0].0);
+        assert_eq!(row.8, UiRequestAuditDecision::Allowed.as_str());
+        assert_eq!(row.9, UiRequestAuditOutcome::Succeeded.as_str());
+        assert_eq!(row.10, UiRequestAuditReason::None.as_str());
+        assert_eq!(row.11, "completed");
+        assert_eq!(row.13, context.installed_uis.managed_gateway_id);
+        assert_eq!(row.14, context.installed_uis.managed_gateway_revision_id);
+        assert_eq!(row.15, Some(new_instance_id));
+    }
+    let fresh_invocations: Vec<uuid::Uuid> = sqlx::query_scalar(
+        "SELECT id
+           FROM gateway_invocations
+          WHERE gateway_id = $1 AND NOT (id = ANY($2))
+          ORDER BY accepted_at, id",
+    )
+    .bind(context.installed_uis.managed_gateway_id)
+    .bind(&baseline_invocations)
+    .fetch_all(context.pool)
+    .await
+    .expect("read all fresh replacement gateway invocations");
+    assert_eq!(fresh_invocations.len(), 2);
+    let mut audit_invocations = fresh_rows.iter().map(|row| row.12).collect::<Vec<_>>();
+    audit_invocations.sort_unstable();
+    let mut fresh_invocations = fresh_invocations;
+    fresh_invocations.sort_unstable();
+    assert_eq!(
+        audit_invocations, fresh_invocations,
+        "replacement audits must account for exactly both fresh invocations"
+    );
+    assert!(new_paths.0.is_dir() && new_paths.1.is_dir() && new_paths.2.is_dir());
+    write_installed_ui_control_marker(control_dir, "managed-restart-audit-verified").await;
+    println!(
+        "REAL_UI_INSTALLATION_LIVE_CHILD_RECOVERY=1 same_child=1 new_service_instance=1 old_resources_cleaned=1 gateway_correlation=1"
+    );
+}
+
+struct InstalledUiParentRevocationBaseline {
+    child_id: uuid::Uuid,
+    parent_id: uuid::Uuid,
+    content_audit_ids: Vec<uuid::Uuid>,
+    managed_audit_ids: Vec<uuid::Uuid>,
+    gateway_invocations: i64,
+    boundary: OffsetDateTime,
+}
+
+async fn snapshot_installed_ui_parent_revocation(
+    context: &InstalledUiBrowserContext<'_>,
+    activated_context: &InstalledUiBrowserContext<'_>,
+    control_dir: &Path,
+    deadline: tokio::time::Instant,
+) -> InstalledUiParentRevocationBaseline {
+    wait_for_installed_ui_control_marker(control_dir, "parent-revoke-ready", deadline).await;
+    let existing_children = installed_ui_current_generation_children(activated_context).await;
+    assert_eq!(
+        existing_children.len(),
+        1,
+        "current generation must have exactly one child before parent logout"
+    );
+    let (child_id, parent_id) = existing_children[0];
+    let parent_before: (uuid::Uuid, Option<OffsetDateTime>, Option<String>) = sqlx::query_as(
+        "SELECT user_id, revoked_at, revocation_reason
+           FROM human_browser_sessions
+          WHERE id = $1",
+    )
+    .bind(parent_id)
+    .fetch_one(context.pool)
+    .await
+    .expect("read current installed UI parent session before logout");
+    assert_eq!(
+        parent_before.0, context.actor_id,
+        "current UI parent must belong to the golden actor"
+    );
+    assert!(
+        parent_before.1.is_none() && parent_before.2.is_none(),
+        "current UI parent must be active before logout"
+    );
+    let content_audit_ids: Vec<uuid::Uuid> = sqlx::query_scalar(
+        "SELECT id
+           FROM ui_request_audit_events
+          WHERE surface = 'content'
+          ORDER BY occurred_at, id",
+    )
+    .fetch_all(context.pool)
+    .await
+    .expect("snapshot content audit IDs before parent logout");
+    let managed_audit_ids = installed_ui_audit_ids(activated_context).await;
+    let gateway_invocations = installed_ui_gateway_invocations(activated_context).await;
+    let boundary: OffsetDateTime = sqlx::query_scalar("SELECT clock_timestamp()")
+        .fetch_one(context.pool)
+        .await
+        .expect("read parent logout audit boundary");
+
+    InstalledUiParentRevocationBaseline {
+        child_id,
+        parent_id,
+        content_audit_ids,
+        managed_audit_ids,
+        gateway_invocations,
+        boundary,
+    }
+}
+
+async fn assert_installed_ui_parent_revocation(
+    context: &InstalledUiBrowserContext<'_>,
+    activated_context: &InstalledUiBrowserContext<'_>,
+    baseline: &InstalledUiParentRevocationBaseline,
+) {
+    let parent_after: (uuid::Uuid, Option<OffsetDateTime>, Option<String>) = sqlx::query_as(
+        "SELECT parent.user_id, parent.revoked_at, parent.revocation_reason
+           FROM ui_browser_sessions AS child
+           JOIN human_browser_sessions AS parent
+             ON parent.id = child.parent_session_id
+          WHERE child.id = $1
+            AND child.parent_session_id = $2
+            AND child.installation_id = $3
+            AND child.generation_id = $4",
+    )
+    .bind(baseline.child_id)
+    .bind(baseline.parent_id)
+    .bind(activated_context.installed_uis.managed_ui.installation_id)
+    .bind(activated_context.installed_uis.managed_ui.generation_id)
+    .fetch_one(context.pool)
+    .await
+    .expect("verify revoked parent through child-parent join");
+    assert_eq!(
+        parent_after.0, context.actor_id,
+        "revoked UI parent must retain its actor"
+    );
+    assert!(
+        parent_after.1.is_some(),
+        "logout must revoke the authoritative parent session"
+    );
+    assert_eq!(
+        parent_after.2.as_deref(),
+        Some("logout"),
+        "logout must persist the logout revocation reason"
+    );
+    assert_installed_ui_stale_cookie_denial(
+        activated_context,
+        baseline.boundary,
+        &baseline.content_audit_ids,
+        UiRequestAuditReason::Unauthenticated,
+    )
+    .await;
+    assert_eq!(
+        installed_ui_audit_ids(activated_context).await,
+        baseline.managed_audit_ids,
+        "revoked child must not create a managed-context audit"
+    );
+    assert_eq!(
+        installed_ui_gateway_invocations(activated_context).await,
+        baseline.gateway_invocations,
+        "revoked child must not invoke the managed gateway"
+    );
+}
+
+async fn assert_installed_ui_relogin_child(
+    context: &InstalledUiBrowserContext<'_>,
+    activated_context: &InstalledUiBrowserContext<'_>,
+    baseline: &InstalledUiParentRevocationBaseline,
+    existing_children: &[(uuid::Uuid, uuid::Uuid)],
+    control_dir: &Path,
+    deadline: tokio::time::Instant,
+) {
+    wait_for_installed_ui_control_marker(control_dir, "parent-new-child-ready", deadline).await;
+    let new_children = installed_ui_current_generation_children(activated_context).await;
+    let fresh_children: Vec<(uuid::Uuid, uuid::Uuid)> = new_children
+        .iter()
+        .copied()
+        .filter(|(child_id, _)| {
+            !existing_children
+                .iter()
+                .any(|(old_id, _)| old_id == child_id)
+        })
+        .collect();
+    assert_eq!(
+        fresh_children.len(),
+        1,
+        "re-login must create exactly one fresh current-generation child"
+    );
+    let (new_child_id, new_parent_id) = fresh_children[0];
+    assert_ne!(
+        new_parent_id, baseline.parent_id,
+        "re-login must use a new browser parent session"
+    );
+    let new_parent: (uuid::Uuid, Option<OffsetDateTime>, Option<String>) = sqlx::query_as(
+        "SELECT user_id, revoked_at, revocation_reason
+           FROM human_browser_sessions
+          WHERE id = $1",
+    )
+    .bind(new_parent_id)
+    .fetch_one(context.pool)
+    .await
+    .expect("read re-login parent session");
+    assert_eq!(new_parent.0, context.actor_id);
+    assert!(
+        new_parent.1.is_none() && new_parent.2.is_none(),
+        "re-login parent must be active"
+    );
+    // Browser content audits intentionally omit gateway references; the
+    // request-ID join and invocation binding below provide the gateway proof.
+    let new_child_surfaces: Vec<String> = sqlx::query_scalar(
+        "SELECT DISTINCT audit.surface
+           FROM ui_request_audit_events AS audit
+           JOIN gateway_invocations AS invocation
+             ON invocation.request_id = audit.request_id
+          WHERE audit.actor_id = $1
+            AND audit.organization_id = $2
+            AND audit.installation_id = $3
+            AND audit.generation_id = $4
+            AND audit.child_session_id = $5
+            AND audit.occurred_at >= $8
+            AND audit.decision = 'allowed'
+            AND audit.outcome = 'succeeded'
+            AND audit.reason_code = 'none'
+            AND audit.surface IN ('managed', 'api')
+            AND invocation.gateway_id = $6
+            AND invocation.gateway_revision_id = $7
+            AND invocation.outcome = 'completed'
+          ORDER BY audit.surface",
+    )
+    .bind(context.actor_id)
+    .bind(activated_context.organization_id.as_uuid())
+    .bind(activated_context.installed_uis.managed_ui.installation_id)
+    .bind(activated_context.installed_uis.managed_ui.generation_id)
+    .bind(new_child_id)
+    .bind(activated_context.installed_uis.managed_gateway_id)
+    .bind(activated_context.installed_uis.managed_gateway_revision_id)
+    .bind(baseline.boundary)
+    .fetch_all(context.pool)
+    .await
+    .expect("read re-login audits correlated to completed gateway invocations");
+    assert!(
+        new_child_surfaces
+            .iter()
+            .any(|surface| surface == "managed"),
+        "re-login child must create a managed success audit"
+    );
+    assert!(
+        new_child_surfaces.iter().any(|surface| surface == "api"),
+        "re-login child must create an API success audit"
+    );
+    assert!(
+        installed_ui_gateway_invocations(activated_context).await > baseline.gateway_invocations,
+        "re-login child must create a fresh managed gateway invocation"
+    );
+    write_installed_ui_control_marker(control_dir, "new-generation-verified").await;
+}
+
+async fn run_installed_ui_parent_revocation_phase(
+    context: &InstalledUiBrowserContext<'_>,
+    activated_context: &InstalledUiBrowserContext<'_>,
+    control_dir: &Path,
+    deadline: tokio::time::Instant,
+) {
+    let baseline =
+        snapshot_installed_ui_parent_revocation(context, activated_context, control_dir, deadline)
+            .await;
+    let existing_children = [(baseline.child_id, baseline.parent_id)];
+    write_installed_ui_control_marker(control_dir, "parent-revoke-permitted").await;
+    wait_for_installed_ui_control_marker(control_dir, "parent-revoked-denied", deadline).await;
+    assert_installed_ui_parent_revocation(context, activated_context, &baseline).await;
+    write_installed_ui_control_marker(control_dir, "parent-revocation-verified").await;
+    assert_installed_ui_relogin_child(
+        context,
+        activated_context,
+        &baseline,
+        &existing_children,
+        control_dir,
+        deadline,
+    )
+    .await;
+    println!(
+        "REAL_UI_INSTALLATION_PARENT_REVOCATION=1 parent_revoked=1 stale_cookie_denied=1 gateway_invocation_unchanged=1 fresh_parent_child=1"
+    );
+}
+
+async fn run_installed_ui_removal_phase(
+    context: &InstalledUiBrowserContext<'_>,
+    activated_context: &InstalledUiBrowserContext<'_>,
+    control_dir: &Path,
+    deadline: tokio::time::Instant,
+) {
+    wait_for_installed_ui_control_marker(control_dir, "new-generation-verified", deadline).await;
+    wait_for_installed_ui_control_marker(control_dir, "remove-ready", deadline).await;
+
+    let removal_content_audit_ids: Vec<uuid::Uuid> = sqlx::query_scalar(
+        "SELECT id
+           FROM ui_request_audit_events
+          WHERE surface = 'content'
+          ORDER BY occurred_at, id",
+    )
+    .fetch_all(context.pool)
+    .await
+    .expect("snapshot content audit IDs before removal");
+    let removal_managed_audit_ids = installed_ui_audit_ids(activated_context).await;
+    let removal_gateway_invocations = installed_ui_gateway_invocations(activated_context).await;
+    let removed_at: OffsetDateTime = sqlx::query_scalar("SELECT clock_timestamp()")
+        .fetch_one(context.pool)
+        .await
+        .expect("read installed UI removal audit boundary");
+
+    let removed = cooking_builds::remove_installed_ui(
+        context.running,
+        context.rpc_token,
+        activated_context.installed_uis.managed_ui,
+    )
+    .await
+    .expect("remove managed installed UI through owner RPC");
+    assert_eq!(
+        removed.installation_id, activated_context.installed_uis.managed_ui.installation_id,
+        "removal must retain the managed installation"
+    );
+    assert_eq!(
+        removed.generation_id, activated_context.installed_uis.managed_ui.generation_id,
+        "removal must retain the active generation"
+    );
+    let removed_state: (String, uuid::Uuid) = sqlx::query_as(
+        "SELECT lifecycle, current_generation_id
+           FROM ui_installations
+          WHERE id = $1",
+    )
+    .bind(removed.installation_id)
+    .fetch_one(context.pool)
+    .await
+    .expect("read removed installed UI lifecycle");
+    assert_eq!(
+        removed_state.0, "removed",
+        "managed UI lifecycle after removal"
+    );
+    assert_eq!(
+        removed_state.1, removed.generation_id,
+        "removal must retain the removed generation"
+    );
+    write_installed_ui_control_marker(control_dir, "remove-complete").await;
+    wait_for_installed_ui_control_marker(control_dir, "removed-host-denied", deadline).await;
+
+    assert_installed_ui_stale_cookie_denial(
+        activated_context,
+        removed_at,
+        &removal_content_audit_ids,
+        UiRequestAuditReason::NotFound,
+    )
+    .await;
+    assert_eq!(
+        installed_ui_audit_ids(activated_context).await,
+        removal_managed_audit_ids,
+        "removed managed child must not create a managed-context audit"
+    );
+    assert_eq!(
+        installed_ui_gateway_invocations(activated_context).await,
+        removal_gateway_invocations,
+        "removed managed child must not invoke the managed gateway"
+    );
+    wait_for_installed_ui_control_marker(control_dir, "removed-card-absent", deadline).await;
+    println!(
+        "REAL_UI_INSTALLATION_REMOVE_LIFECYCLE=1 stale_cookie_denied=1 gateway_invocation_unchanged=1 navigation_removed=1"
+    );
+}
+
+async fn run_installed_ui_disable_control(
+    context: &InstalledUiBrowserContext<'_>,
+    control_dir: &Path,
+) {
+    let deadline = tokio::time::Instant::now() + INSTALLED_UI_LIFECYCLE_DEADLINE;
+    run_installed_ui_guest_policy_phase(context, control_dir, deadline).await;
+    let (baseline_managed_audit_ids, baseline_managed_invocations, reactivation_content_audit_ids) =
+        run_installed_ui_disable_phase(context, control_dir, deadline).await;
+    let reactivated = run_installed_ui_reactivation_phase(
+        context,
+        control_dir,
+        deadline,
+        &baseline_managed_audit_ids,
+        baseline_managed_invocations,
+        &reactivation_content_audit_ids,
+    )
+    .await;
+    let mut activated_uis = context.installed_uis;
+    activated_uis.managed_ui = reactivated;
+    let activated_context = InstalledUiBrowserContext {
+        pool: context.pool,
+        running: context.running,
+        database_url: context.database_url,
+        rpc_token: context.rpc_token,
+        organization_id: context.organization_id,
+        installed_uis: activated_uis,
+        actor_id: context.actor_id,
+        workload_phase_timing: context.workload_phase_timing,
+        service_materializer_root: context.service_materializer_root,
+    };
+    assert_installed_ui_browser_audit(&activated_context).await;
+    let new_generation_invocations: i64 = sqlx::query_scalar(
+        "SELECT count(*)
+           FROM gateway_invocations
+          WHERE gateway_id = $1",
+    )
+    .bind(context.installed_uis.managed_gateway_id)
+    .fetch_one(context.pool)
+    .await
+    .expect("count managed gateway invocations after reactivation");
+    assert!(
+        new_generation_invocations > baseline_managed_invocations,
+        "new managed generation must create a gateway invocation"
+    );
+    run_installed_ui_live_service_replacement(&activated_context, control_dir, deadline).await;
+    run_installed_ui_parent_revocation_phase(context, &activated_context, control_dir, deadline)
+        .await;
+    run_installed_ui_removal_phase(context, &activated_context, control_dir, deadline).await;
+    println!(
+        "REAL_UI_INSTALLATION_DISABLE_LIFECYCLE=1 stale_cookie_denied=1 old_generation_denied=1 gateway_invocation_unchanged=1 reactivated_generation=1 new_generation_audit=1 gateway_invocation_increased=1"
+    );
+}
+
+/// Emits only bounded, closed-vocabulary evidence when the browser process
+/// fails. The browser reporter intentionally exposes only an HTTP status
+/// class, so this joins the managed installation's audit rows to durable
+/// gateway outcomes without reading request or response data.
+async fn diagnose_installed_ui_browser_failure(context: &InstalledUiBrowserContext<'_>) {
+    type AuditGroup = (String, String, String, String, i64);
+    type InvocationGroup = (String, String, i64);
+    let installation_id = context.installed_uis.managed_ui.installation_id;
+    let generation_id = context.installed_uis.managed_ui.generation_id;
+    let query = async {
+        let audits: Vec<AuditGroup> = sqlx::query_as(
+            "SELECT surface, decision, outcome, reason_code, count(*)
+               FROM ui_request_audit_events
+              WHERE installation_id = $1 AND generation_id = $2
+              GROUP BY surface, decision, outcome, reason_code
+              ORDER BY surface, decision, outcome, reason_code",
+        )
+        .bind(installation_id)
+        .bind(generation_id)
+        .fetch_all(context.pool)
+        .await?;
+        let invocations: Vec<InvocationGroup> = sqlx::query_as(
+            "SELECT audit.surface, invocation.outcome, count(DISTINCT invocation.id)
+               FROM ui_request_audit_events AS audit
+               JOIN gateway_invocations AS invocation
+                 ON invocation.request_id = audit.request_id
+              WHERE audit.installation_id = $1 AND audit.generation_id = $2
+              GROUP BY audit.surface, invocation.outcome
+              ORDER BY audit.surface, invocation.outcome",
+        )
+        .bind(installation_id)
+        .bind(generation_id)
+        .fetch_all(context.pool)
+        .await?;
+        Ok::<_, sqlx::Error>((audits, invocations))
+    };
+    match tokio::time::timeout(Duration::from_secs(5), query).await {
+        Ok(Ok((audits, invocations))) => {
+            println!(
+                "INSTALLED_UI_BROWSER_FAILURE_DIAGNOSTIC=1 audit_groups={} invocation_groups={}",
+                audits.len(),
+                invocations.len()
+            );
+            for (surface, decision, outcome, reason, count) in audits {
+                println!(
+                    "INSTALLED_UI_AUDIT_GROUP surface={surface} decision={decision} outcome={outcome} reason={reason} count={count}"
+                );
+            }
+            for (surface, outcome, count) in invocations {
+                println!(
+                    "INSTALLED_UI_GATEWAY_OUTCOME surface={surface} outcome={outcome} count={count}"
+                );
+            }
+        }
+        Ok(Err(_)) => println!("INSTALLED_UI_BROWSER_FAILURE_DIAGNOSTIC=1 status=unavailable"),
+        Err(_) => println!("INSTALLED_UI_BROWSER_FAILURE_DIAGNOSTIC=1 status=timeout"),
+    }
+}
+
+/// Runs the installed-reference-UI browser phase while the service-proof
+/// daemon, Caddy, database, and managed gateway are still alive.  The
+/// service-proof branch otherwise tears those resources down before reaching
+/// the ordinary browser block below.
+async fn supervise_installed_ui_browser(
+    mut browser: tokio::process::Child,
+    context: &InstalledUiBrowserContext<'_>,
+    control_dir: &Path,
+) -> std::process::ExitStatus {
+    use futures_util::FutureExt as _;
+
+    let mut disable_control = Box::pin(
+        std::panic::AssertUnwindSafe(tokio::time::timeout(
+            INSTALLED_UI_LIFECYCLE_DEADLINE,
+            run_installed_ui_disable_control(context, control_dir),
+        ))
+        .catch_unwind(),
+    );
+    tokio::select! {
+        result = browser.wait() => {
+            let status = result.expect("wait for installed UI browser E2E");
+            if status.success() {
+                match (&mut disable_control).await {
+                    Err(panic) => std::panic::resume_unwind(panic),
+                    Ok(Err(_)) => panic!("installed UI disable controller deadline elapsed"),
+                    Ok(Ok(())) => {}
+                }
+            } else {
+                println!("INSTALLED_UI_DISABLE_CONTROLLER_CANCELLED=1 browser_status=failed");
+                drop(disable_control);
+            }
+            status
+        },
+        control_result = &mut disable_control => {
+            match control_result {
+                Err(panic) => {
+                    let _ = browser.start_kill();
+                    let _ = tokio::time::timeout(Duration::from_secs(5), browser.wait()).await;
+                    std::panic::resume_unwind(panic);
+                }
+                Ok(Err(_)) => {
+                    let _ = browser.start_kill();
+                    let _ = tokio::time::timeout(Duration::from_secs(5), browser.wait()).await;
+                    panic!("installed UI disable controller deadline elapsed");
+                }
+                Ok(Ok(())) => {}
+            }
+            tokio::time::timeout(INSTALLED_UI_LIFECYCLE_DEADLINE, browser.wait())
+                .await
+                .expect("installed UI browser E2E completion deadline")
+                .expect("wait for installed UI browser E2E after disable")
+        }
+    }
+}
+
+async fn run_installed_ui_browser_phase(context: InstalledUiBrowserContext<'_>) {
+    let fixture_path = env::var("HEPHAESTUS_COOKING_BROWSER_FIXTURE_OUTPUT")
+        .expect("installed UI browser fixture output path");
+    let fixture = serde_json::json!({
+        "installed_reference_uis": {
+            "organization_id": context.installed_uis.organization_id,
+            "project_id": context.installed_uis.project_id,
+            "repository_id": context.installed_uis.repository_id,
+            "static_installation_id": context.installed_uis.static_ui.installation_id,
+            "repository_installation_id": context.installed_uis.repository_static_ui.installation_id,
+            "global_installation_id": context.installed_uis.global_static_ui.installation_id,
+            "managed_installation_id": context.installed_uis.managed_ui.installation_id
+        }
+    });
+    tokio::fs::write(
+        &fixture_path,
+        serde_json::to_vec_pretty(&fixture).expect("installed UI browser fixture JSON"),
+    )
+    .await
+    .expect("write installed UI browser fixture JSON");
+    let issuer = env::var("HEPHAESTUS_COOKING_BROWSER_OIDC_ISSUER")
+        .expect("installed UI browser OIDC issuer");
+    let script =
+        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../scripts/run-installed-ui-e2e.sh");
+    let browser_timer = WorkloadPhaseTimer::start("browser-initial", context.workload_phase_timing);
+    let control_dir = prepare_installed_ui_control_dir(Path::new(&fixture_path));
+    let browser = tokio::process::Command::new(script)
+        .env("HEPHAESTUS_E2E_COOKING_FIXTURE", &fixture_path)
+        .env("HEPHAESTUS_E2E_EXTERNAL_DATABASE_URL", context.database_url)
+        .env(
+            "HEPHAESTUS_E2E_EXTERNAL_RPC_ENDPOINT",
+            context.running.http_addr().to_string(),
+        )
+        .env(
+            "HEPHAESTUS_E2E_EXTERNAL_RPC_SECRET",
+            "golden-internal-command-token-with-sufficient-entropy",
+        )
+        .env("HEPHAESTUS_E2E_EXTERNAL_OIDC_ISSUER", issuer)
+        .env("HEPHAESTUS_E2E_COOKING_PHASE", "initial")
+        .env(
+            "HEPHAESTUS_PLATFORM_HTTPS_ORIGIN",
+            installed_ui_platform_origin(),
+        )
+        .env("HEPHAESTUS_UI_NAMESPACE", installed_ui_namespace())
+        .env(
+            "HEPHAESTUS_CADDY_TEST_CA_CERT",
+            env::var("HEPHAESTUS_CADDY_TEST_CA_CERT")
+                .expect("joined Caddy CA certificate for installed UI"),
+        )
+        .kill_on_drop(true)
+        .spawn()
+        .expect("spawn installed UI browser E2E");
+    let status = supervise_installed_ui_browser(browser, &context, &control_dir).await;
+    browser_timer.finish(status.success());
+    if !status.success() {
+        diagnose_installed_ui_browser_failure(&context).await;
+    }
+    assert!(
+        status.success(),
+        "installed UI browser E2E failed: {status}"
+    );
+
+    assert_installed_ui_browser_audit(&context).await;
+}
+
+// Keep the positive audit matrix together so each installed owner surface is
+// checked before lifecycle control proceeds.
+#[allow(clippy::too_many_lines)]
+async fn assert_installed_ui_browser_audit(context: &InstalledUiBrowserContext<'_>) {
+    let static_installation_id = context.installed_uis.static_ui.installation_id;
+    let static_generation_id = context.installed_uis.static_ui.generation_id;
+    for surface in [
+        UiRequestAuditSurface::HandoffIssue,
+        UiRequestAuditSurface::HandoffExchange,
+        UiRequestAuditSurface::Bootstrap,
+        UiRequestAuditSurface::Static,
+    ] {
+        assert_installed_ui_audit_success(
+            context.pool,
+            context.actor_id,
+            context.organization_id.as_uuid(),
+            static_installation_id,
+            static_generation_id,
+            surface,
+            surface != UiRequestAuditSurface::HandoffIssue,
+        )
+        .await;
+    }
+    for (installation_id, generation_id) in [
+        (
+            context.installed_uis.repository_static_ui.installation_id,
+            context.installed_uis.repository_static_ui.generation_id,
+        ),
+        (
+            context.installed_uis.global_static_ui.installation_id,
+            context.installed_uis.global_static_ui.generation_id,
+        ),
+    ] {
+        for surface in [
+            UiRequestAuditSurface::HandoffIssue,
+            UiRequestAuditSurface::HandoffExchange,
+            UiRequestAuditSurface::Bootstrap,
+            UiRequestAuditSurface::Static,
+        ] {
+            assert_installed_ui_audit_success(
+                context.pool,
+                context.actor_id,
+                context.organization_id.as_uuid(),
+                installation_id,
+                generation_id,
+                surface,
+                surface != UiRequestAuditSurface::HandoffIssue,
+            )
+            .await;
+        }
+    }
+    let managed_installation_id = context.installed_uis.managed_ui.installation_id;
+    let managed_generation_id = context.installed_uis.managed_ui.generation_id;
+    for surface in [
+        UiRequestAuditSurface::HandoffIssue,
+        UiRequestAuditSurface::HandoffExchange,
+        UiRequestAuditSurface::Bootstrap,
+        UiRequestAuditSurface::Managed,
+        UiRequestAuditSurface::Embed,
+    ] {
+        assert_installed_ui_audit_success(
+            context.pool,
+            context.actor_id,
+            context.organization_id.as_uuid(),
+            managed_installation_id,
+            managed_generation_id,
+            surface,
+            !matches!(
+                surface,
+                UiRequestAuditSurface::HandoffIssue | UiRequestAuditSurface::Embed
+            ),
+        )
+        .await;
+    }
+    let api_request_ids = assert_installed_ui_audit_success(
+        context.pool,
+        context.actor_id,
+        context.organization_id.as_uuid(),
+        managed_installation_id,
+        managed_generation_id,
+        UiRequestAuditSurface::Api,
+        true,
+    )
+    .await;
+    let correlated_api_count: i64 = sqlx::query_scalar(
+        "SELECT count(*)
+           FROM gateway_invocations invocation
+           JOIN ui_request_audit_events audit
+             ON audit.request_id = invocation.request_id
+          WHERE audit.installation_id = $1
+            AND audit.generation_id = $2
+            AND audit.surface = $3
+            AND audit.request_id = ANY($4)",
+    )
+    .bind(managed_installation_id)
+    .bind(managed_generation_id)
+    .bind(UiRequestAuditSurface::Api.as_str())
+    .bind(&api_request_ids)
+    .fetch_one(context.pool)
+    .await
+    .expect("read installed UI gateway invocation correlation");
+    assert!(
+        correlated_api_count > 0,
+        "managed API audit must correlate to a gateway invocation"
+    );
+    println!("REAL_UI_INSTALLATION_AUDIT=1 static=1 managed=1 api=1 embed=1 gateway_correlation=1");
+}
+
+async fn snapshot_guest_policy_boundary(
+    context: &InstalledUiBrowserContext<'_>,
+) -> (Vec<uuid::Uuid>, Vec<uuid::Uuid>, OffsetDateTime) {
+    let installation_id = context.installed_uis.managed_ui.installation_id;
+    let generation_id = context.installed_uis.managed_ui.generation_id;
+    let gateway_id = context.installed_uis.managed_gateway_id;
+    let api_audits = sqlx::query_scalar(
+        "SELECT id
+           FROM ui_request_audit_events
+          WHERE installation_id = $1 AND generation_id = $2 AND surface = 'api'
+          ORDER BY occurred_at, id",
+    )
+    .bind(installation_id)
+    .bind(generation_id)
+    .fetch_all(context.pool)
+    .await
+    .expect("snapshot installed UI API audits before guest policy probes");
+    let invocations = sqlx::query_scalar(
+        "SELECT id
+           FROM gateway_invocations
+          WHERE gateway_id = $1
+          ORDER BY accepted_at, id",
+    )
+    .bind(gateway_id)
+    .fetch_all(context.pool)
+    .await
+    .expect("snapshot direct installed UI gateway invocations");
+    let boundary = sqlx::query_scalar("SELECT clock_timestamp()")
+        .fetch_one(context.pool)
+        .await
+        .expect("read guest policy audit boundary");
+    (api_audits, invocations, boundary)
+}
+
+async fn read_guest_policy_audits(
+    context: &InstalledUiBrowserContext<'_>,
+    boundary: OffsetDateTime,
+    baseline_api_audit_ids: &[uuid::Uuid],
+) -> Vec<GuestPolicyAuditRow> {
+    sqlx::query_as(
+        "SELECT audit.id, audit.request_id, audit.actor_id,
+                audit.organization_id, audit.installation_id,
+                audit.generation_id, audit.child_session_id,
+                audit.decision, audit.outcome, audit.reason_code,
+                audit.gateway_id, audit.gateway_revision_id,
+                invocation.id, invocation.gateway_id,
+                invocation.gateway_revision_id, invocation.outcome
+           FROM ui_request_audit_events AS audit
+           JOIN gateway_invocations AS invocation
+             ON invocation.request_id = audit.request_id
+          WHERE audit.installation_id = $1
+            AND audit.generation_id = $2
+            AND audit.surface = 'api'
+            AND audit.occurred_at >= $3
+            AND NOT (audit.id = ANY($4))
+          ORDER BY audit.occurred_at, audit.id",
+    )
+    .bind(context.installed_uis.managed_ui.installation_id)
+    .bind(context.installed_uis.managed_ui.generation_id)
+    .bind(boundary)
+    .bind(baseline_api_audit_ids)
+    .fetch_all(context.pool)
+    .await
+    .expect("read guest policy API audits correlated to gateway invocations")
+}
+
+async fn read_guest_policy_audit_ids(
+    context: &InstalledUiBrowserContext<'_>,
+    boundary: OffsetDateTime,
+    baseline_api_audit_ids: &[uuid::Uuid],
+) -> Vec<uuid::Uuid> {
+    sqlx::query_scalar(
+        "SELECT id
+           FROM ui_request_audit_events
+          WHERE installation_id = $1
+            AND generation_id = $2
+            AND surface = 'api'
+            AND occurred_at >= $3
+            AND NOT (id = ANY($4))
+          ORDER BY occurred_at, id",
+    )
+    .bind(context.installed_uis.managed_ui.installation_id)
+    .bind(context.installed_uis.managed_ui.generation_id)
+    .bind(boundary)
+    .bind(baseline_api_audit_ids)
+    .fetch_all(context.pool)
+    .await
+    .expect("read all fresh guest policy API audit IDs")
+}
+
+fn assert_guest_policy_audits(
+    context: &InstalledUiBrowserContext<'_>,
+    rows: &[GuestPolicyAuditRow],
+    fresh_invocation_ids: &[uuid::Uuid],
+) {
+    assert_eq!(
+        rows.len(),
+        4,
+        "guest policy probes must emit four API audits"
+    );
+    let mut request_ids: Vec<uuid::Uuid> = rows.iter().map(|row| row.1).collect();
+    request_ids.sort_unstable();
+    request_ids.dedup();
+    assert_eq!(
+        request_ids.len(),
+        4,
+        "guest policy probes need distinct request IDs"
+    );
+    let mut completed = 0;
+    let mut failed = 0;
+    let mut failed_audit_count = 0;
+    let mut succeeded_audit_count = 0;
+    let mut child_session_id = None;
+    for row in rows {
+        assert_eq!(row.2, context.actor_id, "guest policy audit actor");
+        assert_eq!(row.3, context.organization_id.as_uuid());
+        assert_eq!(row.4, context.installed_uis.managed_ui.installation_id);
+        assert_eq!(row.5, context.installed_uis.managed_ui.generation_id);
+        if let Some(existing) = child_session_id {
+            assert_eq!(row.6, existing, "guest policy probes must use one child");
+        } else {
+            child_session_id = Some(row.6);
+        }
+        assert_eq!(row.7, UiRequestAuditDecision::Allowed.as_str());
+        assert!(row.10.is_none() && row.11.is_none());
+        assert!(fresh_invocation_ids.contains(&row.12));
+        assert_eq!(row.13, context.installed_uis.managed_gateway_id);
+        assert_eq!(row.14, context.installed_uis.managed_gateway_revision_id);
+        match row.8.as_str() {
+            "succeeded" => {
+                succeeded_audit_count += 1;
+                assert_eq!(row.9, UiRequestAuditReason::None.as_str());
+                assert_eq!(row.15, "completed");
+                completed += 1;
+            }
+            "failed" => {
+                failed_audit_count += 1;
+                assert_eq!(row.9, UiRequestAuditReason::UpstreamFailure.as_str());
+                match row.15.as_str() {
+                    "completed" => completed += 1,
+                    "failed" => failed += 1,
+                    outcome => panic!("unexpected guest policy invocation outcome {outcome}"),
+                }
+            }
+            outcome => panic!("unexpected guest policy audit outcome {outcome}"),
+        }
+    }
+    assert_eq!(succeeded_audit_count, 1);
+    assert_eq!(failed_audit_count, 3);
+    assert_eq!(failed, 1);
+    assert_eq!(completed, 3);
+}
+
+/// Verifies the installed guest's four response-policy probes before the
+/// lifecycle controller starts mutating the installation.
+async fn run_installed_ui_guest_policy_phase(
+    context: &InstalledUiBrowserContext<'_>,
+    control_dir: &Path,
+    deadline: tokio::time::Instant,
+) {
+    wait_for_installed_ui_control_marker(control_dir, "guest-policy-ready", deadline).await;
+    let (baseline_api_audit_ids, baseline_invocation_ids, boundary) =
+        snapshot_guest_policy_boundary(context).await;
+    write_installed_ui_control_marker(control_dir, "guest-policy-start").await;
+    wait_for_installed_ui_control_marker(control_dir, "guest-policy-complete", deadline).await;
+    let invocation_ids: Vec<uuid::Uuid> = sqlx::query_scalar(
+        "SELECT id
+           FROM gateway_invocations
+          WHERE gateway_id = $1
+          ORDER BY accepted_at, id",
+    )
+    .bind(context.installed_uis.managed_gateway_id)
+    .fetch_all(context.pool)
+    .await
+    .expect("read direct installed UI gateway invocations after guest policy probes");
+    let fresh_invocation_ids: Vec<uuid::Uuid> = invocation_ids
+        .iter()
+        .copied()
+        .filter(|id| !baseline_invocation_ids.contains(id))
+        .collect();
+    assert_eq!(fresh_invocation_ids.len(), 4);
+    let fresh_audit_ids =
+        read_guest_policy_audit_ids(context, boundary, &baseline_api_audit_ids).await;
+    assert_eq!(fresh_audit_ids.len(), 4);
+    let rows = read_guest_policy_audits(context, boundary, &baseline_api_audit_ids).await;
+    let mut joined_audit_ids: Vec<uuid::Uuid> = rows.iter().map(|row| row.0).collect();
+    let mut fresh_audit_ids = fresh_audit_ids;
+    joined_audit_ids.sort_unstable();
+    fresh_audit_ids.sort_unstable();
+    assert_eq!(
+        joined_audit_ids, fresh_audit_ids,
+        "every fresh guest policy API audit must correlate to one gateway invocation"
+    );
+    assert_guest_policy_audits(context, &rows, &fresh_invocation_ids);
+    write_installed_ui_control_marker(control_dir, "guest-policy-verified").await;
+    println!(
+        "REAL_UI_INSTALLATION_GUEST_POLICY=1 credential_headers_stripped=1 guest_response_headers_rejected=3 gateway_correlation=1"
+    );
+}
+
+impl IsolatedGoldenDatabase {
+    async fn create(parent_url: &str) -> Self {
+        let database_name = format!("hephaestus_golden_{}", uuid::Uuid::new_v4().simple());
+        let mut maintenance_url = Url::parse(parent_url).expect("parse golden PostgreSQL URL");
+        maintenance_url.set_path("/postgres");
+        let mut target_url = Url::parse(parent_url).expect("parse golden PostgreSQL URL");
+        target_url.set_path(&format!("/{database_name}"));
+        let maintenance_pool = PgPoolOptions::new()
+            .max_connections(2)
+            .connect(maintenance_url.as_str())
+            .await
+            .expect("connect golden PostgreSQL maintenance database");
+        let create_sql = format!("CREATE DATABASE \"{database_name}\"");
+        sqlx::query(&create_sql)
+            .execute(&maintenance_pool)
+            .await
+            .expect("create isolated golden database");
+        maintenance_pool.close().await;
+
+        let target_pool = PgPoolOptions::new()
+            .max_connections(5)
+            .connect(target_url.as_str())
+            .await
+            .expect("connect isolated golden database");
+        sqlx::migrate!("../../migrations")
+            .run(&target_pool)
+            .await
+            .expect("apply migrations to isolated golden database");
+        target_pool.close().await;
+
+        Self {
+            database_name,
+            maintenance_url: maintenance_url.to_string(),
+            target_url: target_url.to_string(),
+        }
+    }
+
+    async fn cleanup(self, pool: sqlx::PgPool) {
+        pool.close().await;
+        let maintenance_pool = PgPoolOptions::new()
+            .max_connections(1)
+            .connect(&self.maintenance_url)
+            .await
+            .expect("reconnect golden PostgreSQL maintenance database");
+        let drop_sql = format!("DROP DATABASE \"{}\"", self.database_name);
+        sqlx::query(&drop_sql)
+            .execute(&maintenance_pool)
+            .await
+            .expect("drop isolated golden database after all pools closed");
+        maintenance_pool.close().await;
+    }
+}
+
+async fn product_outbox_census(database_url: &str) -> ProductOutboxCensus {
+    let pool = PgPoolOptions::new()
+        .max_connections(1)
+        .connect(database_url)
+        .await
+        .expect("connect product outbox census database");
+    let row = sqlx::query(
+        "SELECT count(*)::bigint AS total,
+                count(*) FILTER (
+                    WHERE published_at IS NULL AND dead_lettered_at IS NULL
+                )::bigint AS pending,
+                count(*) FILTER (WHERE published_at IS NOT NULL)::bigint AS published,
+                count(*) FILTER (WHERE dead_lettered_at IS NOT NULL)::bigint AS dead_lettered,
+                md5(COALESCE(string_agg(
+                    event_id::text, ',' ORDER BY event_id
+                ) FILTER (
+                    WHERE published_at IS NULL AND dead_lettered_at IS NULL
+                ), '')) AS pending_fingerprint
+           FROM product_event_outbox",
+    )
+    .fetch_one(&pool)
+    .await
+    .expect("read product outbox census");
+    let census = ProductOutboxCensus {
+        total: row.get("total"),
+        pending: row.get("pending"),
+        published: row.get("published"),
+        dead_lettered: row.get("dead_lettered"),
+        pending_fingerprint: row.get("pending_fingerprint"),
+    };
+    pool.close().await;
+    census
+}
+
+async fn finish_isolated_golden(
+    isolated: IsolatedGoldenDatabase,
+    pool: sqlx::PgPool,
+    target_url: &str,
+    parent_url: &str,
+    parent_before: Option<ProductOutboxCensus>,
+) {
+    let target_after = product_outbox_census(target_url).await;
+    let parent_after = parent_before
+        .as_ref()
+        .map(|_| async { product_outbox_census(parent_url).await });
+    isolated.cleanup(pool).await;
+    assert_eq!(
+        target_after.pending, 0,
+        "isolated golden outbox must be quiescent before database cleanup"
+    );
+    if let Some(parent_before) = parent_before {
+        let parent_after = parent_after.expect("parent census future").await;
+        assert_eq!(
+            parent_after, parent_before,
+            "golden bootstrap must not mutate the inherited parent outbox"
+        );
+    }
+}
+
+/// Runs the first persistent-service proof in a real external daemon process.
+///
+/// Keeping this opt-in path beside the existing golden setup is deliberate:
+/// the test still owns the exact release/declaration fixture, while the child
+/// consumes only the production environment contract used by `hephaestusd`.
+/// Later tests can replace the graceful signal below with an unclean process
+/// termination without changing the fixture or Caddy wiring.
+// Keep the external daemon fixture arguments explicit so each owned resource
+// and its cleanup boundary remain visible at the opt-in proof entry point.
+#[allow(clippy::too_many_arguments, clippy::too_many_lines)]
+async fn exercise_external_gateway_service_warm_path(
+    pool: &sqlx::PgPool,
+    fixture: &GatewayServiceGoldenFixture,
+    gateway: &GatewayEdgeConfig,
+    app_config: &AppConfig,
+    root: &Path,
+    root_image: &Path,
+    release_artifact_root: &Path,
+    owner: &AuthenticatedIdentity,
+) {
+    let mut daemon =
+        spawn_external_golden_daemon(gateway, app_config, root, root_image, None).await;
+    wait_for_external_daemon_health(&mut daemon).await;
+    let first_instance_id = wait_for_gateway_service_ready(pool, fixture).await;
+    let paths = gateway_service_resource_paths(first_instance_id);
+    assert!(paths.0.is_dir(), "external service VM runtime exists");
+    assert!(paths.1.is_dir(), "external service cgroup exists");
+    assert!(paths.2.is_dir(), "external service materializer exists");
+
+    let applied_config =
+        wait_for_caddy_configuration(&gateway.caddy_admin_url, "/gateway/service").await;
+    assert!(
+        applied_config.contains("/gateway/service"),
+        "external daemon must publish the persistent service Caddy route"
+    );
+    let public_url = env::var("HEPHAESTUS_CADDY_TEST_PUBLIC_URL")
+        .expect("joined Caddy public URL for external daemon proof");
+    let first_proof = exercise_gateway_service_requests(&public_url).await;
+    let cutover = env::var("HEPHAESTUS_APP_GATEWAY_SERVICE_CUTOVER_E2E").as_deref() == Ok("1");
+    let rollback = env::var("HEPHAESTUS_APP_GATEWAY_SERVICE_ROLLBACK_E2E").as_deref() == Ok("1");
+    let unclean_restart =
+        env::var("HEPHAESTUS_APP_GATEWAY_SERVICE_EXTERNAL_CRASH_E2E").as_deref() == Ok("1");
+    let failed_candidate =
+        env::var("HEPHAESTUS_APP_GATEWAY_SERVICE_FAILED_CANDIDATE_E2E").as_deref() == Ok("1");
+    let candidate_capacity =
+        env::var("HEPHAESTUS_APP_GATEWAY_SERVICE_CANDIDATE_CAPACITY_E2E").as_deref() == Ok("1");
+    let revocation =
+        env::var("HEPHAESTUS_APP_GATEWAY_SERVICE_REVOCATION_E2E").as_deref() == Ok("1");
+    if revocation {
+        service_revocation::exercise_external_gateway_service_revocation(
+            pool,
+            fixture,
+            &daemon,
+            first_instance_id,
+            &paths,
+            &public_url,
+            owner,
+        )
+        .await;
+        daemon.graceful_shutdown().await;
+        eprintln!(
+            "REAL_GATEWAY_SERVICE_REVOCATION_E2E=1 gateway_id={} revision_id={} instance_id={}",
+            fixture.gateway_id, fixture.revision_id, first_instance_id
+        );
+    } else if failed_candidate {
+        exercise_external_gateway_service_failed_candidate(
+            pool,
+            fixture,
+            daemon,
+            first_instance_id,
+            paths,
+            &first_proof,
+            &public_url,
+            release_artifact_root,
+        )
+        .await;
+    } else if cutover {
+        exercise_external_gateway_service_cutover(
+            pool,
+            fixture,
+            gateway,
+            app_config,
+            root,
+            root_image,
+            release_artifact_root,
+            daemon,
+            first_instance_id,
+            paths,
+            &first_proof,
+            &public_url,
+            rollback,
+            candidate_capacity,
+        )
+        .await;
+    } else if unclean_restart {
+        exercise_external_gateway_service_unclean_restart(ExternalGatewayServiceUncleanRestart {
+            pool,
+            fixture,
+            gateway,
+            app_config,
+            root,
+            root_image,
+            daemon,
+            first_instance_id,
+            old_paths: paths,
+            first_proof: &first_proof,
+            public_url: &public_url,
+        })
+        .await;
+    } else {
+        daemon.graceful_shutdown().await;
+        wait_for_gateway_service_cleaned(pool, fixture, first_instance_id).await;
+        assert!(!paths.0.exists(), "external service VM runtime is cleaned");
+        assert!(!paths.1.exists(), "external service cgroup is cleaned");
+        assert!(
+            !paths.2.exists(),
+            "external service materializer is cleaned"
+        );
+    }
+    assert!(!first_proof.startup_id.is_empty());
+    eprintln!(
+        "persistent-service-external-warm-evidence instance={first_instance_id} startup_id={}",
+        first_proof.startup_id
+    );
+    eprintln!("persistent-service-external-warm-passed");
+}
+
+struct ExternalGatewayServiceUncleanRestart<'a> {
+    pool: &'a sqlx::PgPool,
+    fixture: &'a GatewayServiceGoldenFixture,
+    gateway: &'a GatewayEdgeConfig,
+    app_config: &'a AppConfig,
+    root: &'a Path,
+    root_image: &'a Path,
+    daemon: ExternalGoldenDaemon,
+    first_instance_id: uuid::Uuid,
+    old_paths: (PathBuf, PathBuf, PathBuf),
+    first_proof: &'a GatewayServiceRequestProof,
+    public_url: &'a str,
+}
+
+async fn exercise_external_gateway_service_unclean_restart(
+    request: ExternalGatewayServiceUncleanRestart<'_>,
+) {
+    let ExternalGatewayServiceUncleanRestart {
+        pool,
+        fixture,
+        gateway,
+        app_config,
+        root,
+        root_image,
+        daemon,
+        first_instance_id,
+        old_paths,
+        first_proof,
+        public_url,
+    } = request;
+    let old_ownership = read_gateway_service_ownership(pool, first_instance_id).await;
+    let db_now: OffsetDateTime = sqlx::query_scalar("SELECT clock_timestamp()")
+        .fetch_one(pool)
+        .await
+        .expect("read database clock before daemon crash");
+    assert!(
+        old_ownership.3 > db_now,
+        "service lease must be live before the daemon crash"
+    );
+    let exit_status = daemon.unclean_kill().await;
+    assert_eq!(
+        std::os::unix::process::ExitStatusExt::signal(&exit_status),
+        Some(9),
+        "external daemon must be terminated by SIGKILL"
+    );
+    eprintln!(
+        "persistent-service-unclean-daemon-kill old_instance={first_instance_id} old_fence={} old_lease_expires_at={}",
+        old_ownership.2, old_ownership.3
+    );
+    let old_resources_after_kill = (
+        old_paths.0.exists(),
+        old_paths.1.exists(),
+        old_paths.2.exists(),
+    );
+    eprintln!(
+        "persistent-service-unclean-daemon-residual-resources runtime={} cgroup={} materializer={}",
+        old_resources_after_kill.0, old_resources_after_kill.1, old_resources_after_kill.2
+    );
+    let recovery_started_at: OffsetDateTime = sqlx::query_scalar("SELECT clock_timestamp()")
+        .fetch_one(pool)
+        .await
+        .expect("read database clock before daemon restart");
+    let restart_log = root.join("external-hephaestusd-restart.log");
+    let mut restarted =
+        spawn_external_golden_daemon(gateway, app_config, root, root_image, Some(&restart_log))
+            .await;
+    wait_for_external_daemon_health(&mut restarted).await;
+    let replacement_instance_id = wait_for_gateway_service_boot_replacement(
+        pool,
+        fixture,
+        first_instance_id,
+        old_ownership,
+        old_paths,
+        recovery_started_at,
+    )
+    .await;
+    let replacement_paths = gateway_service_resource_paths(replacement_instance_id);
+    let replacement_proof = exercise_gateway_service_requests(public_url).await;
+    assert_ne!(
+        replacement_instance_id, first_instance_id,
+        "unclean daemon restart must claim a fresh service instance"
+    );
+    assert_ne!(
+        replacement_proof.startup_id, first_proof.startup_id,
+        "unclean daemon restart must start a fresh guest process"
+    );
+    assert!(
+        replacement_paths.0.is_dir(),
+        "replacement VM runtime must exist before final shutdown"
+    );
+    assert!(
+        replacement_paths.1.is_dir(),
+        "replacement cgroup must exist before final shutdown"
+    );
+    assert!(
+        replacement_paths.2.is_dir(),
+        "replacement materializer must exist before final shutdown"
+    );
+    eprintln!(
+        "persistent-service-unclean-daemon-recovered old_instance={first_instance_id} replacement_instance={replacement_instance_id} replacement_startup_id={}",
+        replacement_proof.startup_id
+    );
+    restarted.graceful_shutdown().await;
+    wait_for_gateway_service_cleaned(pool, fixture, replacement_instance_id).await;
+    assert!(!replacement_paths.0.exists());
+    assert!(!replacement_paths.1.exists());
+    assert!(!replacement_paths.2.exists());
+    eprintln!("persistent-service-unclean-daemon-recovery-passed");
+}
+
+/// Exercises a real failed candidate while the original ready revision keeps
+/// serving public identity requests. The `/crash` readiness probe returns the
+/// fixture's 503 before its process exits with 42; this acceptance requires
+/// the durable unexpected-exit report so a generic startup failure cannot be
+/// mistaken for guest execution.
+#[allow(
+    // This one acceptance path keeps failure, public continuity, and cleanup
+    // assertions together so their ordering remains explicit.
+    clippy::cognitive_complexity,
+    clippy::too_many_arguments,
+    clippy::too_many_lines
+)]
+async fn exercise_external_gateway_service_failed_candidate(
+    pool: &sqlx::PgPool,
+    fixture: &GatewayServiceGoldenFixture,
+    daemon: ExternalGoldenDaemon,
+    old_instance_id: uuid::Uuid,
+    old_paths: (PathBuf, PathBuf, PathBuf),
+    first_proof: &GatewayServiceRequestProof,
+    public_url: &str,
+    release_artifact_root: &Path,
+) {
+    let old_fencing_token: i64 = sqlx::query_scalar(
+        "SELECT fencing_token
+           FROM gateway_service_instances
+          WHERE id = $1 AND gateway_id = $2 AND revision_id = $3",
+    )
+    .bind(old_instance_id)
+    .bind(fixture.gateway_id)
+    .bind(fixture.revision_id)
+    .fetch_one(pool)
+    .await
+    .expect("read A fencing token before failed candidate");
+    assert!(old_paths.0.is_dir() && old_paths.1.is_dir() && old_paths.2.is_dir());
+
+    let candidate =
+        seed_gateway_service_cutover_candidate(pool, fixture, release_artifact_root, "/crash")
+            .await;
+    let gateway_events_before_declaration: i64 = sqlx::query_scalar(
+        "SELECT count(*)
+           FROM application_events
+          WHERE aggregate_type = 'gateway' AND aggregate_id = $1",
+    )
+    .bind(fixture.gateway_id)
+    .fetch_one(pool)
+    .await
+    .expect("count gateway events before failed candidate declaration");
+    sqlx::query("UPDATE gateways SET desired_service_revision_id = $2 WHERE id = $1")
+        .bind(fixture.gateway_id)
+        .bind(candidate.revision_id)
+        .execute(pool)
+        .await
+        .expect("declare failed published candidate");
+    let gateway_events_after_declaration: i64 = sqlx::query_scalar(
+        "SELECT count(*)
+           FROM application_events
+          WHERE aggregate_type = 'gateway' AND aggregate_id = $1",
+    )
+    .bind(fixture.gateway_id)
+    .fetch_one(pool)
+    .await
+    .expect("count gateway events after failed candidate declaration");
+    assert_eq!(
+        gateway_events_after_declaration,
+        gateway_events_before_declaration + 1,
+        "declaring failed B emits exactly one durable gateway event"
+    );
+
+    // A bounded request after declaration confirms that the existing public
+    // revision remains the one served while B is being attempted.
+    let during_startup = exercise_gateway_service_requests(public_url).await;
+    assert_eq!(during_startup.startup_id, first_proof.startup_id);
+    let evidence = wait_for_failed_gateway_service_candidate(
+        pool,
+        fixture.gateway_id,
+        candidate.revision_id,
+        (old_instance_id, fixture.revision_id, old_fencing_token),
+        first_proof,
+        public_url,
+    )
+    .await;
+
+    assert_eq!(evidence.gateway_id, fixture.gateway_id);
+    assert_eq!(evidence.revision_id, candidate.revision_id);
+    assert!(
+        !evidence.observed_ready,
+        "failed B must not be observed Ready during lifecycle polling"
+    );
+    assert!(
+        !evidence.observed_promoted,
+        "failed B must not be observed as the active revision during polling"
+    );
+    assert_eq!(evidence.state, "cleaned");
+    let failure_code = evidence
+        .failure_code
+        .as_deref()
+        .expect("failed B retains a durable failure classification");
+    assert_eq!(
+        failure_code, "unexpected_exit",
+        "failed-candidate proof must observe the guest crash, not startup failure"
+    );
+    assert_eq!(evidence.exit_code, Some(42));
+    assert!(evidence.exit_signal.is_none());
+    assert!(evidence.failed_at.is_some());
+    assert_eq!(evidence.fencing_token, evidence.initial_fencing_token);
+
+    let b_invocations: i64 = sqlx::query_scalar(
+        "SELECT count(*)
+           FROM gateway_invocations
+          WHERE gateway_id = $1
+            AND gateway_revision_id = $2",
+    )
+    .bind(fixture.gateway_id)
+    .bind(candidate.revision_id)
+    .fetch_one(pool)
+    .await
+    .expect("count all failed B invocations");
+    assert_eq!(
+        b_invocations, 0,
+        "failed B must not receive invocations of any outcome"
+    );
+    let b_bound_invocations: i64 = sqlx::query_scalar(
+        "SELECT count(*)
+           FROM gateway_invocations
+          WHERE gateway_id = $1
+            AND gateway_revision_id = $2
+            AND service_instance_id = $3
+            AND service_instance_fencing_token = $4",
+    )
+    .bind(fixture.gateway_id)
+    .bind(candidate.revision_id)
+    .bind(evidence.instance_id)
+    .bind(evidence.fencing_token)
+    .fetch_one(pool)
+    .await
+    .expect("count failed B invocations bound to its exact lease");
+    assert_eq!(
+        b_bound_invocations, 0,
+        "failed B must not receive invocations on its exact instance and fence"
+    );
+
+    let gateway_events_after_cleanup: i64 = sqlx::query_scalar(
+        "SELECT count(*)
+           FROM application_events
+          WHERE aggregate_type = 'gateway' AND aggregate_id = $1",
+    )
+    .bind(fixture.gateway_id)
+    .fetch_one(pool)
+    .await
+    .expect("count gateway events after failed candidate cleanup");
+    assert_eq!(
+        gateway_events_after_cleanup, gateway_events_after_declaration,
+        "failed B cleanup must not promote or roll back a gateway pointer"
+    );
+
+    let (active_revision, old_state): (Option<uuid::Uuid>, String) = sqlx::query_as(
+        "SELECT gateway.active_revision_id, instance.state
+           FROM gateways AS gateway
+           JOIN gateway_service_instances AS instance
+             ON instance.id = $2
+            AND instance.gateway_id = gateway.id
+            AND instance.revision_id = $3
+          WHERE gateway.id = $1",
+    )
+    .bind(fixture.gateway_id)
+    .bind(old_instance_id)
+    .bind(fixture.revision_id)
+    .fetch_one(pool)
+    .await
+    .expect("read active A after failed B cleanup");
+    assert_eq!(active_revision, Some(fixture.revision_id));
+    assert_eq!(old_state, "ready");
+
+    let retry = evidence
+        .retry
+        .expect("failed B records a revision-scoped retry snapshot");
+    assert!(retry.0 >= 1, "failed B increments durable retry streak");
+    let failed_at = evidence
+        .failed_at
+        .expect("failed B includes durable failure timestamp");
+    let minimum_retry_delay = match retry.0 {
+        1 => 1,
+        2 => 2,
+        3 => 4,
+        4 => 8,
+        5 => 16,
+        6 => 32,
+        _ => 60,
+    };
+    let next_retry_at = retry
+        .1
+        .expect("failed B retry snapshot includes next retry timestamp");
+    assert!(
+        next_retry_at >= failed_at + time::Duration::seconds(minimum_retry_delay),
+        "failed B retry must honor durable failure backoff"
+    );
+
+    let after_cleanup = exercise_gateway_service_requests(public_url).await;
+    assert_eq!(after_cleanup.startup_id, first_proof.startup_id);
+    let old_fence_after: i64 = sqlx::query_scalar(
+        "SELECT fencing_token
+           FROM gateway_service_instances
+          WHERE id = $1 AND gateway_id = $2 AND revision_id = $3",
+    )
+    .bind(old_instance_id)
+    .bind(fixture.gateway_id)
+    .bind(fixture.revision_id)
+    .fetch_one(pool)
+    .await
+    .expect("read A fencing token after failed B cleanup");
+    assert_eq!(old_fence_after, old_fencing_token);
+
+    let b_paths = gateway_service_resource_paths(evidence.instance_id);
+    assert!(!b_paths.0.exists(), "failed B VM runtime is cleaned");
+    assert!(!b_paths.1.exists(), "failed B cgroup is cleaned");
+    assert!(!b_paths.2.exists(), "failed B materializer is cleaned");
+
+    daemon.graceful_shutdown().await;
+    wait_for_gateway_service_cleaned(pool, fixture, old_instance_id).await;
+    assert!(!old_paths.0.exists(), "A VM runtime is cleaned at shutdown");
+    assert!(!old_paths.1.exists(), "A cgroup is cleaned at shutdown");
+    assert!(
+        !old_paths.2.exists(),
+        "A materializer is cleaned at shutdown"
+    );
+    eprintln!(
+        "persistent-service-failed-candidate-passed old_instance={old_instance_id} candidate_instance={} candidate_fence={} failure_code={failure_code} old_startup_id={}",
+        evidence.instance_id, evidence.fencing_token, first_proof.startup_id
+    );
+}
+
+type FailedGatewayServiceRow = (
+    uuid::Uuid,
+    i64,
+    String,
+    Option<String>,
+    Option<OffsetDateTime>,
+    Option<i32>,
+    Option<i32>,
+    Option<uuid::Uuid>,
+    Option<i32>,
+    Option<OffsetDateTime>,
+);
+
+#[derive(Debug)]
+struct FailedGatewayServiceEvidence {
+    gateway_id: uuid::Uuid,
+    revision_id: uuid::Uuid,
+    instance_id: uuid::Uuid,
+    initial_fencing_token: i64,
+    fencing_token: i64,
+    state: String,
+    failure_code: Option<String>,
+    failed_at: Option<OffsetDateTime>,
+    exit_code: Option<i32>,
+    exit_signal: Option<i32>,
+    observed_ready: bool,
+    observed_promoted: bool,
+    retry: Option<(i32, Option<OffsetDateTime>)>,
+}
+
+async fn wait_for_failed_gateway_service_candidate(
+    pool: &sqlx::PgPool,
+    gateway_id: uuid::Uuid,
+    revision_id: uuid::Uuid,
+    old_identity: (uuid::Uuid, uuid::Uuid, i64),
+    old_proof: &GatewayServiceRequestProof,
+    public_url: &str,
+) -> FailedGatewayServiceEvidence {
+    let (old_instance_id, old_revision_id, old_fencing_token) = old_identity;
+    tokio::time::timeout(Duration::from_secs(120), async {
+        // The ownership schema has no historical ready_at column. Poll the
+        // complete launch lifetime and record every observed Ready state;
+        // the durable gateway event count in the caller proves that no active
+        // pointer transition occurred after B was declared.
+        let mut initial_fencing_token = None;
+        let mut candidate_id = None;
+        let mut observed_ready = false;
+        let mut observed_promoted = false;
+        let mut served_during_failure = false;
+        loop {
+            let row: Option<FailedGatewayServiceRow> = sqlx::query_as(
+                "SELECT instance.id, instance.fencing_token, instance.state,
+                        instance.failure_code, instance.failed_at,
+                        instance.exit_code, instance.exit_signal,
+                        gateway.active_revision_id,
+                        retry.failure_streak, retry.next_retry_at
+                   FROM gateway_service_instances AS instance
+                   JOIN gateways AS gateway ON gateway.id = instance.gateway_id
+                   LEFT JOIN gateway_service_retry_state AS retry
+                     ON retry.gateway_id = instance.gateway_id
+                    AND retry.revision_id = instance.revision_id
+                  WHERE instance.gateway_id = $1
+                    AND instance.revision_id = $2
+                    AND (($3::uuid IS NULL AND instance.id <> $4)
+                         OR instance.id = $3)
+                  ORDER BY instance.created_at ASC, instance.id ASC
+                  LIMIT 1",
+            )
+            .bind(gateway_id)
+            .bind(revision_id)
+            .bind(candidate_id)
+            .bind(old_instance_id)
+            .fetch_optional(pool)
+            .await
+            .expect("read failed candidate lifecycle evidence");
+            if let Some((
+                observed_id,
+                fencing_token,
+                state,
+                failure_code,
+                failed_at,
+                exit_code,
+                exit_signal,
+                active_revision,
+                failure_streak,
+                next_retry_at,
+            )) = row
+            {
+                if let Some(expected_id) = candidate_id {
+                    assert_eq!(
+                        observed_id, expected_id,
+                        "failed-candidate evidence must stay bound to its first instance"
+                    );
+                } else {
+                    candidate_id = Some(observed_id);
+                    initial_fencing_token = Some(fencing_token);
+                }
+                observed_ready |= state == "ready";
+                observed_promoted |= active_revision == Some(revision_id);
+                if failure_code.is_some() && !served_during_failure {
+                    let proof = exercise_gateway_service_requests(public_url).await;
+                    assert_eq!(proof.startup_id, old_proof.startup_id);
+                    let current_old_fence = read_gateway_service_fencing_token(
+                        pool,
+                        old_instance_id,
+                        gateway_id,
+                        old_revision_id,
+                    )
+                    .await;
+                    assert_eq!(current_old_fence, old_fencing_token);
+                    served_during_failure = true;
+                }
+                if let (true, Some(failure_streak)) =
+                    (state == "cleaned" && failure_code.is_some(), failure_streak)
+                {
+                    return FailedGatewayServiceEvidence {
+                        gateway_id,
+                        revision_id,
+                        instance_id: candidate_id.expect("capture B candidate identity"),
+                        initial_fencing_token: initial_fencing_token
+                            .expect("capture B initial fencing token"),
+                        fencing_token,
+                        state,
+                        failure_code,
+                        failed_at,
+                        exit_code,
+                        exit_signal,
+                        observed_ready,
+                        observed_promoted,
+                        retry: Some((failure_streak, next_retry_at)),
+                    };
+                }
+            }
+            tokio::time::sleep(Duration::from_millis(50)).await;
+        }
+    })
+    .await
+    .expect("failed service candidate reaches durable cleanup")
+}
+
+async fn read_gateway_service_fencing_token(
+    pool: &sqlx::PgPool,
+    instance_id: uuid::Uuid,
+    gateway_id: uuid::Uuid,
+    revision_id: uuid::Uuid,
+) -> i64 {
+    sqlx::query_scalar(
+        "SELECT fencing_token
+           FROM gateway_service_instances
+          WHERE id = $1 AND gateway_id = $2 AND revision_id = $3",
+    )
+    .bind(instance_id)
+    .bind(gateway_id)
+    .bind(revision_id)
+    .fetch_one(pool)
+    .await
+    .expect("read A fencing token during failed B cleanup")
+}
+
+/// Exercises one real public revision cutover while an accepted request is
+/// still executing against the old guest.  The service fixture's bounded hold
+/// response keeps the exchange buffered until the new revision is serving.
+// This opt-in harness function keeps the complete external cutover evidence
+// together so its cleanup ordering remains reviewable at one call site.
+#[allow(
+    clippy::cognitive_complexity,
+    clippy::too_many_arguments,
+    clippy::too_many_lines
+)]
+async fn exercise_external_gateway_service_cutover(
+    pool: &sqlx::PgPool,
+    fixture: &GatewayServiceGoldenFixture,
+    gateway: &GatewayEdgeConfig,
+    _app_config: &AppConfig,
+    _root: &Path,
+    _root_image: &Path,
+    release_artifact_root: &Path,
+    daemon: ExternalGoldenDaemon,
+    old_instance_id: uuid::Uuid,
+    old_paths: (PathBuf, PathBuf, PathBuf),
+    first_proof: &GatewayServiceRequestProof,
+    public_url: &str,
+    rollback: bool,
+    candidate_capacity: bool,
+) {
+    let candidate =
+        seed_gateway_service_cutover_candidate(pool, fixture, release_artifact_root, "/readyz")
+            .await;
+    let baseline_invocations: i64 =
+        sqlx::query_scalar("SELECT count(*) FROM gateway_invocations WHERE gateway_id = $1")
+            .bind(fixture.gateway_id)
+            .fetch_one(pool)
+            .await
+            .expect("count service invocations before cutover hold");
+    let hold_started_at: OffsetDateTime = sqlx::query_scalar("SELECT clock_timestamp()")
+        .fetch_one(pool)
+        .await
+        .expect("read cutover hold start time");
+    let old_fencing_token: i64 = sqlx::query_scalar(
+        "SELECT fencing_token
+           FROM gateway_service_instances
+          WHERE id = $1 AND gateway_id = $2 AND revision_id = $3",
+    )
+    .bind(old_instance_id)
+    .bind(fixture.gateway_id)
+    .bind(fixture.revision_id)
+    .fetch_one(pool)
+    .await
+    .expect("read A fencing token before hold");
+    let hold_nonce = uuid::Uuid::new_v4();
+    let hold_url = format!("{public_url}/gateway/service/hold?nonce={hold_nonce}");
+    let hold_deadline = tokio::time::Instant::now() + Duration::from_secs(29);
+    let hold_client = reqwest::Client::builder()
+        .timeout(Duration::from_secs(29))
+        .build()
+        .expect("bounded cutover hold client");
+    let hold = tokio::spawn(async move {
+        let bytes = hold_client
+            .get(hold_url)
+            .send()
+            .await
+            .expect("public persistent-service hold request")
+            .error_for_status()
+            .expect("persistent-service hold succeeds")
+            .bytes()
+            .await
+            .expect("read persistent-service hold response");
+        let body: serde_json::Value =
+            serde_json::from_slice(&bytes).expect("persistent-service hold identity JSON");
+        GatewayServiceRequestProof {
+            pid: body
+                .get("pid")
+                .and_then(serde_json::Value::as_u64)
+                .expect("hold guest PID"),
+            startup_id: body
+                .get("startup_id")
+                .and_then(serde_json::Value::as_str)
+                .expect("hold guest startup identity")
+                .to_owned(),
+        }
+    });
+    let hold_invocation = wait_for_accepted_gateway_service_hold(
+        pool,
+        fixture,
+        old_instance_id,
+        old_fencing_token,
+        hold_started_at,
+        baseline_invocations,
+    )
+    .await;
+    assert!(
+        !hold.is_finished(),
+        "A hold remains in flight after acceptance"
+    );
+
+    sqlx::query("UPDATE gateways SET desired_service_revision_id = $2 WHERE id = $1")
+        .bind(fixture.gateway_id)
+        .bind(candidate.revision_id)
+        .execute(pool)
+        .await
+        .expect("declare published cutover candidate");
+    let candidate_instance_id = wait_for_gateway_service_cutover_state(
+        pool,
+        fixture.gateway_id,
+        old_instance_id,
+        fixture.revision_id,
+        candidate.revision_id,
+    )
+    .await;
+    assert!(
+        !hold.is_finished(),
+        "A hold remains pending while B is ready, active, and A is draining"
+    );
+    let candidate_paths = gateway_service_resource_paths(candidate_instance_id);
+    assert!(old_paths.0.is_dir(), "A VM runtime remains during drain");
+    assert!(old_paths.1.is_dir(), "A cgroup remains during drain");
+    assert!(old_paths.2.is_dir(), "A materializer remains during drain");
+    assert!(
+        candidate_paths.0.is_dir(),
+        "B VM runtime exists while serving"
+    );
+    assert!(candidate_paths.1.is_dir(), "B cgroup exists while serving");
+    assert!(
+        candidate_paths.2.is_dir(),
+        "B materializer exists while serving"
+    );
+    let b_before: OffsetDateTime = sqlx::query_scalar("SELECT clock_timestamp()")
+        .fetch_one(pool)
+        .await
+        .expect("read B public request start time");
+    let b_proof = exercise_gateway_service_cutover_requests(
+        pool,
+        &candidate,
+        candidate_instance_id,
+        public_url,
+        b_before,
+    )
+    .await;
+    assert_ne!(b_proof.startup_id, first_proof.startup_id);
+    assert!(
+        !hold.is_finished(),
+        "A hold remains pending after B traffic"
+    );
+    let old_state: String =
+        sqlx::query_scalar("SELECT state FROM gateway_service_instances WHERE id = $1")
+            .bind(old_instance_id)
+            .fetch_one(pool)
+            .await
+            .expect("read A state after B traffic");
+    assert_eq!(old_state, "draining");
+    let hold_outcome: String =
+        sqlx::query_scalar("SELECT outcome FROM gateway_invocations WHERE id = $1")
+            .bind(hold_invocation)
+            .fetch_one(pool)
+            .await
+            .expect("read A hold outcome after B traffic");
+    assert_eq!(hold_outcome, "accepted");
+    assert!(old_paths.0.is_dir() && old_paths.1.is_dir() && old_paths.2.is_dir());
+
+    if candidate_capacity {
+        exercise_external_gateway_service_candidate_capacity(
+            pool,
+            fixture,
+            &candidate,
+            release_artifact_root,
+            daemon,
+            old_instance_id,
+            old_fencing_token,
+            old_paths,
+            first_proof,
+            public_url,
+            candidate_instance_id,
+            candidate_paths,
+            &b_proof,
+            hold,
+            hold_invocation,
+            hold_deadline,
+        )
+        .await;
+        return;
+    }
+
+    let hold_proof = tokio::time::timeout_at(hold_deadline, hold)
+        .await
+        .expect("A hold completes inside the public exchange deadline")
+        .expect("A hold task joins");
+    assert_eq!(hold_proof.startup_id, first_proof.startup_id);
+    wait_for_gateway_invocation_completed(pool, hold_invocation).await;
+    wait_for_gateway_service_cleaned(pool, fixture, old_instance_id).await;
+    assert!(
+        !old_paths.0.exists(),
+        "A VM runtime is cleaned after response"
+    );
+    assert!(!old_paths.1.exists(), "A cgroup is cleaned after response");
+    assert!(
+        !old_paths.2.exists(),
+        "A materializer is cleaned after response"
+    );
+    assert!(
+        candidate_paths.0.is_dir() && candidate_paths.1.is_dir() && candidate_paths.2.is_dir(),
+        "B remains serving after A cleanup"
+    );
+    if rollback {
+        exercise_external_gateway_service_rollback(
+            pool,
+            fixture,
+            gateway,
+            daemon,
+            old_instance_id,
+            &candidate,
+            candidate_instance_id,
+            candidate_paths,
+            first_proof,
+            &b_proof,
+            public_url,
+        )
+        .await;
+    } else {
+        daemon.graceful_shutdown().await;
+        wait_for_gateway_service_cleaned(pool, &candidate, candidate_instance_id).await;
+        assert!(!candidate_paths.0.exists());
+        assert!(!candidate_paths.1.exists());
+        assert!(!candidate_paths.2.exists());
+        let applied_config =
+            wait_for_caddy_configuration(&gateway.caddy_admin_url, "/gateway/service").await;
+        assert!(applied_config.contains("/gateway/service"));
+        eprintln!(
+            "persistent-service-cutover-passed old_instance={old_instance_id} new_instance={candidate_instance_id} old_startup_id={} new_startup_id={}",
+            first_proof.startup_id, b_proof.startup_id
+        );
+    }
+}
+
+struct ExternalCandidateCapacitySnapshot {
+    active_revision: Option<uuid::Uuid>,
+    old_state: String,
+    old_fencing_token: i64,
+    serving_state: String,
+    serving_fencing_token: i64,
+    next_instances: i64,
+}
+
+async fn read_external_candidate_capacity_snapshot(
+    pool: &sqlx::PgPool,
+    gateway_id: uuid::Uuid,
+    old_instance_id: uuid::Uuid,
+    old_revision_id: uuid::Uuid,
+    serving_instance_id: uuid::Uuid,
+    serving_revision_id: uuid::Uuid,
+    next_revision_id: uuid::Uuid,
+) -> ExternalCandidateCapacitySnapshot {
+    let row: (Option<uuid::Uuid>, String, i64, String, i64, i64) = sqlx::query_as(
+        "SELECT gateway.active_revision_id, old_instance.state,
+                old_instance.fencing_token, serving_instance.state,
+                serving_instance.fencing_token, count(next_instance.id)::bigint
+           FROM gateways AS gateway
+           JOIN gateway_service_instances AS old_instance
+             ON old_instance.id = $2
+            AND old_instance.gateway_id = gateway.id
+            AND old_instance.revision_id = $3
+           JOIN gateway_service_instances AS serving_instance
+             ON serving_instance.id = $4
+            AND serving_instance.gateway_id = gateway.id
+            AND serving_instance.revision_id = $5
+           LEFT JOIN gateway_service_instances AS next_instance
+             ON next_instance.gateway_id = gateway.id
+            AND next_instance.revision_id = $6
+          WHERE gateway.id = $1
+          GROUP BY gateway.active_revision_id, old_instance.state,
+                   old_instance.fencing_token, serving_instance.state,
+                   serving_instance.fencing_token",
+    )
+    .bind(gateway_id)
+    .bind(old_instance_id)
+    .bind(old_revision_id)
+    .bind(serving_instance_id)
+    .bind(serving_revision_id)
+    .bind(next_revision_id)
+    .fetch_one(pool)
+    .await
+    .expect("read real candidate capacity state");
+    ExternalCandidateCapacitySnapshot {
+        active_revision: row.0,
+        old_state: row.1,
+        old_fencing_token: row.2,
+        serving_state: row.3,
+        serving_fencing_token: row.4,
+        next_instances: row.5,
+    }
+}
+
+/// Extends the real A/B cutover proof with a third revision admission check.
+/// A's accepted request remains unresolved while the test observes C blocked
+/// by durable capacity, then admits C only after A is physically cleaned.
+#[allow(
+    clippy::cognitive_complexity,
+    clippy::too_many_arguments,
+    clippy::too_many_lines
+)]
+async fn exercise_external_gateway_service_candidate_capacity(
+    pool: &sqlx::PgPool,
+    fixture: &GatewayServiceGoldenFixture,
+    b_fixture: &GatewayServiceGoldenFixture,
+    release_artifact_root: &Path,
+    daemon: ExternalGoldenDaemon,
+    old_instance_id: uuid::Uuid,
+    old_fencing_token: i64,
+    old_paths: (PathBuf, PathBuf, PathBuf),
+    first_proof: &GatewayServiceRequestProof,
+    public_url: &str,
+    b_instance_id: uuid::Uuid,
+    b_paths: (PathBuf, PathBuf, PathBuf),
+    b_proof: &GatewayServiceRequestProof,
+    hold: tokio::task::JoinHandle<GatewayServiceRequestProof>,
+    hold_invocation: uuid::Uuid,
+    hold_deadline: tokio::time::Instant,
+) {
+    let third =
+        seed_gateway_service_cutover_candidate(pool, fixture, release_artifact_root, "/readyz")
+            .await;
+    let accepted_invocation: (uuid::Uuid, uuid::Uuid, uuid::Uuid, i64, String) = sqlx::query_as(
+        "SELECT gateway_id, gateway_revision_id, service_instance_id,
+                service_instance_fencing_token, outcome
+           FROM gateway_invocations
+          WHERE id = $1",
+    )
+    .bind(hold_invocation)
+    .fetch_one(pool)
+    .await
+    .expect("read accepted A capacity hold");
+    assert_eq!(accepted_invocation.0, fixture.gateway_id);
+    assert_eq!(accepted_invocation.1, fixture.revision_id);
+    assert_eq!(accepted_invocation.2, old_instance_id);
+    assert_eq!(accepted_invocation.3, old_fencing_token);
+    assert_eq!(accepted_invocation.4, "accepted");
+    sqlx::query("UPDATE gateways SET desired_service_revision_id = $2 WHERE id = $1")
+        .bind(fixture.gateway_id)
+        .bind(third.revision_id)
+        .execute(pool)
+        .await
+        .expect("declare third candidate while A drains and B serves");
+
+    let mut observed_blocked = false;
+    let mut serving_fencing_token = None;
+    tokio::time::timeout_at(hold_deadline, async {
+        loop {
+            let snapshot = read_external_candidate_capacity_snapshot(
+                pool,
+                fixture.gateway_id,
+                old_instance_id,
+                fixture.revision_id,
+                b_instance_id,
+                b_fixture.revision_id,
+                third.revision_id,
+            )
+            .await;
+            assert!(
+                !(snapshot.next_instances > 0 && snapshot.old_state != "cleaned"),
+                "C was admitted before A cleaned: a_state={} c_instances={}",
+                snapshot.old_state,
+                snapshot.next_instances
+            );
+            assert_eq!(snapshot.old_fencing_token, old_fencing_token);
+            if let Some(expected) = serving_fencing_token {
+                assert_eq!(snapshot.serving_fencing_token, expected);
+            } else {
+                assert!(snapshot.serving_fencing_token > 0);
+                serving_fencing_token = Some(snapshot.serving_fencing_token);
+            }
+            let hold_unresolved = !hold.is_finished();
+            if hold_unresolved
+                && snapshot.active_revision == Some(b_fixture.revision_id)
+                && snapshot.old_state == "draining"
+                && snapshot.serving_state == "ready"
+                && snapshot.next_instances == 0
+            {
+                observed_blocked = true;
+            }
+            if hold.is_finished() {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(50)).await;
+        }
+    })
+    .await
+    .expect("A capacity hold completes inside the public exchange deadline");
+
+    let hold_proof = hold.await.expect("A capacity hold task joins");
+    assert_eq!(hold_proof.startup_id, first_proof.startup_id);
+
+    tokio::time::timeout(Duration::from_secs(120), async {
+        loop {
+            let snapshot = read_external_candidate_capacity_snapshot(
+                pool,
+                fixture.gateway_id,
+                old_instance_id,
+                fixture.revision_id,
+                b_instance_id,
+                b_fixture.revision_id,
+                third.revision_id,
+            )
+            .await;
+            assert!(
+                !(snapshot.next_instances > 0 && snapshot.old_state != "cleaned"),
+                "C was admitted before A cleaned: a_state={} c_instances={}",
+                snapshot.old_state,
+                snapshot.next_instances
+            );
+            assert_eq!(snapshot.old_fencing_token, old_fencing_token);
+            assert_eq!(serving_fencing_token, Some(snapshot.serving_fencing_token));
+            if snapshot.old_state == "cleaned" {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(50)).await;
+        }
+    })
+    .await
+    .expect("A capacity hold cleanup reaches durable Cleaned state");
+    assert!(
+        observed_blocked,
+        "at least one durable A-draining/B-ready/C-empty snapshot is required"
+    );
+    wait_for_gateway_invocation_completed(pool, hold_invocation).await;
+    wait_for_gateway_service_cleaned(pool, fixture, old_instance_id).await;
+    assert!(!old_paths.0.exists());
+    assert!(!old_paths.1.exists());
+    assert!(!old_paths.2.exists());
+
+    let third_instance_id = wait_for_gateway_service_ready(pool, &third).await;
+    let third_paths = gateway_service_resource_paths(third_instance_id);
+    assert!(third_paths.0.is_dir());
+    assert!(third_paths.1.is_dir());
+    assert!(third_paths.2.is_dir());
+    let third_started_at: OffsetDateTime = sqlx::query_scalar("SELECT clock_timestamp()")
+        .fetch_one(pool)
+        .await
+        .expect("read C request start time");
+    let third_proof = exercise_gateway_service_cutover_requests(
+        pool,
+        &third,
+        third_instance_id,
+        public_url,
+        third_started_at,
+    )
+    .await;
+    assert_ne!(third_proof.startup_id, first_proof.startup_id);
+    assert_ne!(third_proof.startup_id, b_proof.startup_id);
+
+    // C promotion commits the active pointer before the paced reconciliation
+    // pass asks the now-noncurrent B job to drain. B may therefore remain
+    // Ready at this instant; the durable cleanup and physical-path checks
+    // below prove that reconciliation eventually retires it.
+    wait_for_gateway_service_cleaned(pool, b_fixture, b_instance_id).await;
+    assert!(!b_paths.0.exists());
+    assert!(!b_paths.1.exists());
+    assert!(!b_paths.2.exists());
+
+    daemon.graceful_shutdown().await;
+    wait_for_gateway_service_cleaned(pool, &third, third_instance_id).await;
+    assert!(!third_paths.0.exists());
+    assert!(!third_paths.1.exists());
+    assert!(!third_paths.2.exists());
+    eprintln!(
+        "REAL_GATEWAY_SERVICE_CANDIDATE_CAPACITY_E2E=1 a_instance={old_instance_id} b_instance={b_instance_id} c_instance={third_instance_id} a_startup_id={} b_startup_id={} c_startup_id={}",
+        first_proof.startup_id, b_proof.startup_id, third_proof.startup_id
+    );
+}
+
+/// Re-selects the original immutable release after B has served. A finite B
+/// hold keeps the old candidate draining long enough to prove the replacement
+/// becomes Ready and active before B is retired.
+// Keep the complete operator rollback evidence at one call site so its
+// ordering and resource assertions remain reviewable together.
+#[allow(
+    clippy::cognitive_complexity,
+    clippy::too_many_arguments,
+    clippy::too_many_lines
+)]
+async fn exercise_external_gateway_service_rollback(
+    pool: &sqlx::PgPool,
+    fixture: &GatewayServiceGoldenFixture,
+    gateway: &GatewayEdgeConfig,
+    daemon: ExternalGoldenDaemon,
+    original_a_instance_id: uuid::Uuid,
+    b_fixture: &GatewayServiceGoldenFixture,
+    b_instance_id: uuid::Uuid,
+    b_paths: (PathBuf, PathBuf, PathBuf),
+    first_a_proof: &GatewayServiceRequestProof,
+    b_proof: &GatewayServiceRequestProof,
+    public_url: &str,
+) {
+    let baseline_invocations: i64 =
+        sqlx::query_scalar("SELECT count(*) FROM gateway_invocations WHERE gateway_id = $1")
+            .bind(fixture.gateway_id)
+            .fetch_one(pool)
+            .await
+            .expect("count service invocations before rollback hold");
+    let hold_started_at: OffsetDateTime = sqlx::query_scalar("SELECT clock_timestamp()")
+        .fetch_one(pool)
+        .await
+        .expect("read rollback hold start time");
+    let b_fencing_token: i64 = sqlx::query_scalar(
+        "SELECT fencing_token
+           FROM gateway_service_instances
+          WHERE id = $1 AND gateway_id = $2 AND revision_id = $3",
+    )
+    .bind(b_instance_id)
+    .bind(b_fixture.gateway_id)
+    .bind(b_fixture.revision_id)
+    .fetch_one(pool)
+    .await
+    .expect("read B fencing token before rollback hold");
+    let hold_nonce = uuid::Uuid::new_v4();
+    let hold_url = format!("{public_url}/gateway/service/hold?rollback_nonce={hold_nonce}");
+    let hold_deadline = tokio::time::Instant::now() + Duration::from_secs(29);
+    let hold_client = reqwest::Client::builder()
+        .timeout(Duration::from_secs(29))
+        .build()
+        .expect("bounded rollback hold client");
+    let hold = tokio::spawn(async move {
+        let bytes = hold_client
+            .get(hold_url)
+            .send()
+            .await
+            .expect("public rollback hold request")
+            .error_for_status()
+            .expect("rollback hold succeeds")
+            .bytes()
+            .await
+            .expect("read rollback hold response");
+        let body: serde_json::Value =
+            serde_json::from_slice(&bytes).expect("rollback hold identity JSON");
+        GatewayServiceRequestProof {
+            pid: body
+                .get("pid")
+                .and_then(serde_json::Value::as_u64)
+                .expect("rollback hold guest PID"),
+            startup_id: body
+                .get("startup_id")
+                .and_then(serde_json::Value::as_str)
+                .expect("rollback hold guest startup identity")
+                .to_owned(),
+        }
+    });
+    let hold_invocation = wait_for_accepted_gateway_service_hold(
+        pool,
+        b_fixture,
+        b_instance_id,
+        b_fencing_token,
+        hold_started_at,
+        baseline_invocations,
+    )
+    .await;
+    assert!(
+        !hold.is_finished(),
+        "B hold remains in flight after acceptance"
+    );
+
+    sqlx::query("UPDATE gateways SET desired_service_revision_id = $2 WHERE id = $1")
+        .bind(fixture.gateway_id)
+        .bind(fixture.revision_id)
+        .execute(pool)
+        .await
+        .expect("declare rollback to original A revision");
+    let rollback_a_instance_id = wait_for_gateway_service_cutover_state(
+        pool,
+        fixture.gateway_id,
+        b_instance_id,
+        b_fixture.revision_id,
+        fixture.revision_id,
+    )
+    .await;
+    assert_ne!(rollback_a_instance_id, original_a_instance_id);
+    assert_ne!(rollback_a_instance_id, b_instance_id);
+    assert!(
+        !hold.is_finished(),
+        "B hold remains pending during rollback"
+    );
+    let rollback_a_paths = gateway_service_resource_paths(rollback_a_instance_id);
+    assert!(
+        b_paths.0.is_dir(),
+        "B VM runtime remains during rollback drain"
+    );
+    assert!(b_paths.1.is_dir(), "B cgroup remains during rollback drain");
+    assert!(
+        b_paths.2.is_dir(),
+        "B materializer remains during rollback drain"
+    );
+    assert!(
+        rollback_a_paths.0.is_dir(),
+        "rollback A VM runtime is serving"
+    );
+    assert!(rollback_a_paths.1.is_dir(), "rollback A cgroup is serving");
+    assert!(
+        rollback_a_paths.2.is_dir(),
+        "rollback A materializer is serving"
+    );
+    let a_before: OffsetDateTime = sqlx::query_scalar("SELECT clock_timestamp()")
+        .fetch_one(pool)
+        .await
+        .expect("read rollback A public request start time");
+    let rollback_a_proof = exercise_gateway_service_cutover_requests(
+        pool,
+        fixture,
+        rollback_a_instance_id,
+        public_url,
+        a_before,
+    )
+    .await;
+    assert_ne!(rollback_a_proof.startup_id, first_a_proof.startup_id);
+    assert_ne!(rollback_a_proof.startup_id, b_proof.startup_id);
+    assert!(
+        !hold.is_finished(),
+        "B hold remains pending after rollback A traffic"
+    );
+    let b_state: String = sqlx::query_scalar(
+        "SELECT state FROM gateway_service_instances
+           WHERE id = $1 AND gateway_id = $2 AND revision_id = $3",
+    )
+    .bind(b_instance_id)
+    .bind(b_fixture.gateway_id)
+    .bind(b_fixture.revision_id)
+    .fetch_one(pool)
+    .await
+    .expect("read B state after rollback A traffic");
+    assert_eq!(b_state, "draining");
+    let hold_outcome: String =
+        sqlx::query_scalar("SELECT outcome FROM gateway_invocations WHERE id = $1")
+            .bind(hold_invocation)
+            .fetch_one(pool)
+            .await
+            .expect("read B rollback hold outcome");
+    assert_eq!(hold_outcome, "accepted");
+
+    let hold_proof = tokio::time::timeout_at(hold_deadline, hold)
+        .await
+        .expect("B hold completes inside the public exchange deadline")
+        .expect("B hold task joins");
+    assert_eq!(hold_proof.startup_id, b_proof.startup_id);
+    wait_for_gateway_invocation_completed(pool, hold_invocation).await;
+    wait_for_gateway_service_cleaned(pool, b_fixture, b_instance_id).await;
+    assert!(!b_paths.0.exists());
+    assert!(!b_paths.1.exists());
+    assert!(!b_paths.2.exists());
+    assert!(rollback_a_paths.0.is_dir() && rollback_a_paths.1.is_dir());
+    assert!(rollback_a_paths.2.is_dir());
+
+    daemon.graceful_shutdown().await;
+    wait_for_gateway_service_cleaned(pool, fixture, rollback_a_instance_id).await;
+    assert!(!rollback_a_paths.0.exists());
+    assert!(!rollback_a_paths.1.exists());
+    assert!(!rollback_a_paths.2.exists());
+    let applied_config =
+        wait_for_caddy_configuration(&gateway.caddy_admin_url, "/gateway/service").await;
+    assert!(applied_config.contains("/gateway/service"));
+    eprintln!(
+        "persistent-service-rollback-passed original_a_instance={original_a_instance_id} b_instance={b_instance_id} rollback_a_instance={rollback_a_instance_id} original_a_startup_id={} b_startup_id={} rollback_a_startup_id={}",
+        first_a_proof.startup_id, b_proof.startup_id, rollback_a_proof.startup_id
+    );
+}
+
+async fn wait_for_accepted_gateway_service_hold(
+    pool: &sqlx::PgPool,
+    fixture: &GatewayServiceGoldenFixture,
+    instance_id: uuid::Uuid,
+    fencing_token: i64,
+    started_at: OffsetDateTime,
+    baseline_invocations: i64,
+) -> uuid::Uuid {
+    tokio::time::timeout(Duration::from_secs(10), async {
+        loop {
+            let count: i64 = sqlx::query_scalar(
+                "SELECT count(*) FROM gateway_invocations WHERE gateway_id = $1",
+            )
+            .bind(fixture.gateway_id)
+            .fetch_one(pool)
+            .await
+            .expect("count accepted hold invocation");
+            let row: Option<(uuid::Uuid, i64)> = sqlx::query_as(
+                "SELECT invocation.id, invocation.service_instance_fencing_token
+                   FROM gateway_invocations AS invocation
+                   JOIN gateway_runtime_authority_sessions AS session
+                     ON session.invocation_id = invocation.id
+                    AND session.gateway_id = invocation.gateway_id
+                    AND session.gateway_revision_id = invocation.gateway_revision_id
+                  WHERE invocation.gateway_id = $1
+                    AND invocation.gateway_revision_id = $2
+                    AND invocation.service_instance_id = $3
+                    AND invocation.outcome = 'accepted'
+                    AND invocation.accepted_at >= $4
+                    AND session.admission_mode = 'host_mediated'
+                    AND session.status = 'active'
+                  ORDER BY invocation.accepted_at DESC, invocation.id DESC
+                  LIMIT 1",
+            )
+            .bind(fixture.gateway_id)
+            .bind(fixture.revision_id)
+            .bind(instance_id)
+            .bind(started_at)
+            .fetch_optional(pool)
+            .await
+            .expect("read accepted host-mediated hold invocation");
+            if count == baseline_invocations + 1 {
+                if let Some((invocation_id, observed_fencing_token)) = row {
+                    assert_eq!(observed_fencing_token, fencing_token);
+                    return invocation_id;
+                }
+            }
+            tokio::time::sleep(Duration::from_millis(50)).await;
+        }
+    })
+    .await
+    .expect("A hold becomes an accepted host-mediated invocation")
+}
+
+async fn wait_for_gateway_service_cutover_state(
+    pool: &sqlx::PgPool,
+    gateway_id: uuid::Uuid,
+    old_instance_id: uuid::Uuid,
+    old_revision_id: uuid::Uuid,
+    candidate_revision_id: uuid::Uuid,
+) -> uuid::Uuid {
+    tokio::time::timeout(Duration::from_secs(18), async {
+        loop {
+            let row: Option<(Option<uuid::Uuid>, String, uuid::Uuid, String)> = sqlx::query_as(
+                "SELECT gateway.active_revision_id, old_instance.state,
+                        candidate.id, candidate.state
+                   FROM gateways AS gateway
+                   JOIN gateway_service_instances AS old_instance
+                     ON old_instance.id = $2
+                    AND old_instance.gateway_id = gateway.id
+                    AND old_instance.revision_id = $3
+                   JOIN gateway_service_instances AS candidate
+                     ON candidate.gateway_id = gateway.id
+                    AND candidate.revision_id = $4
+                  WHERE gateway.id = $1
+                    AND candidate.state = 'ready'
+                  ORDER BY candidate.created_at DESC
+                  LIMIT 1",
+            )
+            .bind(gateway_id)
+            .bind(old_instance_id)
+            .bind(old_revision_id)
+            .bind(candidate_revision_id)
+            .fetch_optional(pool)
+            .await
+            .expect("read coherent service cutover state");
+            if let Some((Some(active), old_state, candidate_id, candidate_state)) = row {
+                if active == candidate_revision_id
+                    && old_state == "draining"
+                    && candidate_state == "ready"
+                {
+                    return candidate_id;
+                }
+            }
+            tokio::time::sleep(Duration::from_millis(100)).await;
+        }
+    })
+    .await
+    .expect("B becomes active while A drains")
+}
+
+async fn exercise_gateway_service_cutover_requests(
+    pool: &sqlx::PgPool,
+    candidate: &GatewayServiceGoldenFixture,
+    candidate_instance_id: uuid::Uuid,
+    public_url: &str,
+    started_at: OffsetDateTime,
+) -> GatewayServiceRequestProof {
+    let client = reqwest::Client::builder()
+        .timeout(Duration::from_secs(10))
+        .build()
+        .expect("bounded B cutover client");
+    let first_nonce = uuid::Uuid::new_v4();
+    let second_nonce = uuid::Uuid::new_v4();
+    let path = format!("{public_url}/gateway/service/identity");
+    let first = client
+        .get(format!("{path}?cutover_nonce={first_nonce}"))
+        .send()
+        .await
+        .expect("first B public identity request")
+        .error_for_status()
+        .expect("first B identity succeeds")
+        .bytes()
+        .await
+        .expect("read first B identity");
+    let second = client
+        .get(format!("{path}?cutover_nonce={second_nonce}"))
+        .send()
+        .await
+        .expect("second B public identity request")
+        .error_for_status()
+        .expect("second B identity succeeds")
+        .bytes()
+        .await
+        .expect("read second B identity");
+    let first: serde_json::Value = serde_json::from_slice(&first).expect("first B identity JSON");
+    let second: serde_json::Value =
+        serde_json::from_slice(&second).expect("second B identity JSON");
+    let first_startup = first
+        .get("startup_id")
+        .and_then(serde_json::Value::as_str)
+        .expect("first B startup identity");
+    let second_startup = second
+        .get("startup_id")
+        .and_then(serde_json::Value::as_str)
+        .expect("second B startup identity");
+    assert_eq!(first_startup, second_startup);
+    assert!(
+        second
+            .get("request_count")
+            .and_then(serde_json::Value::as_u64)
+            .expect("second B request count")
+            > first
+                .get("request_count")
+                .and_then(serde_json::Value::as_u64)
+                .expect("first B request count")
+    );
+    // The nonce values make the two public URLs distinct.  Invocation rows do
+    // not persist query strings, so the DB correlation is the exact two-row
+    // delta after the exclusive cutover request window.
+    let candidate_fence: i64 =
+        sqlx::query_scalar("SELECT fencing_token FROM gateway_service_instances WHERE id = $1")
+            .bind(candidate_instance_id)
+            .fetch_one(pool)
+            .await
+            .expect("read B fencing token");
+    let bindings: Vec<(uuid::Uuid, Option<uuid::Uuid>, Option<i64>, String)> = sqlx::query_as(
+        "SELECT gateway_revision_id, service_instance_id,
+                service_instance_fencing_token, outcome
+           FROM gateway_invocations
+          WHERE gateway_id = $1 AND accepted_at >= $2
+          ORDER BY accepted_at DESC, id DESC
+          LIMIT 3",
+    )
+    .bind(candidate.gateway_id)
+    .bind(started_at)
+    .fetch_all(pool)
+    .await
+    .expect("read B invocation bindings");
+    assert_eq!(bindings.len(), 2);
+    assert!(
+        bindings
+            .iter()
+            .all(|(revision, instance, fencing_token, outcome)| {
+                *revision == candidate.revision_id
+                    && *instance == Some(candidate_instance_id)
+                    && *fencing_token == Some(candidate_fence)
+                    && outcome == "completed"
+            },)
+    );
+    GatewayServiceRequestProof {
+        pid: first
+            .get("pid")
+            .and_then(serde_json::Value::as_u64)
+            .expect("B guest PID"),
+        startup_id: first_startup.to_owned(),
+    }
+}
+
+async fn wait_for_gateway_invocation_completed(pool: &sqlx::PgPool, invocation_id: uuid::Uuid) {
+    tokio::time::timeout(Duration::from_secs(10), async {
+        loop {
+            let outcome: String =
+                sqlx::query_scalar("SELECT outcome FROM gateway_invocations WHERE id = $1")
+                    .bind(invocation_id)
+                    .fetch_one(pool)
+                    .await
+                    .expect("read completed hold invocation");
+            if outcome == "completed" {
+                return;
+            }
+            tokio::time::sleep(Duration::from_millis(50)).await;
+        }
+    })
+    .await
+    .expect("A hold invocation completes");
+}
+
+struct ExternalGoldenDaemon {
+    child: tokio::process::Child,
+    base_url: String,
+    log_path: PathBuf,
+}
+
+impl Drop for ExternalGoldenDaemon {
+    fn drop(&mut self) {
+        if self.child.id().is_some() {
+            let _ = self.child.start_kill();
+        }
+    }
+}
+
+impl ExternalGoldenDaemon {
+    async fn graceful_shutdown(mut self) {
+        let pid = self.child.id().expect("external daemon child PID");
+        let status = Command::new("kill")
+            .args(["-INT", &pid.to_string()])
+            .status()
+            .await
+            .expect("send external daemon Ctrl-C");
+        assert!(status.success(), "send external daemon Ctrl-C succeeds");
+        let status = tokio::time::timeout(Duration::from_secs(45), self.child.wait())
+            .await
+            .expect("external daemon graceful shutdown timeout")
+            .expect("wait for external daemon graceful shutdown");
+        assert!(
+            status.success(),
+            "external daemon exits successfully after Ctrl-C; log={} ",
+            self.log_path.display()
+        );
+    }
+
+    async fn unclean_kill(mut self) -> std::process::ExitStatus {
+        let pid = self.child.id().expect("external daemon child PID");
+        let status = Command::new("kill")
+            .args(["-KILL", &pid.to_string()])
+            .status()
+            .await
+            .expect("send external daemon SIGKILL");
+        assert!(status.success(), "send external daemon SIGKILL succeeds");
+        tokio::time::timeout(Duration::from_secs(30), self.child.wait())
+            .await
+            .expect("external daemon SIGKILL wait timeout")
+            .expect("wait for external daemon SIGKILL")
+    }
+}
+
+// This fixture must spell out the production environment contract so the
+// child cannot accidentally inherit the in-process AppConfig implementation.
+#[allow(clippy::too_many_lines)]
+async fn spawn_external_golden_daemon(
+    gateway: &GatewayEdgeConfig,
+    app_config: &AppConfig,
+    root: &Path,
+    root_image: &Path,
+    log_path_override: Option<&Path>,
+) -> ExternalGoldenDaemon {
+    let http_listener = TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("reserve external daemon HTTP listener");
+    let http_addr = http_listener
+        .local_addr()
+        .expect("external daemon HTTP listener address");
+    drop(http_listener);
+
+    let secret_key_directory = root.join("external-secret-keys");
+    std::fs::create_dir_all(&secret_key_directory).expect("create external secret key directory");
+    std::fs::set_permissions(
+        &secret_key_directory,
+        std::fs::Permissions::from_mode(0o700),
+    )
+    .expect("set external secret key directory mode");
+    // The production loader treats the filename as the key reference; keep
+    // the slash-free reference used by the in-process golden provider.
+    let secret_key_path = secret_key_directory.join("golden-v1");
+    if !secret_key_path.exists() {
+        std::fs::write(&secret_key_path, [17_u8; 32]).expect("write external secret key");
+        std::fs::set_permissions(&secret_key_path, std::fs::Permissions::from_mode(0o400))
+            .expect("set external secret key mode");
+    }
+
+    let handoff_key_path = root.join("external-runtime-authority.key");
+    if !handoff_key_path.exists() {
+        std::fs::write(&handoff_key_path, app_config.runtime_authority_handoff_key)
+            .expect("write external runtime authority key");
+        std::fs::set_permissions(&handoff_key_path, std::fs::Permissions::from_mode(0o400))
+            .expect("set external runtime authority key mode");
+    }
+    let callback_path = root.join("external-registry-callback-token");
+    if !callback_path.exists() {
+        std::fs::write(
+            &callback_path,
+            "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+        )
+        .expect("write external registry callback token");
+    }
+    let registry_key_path = root.join("external-registry-token-private.pem");
+    if !registry_key_path.exists() {
+        let registry_key_status = Command::new("openssl")
+            .args([
+                "genpkey",
+                "-algorithm",
+                "RSA",
+                "-pkeyopt",
+                "rsa_keygen_bits:2048",
+                "-out",
+                registry_key_path.to_str().expect("registry key path UTF-8"),
+            ])
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .status()
+            .await
+            .expect("launch openssl for external registry key");
+        assert!(
+            registry_key_status.success(),
+            "generate external registry key"
+        );
+        std::fs::set_permissions(&registry_key_path, std::fs::Permissions::from_mode(0o400))
+            .expect("set external registry key mode");
+    }
+
+    let root_manifest_path = root.join("external-root-image-manifest.json");
+    if !root_manifest_path.exists() {
+        std::fs::write(
+            &root_manifest_path,
+            serde_json::json!({
+                "version": 1,
+                "roots": {
+                    ROOT_IMAGE: { "kind": "directory", "path": root_image }
+                }
+            })
+            .to_string(),
+        )
+        .expect("write external root image manifest");
+    }
+    let caddy_config_path = root.join("external-caddy-config.json");
+    if !caddy_config_path.exists() {
+        std::fs::write(&caddy_config_path, &gateway.caddy_configuration_template)
+            .expect("write external Caddy configuration template");
+    }
+    let log_path = log_path_override.map_or_else(
+        || {
+            env::var_os("HEPHAESTUS_EXTERNAL_DAEMON_LOG")
+                .map_or_else(|| root.join("external-hephaestusd.log"), PathBuf::from)
+        },
+        Path::to_path_buf,
+    );
+    let log = OpenOptions::new()
+        .create(true)
+        .truncate(true)
+        .write(true)
+        .open(&log_path)
+        .expect("create external daemon log");
+    let stderr = log.try_clone().expect("clone external daemon log");
+    let runtime_root = env::var("HEPHAESTUS_LIBKRUN_RUNTIME_ROOT")
+        .expect("libkrun runtime root for external daemon");
+    let cgroup_root = env::var("HEPHAESTUS_LIBKRUN_CGROUP_ROOT")
+        .expect("libkrun cgroup root for external daemon");
+    let worker = env::var("HEPHAESTUS_LIBKRUN_WORKER").expect("libkrun worker for external daemon");
+    let daemon_binary = env::var_os("HEPHAESTUS_DAEMON_BINARY")
+        .map(PathBuf::from)
+        .or_else(|| option_env!("CARGO_BIN_EXE_hephaestusd").map(PathBuf::from))
+        .expect("external daemon binary path must be supplied by the harness");
+    assert!(
+        daemon_binary.is_file(),
+        "external daemon binary must be built at {}",
+        daemon_binary.display()
+    );
+    let registry_service = "registry.golden.invalid";
+    let mut command = Command::new(&daemon_binary);
+    command
+        .env("HEPHAESTUS_DATABASE_URL", &app_config.database_url)
+        .env("HEPHAESTUS_NATS_URL", &app_config.nats_url)
+        .env("HEPHAESTUS_HTTP_LISTEN", http_addr.to_string())
+        .env("HEPHAESTUS_REPOSITORY_ROOT", &app_config.repository_root)
+        .env(
+            "HEPHAESTUS_GIT_HTTP_BACKEND",
+            app_config
+                .git_http_backend
+                .to_str()
+                .expect("Git HTTP backend path UTF-8"),
+        )
+        .env(
+            "HEPHAESTUS_GIT_PRE_RECEIVE_HOOK",
+            &app_config.git_pre_receive_hook,
+        )
+        .env("HEPHAESTUS_OIDC_ISSUER", golden_issuer())
+        .env("HEPHAESTUS_OIDC_AUDIENCE", AUDIENCE)
+        .env("HEPHAESTUS_OIDC_ALGORITHM", "HS256")
+        .env(
+            "HEPHAESTUS_OIDC_HS256_SECRET",
+            std::str::from_utf8(SIGNING_SECRET).expect("golden signing secret UTF-8"),
+        )
+        .env("HEPHAESTUS_VOLUME_ROOT", &app_config.volumes.volume_root)
+        .env(
+            "HEPHAESTUS_WORKSPACE_ROOT",
+            &app_config.workspaces.workspace_root,
+        )
+        .env(
+            "HEPHAESTUS_ARTIFACT_ROOT",
+            &app_config.workspaces.artifact_root,
+        )
+        .env("HEPHAESTUS_RUNTIME_ROOT", runtime_root)
+        .env(
+            "HEPHAESTUS_SECRET_RUNTIME_ROOT",
+            &app_config.secret_mounts.root,
+        )
+        .env("HEPHAESTUS_SECRET_KEY_DIRECTORY", &secret_key_directory)
+        .env("HEPHAESTUS_SECRET_KEY_REFERENCE", "golden-v1")
+        .env(
+            "HEPHAESTUS_RUNTIME_AUTHORITY_HANDOFF_KEY_FILE",
+            &handoff_key_path,
+        )
+        .env(
+            "HEPHAESTUS_RPC_MEDIATOR_SECRET",
+            "golden-external-rpc-secret",
+        )
+        .env("HEPHAESTUS_REGISTRY_TOKEN_PRIVATE_KEY", &registry_key_path)
+        .env(
+            "HEPHAESTUS_REGISTRY_TOKEN_ISSUER",
+            "http://127.0.0.1:1/v1/registry/token",
+        )
+        .env("HEPHAESTUS_REGISTRY_SERVICE", registry_service)
+        .env("HEPHAESTUS_REGISTRY_PRIVATE_ORIGIN", "http://127.0.0.1:1/")
+        .env("HEPHAESTUS_REGISTRY_TOKEN_KEY_ID", "golden-external-v1")
+        .env("HEPHAESTUS_REGISTRY_TOKEN_LIFETIME_SECONDS", "300")
+        .env(
+            "HEPHAESTUS_REGISTRY_NOTIFICATION_CALLBACK_TOKEN_FILE",
+            &callback_path,
+        )
+        .env("HEPHAESTUS_ROOT_IMAGE_MANIFEST", &root_manifest_path)
+        .env_remove("HEPHAESTUS_ROOT_IMAGE_PATH")
+        .env_remove("HEPHAESTUS_ROOT_IMAGE_REFERENCE")
+        .env("HEPHAESTUS_VM_BACKEND", "libkrun")
+        .env("HEPHAESTUS_LIBKRUN_WORKER", worker)
+        .env("HEPHAESTUS_CGROUP_ROOT", cgroup_root)
+        .env("HEPHAESTUS_HOST_ID", &app_config.volumes.host_id)
+        .env("HEPHAESTUS_MKFS_EXT4", mkfs_ext4())
+        .env(
+            "HEPHAESTUS_RUNTIME_POLICY_VERSION",
+            &app_config.runtime_policy.version,
+        )
+        .env(
+            "HEPHAESTUS_RUNTIME_MAX_VCPUS",
+            app_config.runtime_policy.max_vcpus.to_string(),
+        )
+        .env(
+            "HEPHAESTUS_RUNTIME_MAX_MEMORY_MIB",
+            app_config.runtime_policy.max_memory_mib.to_string(),
+        )
+        .env(
+            "HEPHAESTUS_RUNTIME_ALLOW_BROKER_ONLY",
+            app_config.runtime_policy.allow_broker_only.to_string(),
+        )
+        .env(
+            "HEPHAESTUS_RUNTIME_ALLOW_EGRESS",
+            app_config.runtime_policy.allow_egress.to_string(),
+        )
+        .env(
+            "HEPHAESTUS_SECRET_BROKER_SOCKET",
+            &app_config.secret_broker_socket,
+        )
+        .env(
+            "HEPHAESTUS_RUNTIME_AUTHORITY_SESSION_TTL_SECONDS",
+            app_config
+                .runtime_authority_session_ttl
+                .as_secs()
+                .to_string(),
+        )
+        .env("HEPHAESTUS_CADDY_ADMIN_URL", &gateway.caddy_admin_url)
+        .env(
+            "HEPHAESTUS_GATEWAY_DISPATCHER_LISTEN",
+            gateway.dispatcher_listen.to_string(),
+        )
+        .env(
+            "HEPHAESTUS_GATEWAY_PUBLIC_AUTHORITY",
+            &gateway.public_authority,
+        )
+        .env("HEPHAESTUS_CADDY_CONFIGURATION_FILE", &caddy_config_path)
+        .env("HEPHAESTUS_CADDY_SERVER_NAME", &gateway.caddy_server_name)
+        .env(
+            "RUST_LOG",
+            "hephaestus_app=debug,gateway_edge=debug,gateway_postgres=debug,vm_libkrun=debug,run_runtime_local=debug",
+        );
+    if let Ok(library) = env::var("HEPHAESTUS_LIBKRUN_LIBRARY") {
+        command.env("HEPHAESTUS_LIBKRUN_LIBRARY", library);
+    }
+    let child = command
+        .stdout(Stdio::from(log))
+        .stderr(Stdio::from(stderr))
+        .kill_on_drop(true)
+        .spawn()
+        .expect("spawn external hephaestusd");
+    ExternalGoldenDaemon {
+        child,
+        base_url: format!("http://{http_addr}"),
+        log_path,
+    }
+}
+
+async fn wait_for_external_daemon_health(daemon: &mut ExternalGoldenDaemon) {
+    let client = reqwest::Client::builder()
+        .timeout(Duration::from_secs(2))
+        .build()
+        .expect("external daemon health client");
+    tokio::time::timeout(Duration::from_secs(120), async {
+        loop {
+            if let Some(status) = daemon.child.try_wait().expect("poll external daemon child") {
+                let log = std::fs::read_to_string(&daemon.log_path)
+                    .unwrap_or_else(|error| format!("unable to read child log: {error}"));
+                panic!(
+                    "external hephaestusd exited before healthz: {status}; log={}\\n{}",
+                    daemon.log_path.display(),
+                    log
+                );
+            }
+            if client
+                .get(format!("{}/healthz", daemon.base_url))
+                .send()
+                .await
+                .is_ok_and(|response| response.status().is_success())
+            {
+                return;
+            }
+            tokio::time::sleep(Duration::from_millis(100)).await;
+        }
+    })
+    .await
+    .unwrap_or_else(|_| {
+        panic!(
+            "external hephaestusd health timeout; log={} ",
+            daemon.log_path.display()
+        )
+    });
+}
+
+fn gateway_service_resource_paths(instance_id: uuid::Uuid) -> (PathBuf, PathBuf, PathBuf) {
+    let vm_id = format!("gateway-service-{instance_id}");
+    let runtime_root = PathBuf::from(
+        env::var("HEPHAESTUS_LIBKRUN_RUNTIME_ROOT")
+            .expect("libkrun runtime root for service cleanup assertion"),
+    );
+    let cgroup_root = PathBuf::from(
+        env::var("HEPHAESTUS_LIBKRUN_CGROUP_ROOT")
+            .expect("libkrun cgroup root for service cleanup assertion"),
+    );
+    (
+        runtime_root.join(&vm_id),
+        cgroup_root.join(&vm_id),
+        runtime_root
+            .join("exact-runs")
+            .join("gateway-services")
+            .join(instance_id.to_string()),
+    )
+}
+
+type GatewayServiceOwnership = (String, uuid::Uuid, i64, OffsetDateTime);
+
+struct GatewayServiceRecoverySnapshot {
+    old_state: String,
+    old_host: String,
+    old_owner: uuid::Uuid,
+    old_fence: i64,
+    old_lease: OffsetDateTime,
+    old_cleaned_at: Option<OffsetDateTime>,
+    active_revision: Option<uuid::Uuid>,
+    candidate_count: i64,
+    candidate_id: Option<uuid::Uuid>,
+    candidate_state: Option<String>,
+    candidate_host: Option<String>,
+    candidate_owner: Option<uuid::Uuid>,
+    candidate_fence: Option<i64>,
+    candidate_created_at: Option<OffsetDateTime>,
+    db_now: OffsetDateTime,
+}
+
+async fn read_gateway_service_ownership(
+    pool: &sqlx::PgPool,
+    instance_id: uuid::Uuid,
+) -> GatewayServiceOwnership {
+    sqlx::query_as(
+        "SELECT owner_host_id, owner_uuid, fencing_token, lease_expires_at
+           FROM gateway_service_instances
+          WHERE id = $1",
+    )
+    .bind(instance_id)
+    .fetch_one(pool)
+    .await
+    .expect("read gateway service ownership")
+}
+
+async fn read_gateway_service_recovery_snapshot(
+    pool: &sqlx::PgPool,
+    fixture: &GatewayServiceGoldenFixture,
+    old_instance_id: uuid::Uuid,
+    recovery_started_at: OffsetDateTime,
+) -> GatewayServiceRecoverySnapshot {
+    let row = sqlx::query(
+        r"
+    SELECT old.state AS old_state,
+           old.owner_host_id AS old_host,
+           old.owner_uuid AS old_owner,
+           old.fencing_token AS old_fence,
+           old.lease_expires_at AS old_lease,
+           old.cleaned_at AS old_cleaned_at,
+           gateway.active_revision_id AS active_revision,
+           (SELECT count(*)
+              FROM gateway_service_instances historical
+             WHERE historical.gateway_id = old.gateway_id
+               AND historical.revision_id = old.revision_id
+               AND historical.id <> old.id
+               AND historical.created_at >= $4) AS candidate_count,
+           candidate.id AS candidate_id,
+           candidate.state AS candidate_state,
+           candidate.owner_host_id AS candidate_host,
+           candidate.owner_uuid AS candidate_owner,
+           candidate.fencing_token AS candidate_fence,
+           candidate.created_at AS candidate_created_at,
+           clock_timestamp() AS db_now
+      FROM gateway_service_instances old
+      JOIN gateways gateway ON gateway.id = old.gateway_id
+ LEFT JOIN LATERAL (
+           SELECT id, state, owner_host_id, owner_uuid, fencing_token, created_at
+             FROM gateway_service_instances current_instance
+            WHERE current_instance.gateway_id = old.gateway_id
+              AND current_instance.revision_id = old.revision_id
+              AND current_instance.id <> old.id
+              AND current_instance.created_at >= $4
+              AND current_instance.state <> 'cleaned'
+            ORDER BY created_at DESC, id DESC
+            LIMIT 1
+      ) candidate ON TRUE
+     WHERE old.id = $1
+       AND old.gateway_id = $2
+       AND old.revision_id = $3
+",
+    )
+    .bind(old_instance_id)
+    .bind(fixture.gateway_id)
+    .bind(fixture.revision_id)
+    .bind(recovery_started_at)
+    .fetch_one(pool)
+    .await
+    .expect("read coherent boot recovery snapshot");
+    GatewayServiceRecoverySnapshot {
+        old_state: row.get("old_state"),
+        old_host: row.get("old_host"),
+        old_owner: row.get("old_owner"),
+        old_fence: row.get("old_fence"),
+        old_lease: row.get("old_lease"),
+        old_cleaned_at: row.get("old_cleaned_at"),
+        active_revision: row.get("active_revision"),
+        candidate_count: row.get("candidate_count"),
+        candidate_id: row.get("candidate_id"),
+        candidate_state: row.get("candidate_state"),
+        candidate_host: row.get("candidate_host"),
+        candidate_owner: row.get("candidate_owner"),
+        candidate_fence: row.get("candidate_fence"),
+        candidate_created_at: row.get("candidate_created_at"),
+        db_now: row.get("db_now"),
+    }
+}
+
+async fn wait_for_gateway_service_cleaned(
+    pool: &sqlx::PgPool,
+    fixture: &GatewayServiceGoldenFixture,
+    instance_id: uuid::Uuid,
+) {
+    tokio::time::timeout(Duration::from_secs(120), async {
+        loop {
+            let state: Option<String> = sqlx::query_scalar(
+                "SELECT state FROM gateway_service_instances
+                   WHERE id = $1 AND gateway_id = $2 AND revision_id = $3",
+            )
+            .bind(instance_id)
+            .bind(fixture.gateway_id)
+            .bind(fixture.revision_id)
+            .fetch_optional(pool)
+            .await
+            .expect("read gateway service cleanup state");
+            if state.as_deref() == Some("cleaned") {
+                return;
+            }
+            tokio::time::sleep(Duration::from_millis(100)).await;
+        }
+    })
+    .await
+    .expect("gateway service reaches durable Cleaned state");
+}
+
+async fn wait_for_gateway_service_boot_replacement(
+    pool: &sqlx::PgPool,
+    fixture: &GatewayServiceGoldenFixture,
+    old_instance_id: uuid::Uuid,
+    old_ownership: GatewayServiceOwnership,
+    old_paths: (PathBuf, PathBuf, PathBuf),
+    recovery_started_at: OffsetDateTime,
+) -> uuid::Uuid {
+    tokio::time::timeout(Duration::from_secs(120), async {
+        let mut observed_unexpired_empty = false;
+        loop {
+            let snapshot = read_gateway_service_recovery_snapshot(
+                pool,
+                fixture,
+                old_instance_id,
+                recovery_started_at,
+            )
+            .await;
+
+            if snapshot.db_now < old_ownership.3 {
+                assert_eq!(
+                    snapshot.candidate_count, 0,
+                    "no replacement attempt may be admitted while the old lease is live"
+                );
+                observed_unexpired_empty = true;
+            }
+            if let Some(candidate_id) = snapshot.candidate_id {
+                assert!(
+                    snapshot.db_now >= old_ownership.3,
+                    "a replacement service must not be admitted before the old lease expires"
+                );
+                assert_eq!(
+                    snapshot.old_state, "cleaned",
+                    "old service must be durably cleaned before replacement admission"
+                );
+                assert!(
+                    snapshot.old_lease >= old_ownership.3,
+                    "recovery must renew the fenced old claim from the original lease"
+                );
+                assert_eq!(snapshot.old_host, old_ownership.0);
+                assert_eq!(
+                    snapshot.candidate_host.as_deref(),
+                    Some(snapshot.old_host.as_str())
+                );
+                assert_ne!(snapshot.old_owner, old_ownership.1);
+                assert!(snapshot.old_fence > old_ownership.2);
+                assert_eq!(snapshot.candidate_owner, Some(snapshot.old_owner));
+                assert_ne!(snapshot.candidate_owner, Some(old_ownership.1));
+                assert!(snapshot.candidate_fence.is_some_and(|fence| fence > 0));
+                assert!(
+                    snapshot
+                        .candidate_created_at
+                        .expect("candidate creation timestamp")
+                        >= old_ownership.3,
+                    "replacement creation must follow old lease expiry"
+                );
+                assert!(
+                    snapshot
+                        .candidate_created_at
+                        .expect("candidate creation timestamp")
+                        >= snapshot.old_cleaned_at.expect("old cleanup timestamp"),
+                    "replacement creation must follow old durable cleanup"
+                );
+                assert!(
+                    !old_paths.0.exists(),
+                    "old VM runtime must be gone before Ready"
+                );
+                assert!(
+                    !old_paths.1.exists(),
+                    "old cgroup must be gone before Ready"
+                );
+                assert!(
+                    !old_paths.2.exists(),
+                    "old materializer must be gone before Ready"
+                );
+                if snapshot.candidate_state.as_deref() == Some("ready")
+                    && snapshot.active_revision == Some(fixture.revision_id)
+                {
+                    assert!(
+                        observed_unexpired_empty,
+                        "must observe an unexpired window with no replacement rows"
+                    );
+                    return candidate_id;
+                }
+            }
+            tokio::time::sleep(Duration::from_millis(100)).await;
+        }
+    })
+    .await
+    .expect("daemon boot recovery replaces the abandoned service")
 }
 
 type MailboxTimeoutEvidence = (
@@ -552,13 +4537,18 @@ async fn bearer_push_starts_run_through_production_bootstrap() {
         tracing_subscriber::fmt()
             .with_env_filter(
                 tracing_subscriber::EnvFilter::try_from_default_env()
-                    .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("info")),
+                    .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("info"))
+                    .add_directive(
+                        "gateway_postgres::ui_post_admission=warn"
+                            .parse()
+                            .expect("valid installed UI diagnostic filter"),
+                    ),
             )
             .with_test_writer()
             .try_init(),
     );
     let workload_phase_timing = workload_phase_timing_from_environment();
-    let (Ok(database_url), Ok(nats_url)) = (
+    let (Ok(parent_database_url), Ok(nats_url)) = (
         std::env::var("HEPHAESTUS_POSTGRES_TEST_URL"),
         std::env::var("HEPHAESTUS_NATS_TEST_URL"),
     ) else {
@@ -570,8 +4560,23 @@ async fn bearer_push_starts_run_through_production_bootstrap() {
         );
         return;
     };
+    // The parent census is an explicit standalone verification mode. Ordinary
+    // golden runs may share the parent database with legitimate writers, so
+    // they never assert a whole-parent invariant.
+    let parent_before = (env::var("HEPHAESTUS_GOLDEN_ASSERT_PARENT_ISOLATION").as_deref()
+        == Ok("1"))
+    .then_some(async { product_outbox_census(&parent_database_url).await });
+    let parent_before = match parent_before {
+        Some(census) => Some(census.await),
+        None => None,
+    };
+    let isolated_database = IsolatedGoldenDatabase::create(&parent_database_url).await;
+    let database_url = isolated_database.target_url.clone();
     let libkrun_e2e = env::var("HEPHAESTUS_APP_LIBKRUN_E2E").as_deref() == Ok("1");
     let cooking_build_proof = env::var("HEPHAESTUS_APP_COOKING_BUILD_PROOF").as_deref() == Ok("1");
+    let cooking_service_build_proof =
+        env::var("HEPHAESTUS_APP_COOKING_SERVICE_BUILD_PROOF").as_deref() == Ok("1");
+    let caddy_tls = env::var("HEPHAESTUS_CADDY_TEST_TLS").as_deref() == Ok("1");
     // Ordinary golden tests keep their short timeout. The real Cooking proof
     // uses the production build limit, with a small margin for the observer's
     // final state poll and cleanup.
@@ -586,7 +4591,26 @@ async fn bearer_push_starts_run_through_production_bootstrap() {
         Duration::from_secs(300)
     };
     let browser_e2e = env::var("HEPHAESTUS_COOKING_BROWSER_E2E").as_deref() == Ok("1");
+    let installed_ui_fixture =
+        env::var("HEPHAESTUS_COOKING_INSTALLED_UI_FIXTURE").as_deref() == Ok("1");
     let gateway_caddy_e2e = env::var("HEPHAESTUS_APP_GATEWAY_CADDY_E2E").as_deref() == Ok("1");
+    let gateway_service_e2e = env::var("HEPHAESTUS_APP_GATEWAY_SERVICE_E2E").as_deref() == Ok("1");
+    let gateway_service_external_e2e =
+        env::var("HEPHAESTUS_APP_GATEWAY_SERVICE_EXTERNAL_E2E").as_deref() == Ok("1");
+    let gateway_service_revocation_e2e =
+        env::var("HEPHAESTUS_APP_GATEWAY_SERVICE_REVOCATION_E2E").as_deref() == Ok("1");
+    let gateway_service_cutover_e2e =
+        env::var("HEPHAESTUS_APP_GATEWAY_SERVICE_CUTOVER_E2E").as_deref() == Ok("1");
+    let gateway_service_failed_candidate_e2e =
+        env::var("HEPHAESTUS_APP_GATEWAY_SERVICE_FAILED_CANDIDATE_E2E").as_deref() == Ok("1");
+    let gateway_service_candidate_capacity_e2e =
+        env::var("HEPHAESTUS_APP_GATEWAY_SERVICE_CANDIDATE_CAPACITY_E2E").as_deref() == Ok("1");
+    let gateway_service_rollback_e2e =
+        env::var("HEPHAESTUS_APP_GATEWAY_SERVICE_ROLLBACK_E2E").as_deref() == Ok("1");
+    let gateway_service_log_rpc_e2e =
+        env::var("HEPHAESTUS_APP_GATEWAY_SERVICE_LOG_RPC_E2E").as_deref() == Ok("1");
+    let gateway_service_log_guest_e2e =
+        env::var("HEPHAESTUS_APP_GATEWAY_SERVICE_LOG_GUEST_E2E").as_deref() == Ok("1");
     assert!(
         !cooking::enabled() || gateway_caddy_e2e,
         "cooking requires the joined Caddy/libkrun fixture"
@@ -595,18 +4619,147 @@ async fn bearer_push_starts_run_through_production_bootstrap() {
         !gateway_caddy_e2e || libkrun_e2e,
         "the joined Caddy gateway proof requires the real libkrun backend"
     );
+    assert!(
+        !gateway_service_e2e || (gateway_caddy_e2e && libkrun_e2e),
+        "the persistent service proof requires the joined Caddy/libkrun fixture"
+    );
+    assert!(
+        !gateway_service_external_e2e || gateway_service_e2e,
+        "the external persistent-service proof requires the service fixture"
+    );
+    assert!(
+        !gateway_service_revocation_e2e || gateway_service_external_e2e,
+        "the service revocation proof requires the external daemon fixture"
+    );
+    assert!(
+        !gateway_service_revocation_e2e || (gateway_caddy_e2e && libkrun_e2e),
+        "the service revocation proof requires the joined Caddy/libkrun fixture"
+    );
+    assert!(
+        !gateway_service_cutover_e2e || gateway_service_external_e2e,
+        "the persistent-service cutover proof requires the external daemon fixture"
+    );
+    assert!(
+        !gateway_service_failed_candidate_e2e || gateway_service_external_e2e,
+        "the failed-candidate proof requires the external daemon fixture"
+    );
+    assert!(
+        !gateway_service_candidate_capacity_e2e || gateway_service_cutover_e2e,
+        "the candidate-capacity proof requires the persistent-service cutover fixture"
+    );
+    assert!(
+        !gateway_service_candidate_capacity_e2e || !gateway_service_failed_candidate_e2e,
+        "the candidate-capacity proof cannot combine with failed-candidate mode"
+    );
+    assert!(
+        !gateway_service_candidate_capacity_e2e || !gateway_service_rollback_e2e,
+        "the candidate-capacity proof cannot combine with rollback"
+    );
+    assert!(
+        !gateway_service_rollback_e2e || gateway_service_cutover_e2e,
+        "the persistent-service rollback proof requires the cutover fixture"
+    );
+    assert!(
+        !gateway_service_revocation_e2e
+            || (!gateway_service_cutover_e2e
+                && !gateway_service_rollback_e2e
+                && !gateway_service_failed_candidate_e2e
+                && !gateway_service_candidate_capacity_e2e
+                && !gateway_service_log_rpc_e2e
+                && !gateway_service_log_guest_e2e),
+        "the service revocation proof requires the initial published service mode"
+    );
+    assert!(
+        !gateway_service_log_rpc_e2e || gateway_service_e2e,
+        "the service-log RPC proof requires the persistent-service fixture"
+    );
+    assert!(
+        !gateway_service_log_guest_e2e || gateway_service_e2e,
+        "the guest service-log proof requires the persistent-service fixture"
+    );
+    assert!(
+        !gateway_service_log_guest_e2e || (gateway_caddy_e2e && libkrun_e2e),
+        "the guest service-log proof requires the real Caddy/libkrun fixture"
+    );
+    assert!(
+        !gateway_service_log_guest_e2e || !gateway_service_log_rpc_e2e,
+        "the guest service-log proof cannot combine with seeded service-log RPC rows"
+    );
+    assert!(
+        !cooking_service_build_proof || cooking_build_proof,
+        "the Cooking service build proof requires HEPHAESTUS_APP_COOKING_BUILD_PROOF=1"
+    );
+    assert!(
+        !cooking_service_build_proof || cooking::enabled(),
+        "the Cooking service build proof requires HEPHAESTUS_APP_COOKING_E2E=1"
+    );
+    assert!(
+        !caddy_tls || cooking_service_build_proof,
+        "Caddy TLS mode is restricted to the published Cooking service proof"
+    );
+    assert!(
+        !cooking_service_build_proof || (gateway_caddy_e2e && libkrun_e2e),
+        "the Cooking service build proof requires the joined Caddy/libkrun fixture"
+    );
+    assert!(
+        !installed_ui_fixture || cooking_service_build_proof,
+        "the installed UI fixture requires the Cooking service build proof"
+    );
+    assert!(
+        !installed_ui_fixture || caddy_tls,
+        "the installed UI fixture requires Caddy TLS"
+    );
+    assert!(
+        !cooking_service_build_proof
+            || (!gateway_service_e2e
+                && !gateway_service_external_e2e
+                && !gateway_service_cutover_e2e
+                && !gateway_service_failed_candidate_e2e
+                && !gateway_service_candidate_capacity_e2e
+                && !gateway_service_rollback_e2e
+                && !gateway_service_revocation_e2e
+                && !gateway_service_log_rpc_e2e
+                && !gateway_service_log_guest_e2e),
+        "the Cooking service build proof cannot combine with seeded or alternate service modes"
+    );
+    assert!(
+        !gateway_service_log_guest_e2e || !gateway_service_external_e2e,
+        "the guest service-log proof cannot use the external daemon early-return path"
+    );
+    assert!(
+        !gateway_service_log_guest_e2e
+            || (!gateway_service_cutover_e2e
+                && !gateway_service_failed_candidate_e2e
+                && !gateway_service_rollback_e2e),
+        "the guest service-log proof requires the initial persistent service revision"
+    );
+    #[cfg(not(feature = "test-fixtures"))]
+    assert!(
+        !gateway_service_log_rpc_e2e,
+        "the service-log RPC proof requires --features test-fixtures"
+    );
+    #[cfg(not(feature = "test-fixtures"))]
+    assert!(
+        !gateway_service_log_guest_e2e,
+        "the guest service-log proof requires --features test-fixtures"
+    );
+    assert!(
+        !gateway_service_e2e || !cooking_build_proof,
+        "the persistent service proof is incompatible with the Cooking build proof"
+    );
     let pool = PgPoolOptions::new()
         .max_connections(5)
         .connect(&database_url)
         .await
         .expect("connect golden PostgreSQL");
-    sqlx::migrate!("../../migrations")
-        .run(&pool)
-        .await
-        .expect("apply application migrations");
-
+    Box::pin(async {
     let temporary = tempfile::tempdir().expect("golden temporary root");
     let root = temporary.path().canonicalize().expect("canonical root");
+    let release_artifact_root = if gateway_service_external_e2e {
+        root.join("artifacts").join("releases")
+    } else {
+        root.join("release-artifacts")
+    };
     let repository_root = root.join("repositories");
     let storage = Arc::new(
         GitStorage::initialize(&repository_root)
@@ -663,6 +4816,16 @@ async fn bearer_push_starts_run_through_production_bootstrap() {
     .execute(&pool)
     .await
     .expect("seed cooking outsider identity");
+    let owner_browser_session = seed_golden_browser_session(
+        &pool,
+        user_id,
+        &browser_oidc_issuer,
+        "golden-subject",
+    )
+    .await;
+    #[cfg(feature = "test-fixtures")]
+    let outsider_browser_session =
+        seed_golden_browser_session(&pool, outsider_id, &browser_oidc_issuer, "outsider").await;
     let project = fixture_repository
         .create_project_trusted(organization_id, "golden-project")
         .await
@@ -704,7 +4867,7 @@ async fn bearer_push_starts_run_through_production_bootstrap() {
         user_id,
         project.id.as_uuid(),
         repository.id.as_uuid(),
-        &root.join("release-artifacts"),
+        &release_artifact_root,
         libkrun_e2e,
         None,
         "golden-agent",
@@ -750,10 +4913,28 @@ async fn bearer_push_starts_run_through_production_bootstrap() {
     } else {
         None
     };
+    let gateway_service_fixture = if gateway_service_e2e && !cooking_build_proof {
+        let service_agent =
+            seed_gateway_service_release_agent(&pool, &seeded_instance, &release_artifact_root)
+                .await;
+        Some(
+            seed_gateway_service_route(
+                &pool,
+                user_id,
+                project.id.as_uuid(),
+                repository.id.as_uuid(),
+                seeded_instance.release,
+                service_agent,
+                gateway_service_log_guest_e2e,
+            )
+            .await,
+        )
+    } else {
+        None
+    };
     let gateway_edge = if gateway_caddy_e2e && !cooking_build_proof {
         let gateway_agent =
-            seed_gateway_release_agent(&pool, &seeded_instance, &root.join("release-artifacts"))
-                .await;
+            seed_gateway_release_agent(&pool, &seeded_instance, &release_artifact_root).await;
         let fixture = brokered_fixture
             .as_ref()
             .expect("joined gateway proof has brokered fixture authority");
@@ -786,11 +4967,39 @@ async fn bearer_push_starts_run_through_production_bootstrap() {
                 caddy_server_name: String::from("shared"),
                 dispatcher_listen,
                 public_authority: String::from("gateway.golden.invalid"),
+                ui_origin: None,
             },
             gateway_fixture,
         ))
     } else {
         None
+    };
+    // The installed UI fixture publishes an HTTP service gateway before the
+    // later Cooking-service restart. Give the initial daemon its real gateway
+    // supervisor so that desired service revisions can pass readiness and
+    // become active before InstallUi resolves the managed route. The UI origin
+    // is intentionally added only by the later restart below.
+    let initial_gateway_edge = if installed_ui_fixture {
+        let dispatcher = TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("reserve installed UI gateway dispatcher listener");
+        let dispatcher_listen = dispatcher
+            .local_addr()
+            .expect("installed UI gateway dispatcher listener address");
+        drop(dispatcher);
+        Some(GatewayEdgeConfig {
+            caddy_admin_url: env::var("HEPHAESTUS_CADDY_TEST_ADMIN_URL")
+                .expect("joined Caddy admin URL"),
+            caddy_configuration_template: caddy_configuration(
+                &env::var("HEPHAESTUS_CADDY_TEST_ADMIN_URL").expect("joined Caddy admin URL"),
+            ),
+            caddy_server_name: String::from("shared"),
+            dispatcher_listen,
+            public_authority: String::from("gateway.golden.invalid"),
+            ui_origin: None,
+        })
+    } else {
+        gateway_edge.as_ref().map(|(config, _)| config.clone())
     };
 
     let mut backend_fixture = backend_fixture(&root).await;
@@ -798,7 +5007,7 @@ async fn bearer_push_starts_run_through_production_bootstrap() {
     let mut root_images = BTreeMap::from([(
         String::from(ROOT_IMAGE),
         RootFilesystem::Directory {
-            host_path: root_image,
+            host_path: root_image.clone(),
         },
     )]);
     if cooking_build_proof {
@@ -884,12 +5093,15 @@ async fn bearer_push_starts_run_through_production_bootstrap() {
         // explicit provider allowlist root instead of guessing a source-tree
         // cache path or broadening the fixture to the entire local root.
         provider.mount_roots.extend(cooking_layout_mount_roots);
-        // The one-shot OCI builder formats its private scratch disk under the
-        // fixture root; it must be a disk allowlist root as well as a worker
-        // filesystem root.
-        provider
-            .disk_roots
-            .push(root.join("repository-images/scratch"));
+        if cooking_build_proof {
+            // The one-shot OCI builder formats its private scratch disk under
+            // the fixture root; it must be a disk allowlist root as well as a
+            // worker filesystem root. Ordinary libkrun golden runs do not
+            // create this optional cooking directory.
+            provider
+                .disk_roots
+                .push(root.join("repository-images/scratch"));
+        }
     }
     let secret_broker_socket = root.join("secret-broker.sock");
     let observer = if cooking_build_proof {
@@ -955,7 +5167,7 @@ async fn bearer_push_starts_run_through_production_bootstrap() {
             decoding_key: jsonwebtoken::DecodingKey::from_secret(SIGNING_SECRET),
         },
         registry: golden_registry_config(),
-        gateway_edge: gateway_edge.as_ref().map(|(config, _)| config.clone()),
+        gateway_edge: initial_gateway_edge,
         volumes: LocalVolumeConfig {
             volume_root: backend_fixture.volume_root,
             transient_runtime_roots,
@@ -1007,12 +5219,39 @@ async fn bearer_push_starts_run_through_production_bootstrap() {
         startup_timeout: Duration::from_secs(10),
         shutdown_timeout: Duration::from_secs(10),
     };
+    if gateway_service_external_e2e {
+        let service_fixture = gateway_service_fixture
+            .as_ref()
+            .expect("external persistent-service fixture");
+        let (gateway_config, _) = gateway_edge
+            .as_ref()
+            .expect("external persistent-service gateway configuration");
+        exercise_external_gateway_service_warm_path(
+            &pool,
+            service_fixture,
+            gateway_config,
+            &app_config,
+            &root,
+            &root_image,
+            &release_artifact_root,
+            &AuthenticatedIdentity::new(
+                user_id,
+                &browser_oidc_issuer,
+                "golden-subject",
+                serde_json::json!({}),
+                RequestId::new(),
+            ),
+        )
+        .await;
+        cleanup_streams(&nats_url).await;
+        return;
+    }
     let app = HephaestusApp::build(app_config.clone())
         .await
         .expect("build production application");
     let daemon_readiness_timer =
         WorkloadPhaseTimer::start("gateway-readiness", workload_phase_timing);
-    let running = app.start().await;
+    let running = async move { app.start().await }.await;
     daemon_readiness_timer.finish(running.is_ok());
     let running = running.expect("start ready application");
     // The Cooking proof deliberately spans several production builds before
@@ -1025,6 +5264,14 @@ async fn bearer_push_starts_run_through_production_bootstrap() {
         Duration::from_secs(5 * 60)
     });
     if cooking_build_proof {
+        let installed_ui_fixture =
+            env::var("HEPHAESTUS_COOKING_INSTALLED_UI_FIXTURE").as_deref() == Ok("1");
+        if installed_ui_fixture {
+            assert!(
+                browser_e2e,
+                "installed UI fixture requires the browser E2E phase to be enabled"
+            );
+        }
         let source_root =
             PathBuf::from(env::var("HEPHAESTUS_COOKING_SOURCE_ROOT").expect("cooking source root"));
         let identity = AuthenticatedIdentity::new(
@@ -1045,7 +5292,8 @@ async fn bearer_push_starts_run_through_production_bootstrap() {
                     "iat": now,
                     "nbf": now,
                     "exp": now + 25,
-                    "jti": uuid::Uuid::new_v4().to_string()
+                    "jti": uuid::Uuid::new_v4().to_string(),
+                    "sid": owner_browser_session.to_protocol_string()
                 }),
                 &EncodingKey::from_secret(&hephaestus_app::rpc::mediator_signing_key(
                     b"golden-internal-command-token-with-sufficient-entropy",
@@ -1135,6 +5383,205 @@ async fn bearer_push_starts_run_through_production_bootstrap() {
             },
             timeout: cooking_wait_timeout,
         };
+        let installed_reference_uis = if installed_ui_fixture {
+            Some(
+                cooking_builds::build_and_install_reference_uis(&cooking_context, organization_id)
+                    .await
+                    .expect("build and install reference UIs through production boundaries"),
+            )
+        } else {
+            None
+        };
+        if cooking_service_build_proof {
+            let published = cooking_service_build::build_and_publish_cooking_service(
+                &cooking_context,
+            )
+            .await
+            .expect("real cooking-service source build and publish proof");
+            assert_eq!(published.actor_id, user_id);
+            assert!(!published.repository_id.as_uuid().is_nil());
+            assert!(!published.source_commit.is_empty());
+            assert!(!published.build_request_id.is_nil());
+            assert!(!published.release_id.is_nil());
+            assert!(!published.release_agent_id.is_nil());
+            assert!(!published.version.is_empty());
+            assert!(published.source_path.is_dir());
+            assert!(published.working_path.is_dir());
+            cooking_builds::wait_for_cooking_build_quiescence(
+                &pool,
+                project.id,
+                "golden-cooking-oci-materialization",
+                cooking_wait_timeout,
+            )
+            .await;
+            let configured = cooking_service_build::install_and_configure_cooking_service(
+                &cooking_context,
+                &published,
+            )
+            .await
+            .expect("install and configure published cooking service");
+            let network: String = sqlx::query_scalar(
+                "SELECT release_agent.runtime_contract #>> '{policy_ceiling,network}'
+                   FROM gateway_revisions revision
+                   JOIN release_agents release_agent
+                     ON release_agent.id = revision.release_agent_id
+                  WHERE revision.id = $1",
+            )
+            .bind(configured.revision_id)
+            .fetch_one(&pool)
+            .await
+            .expect("read published cooking service network policy");
+            assert_eq!(network, "disabled", "cooking service guest network policy");
+
+            let dispatcher = TcpListener::bind("127.0.0.1:0")
+                .await
+                .expect("reserve cooking service dispatcher listener");
+            let dispatcher_listen = dispatcher
+                .local_addr()
+                .expect("cooking service dispatcher listener address");
+            drop(dispatcher);
+            app_config.gateway_edge = Some(GatewayEdgeConfig {
+                caddy_admin_url: env::var("HEPHAESTUS_CADDY_TEST_ADMIN_URL")
+                    .expect("joined Caddy admin URL"),
+                caddy_configuration_template: caddy_configuration(
+                    &env::var("HEPHAESTUS_CADDY_TEST_ADMIN_URL").expect("joined Caddy admin URL"),
+                ),
+                caddy_server_name: String::from("shared"),
+                dispatcher_listen,
+                public_authority: String::from("gateway.golden.invalid"),
+                ui_origin: installed_reference_uis.as_ref().map(|_| {
+                    let listener = reserve_installed_ui_listener();
+                    installed_ui_origin_config(listener)
+                }),
+            });
+            running
+                .shutdown()
+                .await
+                .expect("pre-Caddy cooking service daemon shutdown");
+            let running = Box::pin(restart_application(app_config.clone())).await;
+            let service_fixture = GatewayServiceGoldenFixture {
+                gateway_id: configured.gateway_id,
+                revision_id: configured.revision_id,
+            };
+            let service_instance_id =
+                wait_for_gateway_service_ready(&pool, &service_fixture).await;
+            let pointers: (Option<uuid::Uuid>, Option<uuid::Uuid>) = sqlx::query_as(
+                "SELECT active_revision_id, desired_service_revision_id
+                   FROM gateways
+                  WHERE id = $1",
+            )
+            .bind(service_fixture.gateway_id)
+            .fetch_one(&pool)
+            .await
+            .expect("read cooking service gateway revision pointers");
+            assert_eq!(pointers, (Some(service_fixture.revision_id), Some(service_fixture.revision_id)));
+            let admin_url =
+                env::var("HEPHAESTUS_CADDY_TEST_ADMIN_URL").expect("joined Caddy admin URL");
+            let applied_config = wait_for_caddy_configuration(&admin_url, "/gateway/service").await;
+            assert!(
+                applied_config.contains("/gateway/service"),
+                "Caddy must contain the published cooking service route: {applied_config}"
+            );
+            let public_url =
+                env::var("HEPHAESTUS_CADDY_TEST_PUBLIC_URL").expect("joined Caddy public URL");
+            let client = published_cooking_service_client();
+            let service_body = client
+                .get(format!("{public_url}/gateway/service"))
+                .send()
+                .await
+                .expect("public cooking service request")
+                .error_for_status()
+                .expect("public cooking service request succeeds")
+                .bytes()
+                .await
+                .expect("read public cooking service response");
+            assert_eq!(service_body.as_ref(), b"cooking service");
+            let identity_before = exercise_published_cooking_service_identity(&public_url).await;
+            exercise_published_cooking_service_isolation(&public_url, &admin_url).await;
+            exercise_published_cooking_service_metadata(&public_url).await;
+            // The isolation probe opens a guest-loopback request. Comparing
+            // identity on both sides proves it did not replace the process.
+            let identity_after = exercise_published_cooking_service_identity(&public_url).await;
+            assert_eq!(identity_before.pid, identity_after.pid);
+            assert_eq!(identity_before.startup_id, identity_after.startup_id);
+            if caddy_tls {
+                println!("REAL_COOKING_SERVICE_HTTPS_METADATA=1");
+            }
+            println!(
+                "REAL_COOKING_SERVICE_ISOLATION=1 pid={} startup_id={}",
+                identity_after.pid, identity_after.startup_id
+            );
+            let identity_proof = identity_after;
+            if let Some(installed_uis) = installed_reference_uis {
+                let managed_reference_fixture = GatewayServiceGoldenFixture {
+                    gateway_id: installed_uis.managed_gateway_id,
+                    revision_id: installed_uis.managed_gateway_revision_id,
+                };
+                wait_for_gateway_service_ready(&pool, &managed_reference_fixture).await;
+                run_installed_ui_browser_phase(InstalledUiBrowserContext {
+                    pool: &pool,
+                    running: &running,
+                    database_url: &database_url,
+                    rpc_token: &rpc_token,
+                    organization_id,
+                    installed_uis,
+                    actor_id: user_id.as_uuid(),
+                    workload_phase_timing,
+                    service_materializer_root: &root,
+                })
+                .await;
+            }
+            let resource_paths = {
+                let vm_id = format!("gateway-service-{service_instance_id}");
+                let provider_runtime_root = PathBuf::from(
+                    env::var("HEPHAESTUS_LIBKRUN_RUNTIME_ROOT")
+                        .expect("libkrun runtime root for Cooking service proof"),
+                );
+                let cgroup_root = PathBuf::from(
+                    env::var("HEPHAESTUS_LIBKRUN_CGROUP_ROOT")
+                        .expect("libkrun cgroup root for Cooking service proof"),
+                );
+                (
+                    provider_runtime_root.join(&vm_id),
+                    cgroup_root.join(&vm_id),
+                    root.join("run-runtime")
+                        .join("gateway-services")
+                        .join(service_instance_id.to_string()),
+                )
+            };
+            let (provider_runtime, cgroup, materializer) = &resource_paths;
+            assert!(provider_runtime.is_dir());
+            assert!(cgroup.is_dir());
+            assert!(materializer.is_dir());
+            running
+                .shutdown()
+                .await
+                .expect("cooking service daemon shutdown");
+            let state: Option<String> = sqlx::query_scalar(
+                "SELECT state FROM gateway_service_instances
+                  WHERE id = $1 AND gateway_id = $2 AND revision_id = $3",
+            )
+            .bind(service_instance_id)
+            .bind(service_fixture.gateway_id)
+            .bind(service_fixture.revision_id)
+            .fetch_optional(&pool)
+            .await
+            .expect("read cleaned cooking service instance");
+            assert_eq!(state.as_deref(), Some("cleaned"));
+            assert!(!provider_runtime.exists());
+            assert!(!cgroup.exists());
+            assert!(!materializer.exists());
+            cleanup_streams(&nats_url).await;
+            println!(
+                "REAL_COOKING_SERVICE_BUILD_PROOF=1 gateway={} revision={} instance={} pid={} startup_id={}",
+                service_fixture.gateway_id,
+                service_fixture.revision_id,
+                service_instance_id,
+                identity_proof.pid,
+                identity_proof.startup_id
+            );
+            return;
+        }
         // These repositories share only their project: Python/Rust release builds
         // do not consume the blog's Hugo image. Keep same-family release mutations
         // serial while the independent OCI build and verification make progress.
@@ -1441,7 +5888,20 @@ async fn bearer_push_starts_run_through_production_bootstrap() {
                     "inbound_placeholder": cooking_inbound_placeholder.clone(),
                     "alice_provider_id": 1001,
                     "bob_provider_id": 1002
-                }
+                },
+                "installed_reference_uis": installed_reference_uis.map(|uis| serde_json::json!({
+                    "organization_id": uis.organization_id,
+                    "project_id": uis.project_id,
+                    "repository_id": uis.repository_id,
+                    "static_installation_id": uis.static_ui.installation_id,
+                    "static_generation_id": uis.static_ui.generation_id,
+                    "repository_installation_id": uis.repository_static_ui.installation_id,
+                    "repository_generation_id": uis.repository_static_ui.generation_id,
+                    "global_installation_id": uis.global_static_ui.installation_id,
+                    "global_generation_id": uis.global_static_ui.generation_id,
+                    "managed_installation_id": uis.managed_ui.installation_id,
+                    "managed_generation_id": uis.managed_ui.generation_id
+                }))
             });
             tokio::fs::write(
                 &path,
@@ -1452,11 +5912,17 @@ async fn bearer_push_starts_run_through_production_bootstrap() {
             if browser_e2e {
                 let issuer = env::var("HEPHAESTUS_COOKING_BROWSER_OIDC_ISSUER")
                     .expect("cooking browser OIDC issuer");
-                let script = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-                    .join("../../scripts/run-ui-e2e-external.sh");
+                let installed_browser = installed_reference_uis.is_some();
+                let script_name = if installed_browser {
+                    "../../scripts/run-installed-ui-e2e.sh"
+                } else {
+                    "../../scripts/run-ui-e2e-external.sh"
+                };
+                let script = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join(script_name);
                 let browser_timer =
                     WorkloadPhaseTimer::start("browser-initial", workload_phase_timing);
-                let status = tokio::process::Command::new(script)
+                let mut browser_command = tokio::process::Command::new(script);
+                browser_command
                     .env("HEPHAESTUS_E2E_COOKING_FIXTURE", &path)
                     .env("HEPHAESTUS_E2E_EXTERNAL_DATABASE_URL", &database_url)
                     .env(
@@ -1468,12 +5934,181 @@ async fn bearer_push_starts_run_through_production_bootstrap() {
                         "golden-internal-command-token-with-sufficient-entropy",
                     )
                     .env("HEPHAESTUS_E2E_EXTERNAL_OIDC_ISSUER", issuer)
-                    .env("HEPHAESTUS_E2E_COOKING_PHASE", "initial")
-                    .status()
-                    .await;
+                    .env("HEPHAESTUS_E2E_COOKING_PHASE", "initial");
+                if installed_browser {
+                    browser_command
+                        .env("HEPHAESTUS_PLATFORM_HTTPS_ORIGIN", installed_ui_platform_origin())
+                        .env("HEPHAESTUS_UI_NAMESPACE", installed_ui_namespace())
+                        .env(
+                            "HEPHAESTUS_CADDY_TEST_CA_CERT",
+                            env::var("HEPHAESTUS_CADDY_TEST_CA_CERT")
+                                .expect("joined Caddy CA certificate for installed UI"),
+                        );
+                }
+                let status = browser_command.status().await;
                 browser_timer.finish(status.as_ref().is_ok_and(std::process::ExitStatus::success));
                 let status = status.expect("run cooking browser E2E");
                 assert!(status.success(), "cooking browser E2E failed: {status}");
+                if let Some(installed_uis) = installed_reference_uis {
+                    let audit_actor_id = user_id.as_uuid();
+                    let audit_organization_id = organization_id.as_uuid();
+                    let static_installation_id = installed_uis.static_ui.installation_id;
+                    let static_generation_id = installed_uis.static_ui.generation_id;
+                    let managed_installation_id = installed_uis.managed_ui.installation_id;
+                    let managed_generation_id = installed_uis.managed_ui.generation_id;
+                    assert_installed_ui_audit_success(
+                        &pool,
+                        audit_actor_id,
+                        audit_organization_id,
+                        static_installation_id,
+                        static_generation_id,
+                        UiRequestAuditSurface::HandoffIssue,
+                        false,
+                    )
+                    .await;
+                    for (installation_id, generation_id) in [
+                        (
+                            installed_uis.repository_static_ui.installation_id,
+                            installed_uis.repository_static_ui.generation_id,
+                        ),
+                        (
+                            installed_uis.global_static_ui.installation_id,
+                            installed_uis.global_static_ui.generation_id,
+                        ),
+                    ] {
+                        for (surface, expected_success) in [
+                            (UiRequestAuditSurface::HandoffIssue, false),
+                            (UiRequestAuditSurface::HandoffExchange, true),
+                            (UiRequestAuditSurface::Bootstrap, true),
+                            (UiRequestAuditSurface::Static, true),
+                        ] {
+                            assert_installed_ui_audit_success(
+                                &pool,
+                                audit_actor_id,
+                                audit_organization_id,
+                                installation_id,
+                                generation_id,
+                                surface,
+                                expected_success,
+                            )
+                            .await;
+                        }
+                    }
+                    assert_installed_ui_audit_success(
+                        &pool,
+                        audit_actor_id,
+                        audit_organization_id,
+                        static_installation_id,
+                        static_generation_id,
+                        UiRequestAuditSurface::HandoffExchange,
+                        true,
+                    )
+                    .await;
+                    assert_installed_ui_audit_success(
+                        &pool,
+                        audit_actor_id,
+                        audit_organization_id,
+                        static_installation_id,
+                        static_generation_id,
+                        UiRequestAuditSurface::Bootstrap,
+                        true,
+                    )
+                    .await;
+                    assert_installed_ui_audit_success(
+                        &pool,
+                        audit_actor_id,
+                        audit_organization_id,
+                        static_installation_id,
+                        static_generation_id,
+                        UiRequestAuditSurface::Static,
+                        true,
+                    )
+                    .await;
+                    assert_installed_ui_audit_success(
+                        &pool,
+                        audit_actor_id,
+                        audit_organization_id,
+                        managed_installation_id,
+                        managed_generation_id,
+                        UiRequestAuditSurface::HandoffIssue,
+                        false,
+                    )
+                    .await;
+                    assert_installed_ui_audit_success(
+                        &pool,
+                        audit_actor_id,
+                        audit_organization_id,
+                        managed_installation_id,
+                        managed_generation_id,
+                        UiRequestAuditSurface::HandoffExchange,
+                        true,
+                    )
+                    .await;
+                    assert_installed_ui_audit_success(
+                        &pool,
+                        audit_actor_id,
+                        audit_organization_id,
+                        managed_installation_id,
+                        managed_generation_id,
+                        UiRequestAuditSurface::Bootstrap,
+                        true,
+                    )
+                    .await;
+                    assert_installed_ui_audit_success(
+                        &pool,
+                        audit_actor_id,
+                        audit_organization_id,
+                        managed_installation_id,
+                        managed_generation_id,
+                        UiRequestAuditSurface::Managed,
+                        true,
+                    )
+                    .await;
+                    let api_request_ids = assert_installed_ui_audit_success(
+                        &pool,
+                        audit_actor_id,
+                        audit_organization_id,
+                        managed_installation_id,
+                        managed_generation_id,
+                        UiRequestAuditSurface::Api,
+                        true,
+                    )
+                    .await;
+                    assert_installed_ui_audit_success(
+                        &pool,
+                        audit_actor_id,
+                        audit_organization_id,
+                        managed_installation_id,
+                        managed_generation_id,
+                        UiRequestAuditSurface::Embed,
+                        false,
+                    )
+                    .await;
+                    let correlated_api_count: i64 = sqlx::query_scalar(
+                        "SELECT count(*)
+                           FROM gateway_invocations invocation
+                           JOIN ui_request_audit_events audit
+                             ON audit.request_id = invocation.request_id
+                          WHERE audit.installation_id = $1
+                            AND audit.generation_id = $2
+                            AND audit.surface = $3
+                            AND audit.request_id = ANY($4)",
+                    )
+                    .bind(managed_installation_id)
+                    .bind(managed_generation_id)
+                    .bind(UiRequestAuditSurface::Api.as_str())
+                    .bind(&api_request_ids)
+                    .fetch_one(&pool)
+                    .await
+                    .expect("read managed UI gateway invocation correlation");
+                    assert!(
+                        correlated_api_count > 0,
+                        "managed API audit must correlate to a gateway invocation"
+                    );
+                    println!(
+                        "REAL_UI_INSTALLATION_AUDIT=1 static=1 managed=1 api=1 embed=1 gateway_correlation=1"
+                    );
+                }
                 let browser_gateway_id = installed_gateway.gateway_id;
                 let active_revision_id: uuid::Uuid =
                     sqlx::query_scalar("SELECT active_revision_id FROM gateways WHERE id = $1")
@@ -1578,6 +6213,7 @@ async fn bearer_push_starts_run_through_production_bootstrap() {
             caddy_server_name: String::from("shared"),
             dispatcher_listen,
             public_authority: String::from("gateway.golden.invalid"),
+            ui_origin: None,
         });
         app_config.secret_broker_adapter = actual_brokered.upstream.adapter();
         // Finish the separate adversarial instance's immutable bindings and
@@ -1615,7 +6251,7 @@ async fn bearer_push_starts_run_through_production_bootstrap() {
             .shutdown()
             .await
             .expect("build-proof daemon restart shutdown");
-        let running = restart_application(app_config.clone()).await;
+        let running = Box::pin(restart_application(app_config.clone())).await;
         let adversarial_url = format!(
             "{}/gateway/cooking/telegram",
             env::var("HEPHAESTUS_CADDY_TEST_PUBLIC_URL").expect("public Caddy URL")
@@ -1865,7 +6501,7 @@ async fn bearer_push_starts_run_through_production_bootstrap() {
             .shutdown()
             .await
             .expect("cooking daemon graceful restart shutdown");
-        let restarted = restart_application(app_config).await;
+        let restarted = Box::pin(restart_application(app_config)).await;
         let crash_fixture = GatewayGoldenFixture {
             mailbox_id: mailbox_domain::MailboxId::from_uuid(crash_instance.instance.mailbox_id),
             grant_id: crash_gateway.grant_id,
@@ -2235,6 +6871,7 @@ async fn bearer_push_starts_run_through_production_bootstrap() {
                 )
                 .env("HEPHAESTUS_E2E_EXTERNAL_OIDC_ISSUER", issuer)
                 .env("HEPHAESTUS_E2E_COOKING_PHASE", "post-operation")
+                .env("HEPHAESTUS_E2E_BROWSER_RUNNER", "legacy")
                 .status()
                 .await;
             browser_timer.finish(status.as_ref().is_ok_and(std::process::ExitStatus::success));
@@ -2490,6 +7127,7 @@ async fn bearer_push_starts_run_through_production_bootstrap() {
                 &running,
                 &admission_instance,
                 user_id.as_uuid(),
+                owner_browser_session,
             )
             .await;
             assert_eq!(race.initial_hook_run_id, race.retried_hook_run_id);
@@ -2522,6 +7160,7 @@ async fn bearer_push_starts_run_through_production_bootstrap() {
             &running,
             &admission_instance,
             user_id.as_uuid(),
+            owner_browser_session,
         )
         .await;
         assert_ne!(admission.update_id, uuid::Uuid::nil());
@@ -2543,7 +7182,7 @@ async fn bearer_push_starts_run_through_production_bootstrap() {
             .shutdown()
             .await
             .expect("cooking daemon startup recovery shutdown");
-        let running = restart_application(app_config.clone()).await;
+        let running = Box::pin(restart_application(app_config.clone())).await;
         let checkpoint =
             cooking::exercise_initial(&pool, &gateway_edge.as_ref().expect("cooking gateway").1)
                 .await;
@@ -2551,7 +7190,7 @@ async fn bearer_push_starts_run_through_production_bootstrap() {
             .shutdown()
             .await
             .expect("cooking daemon graceful restart shutdown");
-        let restarted = restart_application(app_config).await;
+        let restarted = Box::pin(restart_application(app_config)).await;
         let _ = cooking::exercise_follow_up(
             &pool,
             &restarted,
@@ -2576,25 +7215,382 @@ async fn bearer_push_starts_run_through_production_bootstrap() {
     }
 
     if libkrun_e2e {
+        let mut running = running;
+        let (mut service_instance_id, mut service_resource_paths) = if gateway_caddy_e2e {
+            let service_instance_id =
+                if let Some(service_fixture) = gateway_service_fixture.as_ref() {
+                    Some(wait_for_gateway_service_ready(&pool, service_fixture).await)
+                } else {
+                    None
+                };
+            let service_resource_paths = service_instance_id.map(|instance_id| {
+                let vm_id = format!("gateway-service-{instance_id}");
+                let provider_runtime_root = PathBuf::from(
+                    env::var("HEPHAESTUS_LIBKRUN_RUNTIME_ROOT")
+                        .expect("libkrun runtime root for cleanup assertion"),
+                );
+                let cgroup_root = PathBuf::from(
+                    env::var("HEPHAESTUS_LIBKRUN_CGROUP_ROOT")
+                        .expect("libkrun cgroup root for cleanup assertion"),
+                );
+                (
+                    provider_runtime_root.join(&vm_id),
+                    cgroup_root.join(&vm_id),
+                    root.join("run-runtime")
+                        .join("gateway-services")
+                        .join(instance_id.to_string()),
+                )
+            });
+            if let Some((provider_runtime, cgroup, materializer)) = &service_resource_paths {
+                assert!(
+                    provider_runtime.is_dir(),
+                    "service VM runtime exists before shutdown"
+                );
+                assert!(cgroup.is_dir(), "service VM cgroup exists before shutdown");
+                assert!(
+                    materializer.is_dir(),
+                    "service materializer tree exists before shutdown"
+                );
+            }
+            (service_instance_id, service_resource_paths)
+        } else {
+            (None, None)
+        };
         if gateway_caddy_e2e {
+            let mut service_startup_id_before_crash = None;
             let admin_url =
                 env::var("HEPHAESTUS_CADDY_TEST_ADMIN_URL").expect("joined Caddy admin URL");
-            let applied_config = reqwest::Client::new()
-                .get(format!("{admin_url}/config/"))
-                .send()
-                .await
-                .expect("load applied Caddy configuration")
-                .error_for_status()
-                .expect("Caddy configuration request succeeds")
-                .text()
-                .await
-                .expect("read applied Caddy configuration");
+            let applied_config =
+                wait_for_caddy_configuration(&admin_url, "/gateway/brokered").await;
             assert!(
                 applied_config.contains("/gateway/brokered"),
                 "Caddy must contain the authoritative gateway route before the public proof: {applied_config}"
             );
+            if gateway_service_fixture.is_some() {
+                let applied_config =
+                    wait_for_caddy_configuration(&admin_url, "/gateway/service").await;
+                assert!(
+                    applied_config.contains("/gateway/service"),
+                    "Caddy must contain the persistent service route before the public proof: {applied_config}"
+                );
+                let first_service_proof = exercise_gateway_service_requests(
+                    &env::var("HEPHAESTUS_CADDY_TEST_PUBLIC_URL").expect("joined Caddy public URL"),
+                )
+                .await;
+                #[cfg(feature = "test-fixtures")]
+                if gateway_service_log_guest_e2e {
+                    let service_fixture = gateway_service_fixture
+                        .as_ref()
+                        .expect("persistent service fixture for guest log proof");
+                    let first_instance_id = service_instance_id
+                        .expect("persistent service instance for guest log proof");
+                    let first_resource_paths = service_resource_paths
+                        .as_ref()
+                        .expect("persistent service paths for guest log proof");
+                    let public_url = env::var("HEPHAESTUS_CADDY_TEST_PUBLIC_URL")
+                        .expect("joined Caddy public URL for guest log proof");
+                    let fencing_token: i64 = sqlx::query_scalar(
+                        "SELECT fencing_token FROM gateway_service_instances
+                          WHERE id = $1 AND gateway_id = $2 AND revision_id = $3",
+                    )
+                    .bind(first_instance_id)
+                    .bind(service_fixture.gateway_id)
+                    .bind(service_fixture.revision_id)
+                    .fetch_one(&pool)
+                    .await
+                    .expect("read guest service-log fencing token");
+                    let guest_log_proof = gateway_service_log_rpc::exercise_gateway_service_guest_log(
+                        running.http_addr(),
+                        service_fixture.gateway_id,
+                        service_fixture.revision_id,
+                        first_instance_id,
+                        project.id.as_uuid(),
+                        fencing_token,
+                        user_id.as_uuid(),
+                        owner_browser_session,
+                        &public_url,
+                    )
+                    .await;
+                    running
+                        .shutdown()
+                        .await
+                        .expect("guest service-log daemon shutdown");
+                    let first_state: Option<String> = sqlx::query_scalar(
+                        "SELECT state FROM gateway_service_instances
+                          WHERE id = $1 AND gateway_id = $2 AND revision_id = $3",
+                    )
+                    .bind(first_instance_id)
+                    .bind(service_fixture.gateway_id)
+                    .bind(service_fixture.revision_id)
+                    .fetch_optional(&pool)
+                    .await
+                    .expect("read cleaned guest service-log instance");
+                    assert_eq!(
+                        first_state.as_deref(),
+                        Some("cleaned"),
+                        "guest service-log daemon shutdown must clean the service instance"
+                    );
+                    let (provider_runtime, cgroup, materializer) = first_resource_paths;
+                    assert!(!provider_runtime.exists());
+                    assert!(!cgroup.exists());
+                    assert!(!materializer.exists());
+                    assert_guest_gateway_service_log_retained(&pool, &guest_log_proof).await;
+                    cleanup_streams(&nats_url).await;
+                    println!(
+                        "REAL_GATEWAY_SERVICE_LOG_GUEST_E2E=1 instance={first_instance_id} fence={} retained_after_shutdown=true",
+                        guest_log_proof.fencing_token
+                    );
+                    return;
+                }
+                #[cfg(feature = "test-fixtures")]
+                let app_pool_probe = if gateway_service_log_rpc_e2e {
+                    let service_fixture = gateway_service_fixture
+                        .as_ref()
+                        .expect("persistent service fixture for log RPC");
+                    let (app_pool, rpc_fixture) = prepare_gateway_service_log_rpc(
+                        &pool,
+                        &running,
+                        service_fixture.gateway_id,
+                        service_fixture.revision_id,
+                        service_instance_id.expect("persistent service instance for log RPC"),
+                        project.id.as_uuid(),
+                    )
+                    .await;
+                    let member_id = rpc_fixture.member_id;
+                    gateway_service_log_rpc::exercise_gateway_service_log_rpc(
+                        &running,
+                        rpc_fixture,
+                        user_id.as_uuid(),
+                        owner_browser_session,
+                        outsider_id.as_uuid(),
+                        outsider_browser_session,
+                        || async {
+                            sqlx::query(
+                                "DELETE FROM project_maintainers WHERE project_id = $1 AND user_id = $2",
+                            )
+                            .bind(project.id.as_uuid())
+                            .bind(member_id)
+                            .execute(&pool)
+                            .await
+                            .expect("revoke service log RPC member");
+                        },
+                    )
+                    .await;
+                    Some(app_pool)
+                } else {
+                    None
+                };
+                service_startup_id_before_crash = Some(first_service_proof.startup_id.clone());
+                if gateway_service_e2e {
+                    let service_fixture = gateway_service_fixture
+                        .as_ref()
+                        .expect("persistent service fixture after first proof");
+                    let first_instance_id =
+                        service_instance_id.expect("persistent service instance after first proof");
+                    let first_resource_paths = service_resource_paths
+                        .as_ref()
+                        .expect("persistent service paths after first proof");
+                    running
+                        .shutdown()
+                        .await
+                        .expect("first persistent service daemon shutdown");
+                    #[cfg(feature = "test-fixtures")]
+                    if let Some(app_pool_probe) = app_pool_probe {
+                        assert!(
+                            app_pool_probe.is_closed(),
+                            "running daemon shutdown closes its application-role pool"
+                        );
+                    }
+                    let (provider_runtime, cgroup, materializer) = first_resource_paths;
+                    let first_state: Option<String> = sqlx::query_scalar(
+                        "SELECT state FROM gateway_service_instances
+                          WHERE id = $1 AND gateway_id = $2 AND revision_id = $3",
+                    )
+                    .bind(first_instance_id)
+                    .bind(service_fixture.gateway_id)
+                    .bind(service_fixture.revision_id)
+                    .fetch_optional(&pool)
+                    .await
+                    .expect("read first cleaned persistent-service instance");
+                    assert_eq!(
+                        first_state.as_deref(),
+                        Some("cleaned"),
+                        "first daemon shutdown must clean the restored service instance"
+                    );
+                    assert!(!provider_runtime.exists());
+                    assert!(!cgroup.exists());
+                    assert!(!materializer.exists());
+
+                    running = Box::pin(restart_application(app_config.clone())).await;
+                    let second_instance_id =
+                        wait_for_gateway_service_ready(&pool, service_fixture).await;
+                    assert_ne!(
+                        first_instance_id, second_instance_id,
+                        "graceful daemon restart must create a new service instance"
+                    );
+                    let second_revision_id: uuid::Uuid = sqlx::query_scalar(
+                        "SELECT revision_id FROM gateway_service_instances WHERE id = $1",
+                    )
+                    .bind(second_instance_id)
+                    .fetch_one(&pool)
+                    .await
+                    .expect("read restarted persistent-service revision");
+                    assert_eq!(
+                        second_revision_id, service_fixture.revision_id,
+                        "graceful restart must restore the same immutable service revision"
+                    );
+                    let second_resource_paths = {
+                        let vm_id = format!("gateway-service-{second_instance_id}");
+                        let provider_runtime_root = PathBuf::from(
+                            env::var("HEPHAESTUS_LIBKRUN_RUNTIME_ROOT")
+                                .expect("libkrun runtime root for restart cleanup assertion"),
+                        );
+                        let cgroup_root = PathBuf::from(
+                            env::var("HEPHAESTUS_LIBKRUN_CGROUP_ROOT")
+                                .expect("libkrun cgroup root for restart cleanup assertion"),
+                        );
+                        (
+                            provider_runtime_root.join(&vm_id),
+                            cgroup_root.join(&vm_id),
+                            root.join("run-runtime")
+                                .join("gateway-services")
+                                .join(second_instance_id.to_string()),
+                        )
+                    };
+                    let (provider_runtime, cgroup, materializer) = &second_resource_paths;
+                    assert!(
+                        provider_runtime.is_dir(),
+                        "restarted service VM runtime exists before shutdown"
+                    );
+                    assert!(
+                        cgroup.is_dir(),
+                        "restarted service VM cgroup exists before shutdown"
+                    );
+                    assert!(
+                        materializer.is_dir(),
+                        "restarted service materializer tree exists before shutdown"
+                    );
+                    let restarted_admin_url = env::var("HEPHAESTUS_CADDY_TEST_ADMIN_URL")
+                        .expect("joined Caddy admin URL");
+                    let restarted_config =
+                        wait_for_caddy_configuration(&restarted_admin_url, "/gateway/service")
+                            .await;
+                    assert!(
+                        restarted_config.contains("/gateway/service"),
+                        "Caddy must restore the persistent service route after daemon restart: {restarted_config}"
+                    );
+                    let second_service_proof = exercise_gateway_service_requests(
+                        &env::var("HEPHAESTUS_CADDY_TEST_PUBLIC_URL")
+                            .expect("joined Caddy public URL after restart"),
+                    )
+                    .await;
+                    service_startup_id_before_crash = Some(second_service_proof.startup_id.clone());
+                    assert_ne!(
+                        first_service_proof.startup_id, second_service_proof.startup_id,
+                        "restart must replace the guest startup identity"
+                    );
+                    println!(
+                        "persistent-service-restart old_instance={first_instance_id} new_instance={second_instance_id} old_startup_id={} new_startup_id={} old_pid={} new_pid={}",
+                        first_service_proof.startup_id,
+                        second_service_proof.startup_id,
+                        first_service_proof.pid,
+                        second_service_proof.pid,
+                    );
+                    service_instance_id = Some(second_instance_id);
+                    service_resource_paths = Some(second_resource_paths);
+                }
+            }
             let public_url =
                 env::var("HEPHAESTUS_CADDY_TEST_PUBLIC_URL").expect("joined Caddy public URL");
+            if gateway_service_e2e {
+                let service_fixture = gateway_service_fixture
+                    .as_ref()
+                    .expect("persistent service fixture before crash proof");
+                let crashed_instance_id =
+                    service_instance_id.expect("persistent service instance before crash proof");
+                let crashed_startup_id = service_startup_id_before_crash
+                    .as_deref()
+                    .expect("persistent service startup identity before crash");
+                let crashed_resource_paths = service_resource_paths
+                    .as_ref()
+                    .expect("persistent service paths before crash proof");
+                exercise_gateway_service_crash(&public_url).await;
+                let replacement_instance_id = wait_for_gateway_service_crash_replacement(
+                    &pool,
+                    service_fixture,
+                    crashed_instance_id,
+                )
+                .await;
+                assert_ne!(
+                    crashed_instance_id, replacement_instance_id,
+                    "guest crash must create a replacement service instance"
+                );
+                let crash_evidence: (String, String, i32, Option<i32>) = sqlx::query_as(
+                    "SELECT state, failure_code, exit_code, exit_signal
+                       FROM gateway_service_instances
+                      WHERE id = $1 AND gateway_id = $2 AND revision_id = $3",
+                )
+                .bind(crashed_instance_id)
+                .bind(service_fixture.gateway_id)
+                .bind(service_fixture.revision_id)
+                .fetch_one(&pool)
+                .await
+                .expect("read durable guest crash evidence");
+                assert_eq!(
+                    crash_evidence,
+                    (
+                        String::from("cleaned"),
+                        String::from("unexpected_exit"),
+                        42,
+                        None,
+                    )
+                );
+                let (provider_runtime, cgroup, materializer) = crashed_resource_paths;
+                assert!(!provider_runtime.exists());
+                assert!(!cgroup.exists());
+                assert!(!materializer.exists());
+                let replacement_revision_id: uuid::Uuid = sqlx::query_scalar(
+                    "SELECT revision_id FROM gateway_service_instances WHERE id = $1",
+                )
+                .bind(replacement_instance_id)
+                .fetch_one(&pool)
+                .await
+                .expect("read replacement service revision after crash");
+                assert_eq!(replacement_revision_id, service_fixture.revision_id);
+                let replacement_resource_paths = {
+                    let vm_id = format!("gateway-service-{replacement_instance_id}");
+                    let provider_runtime_root = PathBuf::from(
+                        env::var("HEPHAESTUS_LIBKRUN_RUNTIME_ROOT")
+                            .expect("libkrun runtime root for crash cleanup assertion"),
+                    );
+                    let cgroup_root = PathBuf::from(
+                        env::var("HEPHAESTUS_LIBKRUN_CGROUP_ROOT")
+                            .expect("libkrun cgroup root for crash cleanup assertion"),
+                    );
+                    (
+                        provider_runtime_root.join(&vm_id),
+                        cgroup_root.join(&vm_id),
+                        root.join("run-runtime")
+                            .join("gateway-services")
+                            .join(replacement_instance_id.to_string()),
+                    )
+                };
+                let (provider_runtime, cgroup, materializer) = &replacement_resource_paths;
+                assert!(provider_runtime.is_dir());
+                assert!(cgroup.is_dir());
+                assert!(materializer.is_dir());
+                let replacement_proof = exercise_gateway_service_requests(&public_url).await;
+                assert_ne!(
+                    crashed_startup_id, replacement_proof.startup_id,
+                    "guest crash must replace the startup identity"
+                );
+                println!(
+                    "persistent-service-crash old_instance={crashed_instance_id} replacement_instance={replacement_instance_id} exit_code=42 replacement_startup_id={} replacement_pid={}",
+                    replacement_proof.startup_id, replacement_proof.pid,
+                );
+                service_instance_id = Some(replacement_instance_id);
+                service_resource_paths = Some(replacement_resource_paths);
+            }
             let client = reqwest::Client::new();
             let first = client
                 .post(format!("{public_url}/gateway/brokered?mode=real"))
@@ -2808,6 +7804,33 @@ async fn bearer_push_starts_run_through_production_bootstrap() {
             fixture.upstream.assert_substituted_request().await;
         }
         running.shutdown().await.expect("graceful daemon shutdown");
+        if let (
+            Some(service_fixture),
+            Some(instance_id),
+            Some((provider_runtime, cgroup, materializer)),
+        ) = (
+            gateway_service_fixture.as_ref(),
+            service_instance_id,
+            service_resource_paths,
+        ) {
+            let state: Option<String> = sqlx::query_scalar(
+                "SELECT state FROM gateway_service_instances
+                  WHERE id = $1 AND gateway_id = $2 AND revision_id = $3",
+            )
+            .bind(instance_id)
+            .bind(service_fixture.gateway_id)
+            .bind(service_fixture.revision_id)
+            .fetch_optional(&pool)
+            .await
+            .expect("read cleaned persistent-service instance");
+            assert_eq!(state.as_deref(), Some("cleaned"));
+            assert!(!provider_runtime.exists());
+            assert!(!cgroup.exists());
+            assert!(!materializer.exists());
+        }
+        if gateway_service_e2e {
+            println!("persistent-service-e2e=passed");
+        }
         cleanup_streams(&nats_url).await;
         return;
     }
@@ -3014,6 +8037,78 @@ async fn bearer_push_starts_run_through_production_bootstrap() {
         "legacy informational signals must never remain pending"
     );
     cleanup_streams(&nats_url).await;
+    }).await;
+    finish_isolated_golden(
+        isolated_database,
+        pool,
+        &database_url,
+        &parent_database_url,
+        parent_before,
+    )
+    .await;
+}
+
+async fn wait_for_caddy_configuration(admin_url: &str, required_route: &str) -> String {
+    let client = reqwest::Client::builder()
+        .timeout(Duration::from_secs(2))
+        .build()
+        .expect("bounded Caddy configuration client");
+    let mut last_configuration = String::new();
+    for _ in 0..40 {
+        last_configuration = client
+            .get(format!("{admin_url}/config/"))
+            .send()
+            .await
+            .expect("load applied Caddy configuration")
+            .error_for_status()
+            .expect("Caddy configuration request succeeds")
+            .text()
+            .await
+            .expect("read applied Caddy configuration");
+        if last_configuration.contains(required_route) {
+            return last_configuration;
+        }
+        tokio::time::sleep(Duration::from_millis(250)).await;
+    }
+    panic!(
+        "Caddy did not contain {required_route} after bounded reconciliation: {last_configuration}"
+    );
+}
+
+async fn seed_golden_browser_session(
+    pool: &sqlx::PgPool,
+    user_id: UserId,
+    issuer: &str,
+    subject: &str,
+) -> BrowserSessionSid {
+    let sid = BrowserSessionSid::new();
+    let verified = AuthenticatedIdentity::new(
+        user_id,
+        issuer,
+        subject,
+        serde_json::Value::Null,
+        RequestId::new(),
+    );
+    sqlx::query(
+        "INSERT INTO human_browser_sessions
+            (id, sid_digest, creation_idempotency_id, creation_request_id,
+             identity_binding_digest, user_id, issued_at, expires_at)
+         VALUES ($1, $2, $3, $4, $5, $6, now(), now() + interval '12 hours')",
+    )
+    .bind(uuid::Uuid::new_v4())
+    .bind(browser_session_sid_digest(sid).as_bytes().to_vec())
+    .bind(uuid::Uuid::new_v4())
+    .bind(uuid::Uuid::new_v4())
+    .bind(
+        browser_session_identity_binding_digest(&verified)
+            .as_bytes()
+            .to_vec(),
+    )
+    .bind(user_id.as_uuid())
+    .execute(pool)
+    .await
+    .expect("seed active golden browser session");
+    sid
 }
 
 fn signed_token(lifetime: Duration) -> String {
@@ -3036,6 +8131,44 @@ fn signed_token(lifetime: Duration) -> String {
     .expect("sign golden bearer token")
 }
 
+fn installed_ui_fixture_enabled() -> bool {
+    env::var("HEPHAESTUS_COOKING_INSTALLED_UI_FIXTURE").as_deref() == Ok("1")
+}
+
+fn installed_ui_platform_origin() -> String {
+    let public =
+        Url::parse(&env::var("HEPHAESTUS_CADDY_TEST_PUBLIC_URL").expect("joined Caddy public URL"))
+            .expect("joined Caddy public URL");
+    let port = public.port().expect("joined Caddy public port");
+    format!("https://platform.localhost:{port}")
+}
+
+fn installed_ui_namespace() -> String {
+    env::var("HEPHAESTUS_UI_NAMESPACE").unwrap_or_else(|_| String::from("ui.platform.localhost"))
+}
+
+fn reserve_installed_ui_listener() -> std::net::SocketAddr {
+    std::net::TcpListener::bind("127.0.0.1:0")
+        .expect("reserve installed UI origin listener")
+        .local_addr()
+        .expect("installed UI origin listener address")
+}
+
+fn installed_ui_origin_config(listener: std::net::SocketAddr) -> UiOriginConfig {
+    let public =
+        Url::parse(&env::var("HEPHAESTUS_CADDY_TEST_PUBLIC_URL").expect("joined Caddy public URL"))
+            .expect("joined Caddy public URL");
+    let public_port = UiPublicPort::parse(public.port().expect("joined Caddy public port"))
+        .expect("joined Caddy public port is valid");
+    UiOriginConfig::new(
+        UiNamespace::parse(installed_ui_namespace()).expect("installed UI namespace"),
+        public_port,
+        installed_ui_platform_origin(),
+    )
+    .expect("installed UI origin configuration")
+    .with_listener(listener)
+}
+
 fn caddy_configuration(admin_url: &str) -> Vec<u8> {
     let admin = reqwest::Url::parse(admin_url).expect("Caddy admin URL");
     let admin_listen = format!(
@@ -3043,19 +8176,81 @@ fn caddy_configuration(admin_url: &str) -> Vec<u8> {
         admin.host_str().expect("Caddy admin host"),
         admin.port().expect("Caddy admin port")
     );
-    serde_json::json!({
+    let mut routes = vec![
+        serde_json::json!({
+            "match": [{ "path": ["/platform/*"] }],
+            "handle": [{ "handler": "static_response", "body": "platform-owned" }]
+        }),
+        serde_json::json!({
+            "group": "hephaestus.gateway",
+            "handle": [{ "handler": "subroute", "routes": [] }]
+        }),
+        serde_json::json!({ "handle": [{ "handler": "static_response", "status_code": 404 }] }),
+    ];
+    if installed_ui_fixture_enabled() {
+        let web_port =
+            env::var("HEPHAESTUS_E2E_EXTERNAL_WEB_PORT").unwrap_or_else(|_| "4000".into());
+        let platform_host = Url::parse(&installed_ui_platform_origin())
+            .expect("installed UI platform origin")
+            .host_str()
+            .expect("installed UI platform host")
+            .to_owned();
+        routes.insert(
+            0,
+            serde_json::json!({
+                "group": "hephaestus.ui",
+                "handle": [{ "handler": "subroute", "routes": [] }]
+            }),
+        );
+        routes.insert(
+            1,
+            serde_json::json!({
+                "match": [{ "host": [platform_host] }],
+                "handle": [{
+                    "handler": "reverse_proxy",
+                    "upstreams": [{ "dial": format!("127.0.0.1:{web_port}") }]
+                }],
+                "terminal": true
+            }),
+        );
+    }
+    let mut configuration = serde_json::json!({
         "admin": { "listen": admin_listen },
         "apps": { "http": { "servers": { "shared": {
             "listen": [env::var("HEPHAESTUS_CADDY_TEST_LISTEN").expect("joined Caddy listen address")],
-            "routes": [
-                { "match": [{ "path": ["/platform/*"] }], "handle": [{ "handler": "static_response", "body": "platform-owned" }] },
-                { "group": "hephaestus.gateway", "handle": [{ "handler": "subroute", "routes": [] }] },
-                { "handle": [{ "handler": "static_response", "status_code": 404 }] }
-            ]
+            "routes": routes
         } } } }
-    })
-    .to_string()
-    .into_bytes()
+    });
+    if env::var("HEPHAESTUS_CADDY_TEST_TLS").as_deref() == Ok("1") {
+        let server = configuration
+            .pointer_mut("/apps/http/servers/shared")
+            .expect("shared Caddy server configuration");
+        server["automatic_https"] = serde_json::json!({ "disable_redirects": true });
+        server["tls_connection_policies"] = serde_json::json!([{}]);
+        let subjects = if installed_ui_fixture_enabled() {
+            serde_json::json!([
+                "127.0.0.1",
+                Url::parse(&installed_ui_platform_origin())
+                    .expect("installed UI platform origin")
+                    .host_str()
+                    .expect("installed UI platform host")
+                    .to_owned(),
+                format!("*.{}", installed_ui_namespace())
+            ])
+        } else {
+            serde_json::json!(["127.0.0.1"])
+        };
+        configuration["apps"]["tls"] = serde_json::json!({
+            "certificates": { "automate": subjects },
+            "automation": {
+                "policies": [{
+                    "subjects": subjects,
+                    "issuers": [{ "module": "internal" }]
+                }]
+            }
+        });
+    }
+    serde_json::to_vec(&configuration).expect("serialize Caddy configuration template")
 }
 
 const fn agent_config() -> &'static str {
@@ -3514,6 +8709,16 @@ struct GatewayGoldenFixture {
     grant_id: uuid::Uuid,
 }
 
+/// Exact durable declaration used by the opt-in daemon-to-Caddy service proof.
+/// The desired pointer is set by the fixture, while the active pointer remains
+/// unset until the production supervisor has observed HTTP readiness.
+struct GatewayServiceGoldenFixture {
+    gateway_id: uuid::Uuid,
+    revision_id: uuid::Uuid,
+}
+
+type GatewayServiceCrashEvidence = (String, Option<String>, Option<i32>, Option<i32>);
+
 /// Adds an exact released, stateless gateway handler alongside the reusable
 /// agent. The artifact delegates only to the guest integration checker, which
 /// validates that the daemon replaced the inbound secret before VM delivery.
@@ -3587,6 +8792,1177 @@ async fn seed_gateway_release_agent(
     .await
     .expect("seed stateless gateway release agent");
     agent_id
+}
+
+/// Adds the long-lived integration-check service executable to the published
+/// release. It shares the release with the stateless proof but uses a distinct
+/// artifact path and release-agent key, so the two immutable contracts cannot
+/// accidentally select one another.
+async fn seed_gateway_service_release_agent(
+    pool: &sqlx::PgPool,
+    instance: &SeededInstance,
+    artifact_root: &Path,
+) -> uuid::Uuid {
+    let agent_id = uuid::Uuid::new_v4();
+    let artifact_id = uuid::Uuid::new_v4();
+    let storage_key = uuid::Uuid::new_v4();
+    let artifact = SERVICE_GATEWAY_HANDLER.as_bytes();
+    tokio::fs::create_dir_all(artifact_root)
+        .await
+        .expect("service gateway release artifact root");
+    let artifact_path = artifact_root.join(storage_key.simple().to_string());
+    tokio::fs::write(&artifact_path, artifact)
+        .await
+        .expect("service gateway release artifact");
+    let mut permissions = tokio::fs::metadata(&artifact_path)
+        .await
+        .expect("service gateway artifact metadata")
+        .permissions();
+    std::os::unix::fs::PermissionsExt::set_mode(&mut permissions, 0o555);
+    tokio::fs::set_permissions(&artifact_path, permissions)
+        .await
+        .expect("service gateway artifact mode");
+    let artifact_hash: [u8; 32] = Sha256::digest(artifact).into();
+    sqlx::query(
+        "INSERT INTO release_artifacts
+           (id, release_id, path, kind, mode, content_hash, size_bytes,
+            media_type, storage_key)
+         VALUES ($1, $2, 'bin/service', 'executable', 365, $3, $4,
+                 'application/octet-stream', $5)",
+    )
+    .bind(artifact_id)
+    .bind(instance.release)
+    .bind(artifact_hash.as_slice())
+    .bind(i64::try_from(artifact.len()).expect("service artifact length"))
+    .bind(storage_key)
+    .execute(pool)
+    .await
+    .expect("seed service gateway release artifact");
+    let family_id: uuid::Uuid =
+        sqlx::query_scalar("SELECT family_id FROM release_agents WHERE id = $1")
+            .bind(instance.release_agent)
+            .fetch_one(pool)
+            .await
+            .expect("load reusable release family for service");
+    sqlx::query(
+        "INSERT INTO release_agents
+           (id, release_id, family_id, agent_key, display_name,
+            runtime_contract, runtime_contract_hash, parameter_schema,
+            secret_slot_schema, requires_state, update_hook)
+         VALUES ($1, $2, $3, 'golden-service', 'Golden service', $4, $5,
+                 '[]', '[]', false, NULL)",
+    )
+    .bind(agent_id)
+    .bind(instance.release)
+    .bind(family_id)
+    .bind(serde_json::json!({
+        "executable": "bin/service",
+        "arguments": [],
+        "working_directory": "bin",
+        "image_reference": ROOT_IMAGE,
+        "requires_state": false,
+        "policy_ceiling": {"vcpus": 1, "memory_mib": 512, "network": "disabled"}
+    }))
+    .bind([11_u8; 32].as_slice())
+    .execute(pool)
+    .await
+    .expect("seed service gateway release agent");
+    agent_id
+}
+
+/// Seeds one public `http.service.v1` declaration without pre-starting it.
+/// The daemon must claim the desired revision, reach readiness, and promote
+/// the active pointer before public requests are attempted.
+async fn seed_gateway_service_route(
+    pool: &sqlx::PgPool,
+    actor: UserId,
+    project_id: uuid::Uuid,
+    repository_id: uuid::Uuid,
+    release_id: uuid::Uuid,
+    release_agent_id: uuid::Uuid,
+    capture_application_logs: bool,
+) -> GatewayServiceGoldenFixture {
+    let gateway_id = uuid::Uuid::new_v4();
+    let revision_id = uuid::Uuid::new_v4();
+    let identity_route_id = uuid::Uuid::new_v4();
+    let service_route_id = uuid::Uuid::new_v4();
+    sqlx::query(
+        "INSERT INTO gateways
+           (id, project_id, repository_id, name, lifecycle, created_by)
+         VALUES ($1, $2, $3, 'golden-service', 'enabled', $4)",
+    )
+    .bind(gateway_id)
+    .bind(project_id)
+    .bind(repository_id)
+    .bind(actor.as_uuid())
+    .execute(pool)
+    .await
+    .expect("seed service gateway");
+    sqlx::query(
+        "INSERT INTO gateway_revisions
+           (id, gateway_id, project_id, repository_id, release_id, release_agent_id,
+            release_agent_key, handler_contract, exposure, parameters, secret_slots,
+            mailbox_slots, normalized_hash, created_by, service_loopback_port,
+            service_readiness_path, service_health_path, service_log_capture_mode)
+         VALUES ($1, $2, $3, $4, $5, $6, 'golden-service', 'http.service.v1',
+                 'public', '{}'::jsonb, '{}', '{}', $7, $8, 8080, '/readyz', '/healthz', $9)",
+    )
+    .bind(revision_id)
+    .bind(gateway_id)
+    .bind(project_id)
+    .bind(repository_id)
+    .bind(release_id)
+    .bind(release_agent_id)
+    .bind([12_u8; 32].as_slice())
+    .bind(actor.as_uuid())
+    .bind(if capture_application_logs {
+        "application"
+    } else {
+        "disabled"
+    })
+    .execute(pool)
+    .await
+    .expect("seed service gateway revision");
+    for (route_id, path) in [
+        (service_route_id, "/service"),
+        (identity_route_id, "/service/identity"),
+        (uuid::Uuid::new_v4(), "/service/crash"),
+        (uuid::Uuid::new_v4(), "/service/log"),
+    ] {
+        sqlx::query(
+            "INSERT INTO gateway_routes
+               (id, gateway_revision_id, gateway_id, project_id, path, methods)
+             VALUES ($1, $2, $3, $4, $5, ARRAY['GET'])",
+        )
+        .bind(route_id)
+        .bind(revision_id)
+        .bind(gateway_id)
+        .bind(project_id)
+        .bind(path)
+        .execute(pool)
+        .await
+        .expect("seed service gateway route");
+    }
+    sqlx::query("UPDATE gateways SET desired_service_revision_id = $2 WHERE id = $1")
+        .bind(gateway_id)
+        .bind(revision_id)
+        .execute(pool)
+        .await
+        .expect("publish service gateway desired revision");
+    GatewayServiceGoldenFixture {
+        gateway_id,
+        revision_id,
+    }
+}
+
+/// Creates a second independently published service release while leaving the
+/// existing desired pointer untouched.  The cutover proof advances that
+/// pointer only after the first public invocation has been accepted.
+// The SQL fixture deliberately mirrors the published-release rows as one
+// bounded setup operation; splitting it would obscure the immutable IDs.
+#[allow(clippy::too_many_lines)]
+async fn seed_gateway_service_cutover_candidate(
+    pool: &sqlx::PgPool,
+    fixture: &GatewayServiceGoldenFixture,
+    artifact_root: &Path,
+    readiness_path: &str,
+) -> GatewayServiceGoldenFixture {
+    let (project_id, repository_id, source_agent_key, source_publication_actor_id, created_by): (
+        uuid::Uuid,
+        uuid::Uuid,
+        String,
+        Option<uuid::Uuid>,
+        uuid::Uuid,
+    ) = sqlx::query_as(
+        "SELECT gateway.project_id, gateway.repository_id,
+                revision.release_agent_key, release.publication_actor_id,
+                gateway.created_by
+           FROM gateways AS gateway
+           JOIN gateway_revisions AS revision
+             ON revision.id = $2 AND revision.gateway_id = gateway.id
+           JOIN releases AS release
+             ON release.id = revision.release_id
+          WHERE gateway.id = $1",
+    )
+    .bind(fixture.gateway_id)
+    .bind(fixture.revision_id)
+    .fetch_one(pool)
+    .await
+    .expect("read published service source metadata");
+    let publication_actor_id = source_publication_actor_id.unwrap_or(created_by);
+    let authorized_actor: Option<uuid::Uuid> = sqlx::query_scalar(
+        "SELECT member.user_id
+           FROM gateways AS gateway
+           JOIN projects AS project ON project.id = gateway.project_id
+           JOIN organization_members AS member
+             ON member.organization_id = project.organization_id
+            AND member.user_id = $2
+          WHERE gateway.id = $1
+            AND member.role IN ('owner', 'admin')",
+    )
+    .bind(fixture.gateway_id)
+    .bind(publication_actor_id)
+    .fetch_optional(pool)
+    .await
+    .expect("verify cutover publication actor authorization");
+    assert_eq!(
+        authorized_actor,
+        Some(publication_actor_id),
+        "cutover publication actor must belong to the gateway project organization"
+    );
+    let release_id = uuid::Uuid::new_v4();
+    let build_request_id = uuid::Uuid::new_v4();
+    let family_id = uuid::Uuid::new_v4();
+    let release_agent_id = uuid::Uuid::new_v4();
+    let artifact_id = uuid::Uuid::new_v4();
+    let storage_key = uuid::Uuid::new_v4();
+    let revision_id = uuid::Uuid::new_v4();
+    let source_commit = format!("{:040x}", release_id.as_u128());
+    let mut normalized_hash = [0_u8; 32];
+    normalized_hash[..16].copy_from_slice(release_id.as_bytes());
+    normalized_hash[16..].copy_from_slice(release_id.as_bytes());
+
+    sqlx::query(
+        "INSERT INTO build_requests
+            (id, repository_id, source_commit, source_ref,
+             build_definition_hash, state, created_by)
+         VALUES ($1, $2, $3, 'refs/heads/main', $4, 'succeeded', $5)",
+    )
+    .bind(build_request_id)
+    .bind(repository_id)
+    .bind(&source_commit)
+    .bind([21_u8; 32].as_slice())
+    .bind(publication_actor_id)
+    .execute(pool)
+    .await
+    .expect("seed cutover build request");
+    sqlx::query(
+        "INSERT INTO releases
+            (id, repository_id, version, source_commit, source_ref,
+             build_request_id, build_definition_hash, configuration,
+             configuration_hash, manifest_hash, state,
+             publication_actor_id, published_at)
+         VALUES ($1, $2, $3, $4, 'refs/heads/main', $5, $6, '{}',
+                 $7, $8, 'published', $9, now())",
+    )
+    .bind(release_id)
+    .bind(repository_id)
+    .bind(format!("cutover-{}", release_id.simple()))
+    .bind(&source_commit)
+    .bind(build_request_id)
+    .bind([21_u8; 32].as_slice())
+    .bind([22_u8; 32].as_slice())
+    .bind([23_u8; 32].as_slice())
+    .bind(publication_actor_id)
+    .execute(pool)
+    .await
+    .expect("publish cutover release");
+    sqlx::query(
+        "INSERT INTO agent_families (id, repository_id, agent_key)
+         VALUES ($1, $2, $3)",
+    )
+    .bind(family_id)
+    .bind(repository_id)
+    .bind(format!("cutover-agent-{}", release_id.simple()))
+    .execute(pool)
+    .await
+    .expect("seed cutover agent family");
+    sqlx::query(
+        "INSERT INTO release_agents
+            (id, release_id, family_id, agent_key, display_name,
+             runtime_contract, runtime_contract_hash, parameter_schema,
+             secret_slot_schema, requires_state)
+         VALUES ($1, $2, $3, $4, 'Cutover service', $5, $6,
+                 '[]', '[]', false)",
+    )
+    .bind(release_agent_id)
+    .bind(release_id)
+    .bind(family_id)
+    .bind(&source_agent_key)
+    .bind(serde_json::json!({
+        "executable": "bin/service",
+        "arguments": [],
+        "working_directory": "bin",
+        "image_reference": ROOT_IMAGE,
+        "requires_state": false,
+        "policy_ceiling": {"vcpus": 1, "memory_mib": 512, "network": "disabled"}
+    }))
+    .bind([24_u8; 32].as_slice())
+    .execute(pool)
+    .await
+    .expect("seed cutover release agent");
+
+    let artifact = SERVICE_GATEWAY_HANDLER.as_bytes();
+    tokio::fs::create_dir_all(artifact_root)
+        .await
+        .expect("cutover release artifact root");
+    let artifact_path = artifact_root.join(storage_key.simple().to_string());
+    tokio::fs::write(&artifact_path, artifact)
+        .await
+        .expect("cutover service artifact");
+    let mut permissions = tokio::fs::metadata(&artifact_path)
+        .await
+        .expect("cutover service artifact metadata")
+        .permissions();
+    PermissionsExt::set_mode(&mut permissions, 0o555);
+    tokio::fs::set_permissions(&artifact_path, permissions)
+        .await
+        .expect("cutover service artifact mode");
+    let artifact_hash: [u8; 32] = Sha256::digest(artifact).into();
+    sqlx::query(
+        "INSERT INTO release_artifacts
+           (id, release_id, path, kind, mode, content_hash, size_bytes,
+            media_type, storage_key)
+         VALUES ($1, $2, 'bin/service', 'executable', 365, $3, $4,
+                 'application/octet-stream', $5)",
+    )
+    .bind(artifact_id)
+    .bind(release_id)
+    .bind(artifact_hash.as_slice())
+    .bind(i64::try_from(artifact.len()).expect("cutover artifact length"))
+    .bind(storage_key)
+    .execute(pool)
+    .await
+    .expect("seed cutover service artifact");
+    sqlx::query(
+        "INSERT INTO gateway_revisions
+            (id, gateway_id, project_id, repository_id, release_id,
+             release_agent_id, release_agent_key, handler_contract, exposure,
+             parameters, secret_slots, mailbox_slots, normalized_hash, created_by,
+             service_loopback_port, service_readiness_path, service_health_path)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, 'http.service.v1', 'public',
+                 '{}', '{}', '{}', $8, $9, 8080, $10, '/healthz')",
+    )
+    .bind(revision_id)
+    .bind(fixture.gateway_id)
+    .bind(project_id)
+    .bind(repository_id)
+    .bind(release_id)
+    .bind(release_agent_id)
+    .bind(&source_agent_key)
+    .bind(normalized_hash.as_slice())
+    .bind(publication_actor_id)
+    .bind(readiness_path)
+    .execute(pool)
+    .await
+    .expect("seed cutover service revision");
+    for path in ["/service", "/service/identity", "/service/crash"] {
+        sqlx::query(
+            "INSERT INTO gateway_routes
+               (id, gateway_revision_id, gateway_id, project_id, path, methods)
+             VALUES ($1, $2, $3, $4, $5, ARRAY['GET'])",
+        )
+        .bind(uuid::Uuid::new_v4())
+        .bind(revision_id)
+        .bind(fixture.gateway_id)
+        .bind(project_id)
+        .bind(path)
+        .execute(pool)
+        .await
+        .expect("seed cutover service route");
+    }
+    GatewayServiceGoldenFixture {
+        gateway_id: fixture.gateway_id,
+        revision_id,
+    }
+}
+
+/// Waits for the daemon-owned service supervisor to prove readiness and make
+/// the exact desired revision active. The query intentionally observes both
+/// pointers and the fenced instance state, so a declaration-only Caddy route
+/// cannot make the public request proof pass.
+async fn wait_for_gateway_service_ready(
+    pool: &sqlx::PgPool,
+    fixture: &GatewayServiceGoldenFixture,
+) -> uuid::Uuid {
+    tokio::time::timeout(Duration::from_secs(120), async {
+        loop {
+            let row: Option<(uuid::Uuid, String, Option<uuid::Uuid>)> = sqlx::query_as(
+                "SELECT instance.id, instance.state, gateway.active_revision_id
+                   FROM gateway_service_instances AS instance
+                   JOIN gateways AS gateway ON gateway.id = instance.gateway_id
+                  WHERE instance.gateway_id = $1
+                    AND instance.revision_id = $2
+                  ORDER BY instance.created_at DESC
+                  LIMIT 1",
+            )
+            .bind(fixture.gateway_id)
+            .bind(fixture.revision_id)
+            .fetch_optional(pool)
+            .await
+            .expect("read daemon-owned service readiness");
+            if let Some((instance_id, state, active_revision_id)) = row {
+                if state == "ready" && active_revision_id == Some(fixture.revision_id) {
+                    return instance_id;
+                }
+            }
+            tokio::time::sleep(Duration::from_millis(50)).await;
+        }
+    })
+    .await
+    .expect("daemon-owned service reaches Ready and active state")
+}
+
+/// Waits for the daemon to retain the crashed instance's redacted exit report,
+/// finish its physical cleanup, and promote a replacement for the same
+/// immutable revision.
+async fn wait_for_gateway_service_crash_replacement(
+    pool: &sqlx::PgPool,
+    fixture: &GatewayServiceGoldenFixture,
+    crashed_instance_id: uuid::Uuid,
+) -> uuid::Uuid {
+    tokio::time::timeout(Duration::from_secs(120), async {
+        loop {
+            let old: Option<GatewayServiceCrashEvidence> = sqlx::query_as(
+                "SELECT state, failure_code, exit_code, exit_signal
+                       FROM gateway_service_instances
+                      WHERE id = $1 AND gateway_id = $2 AND revision_id = $3",
+            )
+            .bind(crashed_instance_id)
+            .bind(fixture.gateway_id)
+            .bind(fixture.revision_id)
+            .fetch_optional(pool)
+            .await
+            .expect("read crashed persistent-service instance");
+            let replacement: Option<uuid::Uuid> = sqlx::query_scalar(
+                "SELECT instance.id
+                   FROM gateway_service_instances AS instance
+                   JOIN gateways AS gateway ON gateway.id = instance.gateway_id
+                  WHERE instance.id <> $1
+                    AND instance.gateway_id = $2
+                    AND instance.revision_id = $3
+                    AND instance.state = 'ready'
+                    AND gateway.active_revision_id = $3
+                  ORDER BY instance.created_at DESC
+                  LIMIT 1",
+            )
+            .bind(crashed_instance_id)
+            .bind(fixture.gateway_id)
+            .bind(fixture.revision_id)
+            .fetch_optional(pool)
+            .await
+            .expect("read replacement persistent-service instance");
+            if let (
+                Some((state, Some(failure_code), Some(exit_code), None)),
+                Some(replacement_id),
+            ) = (old, replacement)
+            {
+                if state == "cleaned" && failure_code == "unexpected_exit" && exit_code == 42 {
+                    return replacement_id;
+                }
+            }
+            tokio::time::sleep(Duration::from_millis(100)).await;
+        }
+    })
+    .await
+    .expect("daemon replaces crashed persistent service")
+}
+
+/// Sends the opt-in fixture crash request through public Caddy routing and
+/// waits for the guest's acknowledged 503 before it exits with code 42.
+async fn exercise_gateway_service_crash(public_url: &str) {
+    let client = reqwest::Client::builder()
+        .timeout(Duration::from_secs(10))
+        .build()
+        .expect("bounded persistent-service crash client");
+    let response = client
+        .get(format!("{public_url}/gateway/service/crash"))
+        .send()
+        .await
+        .expect("public persistent-service crash request");
+    assert_eq!(response.status(), reqwest::StatusCode::SERVICE_UNAVAILABLE);
+    assert_eq!(
+        response
+            .bytes()
+            .await
+            .expect("read persistent-service crash response"),
+        "crashing"
+    );
+}
+
+/// Sends two public requests through the real Caddy/daemon path and proves
+/// they reached one long-lived guest process rather than two per-request VMs.
+struct GatewayServiceRequestProof {
+    pid: u64,
+    startup_id: String,
+}
+
+async fn exercise_gateway_service_requests(public_url: &str) -> GatewayServiceRequestProof {
+    let client = reqwest::Client::builder()
+        .timeout(Duration::from_secs(10))
+        .build()
+        .expect("bounded persistent-service client");
+    let identity_url = format!("{public_url}/gateway/service/identity");
+    let first = client
+        .get(&identity_url)
+        .send()
+        .await
+        .expect("first public persistent-service request")
+        .error_for_status()
+        .expect("first persistent-service request succeeds")
+        .bytes()
+        .await
+        .expect("read first persistent-service identity");
+    let second = client
+        .get(&identity_url)
+        .send()
+        .await
+        .expect("second public persistent-service request")
+        .error_for_status()
+        .expect("second persistent-service request succeeds")
+        .bytes()
+        .await
+        .expect("read second persistent-service identity");
+    let first: serde_json::Value =
+        serde_json::from_slice(&first).expect("first service identity JSON");
+    let second: serde_json::Value =
+        serde_json::from_slice(&second).expect("second service identity JSON");
+    let first_startup = first
+        .get("startup_id")
+        .and_then(serde_json::Value::as_str)
+        .expect("first service response startup identity");
+    let second_startup = second
+        .get("startup_id")
+        .and_then(serde_json::Value::as_str)
+        .expect("second service response startup identity");
+    assert_eq!(first_startup, second_startup);
+    let first_pid = first
+        .get("pid")
+        .and_then(serde_json::Value::as_u64)
+        .expect("first service response process identity");
+    assert!(first_pid > 0, "first service response PID must be positive");
+    let second_pid = second
+        .get("pid")
+        .and_then(serde_json::Value::as_u64)
+        .expect("second service response process identity");
+    assert_eq!(first_pid, second_pid);
+    let first_count = first
+        .get("request_count")
+        .and_then(serde_json::Value::as_u64)
+        .expect("first service response request count");
+    let second_count = second
+        .get("request_count")
+        .and_then(serde_json::Value::as_u64)
+        .expect("second service response request count");
+    assert!(second_count > first_count);
+    println!(
+        "persistent-service-public identity_equal=true pid={first_pid} startup_id={first_startup} request_count={first_count}->{second_count}"
+    );
+    GatewayServiceRequestProof {
+        pid: first_pid,
+        startup_id: first_startup.to_owned(),
+    }
+}
+
+/// Sends two identity requests to the published cooking service. Its small
+/// sample binary reports only PID and startup identity, so this proof keeps
+/// the request-count assertion private to the seeded integration fixture.
+async fn exercise_published_cooking_service_identity(
+    public_url: &str,
+) -> GatewayServiceRequestProof {
+    let client = published_cooking_service_client();
+    let identity_url = format!("{public_url}/gateway/service/identity");
+    let first = client
+        .get(&identity_url)
+        .send()
+        .await
+        .expect("first published cooking-service identity request")
+        .error_for_status()
+        .expect("first published cooking-service identity succeeds")
+        .bytes()
+        .await
+        .expect("read first published cooking-service identity");
+    let second = client
+        .get(&identity_url)
+        .send()
+        .await
+        .expect("second published cooking-service identity request")
+        .error_for_status()
+        .expect("second published cooking-service identity succeeds")
+        .bytes()
+        .await
+        .expect("read second published cooking-service identity");
+    let first: serde_json::Value =
+        serde_json::from_slice(&first).expect("first published cooking-service identity JSON");
+    let second: serde_json::Value =
+        serde_json::from_slice(&second).expect("second published cooking-service identity JSON");
+    let first_startup = first
+        .get("startup_id")
+        .and_then(serde_json::Value::as_str)
+        .filter(|value| !value.is_empty())
+        .expect("first published cooking-service startup identity");
+    let second_startup = second
+        .get("startup_id")
+        .and_then(serde_json::Value::as_str)
+        .filter(|value| !value.is_empty())
+        .expect("second published cooking-service startup identity");
+    assert_eq!(first_startup, second_startup);
+    let first_pid = first
+        .get("pid")
+        .and_then(serde_json::Value::as_u64)
+        .expect("first published cooking-service PID");
+    assert!(
+        first_pid > 0,
+        "published cooking-service PID must be positive"
+    );
+    let second_pid = second
+        .get("pid")
+        .and_then(serde_json::Value::as_u64)
+        .expect("second published cooking-service PID");
+    assert_eq!(first_pid, second_pid);
+    GatewayServiceRequestProof {
+        pid: first_pid,
+        startup_id: first_startup.to_owned(),
+    }
+}
+
+fn published_cooking_service_client() -> reqwest::Client {
+    let mut builder = reqwest::Client::builder().timeout(Duration::from_secs(10));
+    if env::var("HEPHAESTUS_CADDY_TEST_TLS").as_deref() == Ok("1") {
+        let ca_path =
+            env::var("HEPHAESTUS_CADDY_TEST_CA_CERT").expect("joined Caddy TLS fixture CA path");
+        let ca_pem = fs::read(&ca_path).expect("read joined Caddy TLS fixture CA");
+        let certificate =
+            reqwest::Certificate::from_pem(&ca_pem).expect("parse joined Caddy TLS fixture CA");
+        builder = builder
+            .tls_built_in_root_certs(false)
+            .add_root_certificate(certificate);
+    }
+    builder
+        .build()
+        .expect("bounded published cooking-service client")
+}
+
+async fn exercise_published_cooking_service_metadata(public_url: &str) {
+    let client = published_cooking_service_client();
+    let metadata_url = format!("{public_url}/gateway/service/metadata");
+    for (label, request) in [
+        ("normal", client.get(&metadata_url)),
+        (
+            "forged forwarding",
+            client
+                .get(&metadata_url)
+                .header(reqwest::header::HOST, "attacker.golden.invalid")
+                .header("Forwarded", "for=198.51.100.7;host=attacker.golden.invalid")
+                .header("X-Forwarded-For", "198.51.100.7")
+                .header("X-Forwarded-Host", "attacker.golden.invalid")
+                .header("X-Forwarded-Proto", "http"),
+        ),
+    ] {
+        let response = request
+            .send()
+            .await
+            .unwrap_or_else(|error| panic!("{label} published metadata request: {error}"))
+            .error_for_status()
+            .unwrap_or_else(|error| panic!("{label} published metadata request succeeds: {error}"))
+            .bytes()
+            .await
+            .unwrap_or_else(|error| panic!("read {label} published metadata response: {error}"));
+        let metadata: serde_json::Value = serde_json::from_slice(&response)
+            .unwrap_or_else(|error| panic!("{label} published metadata JSON: {error}"));
+        let object = metadata
+            .as_object()
+            .unwrap_or_else(|| panic!("{label} published metadata object"));
+        let expected_keys = [
+            "host_matches_expected",
+            "forwarded_present",
+            "x_forwarded_for_present",
+            "x_forwarded_host_present",
+            "x_forwarded_proto_present",
+        ]
+        .into_iter()
+        .map(String::from)
+        .collect::<std::collections::BTreeSet<_>>();
+        assert_eq!(
+            object
+                .keys()
+                .cloned()
+                .collect::<std::collections::BTreeSet<_>>(),
+            expected_keys,
+            "{label} metadata schema"
+        );
+        assert_eq!(
+            object
+                .get("host_matches_expected")
+                .and_then(serde_json::Value::as_bool),
+            Some(true),
+            "{label} request keeps the configured authority"
+        );
+        for key in [
+            "forwarded_present",
+            "x_forwarded_for_present",
+            "x_forwarded_host_present",
+            "x_forwarded_proto_present",
+        ] {
+            assert_eq!(
+                object.get(key).and_then(serde_json::Value::as_bool),
+                Some(false),
+                "{label} request must not expose caller forwarding header {key}"
+            );
+        }
+    }
+}
+
+/// Runs the published service's bounded guest isolation diagnostic through the
+/// real Caddy public listener, then proves the public listener cannot serve the
+/// separate Caddy administration API, including with a forged admin Host.
+async fn exercise_published_cooking_service_isolation(public_url: &str, admin_url: &str) {
+    let public_port = published_public_loopback_port(public_url, "public Caddy URL");
+    let admin_port = loopback_port(admin_url, "admin Caddy URL");
+    assert_ne!(public_port, admin_port);
+    assert_ne!(public_port, 8080);
+    assert_ne!(admin_port, 8080);
+
+    let client = published_cooking_service_client();
+    let diagnostic = client
+        .get(format!(
+            "{public_url}/gateway/service/isolation?admin_port={admin_port}&public_port={public_port}"
+        ))
+        .send()
+        .await
+        .expect("published cooking-service isolation request")
+        .error_for_status()
+        .expect("published cooking-service isolation request succeeds")
+        .bytes()
+        .await
+        .expect("read published cooking-service isolation response");
+    let diagnostic: serde_json::Value =
+        serde_json::from_slice(&diagnostic).expect("published cooking-service isolation JSON");
+    let object = diagnostic
+        .as_object()
+        .expect("published isolation response object");
+    let expected_keys = [
+        "schema_version",
+        "own_loopback_ok",
+        "admin_loopback_blocked",
+        "public_loopback_blocked",
+        "metadata_blocked",
+        "test_net_blocked",
+        "runtime_authority_env_absent",
+        "runtime_authority_path_absent",
+        "broker_socket_absent",
+        "secret_mount_absent",
+        "control_surface_ok",
+    ]
+    .into_iter()
+    .map(String::from)
+    .collect::<std::collections::BTreeSet<_>>();
+    assert_eq!(
+        object
+            .keys()
+            .cloned()
+            .collect::<std::collections::BTreeSet<_>>(),
+        expected_keys,
+        "published isolation response must have exactly the reviewed schema"
+    );
+    assert_eq!(
+        object
+            .get("schema_version")
+            .and_then(serde_json::Value::as_u64),
+        Some(1)
+    );
+    for key in [
+        "own_loopback_ok",
+        "admin_loopback_blocked",
+        "public_loopback_blocked",
+        "metadata_blocked",
+        "test_net_blocked",
+        "runtime_authority_env_absent",
+        "runtime_authority_path_absent",
+        "broker_socket_absent",
+        "secret_mount_absent",
+        "control_surface_ok",
+    ] {
+        assert_eq!(
+            object.get(key).and_then(serde_json::Value::as_bool),
+            Some(true),
+            "published isolation field {key}"
+        );
+    }
+
+    for host in [None, Some(format!("127.0.0.1:{admin_port}"))] {
+        let mut request = client.get(format!("{public_url}/config/"));
+        if let Some(host) = host {
+            request = request.header(reqwest::header::HOST, host);
+        }
+        let response = request
+            .send()
+            .await
+            .expect("public Caddy internal-config probe");
+        assert_eq!(
+            response.status(),
+            reqwest::StatusCode::NOT_FOUND,
+            "public Caddy listener must deny /config/"
+        );
+        response
+            .bytes()
+            .await
+            .expect("read public Caddy internal-config denial");
+    }
+}
+
+fn published_public_loopback_port(url: &str, label: &str) -> u16 {
+    let url =
+        reqwest::Url::parse(url).unwrap_or_else(|error| panic!("{label} is invalid: {error}"));
+    let expected_scheme = if env::var("HEPHAESTUS_CADDY_TEST_TLS").as_deref() == Ok("1") {
+        "https"
+    } else {
+        "http"
+    };
+    assert_eq!(
+        url.scheme(),
+        expected_scheme,
+        "{label} must use the configured disposable harness scheme"
+    );
+    loopback_port_from_url(&url, label)
+}
+
+fn loopback_port(url: &str, label: &str) -> u16 {
+    let url =
+        reqwest::Url::parse(url).unwrap_or_else(|error| panic!("{label} is invalid: {error}"));
+    assert_eq!(url.scheme(), "http", "{label} must use HTTP administration");
+    loopback_port_from_url(&url, label)
+}
+
+fn loopback_port_from_url(url: &reqwest::Url, label: &str) -> u16 {
+    assert_eq!(
+        url.host_str(),
+        Some("127.0.0.1"),
+        "{label} must use the joined loopback listener"
+    );
+    url.port()
+        .unwrap_or_else(|| panic!("{label} has no explicit port"))
+}
+
+#[cfg(feature = "test-fixtures")]
+async fn assert_guest_gateway_service_log_retained(
+    pool: &sqlx::PgPool,
+    proof: &GatewayServiceGuestLogProof,
+) {
+    let epoch: (i64, i64, i64) = sqlx::query_as(
+        "SELECT fencing_token, acknowledged_through, retained_chunks
+           FROM gateway_service_log_epochs
+          WHERE instance_id = $1 AND gateway_id = $2 AND revision_id = $3
+            AND project_id = $4 AND fencing_token = $5",
+    )
+    .bind(proof.instance_id)
+    .bind(proof.gateway_id)
+    .bind(proof.revision_id)
+    .bind(proof.project_id)
+    .bind(proof.fencing_token)
+    .fetch_one(pool)
+    .await
+    .expect("read retained guest service-log epoch");
+    assert_eq!(epoch.0, proof.fencing_token);
+    assert!(epoch.1 >= 0);
+
+    let rows: Vec<(i64, String, Vec<u8>)> = sqlx::query_as(
+        "SELECT sequence, stream, bytes
+           FROM gateway_service_log_chunks
+          WHERE instance_id = $1 AND gateway_id = $2 AND revision_id = $3
+            AND project_id = $4 AND fencing_token = $5
+          ORDER BY sequence",
+    )
+    .bind(proof.instance_id)
+    .bind(proof.gateway_id)
+    .bind(proof.revision_id)
+    .bind(proof.project_id)
+    .bind(proof.fencing_token)
+    .fetch_all(pool)
+    .await
+    .expect("read retained guest service-log chunks");
+    assert!(
+        !rows.is_empty(),
+        "guest service-log chunks were not retained"
+    );
+    assert_eq!(
+        usize::try_from(epoch.2).expect("retained chunk count fits usize"),
+        rows.len()
+    );
+
+    let mut stdout = Vec::new();
+    let mut stderr = Vec::new();
+    let mut previous_sequence = None;
+    for (sequence, stream, bytes) in rows {
+        if let Some(previous_sequence) = previous_sequence {
+            assert!(sequence > previous_sequence);
+        }
+        previous_sequence = Some(sequence);
+        match stream.as_str() {
+            "stdout" => stdout.extend_from_slice(&bytes),
+            "stderr" => stderr.extend_from_slice(&bytes),
+            other => panic!("unexpected retained guest service-log stream: {other}"),
+        }
+    }
+    assert!(
+        stdout.starts_with(&proof.stdout),
+        "pre-shutdown stdout must remain retained in stream order"
+    );
+    assert!(
+        stderr.starts_with(&proof.stderr),
+        "pre-shutdown stderr must remain retained in stream order"
+    );
+    assert_eq!(
+        marker_count(&stdout, GUEST_SERVICE_LOG_STDOUT_MARKER),
+        1,
+        "retained stdout marker must remain unique"
+    );
+    assert_eq!(
+        marker_count(&stderr, GUEST_SERVICE_LOG_STDERR_MARKER),
+        1,
+        "retained stderr marker must remain unique"
+    );
+}
+
+#[cfg(feature = "test-fixtures")]
+// Keep the complete SQL authority fixture together so its persisted scopes and
+// application-role assertions remain reviewable as one setup boundary.
+#[allow(
+    clippy::cognitive_complexity,
+    clippy::too_many_arguments,
+    clippy::too_many_lines
+)]
+async fn prepare_gateway_service_log_rpc(
+    pool: &sqlx::PgPool,
+    running: &hephaestus_app::RunningHephaestus,
+    gateway_id: uuid::Uuid,
+    revision_id: uuid::Uuid,
+    instance_id: uuid::Uuid,
+    project_id: uuid::Uuid,
+) -> (
+    control_plane_postgres::ControlPlanePool,
+    GatewayServiceLogRpcFixture,
+) {
+    let composed_pool = running.application_pool_for_test();
+    let current_user: String = sqlx::query_scalar("SELECT current_user")
+        .fetch_one(&composed_pool)
+        .await
+        .expect("read composed service log RPC pool role");
+    assert_eq!(current_user, "hephaestus_app");
+    let error = sqlx::query("SELECT retained_bytes FROM gateway_service_log_project_usage")
+        .fetch_optional(&composed_pool)
+        .await
+        .expect_err("application role cannot read worker-only project usage");
+    let code = error
+        .as_database_error()
+        .and_then(sqlx::error::DatabaseError::code);
+    assert_eq!(code.as_deref(), Some("42501"));
+    let mut fixture_transaction = pool.begin().await.expect("begin service log RPC fixture");
+    let (fencing_token, first_sequence): (i64, i64) = sqlx::query_as(
+        "SELECT instance.fencing_token,
+                COALESCE(MAX(chunks.sequence), -1) + 1
+           FROM gateway_service_instances AS instance
+           LEFT JOIN gateway_service_log_chunks AS chunks
+             ON chunks.instance_id = instance.id
+            AND chunks.gateway_id = instance.gateway_id
+            AND chunks.revision_id = instance.revision_id
+            AND chunks.fencing_token = instance.fencing_token
+          WHERE instance.id = $1
+            AND instance.gateway_id = $2
+            AND instance.revision_id = $3
+          GROUP BY instance.fencing_token",
+    )
+    .bind(instance_id)
+    .bind(gateway_id)
+    .bind(revision_id)
+    .fetch_one(&mut *fixture_transaction)
+    .await
+    .expect("read ready service log RPC scope");
+    assert!(fencing_token > 0);
+    let baseline_epoch: Option<(i64, i64, i64)> = sqlx::query_as(
+        "SELECT acknowledged_through, retained_bytes, retained_chunks
+           FROM gateway_service_log_epochs
+          WHERE instance_id = $1 AND gateway_id = $2 AND revision_id = $3
+            AND project_id = $4 AND fencing_token = $5",
+    )
+    .bind(instance_id)
+    .bind(gateway_id)
+    .bind(revision_id)
+    .bind(project_id)
+    .bind(fencing_token)
+    .fetch_optional(&mut *fixture_transaction)
+    .await
+    .expect("read baseline service log RPC metadata");
+    let (baseline_acknowledged, baseline_bytes, baseline_chunks) =
+        baseline_epoch.unwrap_or((-1, 0, 0));
+
+    sqlx::query(
+        "INSERT INTO gateway_service_log_project_usage (project_id)
+         VALUES ($1)
+         ON CONFLICT (project_id) DO NOTHING",
+    )
+    .bind(project_id)
+    .execute(&mut *fixture_transaction)
+    .await
+    .expect("seed service log RPC usage");
+    let inserted_epoch: Option<i64> = sqlx::query_scalar(
+        "INSERT INTO gateway_service_log_epochs
+            (instance_id, gateway_id, revision_id, project_id, fencing_token)
+         VALUES ($1, $2, $3, $4, $5)
+         ON CONFLICT (instance_id, fencing_token) DO NOTHING
+         RETURNING fencing_token",
+    )
+    .bind(instance_id)
+    .bind(gateway_id)
+    .bind(revision_id)
+    .bind(project_id)
+    .bind(fencing_token)
+    .fetch_optional(&mut *fixture_transaction)
+    .await
+    .expect("seed service log RPC epoch");
+    if inserted_epoch.is_some() {
+        sqlx::query(
+            "UPDATE gateway_service_log_project_usage
+                SET retained_epochs = retained_epochs + 1, updated_at = now()
+              WHERE project_id = $1",
+        )
+        .bind(project_id)
+        .execute(&mut *fixture_transaction)
+        .await
+        .expect("update service log RPC epoch usage");
+    }
+    let payloads = [
+        b"rpc-service-log-first".as_slice(),
+        b"rpc-service-log-second".as_slice(),
+    ];
+    let payload_bytes = payloads
+        .iter()
+        .map(|payload| i64::try_from(payload.len()).expect("small log payload"))
+        .sum::<i64>();
+    for (offset, payload) in payloads.iter().enumerate() {
+        let sequence = first_sequence + i64::try_from(offset).expect("small log sequence");
+        sqlx::query(
+            "INSERT INTO gateway_service_log_chunks
+                (instance_id, gateway_id, revision_id, project_id, fencing_token,
+                 sequence, stream, observed_at, bytes)
+             VALUES ($1, $2, $3, $4, $5, $6, 'stdout', now(), $7)",
+        )
+        .bind(instance_id)
+        .bind(gateway_id)
+        .bind(revision_id)
+        .bind(project_id)
+        .bind(fencing_token)
+        .bind(sequence)
+        .bind(*payload)
+        .execute(&mut *fixture_transaction)
+        .await
+        .expect("seed service log RPC payload");
+        sqlx::query(
+            "UPDATE gateway_service_log_epochs
+                SET acknowledged_through = GREATEST(acknowledged_through, $6),
+                    retained_bytes = retained_bytes + $7,
+                    retained_chunks = retained_chunks + 1,
+                    updated_at = now()
+              WHERE instance_id = $1 AND gateway_id = $2 AND revision_id = $3
+                AND project_id = $4 AND fencing_token = $5",
+        )
+        .bind(instance_id)
+        .bind(gateway_id)
+        .bind(revision_id)
+        .bind(project_id)
+        .bind(fencing_token)
+        .bind(sequence)
+        .bind(i64::try_from(payload.len()).expect("small log payload"))
+        .execute(&mut *fixture_transaction)
+        .await
+        .expect("update service log RPC metadata");
+        sqlx::query(
+            "UPDATE gateway_service_log_project_usage
+                SET retained_bytes = retained_bytes + $2,
+                    retained_chunks = retained_chunks + 1,
+                    storage_dropped_chunks = 7,
+                    storage_dropped_bytes = 123,
+                    updated_at = now()
+              WHERE project_id = $1",
+        )
+        .bind(project_id)
+        .bind(i64::try_from(payload.len()).expect("small log payload"))
+        .execute(&mut *fixture_transaction)
+        .await
+        .expect("update service log RPC project usage");
+    }
+    fixture_transaction
+        .commit()
+        .await
+        .expect("commit service log RPC fixture");
+
+    let foreign_owner = uuid::Uuid::new_v4();
+    let foreign_organization = uuid::Uuid::new_v4();
+    let foreign_project = uuid::Uuid::new_v4();
+    sqlx::query("INSERT INTO users (id, display_name) VALUES ($1, 'RPC Log Foreign Owner')")
+        .bind(foreign_owner)
+        .execute(pool)
+        .await
+        .expect("seed foreign service-log owner");
+    sqlx::query("INSERT INTO organizations (id, name) VALUES ($1, $2)")
+        .bind(foreign_organization)
+        .bind(format!("rpc-log-foreign-{foreign_organization}"))
+        .execute(pool)
+        .await
+        .expect("seed foreign service-log organization");
+    sqlx::query(
+        "INSERT INTO organization_members (organization_id, user_id, role)
+         VALUES ($1, $2, 'owner')",
+    )
+    .bind(foreign_organization)
+    .bind(foreign_owner)
+    .execute(pool)
+    .await
+    .expect("seed foreign service-log organization owner");
+    sqlx::query("INSERT INTO projects (id, organization_id, name) VALUES ($1, $2, $3)")
+        .bind(foreign_project)
+        .bind(foreign_organization)
+        .bind(format!("rpc-log-foreign-project-{foreign_project}"))
+        .execute(pool)
+        .await
+        .expect("seed foreign service-log project");
+    sqlx::query(
+        "INSERT INTO gateway_service_log_project_usage
+            (project_id, storage_dropped_chunks, storage_dropped_bytes)
+         VALUES ($1, 99, 999)",
+    )
+    .bind(foreign_project)
+    .execute(pool)
+    .await
+    .expect("seed foreign service-log metadata");
+    let member_id = uuid::Uuid::new_v4();
+    sqlx::query("INSERT INTO users (id, display_name) VALUES ($1, 'RPC Log Member')")
+        .bind(member_id)
+        .execute(pool)
+        .await
+        .expect("seed service log RPC member");
+    let member_browser_session = seed_golden_browser_session(
+        pool,
+        UserId::from_uuid(member_id),
+        &golden_issuer(),
+        &format!("member-{member_id}"),
+    )
+    .await;
+    sqlx::query("INSERT INTO project_maintainers (project_id, user_id) VALUES ($1, $2)")
+        .bind(project_id)
+        .bind(member_id)
+        .execute(pool)
+        .await
+        .expect("grant service log RPC member");
+    (
+        composed_pool,
+        GatewayServiceLogRpcFixture {
+            gateway_id,
+            revision_id,
+            instance_id,
+            project_id,
+            fencing_token,
+            first_sequence,
+            baseline_acknowledged,
+            baseline_bytes,
+            baseline_chunks,
+            payloads: [payloads[0].to_vec(), payloads[1].to_vec()],
+            payload_bytes,
+            foreign_project,
+            member_id,
+            member_browser_session,
+        },
+    )
 }
 
 /// Seeds immutable gateway route and host-only inbound secret authority.

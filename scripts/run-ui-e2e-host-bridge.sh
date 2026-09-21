@@ -12,6 +12,7 @@ bridge_dir="${1:?bridge directory is required}"
 diagnostics_dir="${2:-}"
 deadline_epoch="${3:-0}"
 external_script="${repo_root}/scripts/run-ui-e2e-external.sh"
+installed_script="${repo_root}/scripts/run-installed-ui-e2e.sh"
 
 [[ "${bridge_dir}" = /* && -d "${bridge_dir}" && ! -L "${bridge_dir}" ]] || {
     printf 'browser bridge directory is invalid\n' >&2
@@ -66,6 +67,7 @@ cleanup() {
     fi
     rm -f -- "${bridge_real}"/request.*.json "${bridge_real}"/request.*.json.pending \
         "${bridge_real}"/response.* "${bridge_real}"/values.* \
+        "${bridge_real}"/ca.*.pem \
         "${bridge_real}/.ready" "${bridge_real}/.ready.tmp."* 2>/dev/null || true
     exit "${status}"
 }
@@ -108,10 +110,19 @@ try:
     payload = json.loads(request.read_text(encoding="utf-8"))
 except (OSError, ValueError) as error:
     raise SystemExit(f"invalid browser bridge request: {error}")
-required = {
+base_required = {
     "fixture", "database_url", "rpc_endpoint", "rpc_secret", "oidc_issuer",
     "oidc_client_id", "oidc_client_secret", "web_port", "phase",
 }
+runner = payload.get("runner", "legacy")
+if runner == "legacy":
+    required = base_required
+elif runner == "installed-ui":
+    required = base_required | {
+        "runner", "platform_origin", "ui_namespace", "ui_port", "ca_cert",
+    }
+else:
+    raise SystemExit("browser bridge runner is invalid")
 if set(payload) != required or any(
     not isinstance(payload[key], str) or not payload[key] for key in required
 ):
@@ -129,6 +140,8 @@ if diagnostics:
         raise SystemExit("browser diagnostics directory is invalid")
 if payload["phase"] not in {"initial", "post-operation"}:
     raise SystemExit("browser phase is invalid")
+if runner == "installed-ui" and payload["phase"] != "initial":
+    raise SystemExit("installed UI browser bridge supports only the initial phase")
 if not payload["web_port"].isdigit() or not 1 <= int(payload["web_port"]) <= 65535:
     raise SystemExit("browser web port is invalid")
 for key in ("database_url", "rpc_endpoint", "oidc_issuer"):
@@ -138,8 +151,58 @@ if len(payload["rpc_secret"]) < 32:
     raise SystemExit("browser RPC mediator secret is too short")
 if any("\x00" in payload[key] for key in required):
     raise SystemExit("browser bridge values cannot contain NUL")
+if runner == "installed-ui":
+    from urllib.parse import urlsplit
+    import re
+
+    try:
+        parsed = urlsplit(payload["platform_origin"])
+        host = parsed.hostname
+        origin_port = parsed.port
+        ui_port = int(payload["ui_port"])
+    except (ValueError, TypeError):
+        raise SystemExit("installed UI origin or port is invalid")
+    if (
+        parsed.scheme != "https"
+        or parsed.username is not None
+        or parsed.password is not None
+        or parsed.path != ""
+        or parsed.query
+        or parsed.fragment
+        or not host
+        or not re.fullmatch(r"[a-z0-9-]+(?:\.[a-z0-9-]+)*\.localhost", host)
+        or origin_port != ui_port
+        or not 1 <= ui_port <= 65535
+        or not re.fullmatch(r"[a-z0-9-]+(?:\.[a-z0-9-]+)*\.localhost", payload["ui_namespace"])
+        or payload["ui_namespace"] == host
+        or not payload["ui_namespace"].endswith("." + host)
+    ):
+        raise SystemExit("installed UI origin, namespace, or port is invalid")
+    ca_candidate = bridge / payload["ca_cert"]
+    if ca_candidate.is_symlink():
+        raise SystemExit("installed UI CA is a symlink")
+    ca_path = ca_candidate.resolve()
+    try:
+        ca_path.relative_to(bridge)
+    except ValueError:
+        raise SystemExit("installed UI CA escapes bridge directory")
+    if ca_path.name != payload["ca_cert"] or not ca_path.is_file():
+        raise SystemExit("installed UI CA is not a bridge-owned regular file")
+    try:
+        ca_text = ca_path.read_text(encoding="ascii")
+    except (OSError, UnicodeError):
+        raise SystemExit("installed UI CA is unreadable")
+    if "-----BEGIN CERTIFICATE-----" not in ca_text or "-----END CERTIFICATE-----" not in ca_text:
+        raise SystemExit("installed UI CA is not PEM")
+    control = bridge / "installed-ui-control"
+    if control.is_symlink() or not control.is_dir():
+        raise SystemExit("installed UI control directory is not a bridge-owned directory")
+    if control.stat().st_mode & 0o777 != 0o700:
+        raise SystemExit("installed UI control directory mode is not 0700")
 for key in required:
     print(f"{key}\0{payload[key]}", end="\0")
+if runner == "legacy":
+    print("runner\0legacy", end="\0")
 PY
     then
         rm -f -- "${request}" "${values_file}"
@@ -183,14 +246,41 @@ PY
     if [[ -n "${diagnostics_real}" ]]; then
         base_env+=("HEPHAESTUS_COOKING_DIAGNOSTICS_DIR=${diagnostics_real}")
     fi
+    runner="${request_values[runner]:-legacy}"
+    case "${runner}" in
+        legacy) child_script="${external_script}" ;;
+        installed-ui)
+            [[ -x "${installed_script}" ]] || {
+                write_response "${response}" 1
+                continue
+            }
+            child_script="${installed_script}" ;;
+        *) write_response "${response}" 1; continue ;;
+    esac
+    if [[ "${runner}" == installed-ui ]]; then
+        base_env+=(
+            "HEPHAESTUS_E2E_BROWSER_RUNNER=installed-ui"
+            "HEPHAESTUS_PLATFORM_HTTPS_ORIGIN=${request_values[platform_origin]}"
+            "HEPHAESTUS_UI_NAMESPACE=${request_values[ui_namespace]}"
+            "HEPHAESTUS_UI_PORT=${request_values[ui_port]}"
+            "HEPHAESTUS_CADDY_TEST_CA_CERT=${bridge_real}/${request_values[ca_cert]}"
+            "HEPHAESTUS_INSTALLED_UI_CONTROL_DIR=${bridge_real}/installed-ui-control"
+        )
+        if [[ -n "${HEPHAESTUS_PLAYWRIGHT_IMAGE:-}" ]]; then
+            base_env+=("HEPHAESTUS_PLAYWRIGHT_IMAGE=${HEPHAESTUS_PLAYWRIGHT_IMAGE}")
+        fi
+    fi
+    # env -i below intentionally omits the bridge selector/path, preventing
+    # an installed child from recursively submitting a second bridge request.
+    unset HEPHAESTUS_COOKING_BROWSER_BRIDGE_DIR
     if [[ -n "${diagnostics_real}" ]]; then
         child_log="$(mktemp "${TMPDIR:-/tmp}/heph-browser-bridge.XXXXXX.log")"
         chmod 600 -- "${child_log}"
         setsid timeout --kill-after=30s "${remaining}s" env -i "${base_env[@]}" \
-            "${external_script}" >"${child_log}" 2>&1 &
+            "${child_script}" >"${child_log}" 2>&1 &
     else
         setsid timeout --kill-after=30s "${remaining}s" env -i "${base_env[@]}" \
-            "${external_script}" >/dev/null 2>&1 &
+            "${child_script}" >/dev/null 2>&1 &
     fi
     child_pid="$!"
     wait "${child_pid}"

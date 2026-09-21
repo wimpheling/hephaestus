@@ -61,6 +61,30 @@ pub async fn connect_worker(
         .await
 }
 
+/// Opens a pool whose new connections select the application database role.
+///
+/// # Errors
+///
+/// Returns the connection or role-selection error from `PostgreSQL`. A
+/// connection is never returned when selecting the application role fails.
+pub async fn connect_app(
+    database_url: &str,
+    max_connections: u32,
+) -> Result<ControlPlanePool, sqlx::Error> {
+    sqlx::postgres::PgPoolOptions::new()
+        .max_connections(max_connections)
+        .after_connect(|connection, _metadata| {
+            Box::pin(async move {
+                sqlx::query("SET ROLE hephaestus_app")
+                    .execute(connection)
+                    .await
+                    .map(|_| ())
+            })
+        })
+        .connect(database_url)
+        .await
+}
+
 /// Returns runs whose revoked raw leases require cancellation.
 pub async fn revoked_raw_run_ids(pool: &ControlPlanePool) -> Result<Vec<uuid::Uuid>, sqlx::Error> {
     sqlx::query_scalar(

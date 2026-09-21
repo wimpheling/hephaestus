@@ -23,7 +23,8 @@ mod secret;
 
 pub use auth::mediator_identity_middleware;
 pub use auth::{
-    BootstrapIdentity, MediatorAssertionError, MediatorAuthenticator, MediatorPrincipal,
+    BootstrapIdentity, MediatorAssertionError, MediatorAuthenticationState, MediatorAuthenticator,
+    MediatorPrincipal, VerifiedMediatorSession,
 };
 pub use error::{RpcError, into_connect_error};
 
@@ -33,7 +34,7 @@ use control_plane_postgres::ControlPlanePool as PgPool;
 use event_application::MutationReceiptReader;
 use forge_postgres::PgForgeRepository;
 use forge_service::GitStorage;
-use identity_application::IdempotentIdentityResolver;
+use identity_application::{BrowserSessionStore, IdempotentIdentityResolver};
 use release_artifact_store::LocalArtifactStore;
 use rpc_proto::connect::hephaestus::identity::v1::IdentityServiceExt;
 use std::{path::PathBuf, sync::Arc, time::Duration};
@@ -138,23 +139,37 @@ pub fn mediator_signing_key(internal_token: &[u8]) -> [u8; 32] {
 /// Application dependencies shared by the generated Connect services.
 pub(crate) struct ApplicationDependencies {
     pool: PgPool,
+    application_pool: PgPool,
+    ui_browser_worker_pool: PgPool,
     forge: Arc<PgForgeRepository>,
     mutation_receipt_reader: Arc<dyn MutationReceiptReader>,
     identity_resolver: Arc<dyn IdempotentIdentityResolver>,
+    browser_sessions: Arc<dyn BrowserSessionStore>,
+    release_service: Arc<release_postgres::ReleaseService>,
 }
 
 impl ApplicationDependencies {
+    // Keep the composition root's explicit pool and adapter boundaries visible.
+    #[allow(clippy::too_many_arguments)]
     pub(crate) fn new(
         pool: PgPool,
+        application_pool: PgPool,
+        ui_browser_worker_pool: PgPool,
         forge: Arc<PgForgeRepository>,
         mutation_receipt_reader: Arc<dyn MutationReceiptReader>,
         identity_resolver: Arc<dyn IdempotentIdentityResolver>,
+        browser_sessions: Arc<dyn BrowserSessionStore>,
+        release_service: Arc<release_postgres::ReleaseService>,
     ) -> Self {
         Self {
             pool,
+            application_pool,
+            ui_browser_worker_pool,
             forge,
             mutation_receipt_reader,
             identity_resolver,
+            browser_sessions,
+            release_service,
         }
     }
 }
@@ -174,12 +189,25 @@ pub(crate) fn service(
     let cursor_key: [u8; 32] = mediator_signing_key.try_into().map_err(|_| {
         RpcInitializationError::Descriptor(String::from("invalid event cursor key"))
     })?;
+    let ui_installations = Arc::clone(&applications.release_service);
+    let ui_navigator = Arc::new(release_postgres::PgUiInstallationNavigator::new(
+        applications.application_pool.clone(),
+    ));
+    let ui_browser = Arc::new(release_postgres::PgUiBrowserSessionStore::new(
+        applications.ui_browser_worker_pool.clone(),
+        applications.application_pool.clone(),
+    ));
+    let ui_request_audit: Arc<dyn release_service::UiRequestAuditSink> =
+        Arc::new(release_postgres::PgUiRequestAuditRepository::new(
+            applications.ui_browser_worker_pool.clone(),
+        ));
     let mutation_receipts = MutationReceipts::new(applications.mutation_receipt_reader, cursor_key);
     let pool = &applications.pool;
     let identity = Arc::new(identity::IdentityRpc::new(
         Arc::clone(&applications.identity_resolver),
         MediatorAuthenticator::new(mediator_signing_key),
         mutation_receipts.clone(),
+        Arc::clone(&applications.browser_sessions),
     ));
     let organization = Arc::new(organization::OrganizationRpc::new(
         pool.clone(),
@@ -201,9 +229,11 @@ pub(crate) fn service(
     let router = gateway::register(
         router,
         pool,
+        &applications.application_pool,
         Arc::clone(&storage),
         MediatorAuthenticator::new(mediator_signing_key),
         mutation_receipts.clone(),
+        cursor_key,
     );
     let router = rpc_proto::connect::hephaestus::instance::v1::AgentInstanceServiceExt::register(
         instance, router,
@@ -260,6 +290,10 @@ pub(crate) fn service(
         mutation_receipts.clone(),
         Arc::clone(&event_wakeups),
         cursor_key,
+        ui_installations,
+        ui_navigator,
+        ui_browser,
+        ui_request_audit,
     );
     let router = artifact::register(
         router,

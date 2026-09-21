@@ -3,10 +3,15 @@
 use authz_postgres::PostgresMelangeAuthorizer;
 use forge_domain::{ProjectId, RepositoryId};
 use futures_util::StreamExt;
+use gateway_edge::{
+    GatewayEdgeError, GatewayServiceArtifact, GatewayServiceIdentity, GatewayServiceLaunchRequest,
+    GatewayServiceLaunchResolver, GatewayServiceMaterializer,
+};
 use gateway_postgres::{
     ConfigureGatewayRequest, GatewayConfigureError, GatewayMailboxPublicationRequest,
     GatewayMailboxPublicationResult, InstallGatewayManifest, PostgresGatewayInstaller,
     PostgresGatewayMailboxPublisher, PostgresGatewayManagement,
+    PostgresGatewayServiceLaunchResolver,
 };
 use identity_domain::{AuthenticatedIdentity, RequestId, UserId};
 use mailbox_dispatch::{
@@ -22,9 +27,16 @@ use release_domain::ReleaseId;
 use serial_test::serial;
 use sha2::{Digest, Sha256};
 use sqlx::postgres::PgPoolOptions;
-use std::{collections::BTreeMap, env, sync::Arc, time::Duration};
+use std::{
+    collections::BTreeMap,
+    env,
+    path::PathBuf,
+    sync::{Arc, Mutex},
+    time::Duration,
+};
 use time::OffsetDateTime;
 use uuid::Uuid;
+use vm_trait::{NetworkMode, RootFilesystem, VmMount};
 
 #[tokio::test(flavor = "multi_thread")]
 #[serial]
@@ -400,6 +412,822 @@ methods = ["POST"]
             .await,
         Err(gateway_postgres::GatewayInstallError::Unavailable)
     ));
+}
+
+#[tokio::test]
+#[serial]
+async fn gateway_service_declaration_round_trips_and_rejects_invalid_shapes() {
+    let Ok(database_url) = env::var("HEPHAESTUS_POSTGRES_TEST_URL") else {
+        return;
+    };
+    let pool = PgPoolOptions::new()
+        .max_connections(6)
+        .connect(&database_url)
+        .await
+        .expect("connect gateway service PostgreSQL");
+    sqlx::migrate!("../../migrations")
+        .run(&pool)
+        .await
+        .expect("apply gateway service migrations");
+    let fixture = seed_fixture(&pool).await;
+
+    let stateless: (
+        String,
+        Option<i32>,
+        Option<String>,
+        Option<String>,
+        String,
+        Vec<u8>,
+    ) = sqlx::query_as(
+        "SELECT handler_contract, service_loopback_port, service_readiness_path,
+                    service_health_path, service_log_capture_mode, normalized_hash
+             FROM gateway_revisions WHERE id = $1",
+    )
+    .bind(fixture.revision)
+    .fetch_one(&pool)
+    .await
+    .expect("load legacy stateless revision");
+    assert_eq!(stateless.0, "http.v1");
+    assert_eq!(stateless.1, None);
+    assert_eq!(stateless.2, None);
+    assert_eq!(stateless.3, None);
+    assert_eq!(stateless.4, "disabled");
+    assert_eq!(stateless.5, vec![9_u8; 32]);
+
+    let app_pool = PgPoolOptions::new()
+        .max_connections(6)
+        .after_connect(|connection, _| {
+            Box::pin(async move {
+                sqlx::query("SET ROLE hephaestus_app")
+                    .execute(connection)
+                    .await?;
+                Ok(())
+            })
+        })
+        .connect(&database_url)
+        .await
+        .expect("connect as hephaestus application role");
+    let installer =
+        PostgresGatewayInstaller::new(app_pool.clone(), Arc::new(PostgresMelangeAuthorizer));
+    let owner = AuthenticatedIdentity::new(
+        UserId::from_uuid(fixture.owner),
+        "test",
+        "gateway-service-owner",
+        serde_json::json!({}),
+        RequestId::new(),
+    );
+    let manifest = br#"
+version = 1
+
+[[gateways]]
+name = "service-installed"
+agent_name = "gateway-mailbox"
+handler_contract = "http.service.v1"
+exposure = "public"
+
+[gateways.service]
+loopback_port = 18080
+readiness_path = "/ready"
+health_path = "/health"
+log_capture_mode = "application"
+
+[[gateways.routes]]
+path = "/service"
+methods = ["GET"]
+"#;
+    let installed = installer
+        .install(
+            &owner,
+            InstallGatewayManifest {
+                project_id: ProjectId::from_uuid(fixture.project),
+                repository_id: RepositoryId::from_uuid(fixture.repository),
+                release_id: Some(ReleaseId::from_uuid(fixture.release)),
+                manifest: manifest.to_vec(),
+            },
+        )
+        .await
+        .expect("install service declaration");
+    let initial_state: (Option<Uuid>, Option<Uuid>) = sqlx::query_as(
+        "SELECT active_revision_id, desired_service_revision_id
+           FROM gateways WHERE id = $1",
+    )
+    .bind(installed.gateways[0].gateway_id.as_uuid())
+    .fetch_one(&pool)
+    .await
+    .expect("load initial service activation state");
+    assert_eq!(initial_state.0, None);
+    assert_eq!(
+        initial_state.1,
+        Some(installed.gateways[0].revision_id.as_uuid())
+    );
+    let stateless_state: (Option<Uuid>, Option<Uuid>) = sqlx::query_as(
+        "SELECT active_revision_id, desired_service_revision_id
+           FROM gateways WHERE id = $1",
+    )
+    .bind(fixture.gateway)
+    .fetch_one(&pool)
+    .await
+    .expect("load stateless activation state");
+    assert_eq!(stateless_state, (Some(fixture.revision), None));
+    let persisted: (String, Option<i32>, Option<String>, Option<String>, String) = sqlx::query_as(
+        "SELECT handler_contract, service_loopback_port, service_readiness_path,
+                service_health_path, service_log_capture_mode
+         FROM gateway_revisions WHERE id = $1",
+    )
+    .bind(installed.gateways[0].revision_id.as_uuid())
+    .fetch_one(&pool)
+    .await
+    .expect("load persisted service declaration");
+    assert_eq!(
+        persisted,
+        (
+            "http.service.v1".to_owned(),
+            Some(18080),
+            Some("/ready".to_owned()),
+            Some("/health".to_owned()),
+            "application".to_owned(),
+        )
+    );
+
+    // Use the harness owner connection for the internal projection proof;
+    // production management calls use their established role boundary.
+    let management =
+        PostgresGatewayManagement::new(pool.clone(), Arc::new(PostgresMelangeAuthorizer));
+    let (_, revisions) = management
+        .get(&owner, installed.gateways[0].gateway_id.as_uuid())
+        .await
+        .expect("project service revision");
+    let service = revisions
+        .iter()
+        .find(|revision| revision.id == installed.gateways[0].revision_id.as_uuid())
+        .and_then(|revision| revision.service.clone())
+        .expect("typed service projection");
+    assert_eq!(service.loopback_port, 18080);
+    assert_eq!(service.readiness_path.as_str(), "/ready");
+    assert_eq!(service.health_path.as_str(), "/health");
+    assert_eq!(
+        service.log_capture_mode,
+        gateway_domain::ServiceLogCaptureMode::Application
+    );
+
+    let outbox_before_desired_change: i64 = sqlx::query_scalar(
+        "SELECT count(*) FROM product_event_outbox outbox
+           JOIN application_events event ON event.id = outbox.event_id
+          WHERE event.aggregate_type = 'gateway' AND event.aggregate_id = $1",
+    )
+    .bind(installed.gateways[0].gateway_id.as_uuid())
+    .fetch_one(&pool)
+    .await
+    .expect("count service product events before desired change");
+    let configured = management
+        .configure(
+            &owner,
+            ConfigureGatewayRequest {
+                gateway_id: installed.gateways[0].gateway_id.as_uuid(),
+                expected_revision_id: installed.gateways[0].revision_id.as_uuid(),
+                parameters: BTreeMap::new(),
+                secret_selections: Vec::new(),
+            },
+        )
+        .await
+        .expect("clone service revision");
+    let pending_state: (Option<Uuid>, Option<Uuid>) = sqlx::query_as(
+        "SELECT active_revision_id, desired_service_revision_id
+           FROM gateways WHERE id = $1",
+    )
+    .bind(installed.gateways[0].gateway_id.as_uuid())
+    .fetch_one(&pool)
+    .await
+    .expect("load pending service replacement state");
+    assert_eq!(pending_state.0, None);
+    assert_eq!(pending_state.1, Some(configured.revision_id));
+    let configured_mode: String =
+        sqlx::query_scalar("SELECT service_log_capture_mode FROM gateway_revisions WHERE id = $1")
+            .bind(configured.revision_id)
+            .fetch_one(&pool)
+            .await
+            .expect("load configured service log mode");
+    assert_eq!(configured_mode, "application");
+    let outbox_after_desired_change: i64 = sqlx::query_scalar(
+        "SELECT count(*) FROM product_event_outbox outbox
+           JOIN application_events event ON event.id = outbox.event_id
+          WHERE event.aggregate_type = 'gateway' AND event.aggregate_id = $1",
+    )
+    .bind(installed.gateways[0].gateway_id.as_uuid())
+    .fetch_one(&pool)
+    .await
+    .expect("count service product events after desired change");
+    assert!(
+        outbox_after_desired_change > outbox_before_desired_change,
+        "desired-only service changes must invalidate through the product outbox"
+    );
+
+    let replay = management
+        .configure(
+            &owner,
+            ConfigureGatewayRequest {
+                gateway_id: installed.gateways[0].gateway_id.as_uuid(),
+                expected_revision_id: installed.gateways[0].revision_id.as_uuid(),
+                parameters: BTreeMap::new(),
+                secret_selections: Vec::new(),
+            },
+        )
+        .await
+        .expect("replay the exact service configuration command");
+    assert_eq!(replay.revision_id, configured.revision_id);
+    let outbox_before_rolled_back_change: i64 = sqlx::query_scalar(
+        "SELECT count(*) FROM product_event_outbox outbox
+           JOIN application_events event ON event.id = outbox.event_id
+          WHERE event.aggregate_type = 'gateway' AND event.aggregate_id = $1",
+    )
+    .bind(installed.gateways[0].gateway_id.as_uuid())
+    .fetch_one(&pool)
+    .await
+    .expect("count service product events before stale change");
+    let stale = management
+        .configure(
+            &AuthenticatedIdentity::new(
+                UserId::from_uuid(fixture.owner),
+                "test",
+                "gateway-service-stale",
+                serde_json::json!({}),
+                RequestId::new(),
+            ),
+            ConfigureGatewayRequest {
+                gateway_id: installed.gateways[0].gateway_id.as_uuid(),
+                expected_revision_id: installed.gateways[0].revision_id.as_uuid(),
+                parameters: BTreeMap::new(),
+                secret_selections: Vec::new(),
+            },
+        )
+        .await;
+    assert!(matches!(stale, Err(GatewayConfigureError::Stale)));
+    let outbox_after_rolled_back_change: i64 = sqlx::query_scalar(
+        "SELECT count(*) FROM product_event_outbox outbox
+           JOIN application_events event ON event.id = outbox.event_id
+          WHERE event.aggregate_type = 'gateway' AND event.aggregate_id = $1",
+    )
+    .bind(installed.gateways[0].gateway_id.as_uuid())
+    .fetch_one(&pool)
+    .await
+    .expect("count service product events after stale change");
+    assert_eq!(
+        outbox_after_rolled_back_change, outbox_before_rolled_back_change,
+        "a rolled-back stale change must not emit a product event"
+    );
+
+    let old_stateless_revision = Uuid::new_v4();
+    sqlx::query(
+        "INSERT INTO gateway_revisions
+            (id, gateway_id, project_id, repository_id, release_id,
+             release_agent_id, release_agent_key, handler_contract, exposure,
+             parameters, secret_slots, mailbox_slots, normalized_hash, created_by)
+         SELECT $1, $2, project_id, repository_id, release_id,
+                release_agent_id, release_agent_key, 'http.v1', exposure,
+                parameters, secret_slots, mailbox_slots, $3, created_by
+           FROM gateway_revisions WHERE id = $4",
+    )
+    .bind(old_stateless_revision)
+    .bind(installed.gateways[0].gateway_id.as_uuid())
+    .bind(Sha256::digest(old_stateless_revision.as_bytes()).as_slice())
+    .bind(fixture.revision)
+    .execute(&pool)
+    .await
+    .expect("create old stateless revision for pending-service race");
+    sqlx::query(
+        "INSERT INTO gateway_routes
+            (id, gateway_revision_id, gateway_id, project_id, path, methods)
+         VALUES ($1, $2, $3, $4, '/old-stateless', ARRAY['GET'])",
+    )
+    .bind(Uuid::new_v4())
+    .bind(old_stateless_revision)
+    .bind(installed.gateways[0].gateway_id.as_uuid())
+    .bind(fixture.project)
+    .execute(&pool)
+    .await
+    .expect("create old stateless route for pending-service race");
+    sqlx::query("UPDATE gateways SET active_revision_id = $2 WHERE id = $1")
+        .bind(installed.gateways[0].gateway_id.as_uuid())
+        .bind(old_stateless_revision)
+        .execute(&pool)
+        .await
+        .expect("restore old stateless revision as serving target");
+    let stale_active = management
+        .configure(
+            &AuthenticatedIdentity::new(
+                UserId::from_uuid(fixture.owner),
+                "test",
+                "gateway-service-old-active",
+                serde_json::json!({}),
+                RequestId::new(),
+            ),
+            ConfigureGatewayRequest {
+                gateway_id: installed.gateways[0].gateway_id.as_uuid(),
+                expected_revision_id: old_stateless_revision,
+                parameters: BTreeMap::new(),
+                secret_selections: Vec::new(),
+            },
+        )
+        .await;
+    assert!(
+        matches!(stale_active, Err(GatewayConfigureError::Stale)),
+        "a pending service candidate must make an older active revision stale"
+    );
+
+    let stateless_install = installer
+        .install(
+            &AuthenticatedIdentity::new(
+                UserId::from_uuid(fixture.owner),
+                "test",
+                "gateway-service-stateless-reinstall",
+                serde_json::json!({}),
+                RequestId::new(),
+            ),
+            InstallGatewayManifest {
+                project_id: ProjectId::from_uuid(fixture.project),
+                repository_id: RepositoryId::from_uuid(fixture.repository),
+                release_id: Some(ReleaseId::from_uuid(fixture.release)),
+                manifest: br#"
+version = 1
+
+[[gateways]]
+name = "service-installed"
+agent_name = "gateway-mailbox"
+handler_contract = "http.v1"
+exposure = "public"
+
+[[gateways.routes]]
+path = "/service-stateless"
+methods = ["GET"]
+"#
+                .to_vec(),
+            },
+        )
+        .await
+        .expect("stateless reinstall");
+    let cleared_state: (Option<Uuid>, Option<Uuid>) = sqlx::query_as(
+        "SELECT active_revision_id, desired_service_revision_id
+           FROM gateways WHERE id = $1",
+    )
+    .bind(installed.gateways[0].gateway_id.as_uuid())
+    .fetch_one(&pool)
+    .await
+    .expect("load stateless reinstall state");
+    assert_eq!(
+        cleared_state,
+        (
+            Some(stateless_install.gateways[0].revision_id.as_uuid()),
+            None
+        )
+    );
+    let cloned: (String, Option<i32>, Option<String>, Option<String>, String) = sqlx::query_as(
+        "SELECT handler_contract, service_loopback_port, service_readiness_path,
+                service_health_path, service_log_capture_mode
+         FROM gateway_revisions WHERE id = $1",
+    )
+    .bind(configured.revision_id)
+    .fetch_one(&pool)
+    .await
+    .expect("load cloned service declaration");
+    assert_eq!(cloned, persisted);
+
+    sqlx::query(
+        "UPDATE gateways SET active_revision_id = $2
+          WHERE id = $1",
+    )
+    .bind(installed.gateways[0].gateway_id.as_uuid())
+    .bind(configured.revision_id)
+    .execute(&pool)
+    .await
+    .expect("promote service candidate for replacement proof");
+    let replacement = management
+        .configure(
+            &AuthenticatedIdentity::new(
+                UserId::from_uuid(fixture.owner),
+                "test",
+                "gateway-service-replacement",
+                serde_json::json!({}),
+                RequestId::new(),
+            ),
+            ConfigureGatewayRequest {
+                gateway_id: installed.gateways[0].gateway_id.as_uuid(),
+                expected_revision_id: configured.revision_id,
+                parameters: BTreeMap::new(),
+                secret_selections: Vec::new(),
+            },
+        )
+        .await
+        .expect("configure replacement while service is serving");
+    let replacement_state: (Option<Uuid>, Option<Uuid>) = sqlx::query_as(
+        "SELECT active_revision_id, desired_service_revision_id
+           FROM gateways WHERE id = $1",
+    )
+    .bind(installed.gateways[0].gateway_id.as_uuid())
+    .fetch_one(&pool)
+    .await
+    .expect("load serving and pending replacement state");
+    assert_eq!(replacement_state.0, Some(configured.revision_id));
+    assert_eq!(replacement_state.1, Some(replacement.revision_id));
+
+    let oversized_path = format!("/{}", "é".repeat(256));
+    for (port, readiness, health) in [
+        (
+            Some(80_i32),
+            Some("/ready".to_owned()),
+            Some("/health".to_owned()),
+        ),
+        (
+            Some(18080_i32),
+            Some("ready".to_owned()),
+            Some("/health".to_owned()),
+        ),
+        (
+            Some(18080_i32),
+            Some("/ready%20".to_owned()),
+            Some("/health".to_owned()),
+        ),
+        (Some(18080_i32), None, Some("/health".to_owned())),
+        (
+            Some(18080_i32),
+            Some(oversized_path),
+            Some("/health".to_owned()),
+        ),
+    ] {
+        let mut transaction = pool.begin().await.expect("begin invalid shape transaction");
+        let result = sqlx::query(
+            "INSERT INTO gateway_revisions
+                (id, gateway_id, project_id, repository_id, handler_contract,
+                 exposure, parameters, service_loopback_port, service_readiness_path,
+                 service_health_path, normalized_hash, created_by)
+             VALUES ($1, $2, $3, $4, 'http.service.v1', 'public', '{}', $5, $6, $7, $8, $9)",
+        )
+        .bind(Uuid::new_v4())
+        .bind(fixture.gateway)
+        .bind(fixture.project)
+        .bind(fixture.repository)
+        .bind(port)
+        .bind(readiness)
+        .bind(health)
+        .bind(Sha256::digest(Uuid::new_v4().as_bytes()).as_slice())
+        .bind(fixture.owner)
+        .execute(&mut *transaction)
+        .await;
+        assert!(result.is_err(), "invalid service shape must be rejected");
+        transaction
+            .rollback()
+            .await
+            .expect("rollback invalid shape transaction");
+    }
+
+    for (handler_contract, log_capture_mode, port, readiness, health) in [
+        (
+            "http.service.v1",
+            "future",
+            Some(18080_i32),
+            Some("/ready".to_owned()),
+            Some("/health".to_owned()),
+        ),
+        ("http.v1", "application", None, None, None),
+    ] {
+        let mut transaction = pool.begin().await.expect("begin invalid mode transaction");
+        let result = sqlx::query(
+            "INSERT INTO gateway_revisions
+                (id, gateway_id, project_id, repository_id, handler_contract,
+                 exposure, parameters, service_loopback_port, service_readiness_path,
+                 service_health_path, service_log_capture_mode, normalized_hash, created_by)
+             VALUES ($1, $2, $3, $4, $5, 'public', '{}', $6, $7, $8, $9, $10, $11)",
+        )
+        .bind(Uuid::new_v4())
+        .bind(fixture.gateway)
+        .bind(fixture.project)
+        .bind(fixture.repository)
+        .bind(handler_contract)
+        .bind(port)
+        .bind(readiness)
+        .bind(health)
+        .bind(log_capture_mode)
+        .bind(Sha256::digest(Uuid::new_v4().as_bytes()).as_slice())
+        .bind(fixture.owner)
+        .execute(&mut *transaction)
+        .await;
+        assert!(
+            result.is_err(),
+            "invalid log capture mode shape must be rejected"
+        );
+        transaction
+            .rollback()
+            .await
+            .expect("rollback invalid mode transaction");
+    }
+
+    let invalid_desired =
+        sqlx::query("UPDATE gateways SET desired_service_revision_id = $2 WHERE id = $1")
+            .bind(installed.gateways[0].gateway_id.as_uuid())
+            .bind(fixture.revision)
+            .execute(&pool)
+            .await;
+    assert!(
+        invalid_desired.is_err(),
+        "desired state must reject a stateless revision"
+    );
+}
+
+#[tokio::test]
+#[serial]
+async fn gateway_service_launch_resolves_exact_published_revision_without_runtime_session() {
+    let Ok(database_url) = env::var("HEPHAESTUS_POSTGRES_TEST_URL") else {
+        eprintln!("SKIPPED gateway service resolver: HEPHAESTUS_POSTGRES_TEST_URL is unset");
+        return;
+    };
+    let pool = PgPoolOptions::new()
+        .max_connections(6)
+        .connect(&database_url)
+        .await
+        .expect("connect gateway service resolver PostgreSQL");
+    sqlx::migrate!("../../migrations")
+        .run(&pool)
+        .await
+        .expect("apply gateway service resolver migrations");
+    let max_migration: i64 = sqlx::query_scalar("SELECT max(version) FROM _sqlx_migrations")
+        .fetch_one(&pool)
+        .await
+        .expect("read migration marker");
+    assert!(max_migration >= 77, "migration 0077 must be applied");
+    println!(
+        "REAL_POSTGRES_CONNECTED_AND_MIGRATED=1 max_migration={max_migration} service_launch_resolver=connected"
+    );
+    let fixture = seed_fixture(&pool).await;
+    println!("REAL_POSTGRES_SERVICE_RESOLVER_FIXTURE=seeded");
+    let service_revision = Uuid::new_v4();
+    let service_agent = Uuid::new_v4();
+    let artifact_key = Uuid::new_v4();
+    let artifact_hash = Sha256::digest(b"service executable");
+    let runtime_contract = serde_json::json!({
+        "command": "bin/server",
+        "arguments": ["--serve"],
+        "working_directory": ".",
+        "image_reference": "service-root",
+        "requires_state": false,
+        "policy_ceiling": {"vcpus": 2, "memory_mib": 256, "network": "disabled"}
+    });
+    sqlx::query("INSERT INTO release_agents (id, release_id, family_id, agent_key, display_name, runtime_contract, runtime_contract_hash, parameter_schema, secret_slot_schema, requires_state) VALUES ($1, $2, $3, 'service-agent', 'Service agent', $4, $5, '[]', '[]', false)")
+        .bind(service_agent)
+        .bind(fixture.release)
+        .bind(fixture.family)
+        .bind(runtime_contract)
+        .bind([7_u8; 32].as_slice())
+        .execute(&pool)
+        .await
+        .expect("service release agent");
+    sqlx::query("INSERT INTO gateway_revisions (id, gateway_id, project_id, repository_id, release_id, release_agent_id, release_agent_key, handler_contract, exposure, parameters, service_loopback_port, service_readiness_path, service_health_path, service_log_capture_mode, normalized_hash, created_by) VALUES ($1, $2, $3, $4, $5, $6, 'service-agent', 'http.service.v1', 'public', $7, 18081, '/ready', '/health', 'application', $8, $9)")
+        .bind(service_revision)
+        .bind(fixture.gateway)
+        .bind(fixture.project)
+        .bind(fixture.repository)
+        .bind(fixture.release)
+        .bind(service_agent)
+        .bind(serde_json::json!({"mode": "persistent"}))
+        .bind([8_u8; 32].as_slice())
+        .bind(fixture.owner)
+        .execute(&pool)
+        .await
+        .expect("service gateway revision");
+    sqlx::query("INSERT INTO release_artifacts (id, release_id, path, kind, mode, content_hash, size_bytes, media_type, storage_key) VALUES ($1, $2, 'bin/server', 'executable', 365, $3, 17, 'application/octet-stream', $4)")
+        .bind(Uuid::new_v4())
+        .bind(fixture.release)
+        .bind(artifact_hash.as_slice())
+        .bind(artifact_key)
+        .execute(&pool)
+        .await
+        .expect("service release artifact");
+
+    let before: (i64, i64) = sqlx::query_as(
+        "SELECT (SELECT count(*) FROM gateway_invocations),
+                (SELECT count(*) FROM gateway_runtime_authority_sessions)",
+    )
+    .fetch_one(&pool)
+    .await
+    .expect("count runtime rows before resolution");
+    let worker_pool = PgPoolOptions::new()
+        .max_connections(6)
+        .after_connect(|connection, _| {
+            Box::pin(async move {
+                sqlx::query("SET ROLE hephaestus_worker")
+                    .execute(connection)
+                    .await?;
+                Ok(())
+            })
+        })
+        .connect(&database_url)
+        .await
+        .expect("connect service resolver worker role");
+    let materializer = Arc::new(RecordingServiceMaterializer::default());
+    let resolver = PostgresGatewayServiceLaunchResolver::new(
+        worker_pool,
+        BTreeMap::from([(
+            String::from("service-root"),
+            RootFilesystem::Directory {
+                host_path: PathBuf::from("/var/lib/hephaestus/test-root"),
+            },
+        )]),
+    )
+    .with_service_materializer(Arc::clone(&materializer) as Arc<dyn GatewayServiceMaterializer>);
+    let identity = GatewayServiceIdentity {
+        instance_id: Uuid::new_v4(),
+        gateway_id: fixture.gateway,
+        revision_id: service_revision,
+    };
+    let launch = resolver
+        .resolve_service_launch(GatewayServiceLaunchRequest { identity })
+        .await
+        .expect("resolve published service revision");
+    println!("REAL_POSTGRES_SERVICE_RESOLVER_QUERY=passed");
+    assert_eq!(launch.identity, identity);
+    assert_eq!(launch.service.loopback_port, 18081);
+    assert_eq!(launch.service.readiness_path.as_str(), "/ready");
+    assert_eq!(launch.service.health_path.as_str(), "/health");
+    assert_eq!(
+        launch.service.log_capture_mode,
+        gateway_domain::ServiceLogCaptureMode::Application
+    );
+    assert!(matches!(launch.spec.network, NetworkMode::Disabled));
+    assert!(launch.spec.runtime_authority.is_none());
+    assert_eq!(
+        launch
+            .spec
+            .private_http_service
+            .as_ref()
+            .unwrap()
+            .max_connections,
+        32
+    );
+    assert_eq!(
+        launch
+            .spec
+            .private_http_service
+            .as_ref()
+            .unwrap()
+            .connect_timeout,
+        Duration::from_secs(2)
+    );
+    assert_eq!(
+        launch.spec.id.0,
+        format!("gateway-service-{}", identity.instance_id)
+    );
+    assert_eq!(
+        launch.spec.labels.get("hephaestus.gateway-instance"),
+        Some(&identity.instance_id.to_string())
+    );
+    {
+        let recorded = materializer.records.lock().expect("materializer records");
+        assert_eq!(recorded.len(), 1);
+        assert_eq!(recorded[0].identity, identity);
+        assert_eq!(recorded[0].artifact_paths, vec![String::from("bin/server")]);
+        assert_eq!(
+            recorded[0].parameters,
+            serde_json::json!({"mode": "persistent"})
+        );
+        drop(recorded);
+    }
+    let after: (i64, i64) = sqlx::query_as(
+        "SELECT (SELECT count(*) FROM gateway_invocations),
+                (SELECT count(*) FROM gateway_runtime_authority_sessions)",
+    )
+    .fetch_one(&pool)
+    .await
+    .expect("count runtime rows after resolution");
+    assert_eq!(
+        after, before,
+        "service resolution must not create runtime rows"
+    );
+
+    let wrong_revision = resolver
+        .resolve_service_launch(GatewayServiceLaunchRequest {
+            identity: GatewayServiceIdentity {
+                revision_id: fixture.revision,
+                ..identity
+            },
+        })
+        .await;
+    assert!(
+        wrong_revision.is_err(),
+        "stateless revisions cannot be service launches"
+    );
+    let wrong_gateway = resolver
+        .resolve_service_launch(GatewayServiceLaunchRequest {
+            identity: GatewayServiceIdentity {
+                gateway_id: Uuid::new_v4(),
+                ..identity
+            },
+        })
+        .await;
+    assert!(
+        wrong_gateway.is_err(),
+        "gateway identity must bind the exact revision"
+    );
+
+    let invalid_materializer = Arc::new(RecordingServiceMaterializer {
+        invalid_mounts: true,
+        ..RecordingServiceMaterializer::default()
+    });
+    let invalid_resolver = PostgresGatewayServiceLaunchResolver::new(
+        pool.clone(),
+        BTreeMap::from([(
+            String::from("service-root"),
+            RootFilesystem::Directory {
+                host_path: PathBuf::from("/var/lib/hephaestus/test-root"),
+            },
+        )]),
+    )
+    .with_service_materializer(
+        Arc::clone(&invalid_materializer) as Arc<dyn GatewayServiceMaterializer>
+    );
+    assert!(
+        invalid_resolver
+            .resolve_service_launch(GatewayServiceLaunchRequest { identity })
+            .await
+            .is_err()
+    );
+    assert_eq!(
+        invalid_materializer
+            .destroyed
+            .lock()
+            .expect("destroyed identities")
+            .as_slice(),
+        &[identity]
+    );
+
+    sqlx::query("UPDATE releases SET state = 'revoked', revoked_at = now() WHERE id = $1")
+        .bind(fixture.release)
+        .execute(&pool)
+        .await
+        .expect("revoke service release");
+    assert!(
+        resolver
+            .resolve_service_launch(GatewayServiceLaunchRequest { identity })
+            .await
+            .is_err()
+    );
+}
+
+#[derive(Default)]
+struct RecordingServiceMaterializer {
+    records: Mutex<Vec<MaterializerRecord>>,
+    invalid_mounts: bool,
+    destroyed: Mutex<Vec<GatewayServiceIdentity>>,
+}
+
+struct MaterializerRecord {
+    identity: GatewayServiceIdentity,
+    artifact_paths: Vec<String>,
+    parameters: serde_json::Value,
+}
+
+impl GatewayServiceMaterializer for RecordingServiceMaterializer {
+    fn prepare_service(
+        &self,
+        identity: GatewayServiceIdentity,
+        artifacts: &[GatewayServiceArtifact],
+        parameters: &serde_json::Value,
+    ) -> Result<Vec<VmMount>, GatewayEdgeError> {
+        self.records
+            .lock()
+            .expect("materializer records")
+            .push(MaterializerRecord {
+                identity,
+                artifact_paths: artifacts
+                    .iter()
+                    .map(|artifact| artifact.path.clone())
+                    .collect(),
+                parameters: parameters.clone(),
+            });
+        let mounts = vec![
+            VmMount {
+                tag: String::from("service-release"),
+                host_path: PathBuf::from("/tmp/service-release"),
+                guest_path: PathBuf::from("/release"),
+                read_only: true,
+            },
+            VmMount {
+                tag: String::from("service-control"),
+                host_path: PathBuf::from("/tmp/service-control"),
+                guest_path: PathBuf::from("/run/hephaestus"),
+                read_only: true,
+            },
+        ];
+        if self.invalid_mounts {
+            return Ok(mounts.into_iter().take(1).collect());
+        }
+        Ok(mounts)
+    }
+
+    fn destroy_service(&self, identity: GatewayServiceIdentity) -> Result<(), GatewayEdgeError> {
+        self.destroyed
+            .lock()
+            .expect("destroyed identities")
+            .push(identity);
+        Ok(())
+    }
 }
 
 async fn assert_reconfigure_after_reinstallation_creates_fresh_authority(

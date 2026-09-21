@@ -11,6 +11,16 @@ defmodule HephaestusWebWeb.DesignSystem.Pages.ProjectPage do
   attr :project_id, :string, required: true
   attr :item_count, :integer, default: 0
   attr :repositories, :any, default: []
+
+  attr :installed_ui, :map,
+    default: %{
+      state: :loading,
+      installations: [],
+      error: nil,
+      has_more: false,
+      loading_more: false
+    }
+
   attr :organization_index_destination, :string, required: true
   attr :organization_destination, :string, required: true
   attr :repository_destination, :any, required: true
@@ -63,6 +73,14 @@ defmodule HephaestusWebWeb.DesignSystem.Pages.ProjectPage do
             </.action>
           </.resource_list>
         </.frame>
+        <.installed_ui_navigation
+          scope={:project}
+          state={@installed_ui.state}
+          installations={@installed_ui.installations}
+          error={@installed_ui.error}
+          has_more={@installed_ui.has_more}
+          loading_more={@installed_ui.loading_more}
+        />
       </.frame>
     </.page_state>
     """

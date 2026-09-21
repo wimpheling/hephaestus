@@ -1,5 +1,12 @@
 //! Provider-neutral release command DTOs and workflow ports.
 
+mod ui_browser;
+pub mod ui_browser_host;
+pub mod ui_browser_serving;
+mod ui_installation;
+mod ui_installation_navigation;
+mod ui_request_audit;
+
 use capability_domain::{
     CapabilityBindingId, CapabilityOperation, CapabilityResource, CapabilitySlotKey,
 };
@@ -14,6 +21,38 @@ use release_domain::{
 use runtime_types::RunId;
 use std::collections::BTreeMap;
 use uuid::Uuid;
+
+pub use release_domain::ui::UiCachePolicy;
+pub use ui_browser::{
+    AuthenticateUiBrowserSession, CreateUiBrowserHandoff, CreatedUiBrowserHandoff,
+    CreatedUiBrowserSession, ExchangeUiBrowserHandoff, UiBrowserHandoffError,
+    UiBrowserRequestRoute, UiBrowserSessionContext, UiBrowserSessionError, UiBrowserSessionStore,
+};
+pub use ui_browser_host::{
+    UI_BOOTSTRAP_PATH, UI_CHILD_COOKIE, UI_HANDOFF_FRAGMENT_LENGTH, UI_RESERVED_PREFIX,
+    UiGenerationHost, UiHostError, UiNamespace, UiPublicPort,
+};
+pub use ui_browser_serving::{
+    ActiveUiGenerationHost, UiBrowserHttpPath, UiBrowserHttpPathError, UiBrowserHttpRequest,
+    UiBrowserHttpServingProjection, UiGatewayRequestKind, UiGatewayRequestProjection,
+    UiGenerationHostResolver, UiHostLookupError, UiServingError, UiServingProjection,
+    UiStaticArtifactProjection,
+};
+pub use ui_installation::{
+    ActivateUiInstallation, DisableUiInstallation, InstallStaticUi, InstallStaticUiResult,
+    InstallUi, InstallUiResult, RemoveUiInstallation, RollbackUiInstallation, UiInstallationError,
+    UiInstallationGenerationResult, UiInstallationLifecycleResult, UiInstallationReceiptScope,
+};
+pub use ui_installation_navigation::{
+    DEFAULT_UI_INSTALLATION_PAGE_SIZE, ListUiInstallations, MAX_UI_INSTALLATION_PAGE_SIZE,
+    UiInstallationContentKind, UiInstallationNavigation, UiInstallationNavigationError,
+    UiInstallationNavigationPage, UiInstallationNavigator, UiInstallationPage,
+    UiInstallationTargetFilter,
+};
+pub use ui_request_audit::{
+    NewUiRequestAuditEvent, UiRequestAuditContext, UiRequestAuditDecision, UiRequestAuditError,
+    UiRequestAuditOutcome, UiRequestAuditReason, UiRequestAuditSink, UiRequestAuditSurface,
+};
 
 /// One already safely imported immutable artifact.
 #[derive(Debug, Clone)]

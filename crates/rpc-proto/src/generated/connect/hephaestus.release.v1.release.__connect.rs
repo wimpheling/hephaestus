@@ -58,6 +58,88 @@ pub type OwnedWatchReleaseResponseView = ::buffa::view::OwnedView<
         'static,
     >,
 >;
+///Shorthand for `OwnedView<InstallUiRequestView<'static>>`.
+pub type OwnedInstallUiRequestView = ::buffa::view::OwnedView<
+    crate::messages::hephaestus::release::v1::__buffa::view::InstallUiRequestView<
+        'static,
+    >,
+>;
+///Shorthand for `OwnedView<InstallUiResponseView<'static>>`.
+pub type OwnedInstallUiResponseView = ::buffa::view::OwnedView<
+    crate::messages::hephaestus::release::v1::__buffa::view::InstallUiResponseView<
+        'static,
+    >,
+>;
+///Shorthand for `OwnedView<ActivateUiRequestView<'static>>`.
+pub type OwnedActivateUiRequestView = ::buffa::view::OwnedView<
+    crate::messages::hephaestus::release::v1::__buffa::view::ActivateUiRequestView<
+        'static,
+    >,
+>;
+///Shorthand for `OwnedView<ActivateUiResponseView<'static>>`.
+pub type OwnedActivateUiResponseView = ::buffa::view::OwnedView<
+    crate::messages::hephaestus::release::v1::__buffa::view::ActivateUiResponseView<
+        'static,
+    >,
+>;
+///Shorthand for `OwnedView<RollbackUiRequestView<'static>>`.
+pub type OwnedRollbackUiRequestView = ::buffa::view::OwnedView<
+    crate::messages::hephaestus::release::v1::__buffa::view::RollbackUiRequestView<
+        'static,
+    >,
+>;
+///Shorthand for `OwnedView<RollbackUiResponseView<'static>>`.
+pub type OwnedRollbackUiResponseView = ::buffa::view::OwnedView<
+    crate::messages::hephaestus::release::v1::__buffa::view::RollbackUiResponseView<
+        'static,
+    >,
+>;
+///Shorthand for `OwnedView<DisableUiRequestView<'static>>`.
+pub type OwnedDisableUiRequestView = ::buffa::view::OwnedView<
+    crate::messages::hephaestus::release::v1::__buffa::view::DisableUiRequestView<
+        'static,
+    >,
+>;
+///Shorthand for `OwnedView<DisableUiResponseView<'static>>`.
+pub type OwnedDisableUiResponseView = ::buffa::view::OwnedView<
+    crate::messages::hephaestus::release::v1::__buffa::view::DisableUiResponseView<
+        'static,
+    >,
+>;
+///Shorthand for `OwnedView<RemoveUiRequestView<'static>>`.
+pub type OwnedRemoveUiRequestView = ::buffa::view::OwnedView<
+    crate::messages::hephaestus::release::v1::__buffa::view::RemoveUiRequestView<'static>,
+>;
+///Shorthand for `OwnedView<RemoveUiResponseView<'static>>`.
+pub type OwnedRemoveUiResponseView = ::buffa::view::OwnedView<
+    crate::messages::hephaestus::release::v1::__buffa::view::RemoveUiResponseView<
+        'static,
+    >,
+>;
+///Shorthand for `OwnedView<ListUiInstallationsRequestView<'static>>`.
+pub type OwnedListUiInstallationsRequestView = ::buffa::view::OwnedView<
+    crate::messages::hephaestus::release::v1::__buffa::view::ListUiInstallationsRequestView<
+        'static,
+    >,
+>;
+///Shorthand for `OwnedView<ListUiInstallationsResponseView<'static>>`.
+pub type OwnedListUiInstallationsResponseView = ::buffa::view::OwnedView<
+    crate::messages::hephaestus::release::v1::__buffa::view::ListUiInstallationsResponseView<
+        'static,
+    >,
+>;
+///Shorthand for `OwnedView<CreateUiBrowserHandoffRequestView<'static>>`.
+pub type OwnedCreateUiBrowserHandoffRequestView = ::buffa::view::OwnedView<
+    crate::messages::hephaestus::release::v1::__buffa::view::CreateUiBrowserHandoffRequestView<
+        'static,
+    >,
+>;
+///Shorthand for `OwnedView<CreateUiBrowserHandoffResponseView<'static>>`.
+pub type OwnedCreateUiBrowserHandoffResponseView = ::buffa::view::OwnedView<
+    crate::messages::hephaestus::release::v1::__buffa::view::CreateUiBrowserHandoffResponseView<
+        'static,
+    >,
+>;
 impl ::connectrpc::Encodable<
     crate::messages::hephaestus::release::v1::ListRepositoryReleasesResponse,
 >
@@ -196,6 +278,180 @@ for ::buffa::view::OwnedView<
         ::connectrpc::__codegen::encode_view_body(self.reborrow(), codec)
     }
 }
+impl ::connectrpc::Encodable<crate::messages::hephaestus::release::v1::InstallUiResponse>
+for crate::messages::hephaestus::release::v1::__buffa::view::InstallUiResponseView<'_> {
+    fn encode(
+        &self,
+        codec: ::connectrpc::CodecFormat,
+    ) -> ::std::result::Result<::buffa::bytes::Bytes, ::connectrpc::ConnectError> {
+        ::connectrpc::__codegen::encode_view_body(self, codec)
+    }
+}
+impl ::connectrpc::Encodable<crate::messages::hephaestus::release::v1::InstallUiResponse>
+for ::buffa::view::OwnedView<
+    crate::messages::hephaestus::release::v1::__buffa::view::InstallUiResponseView<
+        'static,
+    >,
+> {
+    fn encode(
+        &self,
+        codec: ::connectrpc::CodecFormat,
+    ) -> ::std::result::Result<::buffa::bytes::Bytes, ::connectrpc::ConnectError> {
+        ::connectrpc::__codegen::encode_view_body(self.reborrow(), codec)
+    }
+}
+impl ::connectrpc::Encodable<
+    crate::messages::hephaestus::release::v1::ActivateUiResponse,
+>
+for crate::messages::hephaestus::release::v1::__buffa::view::ActivateUiResponseView<'_> {
+    fn encode(
+        &self,
+        codec: ::connectrpc::CodecFormat,
+    ) -> ::std::result::Result<::buffa::bytes::Bytes, ::connectrpc::ConnectError> {
+        ::connectrpc::__codegen::encode_view_body(self, codec)
+    }
+}
+impl ::connectrpc::Encodable<
+    crate::messages::hephaestus::release::v1::ActivateUiResponse,
+>
+for ::buffa::view::OwnedView<
+    crate::messages::hephaestus::release::v1::__buffa::view::ActivateUiResponseView<
+        'static,
+    >,
+> {
+    fn encode(
+        &self,
+        codec: ::connectrpc::CodecFormat,
+    ) -> ::std::result::Result<::buffa::bytes::Bytes, ::connectrpc::ConnectError> {
+        ::connectrpc::__codegen::encode_view_body(self.reborrow(), codec)
+    }
+}
+impl ::connectrpc::Encodable<
+    crate::messages::hephaestus::release::v1::RollbackUiResponse,
+>
+for crate::messages::hephaestus::release::v1::__buffa::view::RollbackUiResponseView<'_> {
+    fn encode(
+        &self,
+        codec: ::connectrpc::CodecFormat,
+    ) -> ::std::result::Result<::buffa::bytes::Bytes, ::connectrpc::ConnectError> {
+        ::connectrpc::__codegen::encode_view_body(self, codec)
+    }
+}
+impl ::connectrpc::Encodable<
+    crate::messages::hephaestus::release::v1::RollbackUiResponse,
+>
+for ::buffa::view::OwnedView<
+    crate::messages::hephaestus::release::v1::__buffa::view::RollbackUiResponseView<
+        'static,
+    >,
+> {
+    fn encode(
+        &self,
+        codec: ::connectrpc::CodecFormat,
+    ) -> ::std::result::Result<::buffa::bytes::Bytes, ::connectrpc::ConnectError> {
+        ::connectrpc::__codegen::encode_view_body(self.reborrow(), codec)
+    }
+}
+impl ::connectrpc::Encodable<crate::messages::hephaestus::release::v1::DisableUiResponse>
+for crate::messages::hephaestus::release::v1::__buffa::view::DisableUiResponseView<'_> {
+    fn encode(
+        &self,
+        codec: ::connectrpc::CodecFormat,
+    ) -> ::std::result::Result<::buffa::bytes::Bytes, ::connectrpc::ConnectError> {
+        ::connectrpc::__codegen::encode_view_body(self, codec)
+    }
+}
+impl ::connectrpc::Encodable<crate::messages::hephaestus::release::v1::DisableUiResponse>
+for ::buffa::view::OwnedView<
+    crate::messages::hephaestus::release::v1::__buffa::view::DisableUiResponseView<
+        'static,
+    >,
+> {
+    fn encode(
+        &self,
+        codec: ::connectrpc::CodecFormat,
+    ) -> ::std::result::Result<::buffa::bytes::Bytes, ::connectrpc::ConnectError> {
+        ::connectrpc::__codegen::encode_view_body(self.reborrow(), codec)
+    }
+}
+impl ::connectrpc::Encodable<crate::messages::hephaestus::release::v1::RemoveUiResponse>
+for crate::messages::hephaestus::release::v1::__buffa::view::RemoveUiResponseView<'_> {
+    fn encode(
+        &self,
+        codec: ::connectrpc::CodecFormat,
+    ) -> ::std::result::Result<::buffa::bytes::Bytes, ::connectrpc::ConnectError> {
+        ::connectrpc::__codegen::encode_view_body(self, codec)
+    }
+}
+impl ::connectrpc::Encodable<crate::messages::hephaestus::release::v1::RemoveUiResponse>
+for ::buffa::view::OwnedView<
+    crate::messages::hephaestus::release::v1::__buffa::view::RemoveUiResponseView<
+        'static,
+    >,
+> {
+    fn encode(
+        &self,
+        codec: ::connectrpc::CodecFormat,
+    ) -> ::std::result::Result<::buffa::bytes::Bytes, ::connectrpc::ConnectError> {
+        ::connectrpc::__codegen::encode_view_body(self.reborrow(), codec)
+    }
+}
+impl ::connectrpc::Encodable<
+    crate::messages::hephaestus::release::v1::ListUiInstallationsResponse,
+>
+for crate::messages::hephaestus::release::v1::__buffa::view::ListUiInstallationsResponseView<
+    '_,
+> {
+    fn encode(
+        &self,
+        codec: ::connectrpc::CodecFormat,
+    ) -> ::std::result::Result<::buffa::bytes::Bytes, ::connectrpc::ConnectError> {
+        ::connectrpc::__codegen::encode_view_body(self, codec)
+    }
+}
+impl ::connectrpc::Encodable<
+    crate::messages::hephaestus::release::v1::ListUiInstallationsResponse,
+>
+for ::buffa::view::OwnedView<
+    crate::messages::hephaestus::release::v1::__buffa::view::ListUiInstallationsResponseView<
+        'static,
+    >,
+> {
+    fn encode(
+        &self,
+        codec: ::connectrpc::CodecFormat,
+    ) -> ::std::result::Result<::buffa::bytes::Bytes, ::connectrpc::ConnectError> {
+        ::connectrpc::__codegen::encode_view_body(self.reborrow(), codec)
+    }
+}
+impl ::connectrpc::Encodable<
+    crate::messages::hephaestus::release::v1::CreateUiBrowserHandoffResponse,
+>
+for crate::messages::hephaestus::release::v1::__buffa::view::CreateUiBrowserHandoffResponseView<
+    '_,
+> {
+    fn encode(
+        &self,
+        codec: ::connectrpc::CodecFormat,
+    ) -> ::std::result::Result<::buffa::bytes::Bytes, ::connectrpc::ConnectError> {
+        ::connectrpc::__codegen::encode_view_body(self, codec)
+    }
+}
+impl ::connectrpc::Encodable<
+    crate::messages::hephaestus::release::v1::CreateUiBrowserHandoffResponse,
+>
+for ::buffa::view::OwnedView<
+    crate::messages::hephaestus::release::v1::__buffa::view::CreateUiBrowserHandoffResponseView<
+        'static,
+    >,
+> {
+    fn encode(
+        &self,
+        codec: ::connectrpc::CodecFormat,
+    ) -> ::std::result::Result<::buffa::bytes::Bytes, ::connectrpc::ConnectError> {
+        ::connectrpc::__codegen::encode_view_body(self.reborrow(), codec)
+    }
+}
 /// Full service name for this service.
 pub const RELEASE_SERVICE_SERVICE_NAME: &str = "hephaestus.release.v1.ReleaseService";
 /// Static [`Spec`](::connectrpc::Spec) for the server-side `ListRepositoryReleases` RPC.
@@ -241,6 +497,69 @@ pub const RELEASE_SERVICE_PUBLISH_RELEASE_SPEC: ::connectrpc::Spec = ::connectrp
 pub const RELEASE_SERVICE_WATCH_RELEASE_SPEC: ::connectrpc::Spec = ::connectrpc::Spec::server(
         "/hephaestus.release.v1.ReleaseService/WatchRelease",
         ::connectrpc::StreamType::ServerStream,
+    )
+    .with_idempotency_level(::connectrpc::IdempotencyLevel::Unknown);
+/// Static [`Spec`](::connectrpc::Spec) for the server-side `InstallUi` RPC.
+///
+/// The dispatcher surfaces this on
+/// [`RequestContext::spec`](::connectrpc::RequestContext::spec).
+pub const RELEASE_SERVICE_INSTALL_UI_SPEC: ::connectrpc::Spec = ::connectrpc::Spec::server(
+        "/hephaestus.release.v1.ReleaseService/InstallUi",
+        ::connectrpc::StreamType::Unary,
+    )
+    .with_idempotency_level(::connectrpc::IdempotencyLevel::Unknown);
+/// Static [`Spec`](::connectrpc::Spec) for the server-side `ActivateUi` RPC.
+///
+/// The dispatcher surfaces this on
+/// [`RequestContext::spec`](::connectrpc::RequestContext::spec).
+pub const RELEASE_SERVICE_ACTIVATE_UI_SPEC: ::connectrpc::Spec = ::connectrpc::Spec::server(
+        "/hephaestus.release.v1.ReleaseService/ActivateUi",
+        ::connectrpc::StreamType::Unary,
+    )
+    .with_idempotency_level(::connectrpc::IdempotencyLevel::Unknown);
+/// Static [`Spec`](::connectrpc::Spec) for the server-side `RollbackUi` RPC.
+///
+/// The dispatcher surfaces this on
+/// [`RequestContext::spec`](::connectrpc::RequestContext::spec).
+pub const RELEASE_SERVICE_ROLLBACK_UI_SPEC: ::connectrpc::Spec = ::connectrpc::Spec::server(
+        "/hephaestus.release.v1.ReleaseService/RollbackUi",
+        ::connectrpc::StreamType::Unary,
+    )
+    .with_idempotency_level(::connectrpc::IdempotencyLevel::Unknown);
+/// Static [`Spec`](::connectrpc::Spec) for the server-side `DisableUi` RPC.
+///
+/// The dispatcher surfaces this on
+/// [`RequestContext::spec`](::connectrpc::RequestContext::spec).
+pub const RELEASE_SERVICE_DISABLE_UI_SPEC: ::connectrpc::Spec = ::connectrpc::Spec::server(
+        "/hephaestus.release.v1.ReleaseService/DisableUi",
+        ::connectrpc::StreamType::Unary,
+    )
+    .with_idempotency_level(::connectrpc::IdempotencyLevel::Unknown);
+/// Static [`Spec`](::connectrpc::Spec) for the server-side `RemoveUi` RPC.
+///
+/// The dispatcher surfaces this on
+/// [`RequestContext::spec`](::connectrpc::RequestContext::spec).
+pub const RELEASE_SERVICE_REMOVE_UI_SPEC: ::connectrpc::Spec = ::connectrpc::Spec::server(
+        "/hephaestus.release.v1.ReleaseService/RemoveUi",
+        ::connectrpc::StreamType::Unary,
+    )
+    .with_idempotency_level(::connectrpc::IdempotencyLevel::Unknown);
+/// Static [`Spec`](::connectrpc::Spec) for the server-side `ListUiInstallations` RPC.
+///
+/// The dispatcher surfaces this on
+/// [`RequestContext::spec`](::connectrpc::RequestContext::spec).
+pub const RELEASE_SERVICE_LIST_UI_INSTALLATIONS_SPEC: ::connectrpc::Spec = ::connectrpc::Spec::server(
+        "/hephaestus.release.v1.ReleaseService/ListUiInstallations",
+        ::connectrpc::StreamType::Unary,
+    )
+    .with_idempotency_level(::connectrpc::IdempotencyLevel::NoSideEffects);
+/// Static [`Spec`](::connectrpc::Spec) for the server-side `CreateUiBrowserHandoff` RPC.
+///
+/// The dispatcher surfaces this on
+/// [`RequestContext::spec`](::connectrpc::RequestContext::spec).
+pub const RELEASE_SERVICE_CREATE_UI_BROWSER_HANDOFF_SPEC: ::connectrpc::Spec = ::connectrpc::Spec::server(
+        "/hephaestus.release.v1.ReleaseService/CreateUiBrowserHandoff",
+        ::connectrpc::StreamType::Unary,
     )
     .with_idempotency_level(::connectrpc::IdempotencyLevel::Unknown);
 /// Server trait for ReleaseService.
@@ -407,6 +726,167 @@ pub trait ReleaseService: Send + Sync + 'static {
                     crate::messages::hephaestus::release::v1::WatchReleaseResponse,
                 > + Send + use<Self>,
             >,
+        >,
+    > + Send;
+    /// Handle the InstallUi RPC.
+    ///
+    /// `'a` lets the response body borrow from `&self` (e.g. server-resident state).
+    ///
+    /// `request` is borrowed from the request body and is valid for the
+    /// duration of the call; message fields are read directly on it
+    /// (zero-copy). The response cannot borrow from `request` — use
+    /// `.to_owned_message()` (or copy the specific fields) for anything
+    /// returned, stored, or moved into `tokio::spawn`.
+    fn install_ui<'a>(
+        &'a self,
+        ctx: ::connectrpc::RequestContext,
+        request: ::connectrpc::ServiceRequest<
+            '_,
+            crate::messages::hephaestus::release::v1::InstallUiRequest,
+        >,
+    ) -> impl ::std::future::Future<
+        Output = ::connectrpc::ServiceResult<
+            impl ::connectrpc::Encodable<
+                crate::messages::hephaestus::release::v1::InstallUiResponse,
+            > + Send + use<'a, Self>,
+        >,
+    > + Send;
+    /// Handle the ActivateUi RPC.
+    ///
+    /// `'a` lets the response body borrow from `&self` (e.g. server-resident state).
+    ///
+    /// `request` is borrowed from the request body and is valid for the
+    /// duration of the call; message fields are read directly on it
+    /// (zero-copy). The response cannot borrow from `request` — use
+    /// `.to_owned_message()` (or copy the specific fields) for anything
+    /// returned, stored, or moved into `tokio::spawn`.
+    fn activate_ui<'a>(
+        &'a self,
+        ctx: ::connectrpc::RequestContext,
+        request: ::connectrpc::ServiceRequest<
+            '_,
+            crate::messages::hephaestus::release::v1::ActivateUiRequest,
+        >,
+    ) -> impl ::std::future::Future<
+        Output = ::connectrpc::ServiceResult<
+            impl ::connectrpc::Encodable<
+                crate::messages::hephaestus::release::v1::ActivateUiResponse,
+            > + Send + use<'a, Self>,
+        >,
+    > + Send;
+    /// Handle the RollbackUi RPC.
+    ///
+    /// `'a` lets the response body borrow from `&self` (e.g. server-resident state).
+    ///
+    /// `request` is borrowed from the request body and is valid for the
+    /// duration of the call; message fields are read directly on it
+    /// (zero-copy). The response cannot borrow from `request` — use
+    /// `.to_owned_message()` (or copy the specific fields) for anything
+    /// returned, stored, or moved into `tokio::spawn`.
+    fn rollback_ui<'a>(
+        &'a self,
+        ctx: ::connectrpc::RequestContext,
+        request: ::connectrpc::ServiceRequest<
+            '_,
+            crate::messages::hephaestus::release::v1::RollbackUiRequest,
+        >,
+    ) -> impl ::std::future::Future<
+        Output = ::connectrpc::ServiceResult<
+            impl ::connectrpc::Encodable<
+                crate::messages::hephaestus::release::v1::RollbackUiResponse,
+            > + Send + use<'a, Self>,
+        >,
+    > + Send;
+    /// Handle the DisableUi RPC.
+    ///
+    /// `'a` lets the response body borrow from `&self` (e.g. server-resident state).
+    ///
+    /// `request` is borrowed from the request body and is valid for the
+    /// duration of the call; message fields are read directly on it
+    /// (zero-copy). The response cannot borrow from `request` — use
+    /// `.to_owned_message()` (or copy the specific fields) for anything
+    /// returned, stored, or moved into `tokio::spawn`.
+    fn disable_ui<'a>(
+        &'a self,
+        ctx: ::connectrpc::RequestContext,
+        request: ::connectrpc::ServiceRequest<
+            '_,
+            crate::messages::hephaestus::release::v1::DisableUiRequest,
+        >,
+    ) -> impl ::std::future::Future<
+        Output = ::connectrpc::ServiceResult<
+            impl ::connectrpc::Encodable<
+                crate::messages::hephaestus::release::v1::DisableUiResponse,
+            > + Send + use<'a, Self>,
+        >,
+    > + Send;
+    /// Handle the RemoveUi RPC.
+    ///
+    /// `'a` lets the response body borrow from `&self` (e.g. server-resident state).
+    ///
+    /// `request` is borrowed from the request body and is valid for the
+    /// duration of the call; message fields are read directly on it
+    /// (zero-copy). The response cannot borrow from `request` — use
+    /// `.to_owned_message()` (or copy the specific fields) for anything
+    /// returned, stored, or moved into `tokio::spawn`.
+    fn remove_ui<'a>(
+        &'a self,
+        ctx: ::connectrpc::RequestContext,
+        request: ::connectrpc::ServiceRequest<
+            '_,
+            crate::messages::hephaestus::release::v1::RemoveUiRequest,
+        >,
+    ) -> impl ::std::future::Future<
+        Output = ::connectrpc::ServiceResult<
+            impl ::connectrpc::Encodable<
+                crate::messages::hephaestus::release::v1::RemoveUiResponse,
+            > + Send + use<'a, Self>,
+        >,
+    > + Send;
+    /// Handle the ListUiInstallations RPC.
+    ///
+    /// `'a` lets the response body borrow from `&self` (e.g. server-resident state).
+    ///
+    /// `request` is borrowed from the request body and is valid for the
+    /// duration of the call; message fields are read directly on it
+    /// (zero-copy). The response cannot borrow from `request` — use
+    /// `.to_owned_message()` (or copy the specific fields) for anything
+    /// returned, stored, or moved into `tokio::spawn`.
+    fn list_ui_installations<'a>(
+        &'a self,
+        ctx: ::connectrpc::RequestContext,
+        request: ::connectrpc::ServiceRequest<
+            '_,
+            crate::messages::hephaestus::release::v1::ListUiInstallationsRequest,
+        >,
+    ) -> impl ::std::future::Future<
+        Output = ::connectrpc::ServiceResult<
+            impl ::connectrpc::Encodable<
+                crate::messages::hephaestus::release::v1::ListUiInstallationsResponse,
+            > + Send + use<'a, Self>,
+        >,
+    > + Send;
+    /// Handle the CreateUiBrowserHandoff RPC.
+    ///
+    /// `'a` lets the response body borrow from `&self` (e.g. server-resident state).
+    ///
+    /// `request` is borrowed from the request body and is valid for the
+    /// duration of the call; message fields are read directly on it
+    /// (zero-copy). The response cannot borrow from `request` — use
+    /// `.to_owned_message()` (or copy the specific fields) for anything
+    /// returned, stored, or moved into `tokio::spawn`.
+    fn create_ui_browser_handoff<'a>(
+        &'a self,
+        ctx: ::connectrpc::RequestContext,
+        request: ::connectrpc::ServiceRequest<
+            '_,
+            crate::messages::hephaestus::release::v1::CreateUiBrowserHandoffRequest,
+        >,
+    ) -> impl ::std::future::Future<
+        Output = ::connectrpc::ServiceResult<
+            impl ::connectrpc::Encodable<
+                crate::messages::hephaestus::release::v1::CreateUiBrowserHandoffResponse,
+            > + Send + use<'a, Self>,
         >,
     > + Send;
 }
@@ -585,6 +1065,209 @@ impl<S: ReleaseService> ReleaseServiceExt for S {
                 }),
             )
             .with_spec(RELEASE_SERVICE_WATCH_RELEASE_SPEC)
+            .route_view(
+                RELEASE_SERVICE_SERVICE_NAME,
+                "InstallUi",
+                {
+                    let svc = ::std::sync::Arc::clone(&self);
+                    ::connectrpc::view_handler_fn(move |
+                        ctx,
+                        req: ::buffa::view::OwnedView<
+                            crate::messages::hephaestus::release::v1::__buffa::view::InstallUiRequestView<
+                                'static,
+                            >,
+                        >,
+                        format|
+                    {
+                        let svc = ::std::sync::Arc::clone(&svc);
+                        async move {
+                            let sreq = ::connectrpc::ServiceRequest::<
+                                crate::messages::hephaestus::release::v1::InstallUiRequest,
+                            >::from_parts(req.reborrow(), req.bytes());
+                            svc.install_ui(ctx, sreq)
+                                .await?
+                                .encode::<
+                                    crate::messages::hephaestus::release::v1::InstallUiResponse,
+                                >(format)
+                        }
+                    })
+                },
+            )
+            .with_spec(RELEASE_SERVICE_INSTALL_UI_SPEC)
+            .route_view(
+                RELEASE_SERVICE_SERVICE_NAME,
+                "ActivateUi",
+                {
+                    let svc = ::std::sync::Arc::clone(&self);
+                    ::connectrpc::view_handler_fn(move |
+                        ctx,
+                        req: ::buffa::view::OwnedView<
+                            crate::messages::hephaestus::release::v1::__buffa::view::ActivateUiRequestView<
+                                'static,
+                            >,
+                        >,
+                        format|
+                    {
+                        let svc = ::std::sync::Arc::clone(&svc);
+                        async move {
+                            let sreq = ::connectrpc::ServiceRequest::<
+                                crate::messages::hephaestus::release::v1::ActivateUiRequest,
+                            >::from_parts(req.reborrow(), req.bytes());
+                            svc.activate_ui(ctx, sreq)
+                                .await?
+                                .encode::<
+                                    crate::messages::hephaestus::release::v1::ActivateUiResponse,
+                                >(format)
+                        }
+                    })
+                },
+            )
+            .with_spec(RELEASE_SERVICE_ACTIVATE_UI_SPEC)
+            .route_view(
+                RELEASE_SERVICE_SERVICE_NAME,
+                "RollbackUi",
+                {
+                    let svc = ::std::sync::Arc::clone(&self);
+                    ::connectrpc::view_handler_fn(move |
+                        ctx,
+                        req: ::buffa::view::OwnedView<
+                            crate::messages::hephaestus::release::v1::__buffa::view::RollbackUiRequestView<
+                                'static,
+                            >,
+                        >,
+                        format|
+                    {
+                        let svc = ::std::sync::Arc::clone(&svc);
+                        async move {
+                            let sreq = ::connectrpc::ServiceRequest::<
+                                crate::messages::hephaestus::release::v1::RollbackUiRequest,
+                            >::from_parts(req.reborrow(), req.bytes());
+                            svc.rollback_ui(ctx, sreq)
+                                .await?
+                                .encode::<
+                                    crate::messages::hephaestus::release::v1::RollbackUiResponse,
+                                >(format)
+                        }
+                    })
+                },
+            )
+            .with_spec(RELEASE_SERVICE_ROLLBACK_UI_SPEC)
+            .route_view(
+                RELEASE_SERVICE_SERVICE_NAME,
+                "DisableUi",
+                {
+                    let svc = ::std::sync::Arc::clone(&self);
+                    ::connectrpc::view_handler_fn(move |
+                        ctx,
+                        req: ::buffa::view::OwnedView<
+                            crate::messages::hephaestus::release::v1::__buffa::view::DisableUiRequestView<
+                                'static,
+                            >,
+                        >,
+                        format|
+                    {
+                        let svc = ::std::sync::Arc::clone(&svc);
+                        async move {
+                            let sreq = ::connectrpc::ServiceRequest::<
+                                crate::messages::hephaestus::release::v1::DisableUiRequest,
+                            >::from_parts(req.reborrow(), req.bytes());
+                            svc.disable_ui(ctx, sreq)
+                                .await?
+                                .encode::<
+                                    crate::messages::hephaestus::release::v1::DisableUiResponse,
+                                >(format)
+                        }
+                    })
+                },
+            )
+            .with_spec(RELEASE_SERVICE_DISABLE_UI_SPEC)
+            .route_view(
+                RELEASE_SERVICE_SERVICE_NAME,
+                "RemoveUi",
+                {
+                    let svc = ::std::sync::Arc::clone(&self);
+                    ::connectrpc::view_handler_fn(move |
+                        ctx,
+                        req: ::buffa::view::OwnedView<
+                            crate::messages::hephaestus::release::v1::__buffa::view::RemoveUiRequestView<
+                                'static,
+                            >,
+                        >,
+                        format|
+                    {
+                        let svc = ::std::sync::Arc::clone(&svc);
+                        async move {
+                            let sreq = ::connectrpc::ServiceRequest::<
+                                crate::messages::hephaestus::release::v1::RemoveUiRequest,
+                            >::from_parts(req.reborrow(), req.bytes());
+                            svc.remove_ui(ctx, sreq)
+                                .await?
+                                .encode::<
+                                    crate::messages::hephaestus::release::v1::RemoveUiResponse,
+                                >(format)
+                        }
+                    })
+                },
+            )
+            .with_spec(RELEASE_SERVICE_REMOVE_UI_SPEC)
+            .route_view_idempotent(
+                RELEASE_SERVICE_SERVICE_NAME,
+                "ListUiInstallations",
+                {
+                    let svc = ::std::sync::Arc::clone(&self);
+                    ::connectrpc::view_handler_fn(move |
+                        ctx,
+                        req: ::buffa::view::OwnedView<
+                            crate::messages::hephaestus::release::v1::__buffa::view::ListUiInstallationsRequestView<
+                                'static,
+                            >,
+                        >,
+                        format|
+                    {
+                        let svc = ::std::sync::Arc::clone(&svc);
+                        async move {
+                            let sreq = ::connectrpc::ServiceRequest::<
+                                crate::messages::hephaestus::release::v1::ListUiInstallationsRequest,
+                            >::from_parts(req.reborrow(), req.bytes());
+                            svc.list_ui_installations(ctx, sreq)
+                                .await?
+                                .encode::<
+                                    crate::messages::hephaestus::release::v1::ListUiInstallationsResponse,
+                                >(format)
+                        }
+                    })
+                },
+            )
+            .with_spec(RELEASE_SERVICE_LIST_UI_INSTALLATIONS_SPEC)
+            .route_view(
+                RELEASE_SERVICE_SERVICE_NAME,
+                "CreateUiBrowserHandoff",
+                {
+                    let svc = ::std::sync::Arc::clone(&self);
+                    ::connectrpc::view_handler_fn(move |
+                        ctx,
+                        req: ::buffa::view::OwnedView<
+                            crate::messages::hephaestus::release::v1::__buffa::view::CreateUiBrowserHandoffRequestView<
+                                'static,
+                            >,
+                        >,
+                        format|
+                    {
+                        let svc = ::std::sync::Arc::clone(&svc);
+                        async move {
+                            let sreq = ::connectrpc::ServiceRequest::<
+                                crate::messages::hephaestus::release::v1::CreateUiBrowserHandoffRequest,
+                            >::from_parts(req.reborrow(), req.bytes());
+                            svc.create_ui_browser_handoff(ctx, sreq)
+                                .await?
+                                .encode::<
+                                    crate::messages::hephaestus::release::v1::CreateUiBrowserHandoffResponse,
+                                >(format)
+                        }
+                    })
+                },
+            )
+            .with_spec(RELEASE_SERVICE_CREATE_UI_BROWSER_HANDOFF_SPEC)
     }
 }
 /// Type-inference marker used by [`Router::add_service`](::connectrpc::Router::add_service).
@@ -667,6 +1350,48 @@ impl<T: ReleaseService> ::connectrpc::Dispatcher for ReleaseServiceServer<T> {
                 Some(
                     ::connectrpc::dispatcher::codegen::MethodDescriptor::server_streaming()
                         .with_spec(RELEASE_SERVICE_WATCH_RELEASE_SPEC),
+                )
+            }
+            "InstallUi" => {
+                Some(
+                    ::connectrpc::dispatcher::codegen::MethodDescriptor::unary(false)
+                        .with_spec(RELEASE_SERVICE_INSTALL_UI_SPEC),
+                )
+            }
+            "ActivateUi" => {
+                Some(
+                    ::connectrpc::dispatcher::codegen::MethodDescriptor::unary(false)
+                        .with_spec(RELEASE_SERVICE_ACTIVATE_UI_SPEC),
+                )
+            }
+            "RollbackUi" => {
+                Some(
+                    ::connectrpc::dispatcher::codegen::MethodDescriptor::unary(false)
+                        .with_spec(RELEASE_SERVICE_ROLLBACK_UI_SPEC),
+                )
+            }
+            "DisableUi" => {
+                Some(
+                    ::connectrpc::dispatcher::codegen::MethodDescriptor::unary(false)
+                        .with_spec(RELEASE_SERVICE_DISABLE_UI_SPEC),
+                )
+            }
+            "RemoveUi" => {
+                Some(
+                    ::connectrpc::dispatcher::codegen::MethodDescriptor::unary(false)
+                        .with_spec(RELEASE_SERVICE_REMOVE_UI_SPEC),
+                )
+            }
+            "ListUiInstallations" => {
+                Some(
+                    ::connectrpc::dispatcher::codegen::MethodDescriptor::unary(true)
+                        .with_spec(RELEASE_SERVICE_LIST_UI_INSTALLATIONS_SPEC),
+                )
+            }
+            "CreateUiBrowserHandoff" => {
+                Some(
+                    ::connectrpc::dispatcher::codegen::MethodDescriptor::unary(false)
+                        .with_spec(RELEASE_SERVICE_CREATE_UI_BROWSER_HANDOFF_SPEC),
                 )
             }
             _ => None,
@@ -766,6 +1491,153 @@ impl<T: ReleaseService> ::connectrpc::Dispatcher for ReleaseServiceServer<T> {
                         .await?
                         .encode::<
                             crate::messages::hephaestus::release::v1::PublishReleaseResponse,
+                        >(format)
+                })
+            }
+            "InstallUi" => {
+                let svc = ::std::sync::Arc::clone(&self.inner);
+                Box::pin(async move {
+                    let body = ::connectrpc::dispatcher::codegen::request_proto_bytes::<
+                        crate::messages::hephaestus::release::v1::InstallUiRequest,
+                    >(request.encoded()?, format)?;
+                    let req: crate::messages::hephaestus::release::v1::__buffa::view::InstallUiRequestView<
+                        '_,
+                    > = ::connectrpc::dispatcher::codegen::decode_borrowed_request_view(
+                        &body,
+                    )?;
+                    let req = ::connectrpc::ServiceRequest::<
+                        crate::messages::hephaestus::release::v1::InstallUiRequest,
+                    >::from_parts(&req, &body);
+                    svc.install_ui(ctx, req)
+                        .await?
+                        .encode::<
+                            crate::messages::hephaestus::release::v1::InstallUiResponse,
+                        >(format)
+                })
+            }
+            "ActivateUi" => {
+                let svc = ::std::sync::Arc::clone(&self.inner);
+                Box::pin(async move {
+                    let body = ::connectrpc::dispatcher::codegen::request_proto_bytes::<
+                        crate::messages::hephaestus::release::v1::ActivateUiRequest,
+                    >(request.encoded()?, format)?;
+                    let req: crate::messages::hephaestus::release::v1::__buffa::view::ActivateUiRequestView<
+                        '_,
+                    > = ::connectrpc::dispatcher::codegen::decode_borrowed_request_view(
+                        &body,
+                    )?;
+                    let req = ::connectrpc::ServiceRequest::<
+                        crate::messages::hephaestus::release::v1::ActivateUiRequest,
+                    >::from_parts(&req, &body);
+                    svc.activate_ui(ctx, req)
+                        .await?
+                        .encode::<
+                            crate::messages::hephaestus::release::v1::ActivateUiResponse,
+                        >(format)
+                })
+            }
+            "RollbackUi" => {
+                let svc = ::std::sync::Arc::clone(&self.inner);
+                Box::pin(async move {
+                    let body = ::connectrpc::dispatcher::codegen::request_proto_bytes::<
+                        crate::messages::hephaestus::release::v1::RollbackUiRequest,
+                    >(request.encoded()?, format)?;
+                    let req: crate::messages::hephaestus::release::v1::__buffa::view::RollbackUiRequestView<
+                        '_,
+                    > = ::connectrpc::dispatcher::codegen::decode_borrowed_request_view(
+                        &body,
+                    )?;
+                    let req = ::connectrpc::ServiceRequest::<
+                        crate::messages::hephaestus::release::v1::RollbackUiRequest,
+                    >::from_parts(&req, &body);
+                    svc.rollback_ui(ctx, req)
+                        .await?
+                        .encode::<
+                            crate::messages::hephaestus::release::v1::RollbackUiResponse,
+                        >(format)
+                })
+            }
+            "DisableUi" => {
+                let svc = ::std::sync::Arc::clone(&self.inner);
+                Box::pin(async move {
+                    let body = ::connectrpc::dispatcher::codegen::request_proto_bytes::<
+                        crate::messages::hephaestus::release::v1::DisableUiRequest,
+                    >(request.encoded()?, format)?;
+                    let req: crate::messages::hephaestus::release::v1::__buffa::view::DisableUiRequestView<
+                        '_,
+                    > = ::connectrpc::dispatcher::codegen::decode_borrowed_request_view(
+                        &body,
+                    )?;
+                    let req = ::connectrpc::ServiceRequest::<
+                        crate::messages::hephaestus::release::v1::DisableUiRequest,
+                    >::from_parts(&req, &body);
+                    svc.disable_ui(ctx, req)
+                        .await?
+                        .encode::<
+                            crate::messages::hephaestus::release::v1::DisableUiResponse,
+                        >(format)
+                })
+            }
+            "RemoveUi" => {
+                let svc = ::std::sync::Arc::clone(&self.inner);
+                Box::pin(async move {
+                    let body = ::connectrpc::dispatcher::codegen::request_proto_bytes::<
+                        crate::messages::hephaestus::release::v1::RemoveUiRequest,
+                    >(request.encoded()?, format)?;
+                    let req: crate::messages::hephaestus::release::v1::__buffa::view::RemoveUiRequestView<
+                        '_,
+                    > = ::connectrpc::dispatcher::codegen::decode_borrowed_request_view(
+                        &body,
+                    )?;
+                    let req = ::connectrpc::ServiceRequest::<
+                        crate::messages::hephaestus::release::v1::RemoveUiRequest,
+                    >::from_parts(&req, &body);
+                    svc.remove_ui(ctx, req)
+                        .await?
+                        .encode::<
+                            crate::messages::hephaestus::release::v1::RemoveUiResponse,
+                        >(format)
+                })
+            }
+            "ListUiInstallations" => {
+                let svc = ::std::sync::Arc::clone(&self.inner);
+                Box::pin(async move {
+                    let body = ::connectrpc::dispatcher::codegen::request_proto_bytes::<
+                        crate::messages::hephaestus::release::v1::ListUiInstallationsRequest,
+                    >(request.encoded()?, format)?;
+                    let req: crate::messages::hephaestus::release::v1::__buffa::view::ListUiInstallationsRequestView<
+                        '_,
+                    > = ::connectrpc::dispatcher::codegen::decode_borrowed_request_view(
+                        &body,
+                    )?;
+                    let req = ::connectrpc::ServiceRequest::<
+                        crate::messages::hephaestus::release::v1::ListUiInstallationsRequest,
+                    >::from_parts(&req, &body);
+                    svc.list_ui_installations(ctx, req)
+                        .await?
+                        .encode::<
+                            crate::messages::hephaestus::release::v1::ListUiInstallationsResponse,
+                        >(format)
+                })
+            }
+            "CreateUiBrowserHandoff" => {
+                let svc = ::std::sync::Arc::clone(&self.inner);
+                Box::pin(async move {
+                    let body = ::connectrpc::dispatcher::codegen::request_proto_bytes::<
+                        crate::messages::hephaestus::release::v1::CreateUiBrowserHandoffRequest,
+                    >(request.encoded()?, format)?;
+                    let req: crate::messages::hephaestus::release::v1::__buffa::view::CreateUiBrowserHandoffRequestView<
+                        '_,
+                    > = ::connectrpc::dispatcher::codegen::decode_borrowed_request_view(
+                        &body,
+                    )?;
+                    let req = ::connectrpc::ServiceRequest::<
+                        crate::messages::hephaestus::release::v1::CreateUiBrowserHandoffRequest,
+                    >::from_parts(&req, &body);
+                    svc.create_ui_browser_handoff(ctx, req)
+                        .await?
+                        .encode::<
+                            crate::messages::hephaestus::release::v1::CreateUiBrowserHandoffResponse,
                         >(format)
                 })
             }
@@ -1145,6 +2017,321 @@ where
                 &self.config,
                 RELEASE_SERVICE_SERVICE_NAME,
                 "WatchRelease",
+                request,
+                options,
+            )
+            .await
+    }
+    /// Call the InstallUi RPC. Sends a request to /hephaestus.release.v1.ReleaseService/InstallUi.
+    pub async fn install_ui(
+        &self,
+        request: crate::messages::hephaestus::release::v1::InstallUiRequest,
+    ) -> Result<
+        ::connectrpc::client::UnaryResponse<
+            ::buffa::view::OwnedView<
+                crate::messages::hephaestus::release::v1::__buffa::view::InstallUiResponseView<
+                    'static,
+                >,
+            >,
+        >,
+        ::connectrpc::ConnectError,
+    > {
+        self.install_ui_with_options(
+                request,
+                ::connectrpc::client::CallOptions::default(),
+            )
+            .await
+    }
+    /// Call the InstallUi RPC with explicit per-call options. Options override [`ClientConfig`](::connectrpc::client::ClientConfig) defaults.
+    pub async fn install_ui_with_options(
+        &self,
+        request: crate::messages::hephaestus::release::v1::InstallUiRequest,
+        options: ::connectrpc::client::CallOptions,
+    ) -> Result<
+        ::connectrpc::client::UnaryResponse<
+            ::buffa::view::OwnedView<
+                crate::messages::hephaestus::release::v1::__buffa::view::InstallUiResponseView<
+                    'static,
+                >,
+            >,
+        >,
+        ::connectrpc::ConnectError,
+    > {
+        ::connectrpc::client::call_unary(
+                &self.transport,
+                &self.config,
+                RELEASE_SERVICE_SERVICE_NAME,
+                "InstallUi",
+                request,
+                options,
+            )
+            .await
+    }
+    /// Call the ActivateUi RPC. Sends a request to /hephaestus.release.v1.ReleaseService/ActivateUi.
+    pub async fn activate_ui(
+        &self,
+        request: crate::messages::hephaestus::release::v1::ActivateUiRequest,
+    ) -> Result<
+        ::connectrpc::client::UnaryResponse<
+            ::buffa::view::OwnedView<
+                crate::messages::hephaestus::release::v1::__buffa::view::ActivateUiResponseView<
+                    'static,
+                >,
+            >,
+        >,
+        ::connectrpc::ConnectError,
+    > {
+        self.activate_ui_with_options(
+                request,
+                ::connectrpc::client::CallOptions::default(),
+            )
+            .await
+    }
+    /// Call the ActivateUi RPC with explicit per-call options. Options override [`ClientConfig`](::connectrpc::client::ClientConfig) defaults.
+    pub async fn activate_ui_with_options(
+        &self,
+        request: crate::messages::hephaestus::release::v1::ActivateUiRequest,
+        options: ::connectrpc::client::CallOptions,
+    ) -> Result<
+        ::connectrpc::client::UnaryResponse<
+            ::buffa::view::OwnedView<
+                crate::messages::hephaestus::release::v1::__buffa::view::ActivateUiResponseView<
+                    'static,
+                >,
+            >,
+        >,
+        ::connectrpc::ConnectError,
+    > {
+        ::connectrpc::client::call_unary(
+                &self.transport,
+                &self.config,
+                RELEASE_SERVICE_SERVICE_NAME,
+                "ActivateUi",
+                request,
+                options,
+            )
+            .await
+    }
+    /// Call the RollbackUi RPC. Sends a request to /hephaestus.release.v1.ReleaseService/RollbackUi.
+    pub async fn rollback_ui(
+        &self,
+        request: crate::messages::hephaestus::release::v1::RollbackUiRequest,
+    ) -> Result<
+        ::connectrpc::client::UnaryResponse<
+            ::buffa::view::OwnedView<
+                crate::messages::hephaestus::release::v1::__buffa::view::RollbackUiResponseView<
+                    'static,
+                >,
+            >,
+        >,
+        ::connectrpc::ConnectError,
+    > {
+        self.rollback_ui_with_options(
+                request,
+                ::connectrpc::client::CallOptions::default(),
+            )
+            .await
+    }
+    /// Call the RollbackUi RPC with explicit per-call options. Options override [`ClientConfig`](::connectrpc::client::ClientConfig) defaults.
+    pub async fn rollback_ui_with_options(
+        &self,
+        request: crate::messages::hephaestus::release::v1::RollbackUiRequest,
+        options: ::connectrpc::client::CallOptions,
+    ) -> Result<
+        ::connectrpc::client::UnaryResponse<
+            ::buffa::view::OwnedView<
+                crate::messages::hephaestus::release::v1::__buffa::view::RollbackUiResponseView<
+                    'static,
+                >,
+            >,
+        >,
+        ::connectrpc::ConnectError,
+    > {
+        ::connectrpc::client::call_unary(
+                &self.transport,
+                &self.config,
+                RELEASE_SERVICE_SERVICE_NAME,
+                "RollbackUi",
+                request,
+                options,
+            )
+            .await
+    }
+    /// Call the DisableUi RPC. Sends a request to /hephaestus.release.v1.ReleaseService/DisableUi.
+    pub async fn disable_ui(
+        &self,
+        request: crate::messages::hephaestus::release::v1::DisableUiRequest,
+    ) -> Result<
+        ::connectrpc::client::UnaryResponse<
+            ::buffa::view::OwnedView<
+                crate::messages::hephaestus::release::v1::__buffa::view::DisableUiResponseView<
+                    'static,
+                >,
+            >,
+        >,
+        ::connectrpc::ConnectError,
+    > {
+        self.disable_ui_with_options(
+                request,
+                ::connectrpc::client::CallOptions::default(),
+            )
+            .await
+    }
+    /// Call the DisableUi RPC with explicit per-call options. Options override [`ClientConfig`](::connectrpc::client::ClientConfig) defaults.
+    pub async fn disable_ui_with_options(
+        &self,
+        request: crate::messages::hephaestus::release::v1::DisableUiRequest,
+        options: ::connectrpc::client::CallOptions,
+    ) -> Result<
+        ::connectrpc::client::UnaryResponse<
+            ::buffa::view::OwnedView<
+                crate::messages::hephaestus::release::v1::__buffa::view::DisableUiResponseView<
+                    'static,
+                >,
+            >,
+        >,
+        ::connectrpc::ConnectError,
+    > {
+        ::connectrpc::client::call_unary(
+                &self.transport,
+                &self.config,
+                RELEASE_SERVICE_SERVICE_NAME,
+                "DisableUi",
+                request,
+                options,
+            )
+            .await
+    }
+    /// Call the RemoveUi RPC. Sends a request to /hephaestus.release.v1.ReleaseService/RemoveUi.
+    pub async fn remove_ui(
+        &self,
+        request: crate::messages::hephaestus::release::v1::RemoveUiRequest,
+    ) -> Result<
+        ::connectrpc::client::UnaryResponse<
+            ::buffa::view::OwnedView<
+                crate::messages::hephaestus::release::v1::__buffa::view::RemoveUiResponseView<
+                    'static,
+                >,
+            >,
+        >,
+        ::connectrpc::ConnectError,
+    > {
+        self.remove_ui_with_options(
+                request,
+                ::connectrpc::client::CallOptions::default(),
+            )
+            .await
+    }
+    /// Call the RemoveUi RPC with explicit per-call options. Options override [`ClientConfig`](::connectrpc::client::ClientConfig) defaults.
+    pub async fn remove_ui_with_options(
+        &self,
+        request: crate::messages::hephaestus::release::v1::RemoveUiRequest,
+        options: ::connectrpc::client::CallOptions,
+    ) -> Result<
+        ::connectrpc::client::UnaryResponse<
+            ::buffa::view::OwnedView<
+                crate::messages::hephaestus::release::v1::__buffa::view::RemoveUiResponseView<
+                    'static,
+                >,
+            >,
+        >,
+        ::connectrpc::ConnectError,
+    > {
+        ::connectrpc::client::call_unary(
+                &self.transport,
+                &self.config,
+                RELEASE_SERVICE_SERVICE_NAME,
+                "RemoveUi",
+                request,
+                options,
+            )
+            .await
+    }
+    /// Call the ListUiInstallations RPC. Sends a request to /hephaestus.release.v1.ReleaseService/ListUiInstallations.
+    pub async fn list_ui_installations(
+        &self,
+        request: crate::messages::hephaestus::release::v1::ListUiInstallationsRequest,
+    ) -> Result<
+        ::connectrpc::client::UnaryResponse<
+            ::buffa::view::OwnedView<
+                crate::messages::hephaestus::release::v1::__buffa::view::ListUiInstallationsResponseView<
+                    'static,
+                >,
+            >,
+        >,
+        ::connectrpc::ConnectError,
+    > {
+        self.list_ui_installations_with_options(
+                request,
+                ::connectrpc::client::CallOptions::default(),
+            )
+            .await
+    }
+    /// Call the ListUiInstallations RPC with explicit per-call options. Options override [`ClientConfig`](::connectrpc::client::ClientConfig) defaults.
+    pub async fn list_ui_installations_with_options(
+        &self,
+        request: crate::messages::hephaestus::release::v1::ListUiInstallationsRequest,
+        options: ::connectrpc::client::CallOptions,
+    ) -> Result<
+        ::connectrpc::client::UnaryResponse<
+            ::buffa::view::OwnedView<
+                crate::messages::hephaestus::release::v1::__buffa::view::ListUiInstallationsResponseView<
+                    'static,
+                >,
+            >,
+        >,
+        ::connectrpc::ConnectError,
+    > {
+        ::connectrpc::client::call_unary(
+                &self.transport,
+                &self.config,
+                RELEASE_SERVICE_SERVICE_NAME,
+                "ListUiInstallations",
+                request,
+                options,
+            )
+            .await
+    }
+    /// Call the CreateUiBrowserHandoff RPC. Sends a request to /hephaestus.release.v1.ReleaseService/CreateUiBrowserHandoff.
+    pub async fn create_ui_browser_handoff(
+        &self,
+        request: crate::messages::hephaestus::release::v1::CreateUiBrowserHandoffRequest,
+    ) -> Result<
+        ::connectrpc::client::UnaryResponse<
+            ::buffa::view::OwnedView<
+                crate::messages::hephaestus::release::v1::__buffa::view::CreateUiBrowserHandoffResponseView<
+                    'static,
+                >,
+            >,
+        >,
+        ::connectrpc::ConnectError,
+    > {
+        self.create_ui_browser_handoff_with_options(
+                request,
+                ::connectrpc::client::CallOptions::default(),
+            )
+            .await
+    }
+    /// Call the CreateUiBrowserHandoff RPC with explicit per-call options. Options override [`ClientConfig`](::connectrpc::client::ClientConfig) defaults.
+    pub async fn create_ui_browser_handoff_with_options(
+        &self,
+        request: crate::messages::hephaestus::release::v1::CreateUiBrowserHandoffRequest,
+        options: ::connectrpc::client::CallOptions,
+    ) -> Result<
+        ::connectrpc::client::UnaryResponse<
+            ::buffa::view::OwnedView<
+                crate::messages::hephaestus::release::v1::__buffa::view::CreateUiBrowserHandoffResponseView<
+                    'static,
+                >,
+            >,
+        >,
+        ::connectrpc::ConnectError,
+    > {
+        ::connectrpc::client::call_unary(
+                &self.transport,
+                &self.config,
+                RELEASE_SERVICE_SERVICE_NAME,
+                "CreateUiBrowserHandoff",
                 request,
                 options,
             )

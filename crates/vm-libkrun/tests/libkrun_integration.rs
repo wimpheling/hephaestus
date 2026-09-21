@@ -1,6 +1,14 @@
 //! Opt-in hardware integration tests for the Fedora libkrun backend.
 
 use bytes::Bytes;
+use gateway_domain::{GatewayServiceConfig, ServiceProbePath};
+use gateway_edge::{
+    GatewayEdgeError, GatewayRequest, GatewayScheme, GatewayServiceFailure,
+    GatewayServiceFailureCode, GatewayServiceIdentity, GatewayServiceLaunch,
+    GatewayServiceLaunchRequest, GatewayServiceLaunchResolver, ServiceHttpPolicy,
+    ServiceInstancePolicy, ServiceProbePolicy, ServiceWorkerState, TrustedRequestMetadata,
+    exchange_private_service_http, new_service_instance, probe_private_service_http,
+};
 use http::{HeaderMap, HeaderValue, Method, StatusCode};
 use runtime_types::RunId;
 use secret_broker::{
@@ -14,7 +22,10 @@ use std::{
     net::{IpAddr, Ipv4Addr},
     os::unix::fs::PermissionsExt,
     path::PathBuf,
-    sync::Arc,
+    sync::{
+        Arc,
+        atomic::{AtomicUsize, Ordering},
+    },
     time::{Duration, Instant},
 };
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
@@ -22,9 +33,9 @@ use vm_conformance::ProviderHarness;
 use vm_libkrun::{LibkrunConfig, LibkrunProvider};
 use vm_trait::{
     DiskFormat, GuestCommand, LogStream, NetworkMode, PortForward, PortProtocol,
-    PrivateHttpRequest, RUNTIME_AUTHORITY_CREDENTIAL_BYTES, RootFilesystem,
-    RuntimeAuthorityBootstrap, StopMode, VmDisk, VmError, VmEvent, VmId, VmMount, VmProvider,
-    VmResources, VmSpec,
+    PrivateHttpRequest, PrivateHttpServiceSpec, RUNTIME_AUTHORITY_CREDENTIAL_BYTES, RootFilesystem,
+    RuntimeAuthorityBootstrap, StopMode, VmDisk, VmError, VmEvent, VmId, VmInstance, VmMount,
+    VmProvider, VmResources, VmSpec,
 };
 
 const ENABLE_FLAG: &str = "HEPHAESTUS_LIBKRUN_INTEGRATION";
@@ -34,6 +45,30 @@ const ENABLE_FLAG: &str = "HEPHAESTUS_LIBKRUN_INTEGRATION";
 struct IntegrationBroker {
     credential: [u8; RUNTIME_AUTHORITY_CREDENTIAL_BYTES],
     session_id: uuid::Uuid,
+}
+
+struct IntegrationServiceResolver {
+    expected: GatewayServiceIdentity,
+    cleanups: AtomicUsize,
+}
+
+#[async_trait::async_trait]
+impl GatewayServiceLaunchResolver for IntegrationServiceResolver {
+    async fn resolve_service_launch(
+        &self,
+        _: GatewayServiceLaunchRequest,
+    ) -> Result<GatewayServiceLaunch, GatewayEdgeError> {
+        Err(GatewayEdgeError::Unavailable)
+    }
+
+    async fn cleanup_service_launch(
+        &self,
+        identity: GatewayServiceIdentity,
+    ) -> Result<(), GatewayEdgeError> {
+        assert_eq!(identity, self.expected);
+        self.cleanups.fetch_add(1, Ordering::Relaxed);
+        Ok(())
+    }
 }
 
 #[async_trait::async_trait]
@@ -306,6 +341,272 @@ async fn boots_and_exercises_guest_runtime_without_privilege_escalation() {
     assert!(!runtime_root.join(&gateway_id).exists());
     assert!(!cgroup_root_for_assertion.join(&gateway_id).exists());
     assert!(!cgroup_root_for_assertion.join(&persisted_id).exists());
+
+    let service_spec = private_service_spec(
+        rootfs.clone(),
+        format!("integration-private-service-{}", std::process::id()),
+    );
+    assert!(service_spec.runtime_authority.is_none());
+    assert!(matches!(service_spec.network, NetworkMode::Disabled));
+    assert!(
+        !service_spec
+            .labels
+            .contains_key("hephaestus.gateway.handler-contract")
+    );
+    let service = provider
+        .provision(service_spec)
+        .await
+        .expect("provision persistent private service VM");
+    let service_id = service.id().0.clone();
+    let mut service_events = service.subscribe_events();
+    service
+        .start()
+        .await
+        .expect("start persistent private service VM");
+    wait_for_service_isolation(&mut service_events).await;
+
+    let ready = poll_private_service(&service, "/readyz").await;
+    assert_eq!(ready.0, 200, "service readiness response: {ready:?}");
+    assert_eq!(ready.1, b"ready");
+    assert_eq!(
+        poll_private_service(&service, "/healthz").await,
+        (200, b"healthy".to_vec())
+    );
+
+    let readiness_probe = poll_private_service_probe(&service, "/readyz").await;
+    assert_eq!(readiness_probe.status, StatusCode::OK);
+    let health_probe = poll_private_service_probe(&service, "/healthz").await;
+    assert_eq!(health_probe.status, StatusCode::OK);
+
+    let identity_one = parse_adapter_service_identity(
+        &private_service_adapter_request(&service, "/identity").await,
+    );
+    let identity_two = parse_adapter_service_identity(
+        &private_service_adapter_request(&service, "/identity").await,
+    );
+    assert_eq!(identity_one["pid"], identity_two["pid"]);
+    assert_eq!(identity_one["startup_id"], identity_two["startup_id"]);
+
+    let delayed_vm = Arc::clone(&service);
+    let delayed =
+        tokio::spawn(async move { private_service_request(&delayed_vm, "/delay/1500").await });
+    wait_for_log(&mut service_events, "private-service-delay=started").await;
+    let health = tokio::time::timeout(
+        Duration::from_secs(1),
+        private_service_request(&service, "/healthz"),
+    )
+    .await
+    .expect("health request did not complete while delayed request was active")
+    .expect("concurrent health response");
+    assert_eq!(health, (200, b"healthy".to_vec()));
+    assert!(
+        !delayed.is_finished(),
+        "delayed request completed too early"
+    );
+    assert_eq!(
+        tokio::time::timeout(Duration::from_secs(5), delayed)
+            .await
+            .expect("delayed service response timeout")
+            .expect("delayed service task")
+            .expect("delayed service response")
+            .0,
+        200
+    );
+
+    let held_one = service
+        .open_private_service_connection()
+        .await
+        .expect("first service capacity connection");
+    let held_two = service
+        .open_private_service_connection()
+        .await
+        .expect("second service capacity connection");
+    assert!(matches!(
+        service.open_private_service_connection().await,
+        Err(VmError::Unavailable { .. })
+    ));
+    drop(held_one);
+    drop(held_two);
+
+    let active = service
+        .open_private_service_connection()
+        .await
+        .expect("active service connection before destroy");
+    service
+        .destroy()
+        .await
+        .expect("destroy persistent service VM");
+    let mut active = active;
+    let mut closed = [0_u8; 1];
+    let close_result = tokio::time::timeout(Duration::from_secs(5), active.read(&mut closed))
+        .await
+        .expect("destroy closes active service stream");
+    assert!(matches!(close_result, Err(_) | Ok(0)));
+    assert!(!runtime_root.join(&service_id).exists());
+    assert!(!cgroup_root_for_assertion.join(&service_id).exists());
+
+    let worker_identity = GatewayServiceIdentity {
+        instance_id: uuid::Uuid::new_v4(),
+        gateway_id: uuid::Uuid::new_v4(),
+        revision_id: uuid::Uuid::new_v4(),
+    };
+    let worker_spec = private_service_spec(
+        rootfs.clone(),
+        format!("gateway-service-{}", worker_identity.instance_id),
+    );
+    let worker_launch = GatewayServiceLaunch {
+        identity: worker_identity,
+        service: GatewayServiceConfig::new(
+            8080,
+            ServiceProbePath::parse("/readyz").expect("worker readiness path"),
+            ServiceProbePath::parse("/healthz").expect("worker health path"),
+        )
+        .expect("worker service declaration"),
+        spec: worker_spec,
+    };
+    let worker_vm = provider
+        .provision(worker_launch.spec.clone())
+        .await
+        .expect("provision prepared service worker VM");
+    let worker_vm_id = worker_vm.id().0.clone();
+    let worker_resolver = Arc::new(IntegrationServiceResolver {
+        expected: worker_identity,
+        cleanups: AtomicUsize::new(0),
+    });
+    let (worker_handle, mut worker_state, worker) = new_service_instance(
+        worker_launch,
+        Arc::clone(&worker_vm),
+        worker_resolver.clone(),
+        "service.internal",
+        ServiceInstancePolicy::new(
+            Duration::from_secs(30),
+            Duration::from_millis(100),
+            Duration::from_secs(3),
+            Duration::from_secs(5),
+        ),
+    )
+    .expect("construct prepared service worker");
+    let worker_task = tokio::spawn(worker.run());
+    tokio::time::timeout(Duration::from_secs(60), async {
+        while *worker_state.borrow() != ServiceWorkerState::Ready {
+            worker_state
+                .changed()
+                .await
+                .expect("prepared service worker state");
+        }
+    })
+    .await
+    .expect("prepared service worker readiness timeout");
+    println!("REAL_PREPARED_SERVICE_WORKER_READY=1");
+    assert_eq!(
+        worker_handle
+            .health()
+            .await
+            .expect("prepared service worker health"),
+        StatusCode::OK
+    );
+    println!("REAL_PREPARED_SERVICE_WORKER_HEALTH=1");
+    let first_identity = parse_adapter_service_identity(
+        &private_service_adapter_request(&worker_vm, "/identity").await,
+    );
+    assert_eq!(
+        private_service_request(&worker_vm, "/crash")
+            .await
+            .expect("prepared service worker crash response"),
+        (503, b"crashing".to_vec())
+    );
+    let worker_result = tokio::time::timeout(Duration::from_secs(15), worker_task)
+        .await
+        .expect("prepared service worker cleanup timeout")
+        .expect("prepared service worker join")
+        .expect_err("prepared service worker exit must be reported");
+    assert_eq!(
+        worker_result,
+        gateway_edge::ServiceInstanceError::UnexpectedExit
+    );
+    assert_eq!(
+        worker_handle.failure(),
+        Some(GatewayServiceFailure {
+            code: GatewayServiceFailureCode::UnexpectedExit,
+            exit_code: Some(42),
+            exit_signal: None,
+        })
+    );
+    assert_eq!(worker_resolver.cleanups.load(Ordering::Relaxed), 1);
+    assert!(!runtime_root.join(&worker_vm_id).exists());
+    assert!(!cgroup_root_for_assertion.join(&worker_vm_id).exists());
+    println!("REAL_PREPARED_SERVICE_WORKER_CRASH=1");
+    println!("REAL_PREPARED_SERVICE_WORKER_CLEANED=1");
+
+    let replacement_identity = GatewayServiceIdentity {
+        instance_id: uuid::Uuid::new_v4(),
+        ..worker_identity
+    };
+    let replacement_launch = GatewayServiceLaunch {
+        identity: replacement_identity,
+        service: GatewayServiceConfig::new(
+            8080,
+            ServiceProbePath::parse("/readyz").expect("replacement readiness path"),
+            ServiceProbePath::parse("/healthz").expect("replacement health path"),
+        )
+        .expect("replacement service declaration"),
+        spec: private_service_spec(
+            rootfs.clone(),
+            format!("gateway-service-{}", replacement_identity.instance_id),
+        ),
+    };
+    let replacement_vm = provider
+        .provision(replacement_launch.spec.clone())
+        .await
+        .expect("provision replacement service worker VM");
+    let replacement_vm_id = replacement_vm.id().0.clone();
+    assert_ne!(replacement_vm_id, worker_vm_id);
+    let replacement_resolver = Arc::new(IntegrationServiceResolver {
+        expected: replacement_identity,
+        cleanups: AtomicUsize::new(0),
+    });
+    let (replacement_handle, mut replacement_state, replacement_worker) = new_service_instance(
+        replacement_launch,
+        Arc::clone(&replacement_vm),
+        replacement_resolver.clone(),
+        "service.internal",
+        ServiceInstancePolicy::new(
+            Duration::from_secs(30),
+            Duration::from_millis(100),
+            Duration::from_secs(3),
+            Duration::from_secs(5),
+        ),
+    )
+    .expect("construct replacement service worker");
+    let replacement_task = tokio::spawn(replacement_worker.run());
+    tokio::time::timeout(Duration::from_secs(60), async {
+        while *replacement_state.borrow() != ServiceWorkerState::Ready {
+            replacement_state
+                .changed()
+                .await
+                .expect("replacement service worker state");
+        }
+    })
+    .await
+    .expect("replacement service worker readiness timeout");
+    let replacement_identity_response = parse_adapter_service_identity(
+        &private_service_adapter_request(&replacement_vm, "/identity").await,
+    );
+    assert_ne!(
+        first_identity["startup_id"],
+        replacement_identity_response["startup_id"]
+    );
+    replacement_handle.shutdown();
+    tokio::time::timeout(Duration::from_secs(15), replacement_task)
+        .await
+        .expect("replacement service worker cleanup timeout")
+        .expect("replacement service worker join")
+        .expect("replacement service worker cleanup");
+    assert_eq!(replacement_handle.failure(), None);
+    assert_eq!(replacement_resolver.cleanups.load(Ordering::Relaxed), 1);
+    assert!(!runtime_root.join(&replacement_vm_id).exists());
+    assert!(!cgroup_root_for_assertion.join(&replacement_vm_id).exists());
+    println!("REAL_PREPARED_SERVICE_WORKER_REPLACED=1");
 
     let graceful = provider
         .provision(long_running_spec(rootfs_for_graceful_test, "graceful"))
@@ -592,6 +893,7 @@ fn state_probe_spec(
             working_dir: Some(PathBuf::from("/")),
         },
         runtime_authority: None,
+        private_http_service: None,
         labels: BTreeMap::from([
             ("test".to_owned(), id.to_owned()),
             (
@@ -638,6 +940,7 @@ impl ProviderHarness for LibkrunHarness {
                 working_dir: Some(PathBuf::from("/")),
             },
             runtime_authority: None,
+            private_http_service: None,
             labels: BTreeMap::from([("test".to_owned(), "conformance".to_owned())]),
         }
     }
@@ -719,6 +1022,7 @@ fn integration_spec(
             working_dir: Some(PathBuf::from("/workspace")),
         },
         runtime_authority: None,
+        private_http_service: None,
         labels: BTreeMap::from([
             ("test".to_owned(), "hardware".to_owned()),
             (
@@ -751,6 +1055,7 @@ fn mode_spec(rootfs: PathBuf, id: &str, argument: &str, network: NetworkMode) ->
             working_dir: Some(PathBuf::from("/")),
         },
         runtime_authority: None,
+        private_http_service: None,
         labels: BTreeMap::from([("test".to_owned(), id.to_owned())]),
     }
 }
@@ -773,11 +1078,188 @@ fn private_http_spec(rootfs: PathBuf) -> VmSpec {
             working_dir: Some(PathBuf::from("/")),
         },
         runtime_authority: None,
+        private_http_service: None,
         labels: BTreeMap::from([(
             "hephaestus.gateway.handler-contract".to_owned(),
             "http.v1".to_owned(),
         )]),
     }
+}
+
+fn private_service_spec(rootfs: PathBuf, id: String) -> VmSpec {
+    VmSpec {
+        id: VmId(id),
+        root: RootFilesystem::Directory { host_path: rootfs },
+        disks: Vec::new(),
+        mounts: Vec::new(),
+        resources: VmResources {
+            vcpus: 1,
+            memory_mib: 512,
+        },
+        network: NetworkMode::Disabled,
+        private_http_service: Some(PrivateHttpServiceSpec {
+            loopback_port: 8080,
+            max_connections: 2,
+            connect_timeout: Duration::from_secs(2),
+        }),
+        command: GuestCommand {
+            program: "/usr/libexec/hephaestus/integration-check".to_owned(),
+            args: vec!["--serve-service".to_owned()],
+            env: BTreeMap::from([
+                (
+                    String::from("HEPH_SERVICE_STARTUP_DELAY_MS"),
+                    String::from("250"),
+                ),
+                (
+                    String::from("HEPH_SERVICE_ISOLATION_CHECK"),
+                    String::from("1"),
+                ),
+            ]),
+            working_dir: Some(PathBuf::from("/")),
+        },
+        runtime_authority: None,
+        labels: BTreeMap::new(),
+    }
+}
+
+async fn poll_private_service(vm: &Arc<dyn VmInstance>, path: &str) -> (u16, Vec<u8>) {
+    tokio::time::timeout(Duration::from_secs(10), async {
+        loop {
+            match private_service_request(vm, path).await {
+                Ok(response) if response.0 == 200 => return response,
+                Ok(_) | Err(_) => tokio::time::sleep(Duration::from_millis(50)).await,
+            }
+        }
+    })
+    .await
+    .expect("private service readiness polling timeout")
+}
+
+async fn poll_private_service_probe(
+    vm: &Arc<dyn VmInstance>,
+    path: &str,
+) -> gateway_edge::ServiceProbeSuccess {
+    let path = ServiceProbePath::parse(path).expect("declared service probe path");
+    tokio::time::timeout(Duration::from_secs(10), async {
+        loop {
+            match probe_private_service_http(
+                vm.as_ref(),
+                &path,
+                "service.internal",
+                ServiceProbePolicy::new(Duration::from_secs(5)),
+            )
+            .await
+            {
+                Ok(response) => return response,
+                Err(_) => tokio::time::sleep(Duration::from_millis(50)).await,
+            }
+        }
+    })
+    .await
+    .expect("private service probe readiness timeout")
+}
+
+async fn private_service_adapter_request(
+    vm: &Arc<dyn VmInstance>,
+    path: &str,
+) -> gateway_edge::GatewayResponse {
+    let connection = vm
+        .open_private_service_connection()
+        .await
+        .expect("open service connection for gateway-edge adapter");
+    exchange_private_service_http(
+        connection,
+        GatewayRequest {
+            method: Method::GET,
+            path_and_query: path.to_owned(),
+            headers: HeaderMap::new(),
+            body: Bytes::new(),
+            trusted: TrustedRequestMetadata {
+                scheme: GatewayScheme::Http,
+                authority: String::from("service.internal"),
+                client_address: IpAddr::V4(Ipv4Addr::LOCALHOST),
+                request_id: uuid::Uuid::new_v4(),
+            },
+        },
+        ServiceHttpPolicy {
+            max_request_body_bytes: 1,
+            max_response_body_bytes: 64 * 1024,
+            max_request_headers: 4,
+            max_response_headers: 32,
+            max_path_and_query_bytes: 512,
+            max_wire_header_bytes: 8 * 1024,
+            exchange_timeout: Duration::from_secs(5),
+        },
+    )
+    .await
+    .expect("gateway-edge private service exchange")
+}
+
+async fn private_service_request(
+    vm: &Arc<dyn VmInstance>,
+    path: &str,
+) -> io::Result<(u16, Vec<u8>)> {
+    tokio::time::timeout(
+        Duration::from_secs(5),
+        private_service_request_inner(vm, path),
+    )
+    .await
+    .map_err(|_| io::Error::new(io::ErrorKind::TimedOut, "private service request timeout"))?
+}
+
+async fn private_service_request_inner(
+    vm: &Arc<dyn VmInstance>,
+    path: &str,
+) -> io::Result<(u16, Vec<u8>)> {
+    const MAX_SERVICE_RESPONSE_BYTES: usize = 64 * 1024;
+    let mut stream = vm
+        .open_private_service_connection()
+        .await
+        .map_err(|error| io::Error::other(error.to_string()))?;
+    stream
+        .write_all(
+            format!("GET {path} HTTP/1.1\r\nHost: guest\r\nConnection: close\r\n\r\n").as_bytes(),
+        )
+        .await?;
+    let mut response = Vec::new();
+    let mut limited = stream.take((MAX_SERVICE_RESPONSE_BYTES + 1) as u64);
+    limited.read_to_end(&mut response).await?;
+    if response.len() > MAX_SERVICE_RESPONSE_BYTES {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            "private service response exceeds test limit",
+        ));
+    }
+    let header_end = response
+        .windows(4)
+        .position(|window| window == b"\r\n\r\n")
+        .ok_or_else(|| {
+            io::Error::new(
+                io::ErrorKind::InvalidData,
+                "service response has no headers",
+            )
+        })?;
+    let status = std::str::from_utf8(&response[..header_end])
+        .map_err(|_| io::Error::new(io::ErrorKind::InvalidData, "service response is not UTF-8"))?
+        .lines()
+        .next()
+        .and_then(|line| line.split_ascii_whitespace().nth(1))
+        .ok_or_else(|| {
+            io::Error::new(io::ErrorKind::InvalidData, "service response has no status")
+        })?
+        .parse::<u16>()
+        .map_err(|_| {
+            io::Error::new(
+                io::ErrorKind::InvalidData,
+                "service response status is invalid",
+            )
+        })?;
+    Ok((status, response[header_end + 4..].to_vec()))
+}
+
+fn parse_adapter_service_identity(response: &gateway_edge::GatewayResponse) -> serde_json::Value {
+    assert_eq!(response.status, StatusCode::OK);
+    serde_json::from_slice(&response.body).expect("service identity JSON")
 }
 
 async fn collect_logs_until_exit(events: &mut tokio::sync::broadcast::Receiver<VmEvent>) -> String {
@@ -859,6 +1341,29 @@ async fn wait_for_log(events: &mut tokio::sync::broadcast::Receiver<VmEvent>, ex
     .expect("guest log marker timeout");
 }
 
+async fn wait_for_service_isolation(events: &mut tokio::sync::broadcast::Receiver<VmEvent>) {
+    tokio::time::timeout(Duration::from_secs(5), async {
+        let mut started = false;
+        loop {
+            match events.recv().await.expect("service guest event") {
+                VmEvent::Started { ingress } => {
+                    assert!(ingress.is_empty(), "private service received ingress");
+                    started = true;
+                }
+                VmEvent::Log { bytes, .. }
+                    if String::from_utf8_lossy(&bytes).contains("private-service-isolation=ok") =>
+                {
+                    assert!(started, "service isolation marker preceded VM start event");
+                    return;
+                }
+                _ => {}
+            }
+        }
+    })
+    .await
+    .expect("service isolation marker timeout");
+}
+
 fn sqlite_previous_rows(markers: &str) -> u64 {
     markers
         .lines()
@@ -929,6 +1434,7 @@ fn long_running_spec(rootfs: PathBuf, kind: &str) -> VmSpec {
             working_dir: Some(PathBuf::from("/")),
         },
         runtime_authority: None,
+        private_http_service: None,
         labels: BTreeMap::from([("test".to_owned(), kind.to_owned())]),
     }
 }

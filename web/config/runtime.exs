@@ -23,6 +23,72 @@ end
 config :hephaestus_web, HephaestusWebWeb.Endpoint,
   http: [port: String.to_integer(System.get_env("PORT", "4000"))]
 
+platform_origin_env = System.get_env("HEPHAESTUS_PLATFORM_HTTPS_ORIGIN")
+
+platform_fallback_host = System.get_env("HEPHAESTUS_PLATFORM_HOST") || System.get_env("PHX_HOST")
+
+platform_origin_pattern =
+  ~r/\Ahttps:\/\/(?<host>[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?(?:\.[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?)*)(?::(?<port>[1-9][0-9]{0,4}))?\z/
+
+canonical_origin = fn %URI{host: host, port: port} ->
+  host = String.downcase(host)
+  port = if port in [nil, 443], do: "", else: ":#{port}"
+  "https://#{host}#{port}"
+end
+
+{platform_host, platform_origin} =
+  case platform_origin_env do
+    nil ->
+      {platform_fallback_host,
+       if(is_binary(platform_fallback_host),
+         do: "https://#{String.downcase(platform_fallback_host)}",
+         else: nil
+       )}
+
+    explicit_origin ->
+      parsed_origin =
+        try do
+          URI.parse(explicit_origin)
+        rescue
+          URI.ParseError -> nil
+        end
+
+      valid_origin? =
+        case {Regex.named_captures(platform_origin_pattern, explicit_origin), parsed_origin} do
+          {%{"host" => raw_host, "port" => raw_port},
+           %URI{
+             scheme: "https",
+             userinfo: nil,
+             host: parsed_host,
+             port: parsed_port,
+             path: path,
+             query: nil,
+             fragment: nil
+           }} ->
+            expected_port =
+              case raw_port do
+                nil -> 443
+                "" -> 443
+                value -> String.to_integer(value)
+              end
+
+            is_binary(parsed_host) and byte_size(raw_host) <= 253 and
+              String.downcase(parsed_host) == String.downcase(raw_host) and
+              parsed_port == expected_port and path in [nil, ""] and
+              expected_port in 1..65_535
+
+          _invalid ->
+            false
+        end
+
+      if valid_origin? do
+        %URI{host: host} = parsed_origin
+        {String.downcase(host), canonical_origin.(parsed_origin)}
+      else
+        raise "HEPHAESTUS_PLATFORM_HTTPS_ORIGIN must be an exact HTTPS origin"
+      end
+  end
+
 config :hephaestus_web,
   rpc: [
     endpoint: System.get_env("HEPHAESTUS_RPC_ENDPOINT", "127.0.0.1:8080"),
@@ -31,6 +97,12 @@ config :hephaestus_web,
         "HEPHAESTUS_RPC_MEDIATOR_SECRET",
         "development-rpc-mediator-secret-change-before-deployment"
       )
+  ],
+  ui_browser: [
+    namespace: System.get_env("HEPHAESTUS_UI_NAMESPACE"),
+    platform_origin: platform_origin,
+    platform_host: platform_host,
+    port: System.get_env("HEPHAESTUS_UI_PORT")
   ],
   oidc: [
     issuer: System.get_env("HEPHAESTUS_BROWSER_OIDC_ISSUER", "http://localhost:5556"),
@@ -76,12 +148,20 @@ if config_env() == :prod do
       You can generate one by calling: mix phx.gen.secret
       """
 
-  host = System.get_env("PHX_HOST") || "example.com"
+  endpoint_url =
+    case platform_origin_env do
+      nil ->
+        [host: System.get_env("PHX_HOST") || "example.com", port: 443, scheme: "https"]
+
+      _explicit_origin ->
+        %URI{scheme: scheme, host: host, port: port} = URI.parse(platform_origin)
+        [host: host, port: port || 443, scheme: scheme]
+    end
 
   config :hephaestus_web, :dns_cluster_query, System.get_env("DNS_CLUSTER_QUERY")
 
   config :hephaestus_web, HephaestusWebWeb.Endpoint,
-    url: [host: host, port: 443, scheme: "https"],
+    url: endpoint_url,
     http: [
       # Enable IPv6 and bind on all interfaces.
       # Set it to  {0, 0, 0, 0, 0, 0, 0, 1} for local network only access.

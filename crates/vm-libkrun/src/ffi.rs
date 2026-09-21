@@ -116,6 +116,7 @@ impl Context {
         passt_socket: Option<&Path>,
         control_socket: &Path,
         broker_socket: Option<&Path>,
+        private_service_socket: Option<&Path>,
     ) -> Result<(), FfiError> {
         let id = self.id();
         status(
@@ -173,6 +174,32 @@ impl Context {
                     &broker_socket,
                 ),
             )?;
+        }
+        match (spec.private_http_service.as_ref(), private_service_socket) {
+            (Some(_), Some(socket)) => {
+                let socket = path_cstring(socket)?;
+                status(
+                    "krun_add_vsock_port",
+                    self.api.add_vsock_port(
+                        id,
+                        crate::protocol::PRIVATE_SERVICE_VSOCK_PORT,
+                        &socket,
+                    ),
+                )?;
+            }
+            (Some(_), None) => {
+                return Err(FfiError::message(
+                    "krun_add_vsock_port",
+                    "private service has no host socket",
+                ));
+            }
+            (None, Some(_)) => {
+                return Err(FfiError::message(
+                    "krun_add_vsock_port",
+                    "private service socket provided without a service",
+                ));
+            }
+            (None, None) => {}
         }
 
         match (&spec.network, passt_socket) {
@@ -449,7 +476,7 @@ mod tests {
     use super::{Context, KrunApi, deterministic_mac, path_cstring, status};
     use crate::validation::{
         PreparedCommand, PreparedDisk, PreparedForward, PreparedMount, PreparedNetwork,
-        PreparedRoot, PreparedSpec,
+        PreparedPrivateHttpService, PreparedRoot, PreparedSpec,
     };
     use std::{
         collections::BTreeMap,
@@ -487,6 +514,7 @@ mod tests {
                 &prepared_spec(),
                 Some(Path::new("/run/vm/passt.sock")),
                 Path::new("/run/vm/control.sock"),
+                None,
                 None,
             )
             .unwrap();
@@ -551,7 +579,7 @@ mod tests {
         spec.mounts.clear();
         spec.network = PreparedNetwork::Disabled;
         context
-            .configure(&spec, None, Path::new("/run/vm/control.sock"), None)
+            .configure(&spec, None, Path::new("/run/vm/control.sock"), None, None)
             .unwrap();
         drop(context);
         let calls = api.calls();
@@ -585,6 +613,7 @@ mod tests {
                 None,
                 Path::new("/run/vm/control.sock"),
                 Some(Path::new("/run/hephaestus/broker.sock")),
+                None,
             )
             .unwrap();
         drop(context);
@@ -593,6 +622,40 @@ mod tests {
             id: 7,
             port: crate::protocol::SECRET_BROKER_VSOCK_PORT,
             path: String::from("/run/hephaestus/broker.sock"),
+        }));
+        assert!(
+            calls
+                .iter()
+                .all(|call| !matches!(call, Call::Network { .. }))
+        );
+    }
+
+    #[test]
+    fn private_service_maps_only_the_dedicated_vsock() {
+        let api = Arc::new(RecordingApi::new(None));
+        let context = Context::from_api(api.clone()).unwrap();
+        let mut spec = prepared_spec();
+        spec.network = PreparedNetwork::Disabled;
+        spec.private_http_service = Some(PreparedPrivateHttpService {
+            loopback_port: 8080,
+            max_connections: 4,
+            connect_timeout_ms: 1_000,
+        });
+        context
+            .configure(
+                &spec,
+                None,
+                Path::new("/run/vm/control.sock"),
+                None,
+                Some(Path::new("/run/vm/private-service.sock")),
+            )
+            .unwrap();
+        drop(context);
+        let calls = api.calls();
+        assert!(calls.contains(&Call::VsockPort {
+            id: 7,
+            port: crate::protocol::PRIVATE_SERVICE_VSOCK_PORT,
+            path: String::from("/run/vm/private-service.sock"),
         }));
         assert!(
             calls
@@ -622,6 +685,7 @@ mod tests {
                     Some(Path::new("/run/vm/passt.sock")),
                     Path::new("/run/vm/control.sock"),
                     None,
+                    None,
                 )
             });
             let error = result.expect_err("injected FFI failure must propagate");
@@ -645,6 +709,7 @@ mod tests {
                     &raw_root,
                     Some(Path::new("/run/vm/passt.sock")),
                     Path::new("/run/vm/control.sock"),
+                    None,
                     None,
                 )
                 .unwrap_err()
@@ -693,6 +758,7 @@ mod tests {
                 working_dir: Some(Path::new("/").to_path_buf()),
             },
             runtime_authority: None,
+            private_http_service: None,
             labels: BTreeMap::new(),
         }
     }

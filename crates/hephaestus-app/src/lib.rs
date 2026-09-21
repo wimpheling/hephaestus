@@ -4,6 +4,14 @@ mod application;
 mod event_adapter;
 mod event_cursor;
 pub mod rpc;
+mod service_log_maintenance;
+pub(crate) mod ui_audit;
+mod ui_bootstrap;
+mod ui_browser_content;
+mod ui_origin_config;
+mod ui_origin_wiring;
+
+pub use ui_origin_config::{UiOriginConfig, UiOriginConfigError};
 
 /// Test-only lifecycle synchronization hooks used by daemon integration tests.
 #[cfg(feature = "test-fixtures")]
@@ -33,9 +41,9 @@ use capability_domain::{
 };
 use control_plane_postgres::launch::PgRunLaunchAuthorizer;
 use control_plane_postgres::{
-    ControlPlanePool, connect as connect_control_plane, connect_worker as connect_oci_worker,
-    is_update_hook_run, load_vm_launch_contract, pending_update_admissions,
-    recoverable_update_hook_run_ids,
+    ControlPlanePool, connect as connect_control_plane, connect_app as connect_application,
+    connect_worker as connect_oci_worker, is_update_hook_run, load_vm_launch_contract,
+    pending_update_admissions, recoverable_update_hook_run_ids,
 };
 use event_postgres::{ReleaseOutboxPublisher, ensure_release_jetstream_topology};
 use forge_postgres::PgForgeRepository;
@@ -47,22 +55,33 @@ use futures_util::StreamExt;
 use gateway_edge::{
     GatewayDispatcher, GatewayInboundSecretResolver, GatewayLimits, GatewayProvider,
     GatewayRequest, GatewayRequestDispatcher, GatewayRuntimeLauncher, GatewayRuntimeService,
-    GatewayScheme, LocalCaddyAdministration, LocalCaddyConfigurationTemplate,
-    LocalCaddyGatewayProvider, PrivateHttpVmGatewayHandler, TrustedRequestMetadata,
+    GatewayScheme, GatewayServiceArtifact, GatewayServiceArtifactKind, GatewayServiceBootRecovery,
+    GatewayServiceBootRecoveryContext, GatewayServiceClaimResolutionStore,
+    GatewayServiceCleanupDriverPolicy, GatewayServiceExpiredClaimRecovery, GatewayServiceHandler,
+    GatewayServiceIdentity, GatewayServiceLogStore, GatewayServiceLogWriterConfig,
+    GatewayServiceMaterializer, GatewayServiceOwnedTarget, GatewayServiceOwner,
+    GatewayServiceRegistry, GatewayServiceStartupIntent, GatewayServiceStartupRequest,
+    GatewayServiceSupervisor, GatewayServiceSupervisorContext, GatewayServiceSupervisorJobStatus,
+    GatewayServiceSupervisorPolicy, GatewayServiceTargetPage, GatewayServiceTargetPageResult,
+    LocalCaddyAdministration, LocalCaddyConfigurationTemplate, LocalCaddyGatewayProvider,
+    PrivateHttpVmGatewayHandler, ServiceLogWriterPolicy, TrustedRequestMetadata,
     UNTRUSTED_FORWARDING_HEADERS,
 };
 use gateway_postgres::{
     GatewayReleaseArtifact, GatewayReleaseArtifactKind, GatewayReleaseMaterializer,
-    PostgresGatewayEdgeAuthority, PostgresGatewayMailboxPublisher, PostgresGatewayReleaseResolver,
+    PostgresGatewayEdgeAuthority, PostgresGatewayExecutionTargetResolver,
+    PostgresGatewayMailboxPublisher, PostgresGatewayReleaseResolver,
+    PostgresGatewayServiceFailureStore, PostgresGatewayServiceLaunchResolver,
+    PostgresGatewayServiceLogStore, PostgresGatewayServiceOwnership, PostgresGatewayServiceTargets,
 };
 use git_http::{
     CompositeGitAuthenticator, GitAuthenticator, GitHttpLimits, GitHttpService,
     OidcGitAuthenticator, PostgresGitAuthorizer, RuntimeGitHttpAuthenticator,
 };
-use identity_application::IdempotentIdentityResolver;
+use identity_application::{BrowserSessionStore, IdempotentIdentityResolver};
 use identity_domain::{AuthenticatedIdentity, RequestId, UserId};
 use identity_oidc::OidcVerifier;
-use identity_postgres::PostgresIdentityStore;
+use identity_postgres::{PostgresBrowserSessionStore, PostgresIdentityStore};
 use jsonwebtoken::{Algorithm, DecodingKey};
 use mailbox_dispatch::{
     MailboxCommandHandler, MailboxDispatchStore, MailboxOutboxPublisher, MailboxRunCompletion,
@@ -104,8 +123,11 @@ use registry_token::{
 use registry_zot::{RegistryPullTokenProvider, ZotClientConfig, ZotClientError, ZotHttpRegistry};
 use release_artifact_store::LocalArtifactStore;
 use release_domain::{BuildRequestId, ReleaseCommandKey};
-use release_postgres::{ReleaseService, ReleaseServiceError};
-use release_service::BeginUpdateHook;
+use release_postgres::{
+    PgUiBrowserServingStore, PgUiBrowserSessionStore, PgUiGenerationHostResolver,
+    PgUiRequestAuditRepository, ReleaseService, ReleaseServiceError,
+};
+use release_service::{BeginUpdateHook, UiBrowserSessionStore};
 use review_domain::CONTROL_EXECUTE_SUBJECT;
 use review_postgres::{GitRepositoryLocator, PostgresReviewRepository};
 use review_service::{NatsControlHandler, ReviewControlService, ReviewOutboxPublisher};
@@ -118,7 +140,8 @@ use run_orchestrator::{
 };
 use run_postgres::PgRunRepository;
 use run_runtime_local::{
-    LocalGatewayReleaseRuntime, LocalRunRuntimeConfig, LocalRunRuntimeManager,
+    GatewayServiceIdentity as LocalGatewayServiceIdentity, LocalGatewayReleaseRuntime,
+    LocalRunRuntimeConfig, LocalRunRuntimeManager,
 };
 use runtime_authority::{
     GatewayRuntimeAuthorityIssuer, RuntimeHandoffStore, RuntimeSessionIssuer,
@@ -136,16 +159,18 @@ use secret_postgres::{GatewayIngressSecretResolver, SecretRuntimeService, Secret
 use secret_runtime::EphemeralSecretConfig;
 use secret_store::{EncryptedStore, LocalKeyProvider};
 use serde::Deserialize;
+use service_log_maintenance::GatewayServiceLogMaintenanceScheduler;
 use sha2::{Digest, Sha256};
 type PgPool = ControlPlanePool;
 use std::{
-    collections::BTreeMap,
+    collections::{BTreeMap, HashMap},
     future::Future,
     net::SocketAddr,
     os::unix::fs::PermissionsExt,
     path::PathBuf,
+    pin::Pin,
     sync::{
-        Arc, RwLock,
+        Arc, Mutex as StdMutex, RwLock,
         atomic::{AtomicBool, Ordering},
     },
     time::{Duration, Instant},
@@ -169,7 +194,11 @@ use workspace_local::{LocalWorkspaceConfig, LocalWorkspaceManager};
 use workspace_postgres::PgWorkspaceMetadataRepository;
 
 /// Ordered database migration expected by this application version.
-pub const EXPECTED_DATABASE_MIGRATION: i64 = 69;
+pub const EXPECTED_DATABASE_MIGRATION: i64 = 94;
+
+const GATEWAY_SERVICE_SERVING_CAPACITY: usize = 8;
+const GATEWAY_SERVICE_REPLACEMENT_CAPACITY: usize = 2;
+const GATEWAY_SERVICE_REQUEST_CAPACITY: usize = 16;
 
 /// OIDC issuer configuration used for bearer-token authentication.
 #[derive(Clone)]
@@ -216,6 +245,8 @@ pub struct GatewayEdgeConfig {
     pub dispatcher_listen: SocketAddr,
     /// Canonical public authority recorded as trusted gateway metadata.
     pub public_authority: String,
+    /// Optional private UI-origin listener and generation-host policy.
+    pub ui_origin: Option<UiOriginConfig>,
 }
 
 /// Configured VM backend.
@@ -473,11 +504,26 @@ impl AppConfig {
         }
         LocalCaddyAdministration::new(&gateway.caddy_admin_url)
             .map_err(|error| AppError::Configuration(error.to_string()))?;
-        LocalCaddyConfigurationTemplate::new(
+        let template = LocalCaddyConfigurationTemplate::new(
             &gateway.caddy_configuration_template,
             gateway.caddy_server_name.clone(),
         )
         .map_err(|error| AppError::Configuration(error.to_string()))?;
+        if let Some(ui) = &gateway.ui_origin {
+            let listener = ui.listener().ok_or_else(|| {
+                AppError::Configuration(String::from(
+                    "UI origin listener is required when UI origin is enabled",
+                ))
+            })?;
+            if !listener.ip().is_loopback() || listener.port() == 0 {
+                return Err(AppError::Configuration(String::from(
+                    "UI origin listener must use a nonzero loopback address",
+                )));
+            }
+            template
+                .with_ui_namespace(ui.namespace().as_str(), listener)
+                .map_err(|error| AppError::Configuration(error.to_string()))?;
+        }
         Ok(())
     }
 
@@ -567,6 +613,8 @@ impl AppConfig {
 /// Constructed application whose external tasks have not started.
 pub struct HephaestusApp {
     pool: PgPool,
+    application_pool: PgPool,
+    service_log_pool: PgPool,
     nats_client: async_nats::Client,
     jetstream: async_nats::jetstream::Context,
     forge: Arc<PgForgeRepository>,
@@ -596,6 +644,7 @@ pub struct HephaestusApp {
     internal_platform_policy_version: String,
     secret_broker_socket: PathBuf,
     secret_broker_executor: Arc<dyn BrokerExecutor>,
+    service_log_maintenance: Arc<GatewayServiceLogMaintenanceScheduler>,
     gateway_edge: Option<GatewayEdgeRuntime>,
     worker_concurrency: usize,
     outbox_poll_interval: Duration,
@@ -607,10 +656,18 @@ pub struct HephaestusApp {
 /// Runtime-owned dependencies for the optional shared-Caddy gateway edge.
 struct GatewayEdgeRuntime {
     authority: PostgresGatewayEdgeAuthority,
+    recovery_authority: PostgresGatewayEdgeAuthority,
+    service_supervisor_context: Arc<GatewayServiceSupervisorContext>,
+    service_claim_resolution: Arc<dyn GatewayServiceClaimResolutionStore>,
+    service_expired_claim_recovery: Arc<dyn GatewayServiceExpiredClaimRecovery>,
+    service_boot_context: GatewayServiceBootRecoveryContext,
+    service_log_writer: GatewayServiceLogWriterConfig,
     provider: Arc<dyn gateway_edge::GatewayProvider>,
     dispatcher: Arc<dyn GatewayRequestDispatcher>,
     dispatcher_listen: SocketAddr,
     public_authority: String,
+    ui_dispatcher: Option<Arc<dyn ui_browser_content::UiGatewayDispatcher>>,
+    ui_origin: Option<UiOriginConfig>,
 }
 
 /// Narrow provider adapter used only after the gateway release resolver has
@@ -670,6 +727,52 @@ impl GatewayReleaseMaterializer for LocalGatewayReleaseMaterializer {
     fn destroy(&self, invocation_id: Uuid) -> Result<(), gateway_edge::GatewayEdgeError> {
         self.runtime
             .destroy(invocation_id)
+            .map_err(|_| gateway_edge::GatewayEdgeError::HandlerUnavailable)
+    }
+}
+
+impl GatewayServiceMaterializer for LocalGatewayReleaseMaterializer {
+    fn prepare_service(
+        &self,
+        identity: GatewayServiceIdentity,
+        artifacts: &[GatewayServiceArtifact],
+        parameters: &serde_json::Value,
+    ) -> Result<Vec<VmMount>, gateway_edge::GatewayEdgeError> {
+        let identity = LocalGatewayServiceIdentity {
+            instance_id: identity.instance_id,
+            gateway_id: identity.gateway_id,
+            revision_id: identity.revision_id,
+        };
+        let artifacts = artifacts
+            .iter()
+            .map(|artifact| RunRuntimeArtifact {
+                path: artifact.path.clone(),
+                kind: match artifact.kind {
+                    GatewayServiceArtifactKind::Executable => RunRuntimeArtifactKind::Executable,
+                    GatewayServiceArtifactKind::File => RunRuntimeArtifactKind::File,
+                    GatewayServiceArtifactKind::Manifest => RunRuntimeArtifactKind::Manifest,
+                },
+                mode: artifact.mode,
+                content_hash: artifact.content_hash,
+                size_bytes: artifact.size_bytes,
+                storage_key: artifact.storage_key,
+            })
+            .collect::<Vec<_>>();
+        self.runtime
+            .prepare_service(identity, &artifacts, parameters)
+            .map_err(|_| gateway_edge::GatewayEdgeError::HandlerUnavailable)
+    }
+
+    fn destroy_service(
+        &self,
+        identity: GatewayServiceIdentity,
+    ) -> Result<(), gateway_edge::GatewayEdgeError> {
+        self.runtime
+            .destroy_service(LocalGatewayServiceIdentity {
+                instance_id: identity.instance_id,
+                gateway_id: identity.gateway_id,
+                revision_id: identity.revision_id,
+            })
             .map_err(|_| gateway_edge::GatewayEdgeError::HandlerUnavailable)
     }
 }
@@ -1121,6 +1224,7 @@ impl HephaestusApp {
     #[allow(clippy::too_many_lines)]
     pub async fn build(mut config: AppConfig) -> Result<Self, AppError> {
         config.validate()?;
+        let gateway_service_host_id = config.volumes.host_id.clone();
         if let VmBackendConfig::Libkrun(provider) = &mut config.vm_backend {
             if provider
                 .broker_socket_path
@@ -1137,6 +1241,9 @@ impl HephaestusApp {
             .await
             .map_err(component("PostgreSQL connection"))?;
         verify_database_contract(&pool).await?;
+        let application_pool = connect_application(&config.database_url, 10)
+            .await
+            .map_err(component("PostgreSQL application-role connection"))?;
 
         let storage = Arc::new(
             GitStorage::initialize(&config.repository_root)
@@ -1193,6 +1300,24 @@ impl HephaestusApp {
         let gateway_handoff_root = config.runtime_authority_handoff_root.clone();
         let gateway_handoff_key = config.runtime_authority_handoff_key;
         let gateway_root_images = config.root_images.clone();
+        // Service-log append and retention use one dedicated worker pool. It
+        // is created even when the optional gateway edge is disabled so the
+        // retention scheduler has stable ownership and shutdown semantics.
+        let service_log_pool = connect_oci_worker(&config.database_url, 2)
+            .await
+            .map_err(component("service-log PostgreSQL connection"))?;
+        let service_log_store = Arc::new(PostgresGatewayServiceLogStore::new(
+            service_log_pool.clone(),
+        ));
+        let service_log_projects: Arc<dyn gateway_edge::GatewayServiceLogMaintenanceProjects> =
+            service_log_store.clone();
+        let service_log_maintenance_port: Arc<dyn gateway_edge::GatewayServiceLogMaintenance> =
+            service_log_store.clone();
+        let service_log_maintenance = Arc::new(GatewayServiceLogMaintenanceScheduler::new(
+            service_log_projects,
+            service_log_maintenance_port,
+            gateway_edge::GatewayServiceLogMaintenancePolicy::default(),
+        ));
         let (secret_mounts, secret_runtime, secret_service) = build_secret_mount_manager(
             pool.clone(),
             &config.database_url,
@@ -1246,35 +1371,116 @@ impl HephaestusApp {
             let gateway_authority_pool = connect_oci_worker(&config.database_url, 4)
                 .await
                 .map_err(component("gateway runtime authority PostgreSQL connection"))?;
+            let service_owner = GatewayServiceOwner::new(gateway_service_host_id, Uuid::new_v4())
+                .map_err(component("gateway service owner"))?;
+            let service_registry = GatewayServiceRegistry::new(
+                GATEWAY_SERVICE_SERVING_CAPACITY + GATEWAY_SERVICE_REPLACEMENT_CAPACITY,
+                GATEWAY_SERVICE_REQUEST_CAPACITY,
+            )
+            .map_err(component("gateway service registry"))?;
             let issuer_handoff =
                 EncryptedFileHandoffStore::new(gateway_handoff_root.clone(), gateway_handoff_key)
                     .map_err(component("gateway runtime authority handoff"))?;
             let issuer: Arc<dyn GatewayRuntimeAuthorityIssuer> =
                 Arc::new(PgGatewayRuntimeAuthorityIssuer::new(
-                    gateway_authority_pool,
+                    gateway_authority_pool.clone(),
                     issuer_handoff,
                     authz_postgres::AUTHORIZATION_MODEL_VERSION,
                 ));
             let authority = PostgresGatewayEdgeAuthority::new(pool.clone(), gateway_limits())
-                .with_runtime_authority(issuer, Duration::from_secs(30))
+                .with_runtime_authority(Arc::clone(&issuer), Duration::from_secs(30))
                 .map_err(component("gateway runtime authority"))?;
+            let recovery_authority =
+                PostgresGatewayEdgeAuthority::new(gateway_authority_pool.clone(), gateway_limits());
+            let ui_authority =
+                PostgresGatewayEdgeAuthority::new(gateway_authority_pool.clone(), gateway_limits())
+                    .with_runtime_authority(Arc::clone(&issuer), Duration::from_secs(30))
+                    .map_err(component("UI gateway runtime authority"))?;
+            let gateway_release_materializer = Arc::new(gateway_release_runtime);
+            let gateway_release_materializer_port: Arc<dyn GatewayReleaseMaterializer> =
+                gateway_release_materializer.clone();
+            let gateway_service_materializer: Arc<dyn GatewayServiceMaterializer> =
+                gateway_release_materializer.clone();
+            let service_ownership = Arc::new(PostgresGatewayServiceOwnership::new(
+                gateway_authority_pool.clone(),
+            ));
+            let service_claim_resolution: Arc<dyn GatewayServiceClaimResolutionStore> =
+                service_ownership.clone();
+            let service_expired_claim_recovery: Arc<dyn GatewayServiceExpiredClaimRecovery> =
+                service_ownership.clone();
+            let service_failure_store = Arc::new(PostgresGatewayServiceFailureStore::new(
+                gateway_authority_pool.clone(),
+            ));
+            let service_log_writer = GatewayServiceLogWriterConfig::new(
+                service_log_store.clone() as Arc<dyn GatewayServiceLogStore>,
+                ServiceLogWriterPolicy::default(),
+            );
+            let service_launch_resolver = Arc::new(
+                PostgresGatewayServiceLaunchResolver::new(
+                    gateway_authority_pool.clone(),
+                    gateway_root_images.clone(),
+                )
+                .with_service_materializer(Arc::clone(&gateway_service_materializer)),
+            );
+            let service_targets = Arc::new(PostgresGatewayServiceTargets::new(
+                gateway_authority_pool.clone(),
+            ));
             let resolver_handoff: Arc<dyn RuntimeHandoffStore> = Arc::new(
                 EncryptedFileHandoffStore::new(gateway_handoff_root, gateway_handoff_key)
                     .map_err(component("gateway runtime resolver handoff"))?,
             );
             let releases = PostgresGatewayReleaseResolver::new(
                 pool.clone(),
-                gateway_root_images,
+                gateway_root_images.clone(),
                 resolver_handoff,
             )
-            .with_release_materializer(Arc::new(gateway_release_runtime));
+            .with_release_materializer(gateway_release_materializer_port);
             let runtime = GatewayRuntimeService::new(
                 releases,
                 ProviderGatewayRuntimeLauncher {
                     provider: Arc::clone(&provider),
                 },
             );
-            let handler = PrivateHttpVmGatewayHandler::new(runtime);
+            let stateless_handler = PrivateHttpVmGatewayHandler::new(runtime);
+            let service_supervisor_context = Arc::new(GatewayServiceSupervisorContext {
+                owner: service_owner.clone(),
+                policy: GatewayServiceSupervisorPolicy::default(),
+                ownership: service_ownership.clone(),
+                failure_store: service_failure_store.clone(),
+                resolver: service_launch_resolver.clone(),
+                provider: Arc::clone(&provider),
+                targets: service_targets.clone(),
+                registry: service_registry.clone(),
+                service_authority: gateway.public_authority.clone(),
+            });
+            let service_policy = service_supervisor_context.policy;
+            let service_boot_context = GatewayServiceBootRecoveryContext {
+                owner: service_supervisor_context.owner.clone(),
+                cleanup_policy: GatewayServiceCleanupDriverPolicy {
+                    lease: service_policy.lease,
+                    database_timeout: service_policy.instance.probe_timeout,
+                },
+                shutdown_timeout: service_policy.instance.shutdown_timeout,
+                ownership: service_ownership.clone(),
+                exact_recovery: service_ownership.clone(),
+                targets: service_targets.clone(),
+                failure_store: service_failure_store.clone(),
+                resolver: service_launch_resolver.clone(),
+                provider: Arc::clone(&service_supervisor_context.provider),
+            };
+            GatewayServiceSupervisor::new(clone_service_supervisor_context(
+                &service_supervisor_context,
+            ))
+            .map_err(component("gateway service supervisor"))?;
+            let handler = Arc::new(
+                GatewayServiceHandler::new(
+                    PostgresGatewayExecutionTargetResolver::new(gateway_authority_pool.clone()),
+                    stateless_handler,
+                    service_registry,
+                    service_owner,
+                )
+                .map_err(component("gateway service handler"))?,
+            );
             let ingress_pool = connect_control_plane(&config.database_url, 4)
                 .await
                 .map_err(component("gateway secret resolver PostgreSQL connection"))?;
@@ -1283,13 +1489,30 @@ impl HephaestusApp {
                     ingress_pool,
                     EncryptedStore::new(gateway_secret_keys),
                 ));
+            let mailbox: Arc<dyn gateway_edge::GatewayMailboxPublisher> =
+                Arc::new(PostgresGatewayMailboxPublisher::new(pool.clone()));
             let dispatcher: Arc<dyn GatewayRequestDispatcher> = Arc::new(
-                GatewayDispatcher::new(authority.clone(), handler, authority.clone())
-                    .with_inbound_secret_resolver(inbound)
-                    .with_mailbox_publisher(Arc::new(PostgresGatewayMailboxPublisher::new(
-                        pool.clone(),
-                    ))),
+                GatewayDispatcher::new(authority.clone(), Arc::clone(&handler), authority.clone())
+                    .with_inbound_secret_resolver(Arc::clone(&inbound))
+                    .with_mailbox_publisher(Arc::clone(&mailbox)),
             );
+            let ui_dispatcher = gateway.ui_origin.as_ref().map(|ui| {
+                let ui_core = Arc::new(
+                    GatewayDispatcher::new(
+                        ui_authority.clone(),
+                        Arc::clone(&handler),
+                        ui_authority.clone(),
+                    )
+                    .with_inbound_secret_resolver(Arc::clone(&inbound))
+                    .with_mailbox_publisher(Arc::clone(&mailbox)),
+                );
+                Arc::new(ui_origin_wiring::RealUiGatewayDispatcher::new(
+                    ui_core,
+                    Arc::new(ui_authority.clone()),
+                    ui.namespace().clone(),
+                    ui.public_port(),
+                )) as Arc<dyn ui_browser_content::UiGatewayDispatcher>
+            });
             let administration = LocalCaddyAdministration::new(&gateway.caddy_admin_url)
                 .map_err(component("gateway Caddy administration"))?;
             let template = LocalCaddyConfigurationTemplate::new(
@@ -1297,6 +1520,17 @@ impl HephaestusApp {
                 gateway.caddy_server_name,
             )
             .map_err(component("gateway Caddy configuration template"))?;
+            let template = match &gateway.ui_origin {
+                Some(ui) => template
+                    .with_ui_namespace(
+                        ui.namespace().as_str(),
+                        ui.listener().ok_or_else(|| {
+                            AppError::Configuration(String::from("missing UI origin listener"))
+                        })?,
+                    )
+                    .map_err(component("gateway UI Caddy configuration"))?,
+                None => template,
+            };
             let provider: Arc<dyn gateway_edge::GatewayProvider> = Arc::new(
                 LocalCaddyGatewayProvider::new(administration, Arc::clone(&dispatcher))
                     .with_dispatcher_upstream(gateway.dispatcher_listen.to_string())
@@ -1304,10 +1538,18 @@ impl HephaestusApp {
             );
             Some(GatewayEdgeRuntime {
                 authority,
+                recovery_authority,
+                service_supervisor_context,
+                service_claim_resolution,
+                service_expired_claim_recovery,
+                service_boot_context,
+                service_log_writer,
                 provider,
                 dispatcher,
                 dispatcher_listen: gateway.dispatcher_listen,
                 public_authority: gateway.public_authority,
+                ui_dispatcher,
+                ui_origin: gateway.ui_origin,
             })
         } else {
             None
@@ -1418,6 +1660,7 @@ impl HephaestusApp {
 
         Ok(Self {
             pool,
+            application_pool,
             nats_client,
             jetstream,
             forge,
@@ -1430,6 +1673,7 @@ impl HephaestusApp {
             git_limits: config.git_http_limits,
             registry: config.registry,
             http_listen: config.http_listen,
+            service_log_pool,
             run_repository,
             mailbox_repository,
             review_repository,
@@ -1447,6 +1691,7 @@ impl HephaestusApp {
             internal_platform_policy_version,
             secret_broker_socket: config.secret_broker_socket,
             secret_broker_executor,
+            service_log_maintenance,
             gateway_edge,
             worker_concurrency: config.worker_concurrency,
             outbox_poll_interval: config.outbox_poll_interval,
@@ -1454,6 +1699,74 @@ impl HephaestusApp {
             startup_timeout: config.startup_timeout,
             shutdown_timeout: config.shutdown_timeout,
         })
+    }
+
+    /// Binds and constructs the optional UI-origin listener before shared
+    /// gateway configuration is reconciled.
+    async fn build_ui_listener(
+        &self,
+    ) -> Result<Option<(tokio::net::TcpListener, Router)>, AppError> {
+        let Some(gateway) = &self.gateway_edge else {
+            return Ok(None);
+        };
+        let Some(ui) = &gateway.ui_origin else {
+            return Ok(None);
+        };
+        let listen = ui.listener().ok_or_else(|| {
+            AppError::Configuration(String::from(
+                "UI origin listener is missing from validated configuration",
+            ))
+        })?;
+        let listener = tokio::net::TcpListener::bind(listen)
+            .await
+            .map_err(component("UI origin listener"))?;
+        let origin = ui_bootstrap::UiBootstrapConfig::new(
+            ui.namespace().clone(),
+            ui.public_port(),
+            ui.platform_origin().to_owned(),
+        )
+        .map_err(component("UI origin configuration"))?;
+        let sessions: Arc<dyn UiBrowserSessionStore> = Arc::new(PgUiBrowserSessionStore::new(
+            self.service_log_pool.clone(),
+            self.application_pool.clone(),
+        ));
+        let audit_sink: Arc<dyn release_service::UiRequestAuditSink> = Arc::new(
+            PgUiRequestAuditRepository::new(self.service_log_pool.clone()),
+        );
+        let host_resolver: Arc<dyn release_service::UiGenerationHostResolver> = Arc::new(
+            PgUiGenerationHostResolver::new(self.application_pool.clone()),
+        );
+        let bootstrap = Arc::new(ui_bootstrap::UiBootstrapState::new(
+            Arc::clone(&host_resolver),
+            sessions,
+            origin,
+            Arc::clone(&audit_sink),
+        ));
+        let serving: Arc<dyn release_service::UiBrowserHttpServingProjection> =
+            Arc::new(PgUiBrowserServingStore::new(self.application_pool.clone()));
+        let gateway = gateway.ui_dispatcher.clone().ok_or_else(|| {
+            AppError::Configuration(String::from("UI origin requires a real gateway dispatcher"))
+        })?;
+        let content = Arc::new(
+            ui_browser_content::UiContentState::new(
+                host_resolver,
+                serving,
+                Arc::new(self.artifact_store.clone()),
+                gateway,
+                ui.namespace().clone(),
+                ui.public_port(),
+                ui.platform_origin().to_owned(),
+                Arc::clone(&audit_sink),
+            )
+            .map_err(component("UI content configuration"))?,
+        );
+        let router = ui_origin_wiring::bounded_ui_router_with_audit(
+            ui_bootstrap::router(bootstrap).merge(ui_browser_content::router(content)),
+            Arc::new(Semaphore::new(128)),
+            Duration::from_secs(30),
+            Arc::clone(&audit_sink),
+        );
+        Ok(Some((listener, router)))
     }
 
     /// Binds HTTP, establishes durable NATS topology, and starts supervised
@@ -1466,10 +1779,14 @@ impl HephaestusApp {
     ///
     /// Returns an error when startup or readiness fails. Already-started tasks
     /// are cancelled and reaped before the error is returned.
-    // Startup deliberately remains ordered in one method so the readiness
-    // barrier and failure cleanup sequence are directly auditable.
-    #[allow(clippy::too_many_lines)]
     pub async fn start(self) -> Result<RunningHephaestus, AppError> {
+        // Keep the large startup state machine off the caller's stack.
+        Box::pin(self.start_inner()).await
+    }
+
+    // Keep readiness barriers and failure cleanup ordered and directly auditable.
+    #[allow(clippy::too_many_lines)]
+    async fn start_inner(self) -> Result<RunningHephaestus, AppError> {
         self.build_executor
             .recover_after_restart()
             .await
@@ -1496,6 +1813,9 @@ impl HephaestusApp {
         let mailbox_consumer = ensure_mailbox_jetstream_topology(&self.jetstream)
             .await
             .map_err(component("mailbox JetStream topology"))?;
+        // Bind the optional UI listener before constructing the HTTP/Caddy
+        // graph, while all application fields are still borrowed in place.
+        let ui_listener = self.build_ui_listener().await?;
         let broker = BrokerServer::bind(
             self.secret_broker_socket,
             Arc::clone(&self.secret_broker_executor),
@@ -1517,14 +1837,21 @@ impl HephaestusApp {
             self.internal_platform_policy.clone(),
             self.internal_platform_policy_version.clone(),
         );
+        let browser_sessions: Arc<dyn BrowserSessionStore> = Arc::new(
+            PostgresBrowserSessionStore::new(self.pool.clone(), self.application_pool.clone()),
+        );
         let rpc = rpc::service(
             rpc::ApplicationDependencies::new(
                 self.pool.clone(),
+                self.application_pool.clone(),
+                self.service_log_pool.clone(),
                 Arc::clone(&self.forge),
                 Arc::new(event_postgres::PostgresMutationReceiptReader::new(
                     self.pool.clone(),
                 )),
                 Arc::clone(&self.identity_store) as Arc<dyn IdempotentIdentityResolver>,
+                Arc::clone(&browser_sessions),
+                Arc::clone(&self.release_service),
             ),
             Arc::clone(&self.storage),
             self.artifact_store.clone(),
@@ -1536,6 +1863,9 @@ impl HephaestusApp {
             )),
         )
         .map_err(component("Connect RPC configuration"))?;
+        let ui_request_audit: Arc<dyn release_service::UiRequestAuditSink> = Arc::new(
+            release_postgres::PgUiRequestAuditRepository::new(self.service_log_pool.clone()),
+        );
         let registry_store = PgRegistryStore::new(self.pool.clone());
         let registry_reconciliation_adapter = PostgresRegistryReconciliation {
             store: registry_store.clone(),
@@ -1602,7 +1932,11 @@ impl HephaestusApp {
             .merge(registry_notifications)
             .fallback_service(rpc)
             .layer(axum::middleware::from_fn_with_state(
-                rpc::MediatorAuthenticator::new(&self.rpc_mediator_signing_key),
+                rpc::MediatorAuthenticationState::new(
+                    rpc::MediatorAuthenticator::new(&self.rpc_mediator_signing_key),
+                    browser_sessions,
+                )
+                .with_ui_request_audit_sink(ui_request_audit),
                 rpc::mediator_identity_middleware,
             ));
         let listener = tokio::net::TcpListener::bind(self.http_listen)
@@ -1625,7 +1959,19 @@ impl HephaestusApp {
         }
 
         let cancellation = CancellationToken::new();
-        let mut tasks = Vec::with_capacity(9);
+        let mut tasks = Vec::with_capacity(10);
+        let service_log_maintenance = Arc::clone(&self.service_log_maintenance);
+        let service_log_cancel = cancellation.clone();
+        tasks.push(tokio::spawn(async move {
+            let result = service_log_maintenance
+                .run(service_log_cancel.clone())
+                .await
+                .map_err(|error| error.to_string());
+            if result.is_err() {
+                service_log_cancel.cancel();
+            }
+            result
+        }));
         let (update_reconcile_ready_tx, update_reconcile_ready_rx) = oneshot::channel();
         let update_reconcile_cancel = cancellation.clone();
         let update_reconcile_observer = Arc::clone(&self.update_completion);
@@ -1640,13 +1986,31 @@ impl HephaestusApp {
             .await;
             Ok(())
         }));
-        if let Some(gateway) = &self.gateway_edge {
+        if let Some(gateway) = self.gateway_edge {
             let gateway_reconcile_cancel = cancellation.clone();
             let gateway_authority = gateway.authority.clone();
+            let gateway_recovery_authority = gateway.recovery_authority.clone();
+            let service_supervisor_context =
+                clone_service_supervisor_context(&gateway.service_supervisor_context);
+            let service_boot_recovery =
+                GatewayServiceBootRecovery::new(gateway.service_boot_context)
+                    .map_err(component("gateway service boot recovery"))?;
+            let service_claim_resolution = Arc::clone(&gateway.service_claim_resolution);
+            let service_expired_claim_recovery =
+                Arc::clone(&gateway.service_expired_claim_recovery);
+            let service_log_writer = gateway.service_log_writer;
+            let service_targets = Arc::clone(&gateway.service_supervisor_context.targets);
             let gateway_provider = Arc::clone(&gateway.provider);
             tasks.push(tokio::spawn(async move {
-                gateway_reconciliation_loop(
+                gateway_reconciliation_loop_with_context(
                     gateway_authority,
+                    gateway_recovery_authority,
+                    service_supervisor_context,
+                    service_boot_recovery,
+                    Some(service_claim_resolution),
+                    Some(service_expired_claim_recovery),
+                    Some(service_log_writer),
+                    service_targets,
                     gateway_provider,
                     gateway_reconcile_cancel,
                 )
@@ -1692,6 +2056,29 @@ impl HephaestusApp {
                 result
             }));
             Some(gateway_ready_rx)
+        } else {
+            None
+        };
+        let ui_ready_rx = if let Some((listener, router)) = ui_listener {
+            let (ui_ready_tx, ui_ready_rx) = oneshot::channel();
+            let ui_cancel = cancellation.clone();
+            tasks.push(tokio::spawn(async move {
+                if ui_ready_tx.send(()).is_err() {
+                    return Ok(());
+                }
+                let result = axum::serve(
+                    listener,
+                    router.into_make_service_with_connect_info::<SocketAddr>(),
+                )
+                .with_graceful_shutdown(ui_cancel.clone().cancelled_owned())
+                .await
+                .map_err(|error| error.to_string());
+                if !ui_cancel.is_cancelled() {
+                    ui_cancel.cancel();
+                }
+                result
+            }));
+            Some(ui_ready_rx)
         } else {
             None
         };
@@ -1881,6 +2268,11 @@ impl HephaestusApp {
                     AppError::Readiness(String::from("gateway private dispatcher task exited"))
                 })?;
             }
+            if let Some(ui_ready_rx) = ui_ready_rx {
+                ui_ready_rx.await.map_err(|_| {
+                    AppError::Readiness(String::from("UI origin listener task exited"))
+                })?;
+            }
             publisher_ready_rx
                 .await
                 .map_err(|_| AppError::Readiness(String::from("outbox task exited")))?;
@@ -1928,6 +2320,8 @@ impl HephaestusApp {
             cancellation,
             tasks,
             pool: self.pool,
+            application_pool: self.application_pool,
+            service_log_pool: self.service_log_pool,
             nats_client: self.nats_client,
             jetstream: self.jetstream,
             forge: self.forge,
@@ -2036,16 +2430,161 @@ fn gateway_http_response(
 const GATEWAY_RECONCILIATION_INTERVAL: Duration = Duration::from_secs(1);
 const GATEWAY_CADDY_RECOVERY_INTERVAL: Duration = Duration::from_secs(30);
 
+type GatewayServiceTargetScan = Pin<
+    Box<
+        dyn Future<Output = Result<GatewayServiceTargetPageResult, gateway_edge::GatewayEdgeError>>
+            + Send,
+    >,
+>;
+
+const SERVICE_TARGET_REFRESH_TIMEOUT: Duration = Duration::from_secs(2);
+const SERVICE_CLEANUP_RETRY_INITIAL_BACKOFF: Duration = Duration::from_secs(1);
+const SERVICE_CLEANUP_RETRY_MAX_BACKOFF: Duration = Duration::from_secs(30);
+
+struct TrackedServiceJob {
+    gateway_id: Uuid,
+    revision_id: Uuid,
+    handle: gateway_edge::GatewayServiceStartupHandle,
+    retirement_requested: bool,
+    cleanup_retry_due: Option<Instant>,
+    cleanup_retry_backoff: Duration,
+    cleanup_retry_attempted: bool,
+}
+
+type GatewayServiceTargetRefresh = Pin<
+    Box<
+        dyn Future<
+                Output = (
+                    Uuid,
+                    Uuid,
+                    Uuid,
+                    Result<Option<GatewayServiceOwnedTarget>, gateway_edge::GatewayEdgeError>,
+                ),
+            > + Send,
+    >,
+>;
+
+fn clone_service_supervisor_context(
+    context: &Arc<GatewayServiceSupervisorContext>,
+) -> GatewayServiceSupervisorContext {
+    GatewayServiceSupervisorContext {
+        owner: context.owner.clone(),
+        policy: context.policy,
+        ownership: Arc::clone(&context.ownership),
+        failure_store: Arc::clone(&context.failure_store),
+        resolver: Arc::clone(&context.resolver),
+        provider: Arc::clone(&context.provider),
+        targets: Arc::clone(&context.targets),
+        registry: context.registry.clone(),
+        service_authority: context.service_authority.clone(),
+    }
+}
+
 /// Reconstructs Caddy exclusively from authoritative route records. Ordinary
 /// passes apply revision cutovers promptly; a bounded forced pass repairs a
 /// Caddy process which restarted after this daemon observed the same revision.
+// Keep separately owned adapters explicit at this daemon composition boundary.
+// The supervisor owns cancellation and cleanup handles until the parent loop
+// finishes; keeping it in this named binding makes that lifetime explicit.
+#[allow(clippy::significant_drop_tightening, clippy::too_many_arguments)]
+async fn gateway_reconciliation_loop_with_context(
+    authority: PostgresGatewayEdgeAuthority,
+    recovery_authority: PostgresGatewayEdgeAuthority,
+    supervisor_context: GatewayServiceSupervisorContext,
+    boot_recovery: GatewayServiceBootRecovery,
+    service_claim_resolution: Option<Arc<dyn GatewayServiceClaimResolutionStore>>,
+    service_expired_claim_recovery: Option<Arc<dyn GatewayServiceExpiredClaimRecovery>>,
+    service_log_writer: Option<GatewayServiceLogWriterConfig>,
+    service_targets: Arc<dyn gateway_edge::GatewayServiceTargetStore>,
+    provider: Arc<dyn GatewayProvider>,
+    cancellation: CancellationToken,
+) {
+    let mut service_supervisor =
+        GatewayServiceSupervisor::new(supervisor_context).expect("validated service supervisor");
+    if let Some(writer) = service_log_writer {
+        service_supervisor = service_supervisor.with_log_writer(writer);
+    }
+    gateway_reconciliation_loop_with_boot(
+        authority,
+        recovery_authority,
+        service_supervisor,
+        Some(boot_recovery),
+        service_claim_resolution,
+        service_expired_claim_recovery,
+        service_targets,
+        provider,
+        cancellation,
+    )
+    .await;
+}
+
+#[cfg(test)]
 async fn gateway_reconciliation_loop(
     authority: PostgresGatewayEdgeAuthority,
+    recovery_authority: PostgresGatewayEdgeAuthority,
+    supervisor_context: GatewayServiceSupervisorContext,
+    provider: Arc<dyn GatewayProvider>,
+    cancellation: CancellationToken,
+) {
+    gateway_reconciliation_loop_with_supervisor(
+        authority,
+        recovery_authority,
+        supervisor_context,
+        provider,
+        cancellation,
+    )
+    .await;
+}
+
+// Kept as a narrow test-facing composition helper for existing daemon-loop
+// tests. Production supplies the already-constructed boot gate below.
+#[cfg(test)]
+async fn gateway_reconciliation_loop_with_supervisor(
+    authority: PostgresGatewayEdgeAuthority,
+    recovery_authority: PostgresGatewayEdgeAuthority,
+    supervisor_context: GatewayServiceSupervisorContext,
+    provider: Arc<dyn GatewayProvider>,
+    cancellation: CancellationToken,
+) {
+    let targets = Arc::clone(&supervisor_context.targets);
+    gateway_reconciliation_loop_with_boot(
+        authority,
+        recovery_authority,
+        GatewayServiceSupervisor::new(supervisor_context).expect("validated service supervisor"),
+        None,
+        None,
+        None,
+        targets,
+        provider,
+        cancellation,
+    )
+    .await;
+}
+
+// The single select set is deliberate: it keeps Caddy, recovery, service
+// jobs, and shutdown under one parent-owned polling boundary.
+// The loop receives separately owned adapters so each parent-polled subsystem
+// keeps its cancellation and lifetime boundary explicit.
+#[allow(
+    clippy::cognitive_complexity,
+    clippy::too_many_arguments,
+    clippy::too_many_lines
+)]
+async fn gateway_reconciliation_loop_with_boot(
+    authority: PostgresGatewayEdgeAuthority,
+    recovery_authority: PostgresGatewayEdgeAuthority,
+    mut service_supervisor: GatewayServiceSupervisor,
+    mut boot_recovery: Option<GatewayServiceBootRecovery>,
+    service_claim_resolution: Option<Arc<dyn GatewayServiceClaimResolutionStore>>,
+    service_expired_claim_recovery: Option<Arc<dyn GatewayServiceExpiredClaimRecovery>>,
+    service_targets: Arc<dyn gateway_edge::GatewayServiceTargetStore>,
     provider: Arc<dyn GatewayProvider>,
     cancellation: CancellationToken,
 ) {
     let mut reconcile = tokio::time::interval(GATEWAY_RECONCILIATION_INTERVAL);
     reconcile.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+    let mut service_recovery = tokio::time::interval(GATEWAY_RECONCILIATION_INTERVAL);
+    service_recovery.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
     // Avoid an immediate duplicate of the startup reconciliation while still
     // making a daemon-owned Caddy restart recover without operator action.
     let mut recovery = tokio::time::interval_at(
@@ -2053,22 +2592,286 @@ async fn gateway_reconciliation_loop(
         GATEWAY_CADDY_RECOVERY_INTERVAL,
     );
     recovery.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+    let mut service_recovery_task: Option<JoinHandle<()>> = None;
+    let mut caddy_task = None;
+    let mut caddy_recovery_pending = false;
+    let mut target_scan: Option<GatewayServiceTargetScan> = None;
+    let mut target_scan_after = None;
+    let mut target_scan_interval = tokio::time::interval(GATEWAY_RECONCILIATION_INTERVAL);
+    target_scan_interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+    let mut tracked_jobs = HashMap::<Uuid, TrackedServiceJob>::new();
+    let mut target_refresh: Option<GatewayServiceTargetRefresh> = None;
+    let mut target_refresh_cursor = None;
+    let mut target_refresh_interval = tokio::time::interval(GATEWAY_RECONCILIATION_INTERVAL);
+    target_refresh_interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+    let mut cleanup_retry_interval = tokio::time::interval(GATEWAY_RECONCILIATION_INTERVAL);
+    cleanup_retry_interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+    let mut cleanup_retry_cursor = None;
     loop {
         tokio::select! {
-            () = cancellation.cancelled() => return,
+            () = cancellation.cancelled() => {
+                if let Some(task) = service_recovery_task.take() {
+                    task.abort();
+                    let _ = task.await;
+                }
+                if let Some(boot_recovery) = boot_recovery.take() {
+                    let boot_shutdown = boot_recovery.shutdown().await;
+                    if !boot_shutdown.unresolved.is_empty()
+                        || !boot_shutdown.unresolved_claims.is_empty()
+                    {
+                        tracing::warn!(
+                            unresolved = boot_shutdown.unresolved.len()
+                                + boot_shutdown.unresolved_claims.len(),
+                            "gateway service boot recovery retained unresolved shutdown work"
+                        );
+                    }
+                }
+                let shutdown = service_supervisor.shutdown().await;
+                if !shutdown.unresolved.is_empty() {
+                    tracing::warn!(
+                        unresolved = shutdown.unresolved.len(),
+                        "gateway service supervisor retained unresolved shutdown work"
+                    );
+                }
+                return;
+            },
             _ = reconcile.tick() => {
-                reconcile_gateway_once(&authority, provider.as_ref(), false).await;
+                if caddy_task.is_none() {
+                    caddy_task = Some(Box::pin(reconcile_gateway_once(
+                        authority.clone(),
+                        Arc::clone(&provider),
+                        false,
+                    )));
+                }
             }
             _ = recovery.tick() => {
-                reconcile_gateway_once(&authority, provider.as_ref(), true).await;
+                if caddy_task.is_some() {
+                    caddy_recovery_pending = true;
+                } else {
+                    caddy_task = Some(Box::pin(reconcile_gateway_once(
+                        authority.clone(),
+                        Arc::clone(&provider),
+                        true,
+                    )));
+                }
+            }
+            _ = async {
+                match caddy_task.as_mut() {
+                    Some(task) => {
+                        task.await;
+                        Some(())
+                    },
+                    None => std::future::pending().await,
+                }
+            }, if caddy_task.is_some() => {
+                caddy_task = None;
+                if caddy_recovery_pending {
+                    caddy_recovery_pending = false;
+                    caddy_task = Some(Box::pin(reconcile_gateway_once(
+                        authority.clone(),
+                        Arc::clone(&provider),
+                        true,
+                    )));
+                }
+            }
+            _ = service_recovery.tick(), if service_recovery_task.is_none() => {
+                let authority = recovery_authority.clone();
+                service_recovery_task = Some(tokio::spawn(async move {
+                    match authority
+                        .recover_abandoned_service_invocations(OffsetDateTime::now_utc())
+                        .await
+                    {
+                        Ok(recovered) if recovered > 0 => {
+                            tracing::info!(recovered, "recovered abandoned gateway service invocations");
+                        }
+                        Ok(_) => {}
+                        Err(error) => {
+                            tracing::warn!(%error, "gateway service invocation recovery failed");
+                        }
+                    }
+                }));
+            }
+            result = async {
+                match service_recovery_task.as_mut() {
+                    Some(task) => Some(task.await),
+                    None => std::future::pending().await,
+                }
+            }, if service_recovery_task.is_some() => {
+                if let Some(Err(error)) = result {
+                    tracing::warn!(%error, "gateway service invocation recovery task failed");
+                }
+                service_recovery_task = None;
+            }
+            boot_event = async {
+                match boot_recovery.as_mut() {
+                    Some(recovery) => Some(recovery.poll().await),
+                    None => std::future::pending().await,
+                }
+            }, if boot_recovery.as_ref().is_some_and(|recovery| !recovery.is_complete()) => {
+                match boot_event {
+                    Some(Ok(gateway_edge::GatewayServiceBootRecoveryEvent::Complete)) => {
+                        tracing::info!("gateway service boot recovery gate completed");
+                    }
+                    Some(Ok(
+                        gateway_edge::GatewayServiceBootRecoveryEvent::Pending
+                        | gateway_edge::GatewayServiceBootRecoveryEvent::Waiting,
+                    )) => {}
+                    Some(Err(error)) => {
+                        tracing::warn!(%error, "gateway service boot recovery is unavailable");
+                    }
+                    None => unreachable!("boot poll branch is enabled only with a boot gate"),
+                }
+            }
+            _ = target_scan_interval.tick(),
+                if boot_recovery.as_ref().is_some_and(GatewayServiceBootRecovery::is_complete)
+                    && target_scan.is_none() =>
+            {
+                let page = match GatewayServiceTargetPage::new(
+                    target_scan_after,
+                    gateway_edge::MAX_SERVICE_TARGET_PAGE_SIZE,
+                ) {
+                    Ok(page) => page,
+                    Err(error) => {
+                        tracing::warn!(%error, "gateway service target page is invalid");
+                        continue;
+                    }
+                };
+                let targets = Arc::clone(&service_targets);
+                target_scan = Some(Box::pin(async move {
+                    targets.list_service_targets(page).await
+                }));
+            }
+            result = async {
+                match target_scan.as_mut() {
+                    Some(scan) => Some(scan.await),
+                    None => std::future::pending().await,
+                }
+            }, if target_scan.is_some() => {
+                target_scan = None;
+                match result {
+                    Some(Ok(page)) => {
+                        target_scan_after = page.next_after;
+                        let cleanup_queued = schedule_one_cleanup_retry(
+                            &mut service_supervisor,
+                            &mut tracked_jobs,
+                            &mut cleanup_retry_cursor,
+                            service_claim_resolution.as_ref(),
+                            service_expired_claim_recovery.as_ref(),
+                        );
+                        reconcile_service_target_page(
+                            &mut service_supervisor,
+                            &mut tracked_jobs,
+                            page,
+                            !cleanup_queued,
+                        );
+                    }
+                    Some(Err(error)) => {
+                        tracing::warn!(%error, "gateway service target scan failed");
+                        target_scan_after = None;
+                    }
+                    None => unreachable!("target scan branch is enabled only with a scan"),
+                }
+            }
+            _ = target_refresh_interval.tick(),
+                if target_refresh.is_none() && !tracked_jobs.is_empty() =>
+            {
+                if let Some(job_id) = next_tracked_job_id(&tracked_jobs, target_refresh_cursor)
+                {
+                    target_refresh_cursor = Some(job_id);
+                    let job = tracked_jobs
+                        .get(&job_id)
+                        .expect("refresh cursor points at tracked job");
+                    let gateway_id = job.gateway_id;
+                    let revision_id = job.revision_id;
+                    let targets = Arc::clone(&service_targets);
+                    target_refresh = Some(Box::pin(async move {
+                        let result = tokio::time::timeout(
+                            SERVICE_TARGET_REFRESH_TIMEOUT,
+                            targets.get_service_target(gateway_id, revision_id),
+                        )
+                        .await
+                        .unwrap_or(Err(gateway_edge::GatewayEdgeError::Unavailable));
+                        (job_id, gateway_id, revision_id, result)
+                    }));
+                }
+            }
+            result = async {
+                match target_refresh.as_mut() {
+                    Some(refresh) => Some(refresh.await),
+                    None => std::future::pending().await,
+                }
+            }, if target_refresh.is_some() => {
+                target_refresh = None;
+                if let Some((job_id, gateway_id, revision_id, result)) = result
+                    && let Some(job) = tracked_jobs.get_mut(&job_id)
+                    && job.gateway_id == gateway_id
+                    && job.revision_id == revision_id
+                {
+                    match result {
+                        Ok(Some(target)) => {
+                            reconcile_tracked_service_job(job, &target);
+                        }
+                        Ok(None) => {
+                            job.handle.cancel();
+                            job.retirement_requested = true;
+                        }
+                        Err(error) => {
+                            tracing::debug!(
+                                job_id = %job_id,
+                                gateway_id = %gateway_id,
+                                revision_id = %revision_id,
+                                %error,
+                                "gateway service target refresh is unavailable"
+                            );
+                        }
+                    }
+                }
+            }
+            event = async {
+                if service_supervisor.has_pending_jobs() {
+                    service_supervisor.poll().await
+                } else {
+                    std::future::pending().await
+                }
+            }, if service_supervisor.has_pending_jobs() => {
+                if let Some(event) = event {
+                    tracing::debug!(
+                        job_id = %event.job_id,
+                        status = ?event.status,
+                        capacity_released = event.capacity_released,
+                        "gateway service supervisor job completed"
+                    );
+                    if event.capacity_released {
+                        tracked_jobs.remove(&event.job_id);
+                    } else if let Some(job) = tracked_jobs.get_mut(&event.job_id) {
+                        let now = Instant::now();
+                        if job.cleanup_retry_attempted {
+                            job.cleanup_retry_due = now.checked_add(job.cleanup_retry_backoff);
+                            job.cleanup_retry_backoff = (job.cleanup_retry_backoff * 2)
+                                .min(SERVICE_CLEANUP_RETRY_MAX_BACKOFF);
+                        } else {
+                            job.cleanup_retry_attempted = true;
+                            job.cleanup_retry_due = Some(now);
+                        }
+                    }
+                }
+            }
+            _ = cleanup_retry_interval.tick() => {
+                let _ = schedule_one_cleanup_retry(
+                    &mut service_supervisor,
+                    &mut tracked_jobs,
+                    &mut cleanup_retry_cursor,
+                    service_claim_resolution.as_ref(),
+                    service_expired_claim_recovery.as_ref(),
+                );
             }
         }
     }
 }
 
 async fn reconcile_gateway_once(
-    authority: &PostgresGatewayEdgeAuthority,
-    provider: &dyn GatewayProvider,
+    authority: PostgresGatewayEdgeAuthority,
+    provider: Arc<dyn GatewayProvider>,
     recover: bool,
 ) {
     let desired = match authority.desired_configuration().await {
@@ -2086,6 +2889,301 @@ async fn reconcile_gateway_once(
     if let Err(error) = result {
         tracing::warn!(%error, recovery = recover, "gateway Caddy reconciliation failed");
     }
+}
+
+/// Reconciles one bounded page of durable service targets.
+///
+/// The active service is restored first. A desired replacement is admitted
+/// only after that active service reports `Ready`; the supervisor owns durable
+/// promotion and the coordinator owns exact drain counts.
+fn reconcile_service_target_page(
+    supervisor: &mut GatewayServiceSupervisor,
+    tracked_jobs: &mut HashMap<Uuid, TrackedServiceJob>,
+    page: GatewayServiceTargetPageResult,
+    allow_startups: bool,
+) {
+    for target in page.targets {
+        if target.lifecycle != "enabled" {
+            continue;
+        }
+        let active_is_eligible = target
+            .active_service_revision
+            .as_ref()
+            .is_some_and(|active| {
+                target.active_revision_id == Some(active.revision_id) && active.publication_eligible
+            });
+        if allow_startups
+            && let Some(active) = target.active_service_revision.as_ref()
+            && active_is_eligible
+        {
+            start_service_job(
+                supervisor,
+                tracked_jobs,
+                GatewayServiceStartupRequest {
+                    gateway_id: target.gateway_id,
+                    revision_id: active.revision_id,
+                    intent: GatewayServiceStartupIntent::RestoreActive,
+                },
+            );
+        }
+        let Some(desired) = target.desired_service_revision.as_ref() else {
+            continue;
+        };
+        if !desired.publication_eligible || target.active_revision_id == Some(desired.revision_id) {
+            continue;
+        }
+        let active_ready = active_is_eligible
+            && target
+                .active_service_revision
+                .as_ref()
+                .and_then(|active| tracked_job(tracked_jobs, target.gateway_id, active.revision_id))
+                .is_some_and(|job| {
+                    *job.handle.subscribe().borrow() == GatewayServiceSupervisorJobStatus::Ready
+                });
+        let revoked_active_settled = !active_is_eligible
+            && target
+                .active_service_revision
+                .as_ref()
+                .is_none_or(|active| {
+                    tracked_job(tracked_jobs, target.gateway_id, active.revision_id).is_none()
+                });
+        let gateway_job_count = tracked_jobs
+            .values()
+            .filter(|job| job.gateway_id == target.gateway_id)
+            .count();
+        if allow_startups
+            && (active_ready || target.active_service_revision.is_none() || revoked_active_settled)
+            && gateway_job_count < 2
+        {
+            start_service_job(
+                supervisor,
+                tracked_jobs,
+                GatewayServiceStartupRequest {
+                    gateway_id: target.gateway_id,
+                    revision_id: desired.revision_id,
+                    intent: GatewayServiceStartupIntent::ActivateDesired,
+                },
+            );
+        }
+    }
+}
+
+fn schedule_one_cleanup_retry(
+    supervisor: &mut GatewayServiceSupervisor,
+    tracked_jobs: &mut HashMap<Uuid, TrackedServiceJob>,
+    cursor: &mut Option<Uuid>,
+    claim_resolution: Option<&Arc<dyn GatewayServiceClaimResolutionStore>>,
+    expired_claim_recovery: Option<&Arc<dyn GatewayServiceExpiredClaimRecovery>>,
+) -> bool {
+    let pending = tracked_jobs
+        .values()
+        .filter(|job| {
+            *job.handle.subscribe().borrow() == GatewayServiceSupervisorJobStatus::CleanupPending
+        })
+        .count();
+    if pending >= 2 {
+        return false;
+    }
+
+    let now = Instant::now();
+    let mut ids = tracked_jobs.keys().copied().collect::<Vec<_>>();
+    ids.sort_unstable();
+    let Some(job_id) = cursor
+        .and_then(|last| ids.iter().copied().find(|id| *id > last))
+        .or_else(|| ids.first().copied())
+    else {
+        return false;
+    };
+    let ordered = ids
+        .iter()
+        .copied()
+        .cycle()
+        .skip_while(|id| *id != job_id)
+        .take(ids.len())
+        .collect::<Vec<_>>();
+    for candidate in ordered {
+        let Some(job) = tracked_jobs.get_mut(&candidate) else {
+            continue;
+        };
+        let due = job
+            .cleanup_retry_due
+            .is_some_and(|deadline| deadline <= now);
+        if !due {
+            continue;
+        }
+        *cursor = Some(candidate);
+        let retry_result = if let Some(recovery) = expired_claim_recovery {
+            supervisor.retry_cleanup_with_recovery(candidate, Arc::clone(recovery))
+        } else {
+            supervisor.retry_cleanup(candidate)
+        };
+        match retry_result {
+            Ok(()) => {
+                job.cleanup_retry_due = None;
+                return true;
+            }
+            Err(gateway_edge::GatewayServiceSupervisorError::RetryNotEligible) => {
+                // A claim acknowledgement may have been lost before the
+                // coordinator returned. Resolve it behind the serialized
+                // gateway barrier instead of silently stranding its capacity.
+                let resolved = claim_resolution.is_some_and(|resolver| {
+                    match supervisor.reconcile_claim(candidate, Arc::clone(resolver)) {
+                        Ok(()) => true,
+                        Err(gateway_edge::GatewayServiceSupervisorError::RetryAlreadyInFlight) => {
+                            job.cleanup_retry_due = now.checked_add(job.cleanup_retry_backoff);
+                            false
+                        }
+                        Err(
+                            gateway_edge::GatewayServiceSupervisorError::RetryNotFound
+                            | gateway_edge::GatewayServiceSupervisorError::RetryNotEligible,
+                        ) => {
+                            job.cleanup_retry_due = None;
+                            false
+                        }
+                        Err(error) => {
+                            tracing::debug!(
+                                job_id = %candidate,
+                                %error,
+                                "gateway service claim reconciliation was not scheduled"
+                            );
+                            job.cleanup_retry_due = now.checked_add(job.cleanup_retry_backoff);
+                            false
+                        }
+                    }
+                });
+                if resolved {
+                    job.cleanup_retry_due = None;
+                    return true;
+                }
+                if claim_resolution.is_none() {
+                    job.cleanup_retry_due = None;
+                }
+            }
+            Err(gateway_edge::GatewayServiceSupervisorError::RetryNotFound) => {
+                job.cleanup_retry_due = None;
+            }
+            Err(gateway_edge::GatewayServiceSupervisorError::RetryAlreadyInFlight) => {
+                job.cleanup_retry_due = now.checked_add(job.cleanup_retry_backoff);
+            }
+            Err(error) => {
+                tracing::debug!(job_id = %candidate, %error, "gateway service cleanup retry was not scheduled");
+                job.cleanup_retry_due = now.checked_add(job.cleanup_retry_backoff);
+            }
+        }
+    }
+    false
+}
+
+fn start_service_job(
+    supervisor: &mut GatewayServiceSupervisor,
+    tracked_jobs: &mut HashMap<Uuid, TrackedServiceJob>,
+    request: GatewayServiceStartupRequest,
+) {
+    if tracked_job(tracked_jobs, request.gateway_id, request.revision_id).is_some() {
+        return;
+    }
+    match supervisor.start(request) {
+        Ok(handle) => {
+            let job_id = handle.job_id();
+            tracked_jobs.insert(
+                job_id,
+                TrackedServiceJob {
+                    gateway_id: request.gateway_id,
+                    revision_id: request.revision_id,
+                    handle,
+                    retirement_requested: false,
+                    cleanup_retry_due: None,
+                    cleanup_retry_backoff: SERVICE_CLEANUP_RETRY_INITIAL_BACKOFF,
+                    cleanup_retry_attempted: false,
+                },
+            );
+        }
+        Err(error) => {
+            tracing::debug!(
+                gateway_id = %request.gateway_id,
+                revision_id = %request.revision_id,
+                %error,
+                "gateway service startup was not admitted"
+            );
+        }
+    }
+}
+
+fn tracked_job(
+    tracked_jobs: &HashMap<Uuid, TrackedServiceJob>,
+    gateway_id: Uuid,
+    revision_id: Uuid,
+) -> Option<&TrackedServiceJob> {
+    tracked_jobs
+        .values()
+        .find(|job| job.gateway_id == gateway_id && job.revision_id == revision_id)
+}
+
+fn next_tracked_job_id(
+    tracked_jobs: &HashMap<Uuid, TrackedServiceJob>,
+    cursor: Option<Uuid>,
+) -> Option<Uuid> {
+    let mut ids = tracked_jobs.keys().copied().collect::<Vec<_>>();
+    ids.sort_unstable();
+    cursor
+        .and_then(|cursor| ids.iter().copied().find(|id| *id > cursor))
+        .or_else(|| ids.first().copied())
+}
+
+fn reconcile_tracked_service_job(
+    job: &mut TrackedServiceJob,
+    target: &gateway_edge::GatewayServiceOwnedTarget,
+) {
+    let candidate_is_still_desired = target.desired_service_revision_id == Some(job.revision_id);
+    let target_is_current = target.active_revision_id == Some(job.revision_id);
+    if !target.revision.publication_eligible {
+        job.handle.cancel();
+        job.retirement_requested = true;
+        return;
+    }
+    if job.retirement_requested {
+        let status = *job.handle.subscribe().borrow();
+        if target.lifecycle == "enabled"
+            && target_is_current
+            && status == GatewayServiceSupervisorJobStatus::Ready
+        {
+            // A stale paused/superseded read may have sent a drain request
+            // just before the gateway became current again. Clear that
+            // request marker while the worker is still Ready so a later
+            // exact retirement read can retry after a durable Conflict.
+            job.retirement_requested = false;
+        } else if status == GatewayServiceSupervisorJobStatus::Ready {
+            // `mark_draining` can reject a stale target read after a
+            // concurrent gateway transition. The next paced exact refresh
+            // must be able to submit the request again.
+            job.handle.request_drain();
+        }
+        return;
+    }
+    if target.lifecycle != "enabled" {
+        retire_tracked_service_job(job);
+        return;
+    }
+    if !target_is_current && candidate_is_still_desired {
+        // A desired candidate remains available until its own coordinator
+        // promotes it; it is not obsolete merely because A still serves.
+        return;
+    }
+    if !target_is_current {
+        retire_tracked_service_job(job);
+    }
+}
+
+fn retire_tracked_service_job(job: &mut TrackedServiceJob) {
+    if job.retirement_requested {
+        return;
+    }
+    if *job.handle.subscribe().borrow() == GatewayServiceSupervisorJobStatus::Ready {
+        job.handle.request_drain();
+    } else {
+        job.handle.cancel();
+    }
+    job.retirement_requested = true;
 }
 
 async fn reap_failed_start(tasks: Vec<JoinHandle<Result<(), String>>>) {
@@ -2886,6 +3984,8 @@ pub struct RunningHephaestus {
     cancellation: CancellationToken,
     tasks: Vec<JoinHandle<Result<(), String>>>,
     pool: PgPool,
+    application_pool: PgPool,
+    service_log_pool: PgPool,
     nats_client: async_nats::Client,
     jetstream: async_nats::jetstream::Context,
     forge: Arc<PgForgeRepository>,
@@ -2903,6 +4003,22 @@ impl RunningHephaestus {
     #[must_use]
     pub const fn http_addr(&self) -> SocketAddr {
         self.http_addr
+    }
+
+    /// Returns a retained application-role pool for daemon integration checks.
+    #[cfg(feature = "test-fixtures")]
+    #[doc(hidden)]
+    #[must_use]
+    pub fn application_pool_for_test(&self) -> ControlPlanePool {
+        self.application_pool.clone()
+    }
+
+    /// Returns the dedicated worker pool used by the service-log scheduler.
+    #[cfg(feature = "test-fixtures")]
+    #[doc(hidden)]
+    #[must_use]
+    pub fn service_log_pool_for_test(&self) -> ControlPlanePool {
+        self.service_log_pool.clone()
     }
 
     /// Waits for one persisted lifecycle event.
@@ -2980,17 +4096,19 @@ impl RunningHephaestus {
                 }
             }
         }
-        if let Err(error) = self.flush_outbox().await {
+        if let Err(error) = self.flush_outbox(deadline).await {
             first_error.get_or_insert(error);
         }
         if let Err(error) = self.nats_client.drain().await {
             first_error.get_or_insert_with(|| AppError::Shutdown(error.to_string()));
         }
         self.pool.close().await;
+        self.application_pool.close().await;
+        self.service_log_pool.close().await;
         first_error.map_or(Ok(()), Err)
     }
 
-    async fn flush_outbox(&self) -> Result<(), AppError> {
+    async fn flush_outbox(&self, deadline: Instant) -> Result<(), AppError> {
         let forge_publisher = ForgeNatsOutboxPublisher::new(self.jetstream.clone());
         let release_publisher =
             ReleaseOutboxPublisher::new(self.jetstream.clone(), self.pool.clone());
@@ -3007,34 +4125,276 @@ impl RunningHephaestus {
         );
         let mailbox_publisher =
             MailboxOutboxPublisher::new(self.jetstream.clone(), self.mailbox_repository.clone());
-        for _pass in 0..100 {
-            let forge = forge_publisher
-                .publish_pending(self.forge.as_ref(), self.outbox_batch_size)
-                .await
-                .map_err(component("final forge outbox flush"))?;
-            let releases = release_publisher
-                .publish_pending(self.outbox_batch_size)
-                .await
-                .map_err(component("final release outbox flush"))?;
-            let reviews = review_publisher
-                .publish_pending(self.outbox_batch_size)
-                .await
-                .map_err(component("final review outbox flush"))?;
-            let events = event_publisher
-                .publish_pending(self.outbox_batch_size)
-                .await
-                .map_err(component("final product-event outbox flush"))?;
-            let mailboxes = mailbox_publisher
-                .publish_pending(self.outbox_batch_size)
-                .await
-                .map_err(component("final mailbox outbox flush"))?;
-            if forge == 0 && releases == 0 && reviews == 0 && events == 0 && mailboxes == 0 {
-                return Ok(());
+        let diagnostics = Arc::new(StdMutex::new(FlushDiagnostics::new(deadline)));
+        let result = flush_until_quiescent(deadline, Arc::clone(&diagnostics), || {
+            let diagnostics = Arc::clone(&diagnostics);
+            let forge_publisher = forge_publisher.clone();
+            let release_publisher = release_publisher.clone();
+            let review_publisher = review_publisher.clone();
+            let event_publisher = event_publisher.clone();
+            let mailbox_publisher = mailbox_publisher.clone();
+            async move {
+                let forge = flush_publisher(
+                    &diagnostics,
+                    FlushPublisher::Forge,
+                    forge_publisher.publish_pending(self.forge.as_ref(), self.outbox_batch_size),
+                    "final forge outbox flush",
+                )
+                .await?;
+                let releases = flush_publisher(
+                    &diagnostics,
+                    FlushPublisher::Release,
+                    release_publisher.publish_pending(self.outbox_batch_size),
+                    "final release outbox flush",
+                )
+                .await?;
+                let reviews = flush_publisher(
+                    &diagnostics,
+                    FlushPublisher::Review,
+                    review_publisher.publish_pending(self.outbox_batch_size),
+                    "final review outbox flush",
+                )
+                .await?;
+                let events = flush_publisher(
+                    &diagnostics,
+                    FlushPublisher::ProductEvent,
+                    event_publisher.publish_pending(self.outbox_batch_size),
+                    "final product-event outbox flush",
+                )
+                .await?;
+                let mailboxes = flush_publisher(
+                    &diagnostics,
+                    FlushPublisher::Mailbox,
+                    mailbox_publisher.publish_pending(self.outbox_batch_size),
+                    "final mailbox outbox flush",
+                )
+                .await?;
+                Ok::<_, AppError>(
+                    forge == 0 && releases == 0 && reviews == 0 && events == 0 && mailboxes == 0,
+                )
             }
+        })
+        .await;
+        if result.is_err() {
+            diagnostics
+                .lock()
+                .expect("flush diagnostics mutex is not poisoned")
+                .log_failure(deadline);
         }
-        Err(AppError::Shutdown(String::from(
-            "final outbox flush did not quiesce",
-        )))
+        result
+    }
+}
+
+#[derive(Debug, Clone, Copy)]
+enum FlushPublisher {
+    Forge,
+    Release,
+    Review,
+    ProductEvent,
+    Mailbox,
+}
+
+impl FlushPublisher {
+    const fn name(self) -> &'static str {
+        match self {
+            Self::Forge => "forge",
+            Self::Release => "release",
+            Self::Review => "review",
+            Self::ProductEvent => "product-event",
+            Self::Mailbox => "mailbox",
+        }
+    }
+
+    const fn index(self) -> usize {
+        match self {
+            Self::Forge => 0,
+            Self::Release => 1,
+            Self::Review => 2,
+            Self::ProductEvent => 3,
+            Self::Mailbox => 4,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy)]
+struct FlushPhase {
+    publisher: FlushPublisher,
+    started: Instant,
+    elapsed: Duration,
+    batch_count: Option<usize>,
+}
+
+#[derive(Debug)]
+struct FlushDiagnostics {
+    entered_remaining: Duration,
+    passes: u32,
+    active: Option<FlushPhase>,
+    last_phase: Option<FlushPhase>,
+    last_batches: [Option<usize>; 5],
+    failure_kind: Option<&'static str>,
+    deadline_expired_before_pass: bool,
+    deadline_expired_during_pass: bool,
+    deadline_expired_during_publisher: bool,
+}
+
+impl FlushDiagnostics {
+    fn new(deadline: Instant) -> Self {
+        Self {
+            entered_remaining: deadline.saturating_duration_since(Instant::now()),
+            passes: 0,
+            active: None,
+            last_phase: None,
+            last_batches: [None; 5],
+            failure_kind: None,
+            deadline_expired_before_pass: false,
+            deadline_expired_during_pass: false,
+            deadline_expired_during_publisher: false,
+        }
+    }
+
+    fn begin(&mut self, publisher: FlushPublisher) {
+        self.active = Some(FlushPhase {
+            publisher,
+            started: Instant::now(),
+            elapsed: Duration::ZERO,
+            batch_count: None,
+        });
+    }
+
+    fn finish(&mut self, batch_count: usize) {
+        if let Some(mut phase) = self.active.take() {
+            phase.elapsed = phase.started.elapsed();
+            phase.batch_count = Some(batch_count);
+            self.last_batches[phase.publisher.index()] = Some(batch_count);
+            self.last_phase = Some(phase);
+        }
+    }
+
+    fn finish_error(&mut self) {
+        if let Some(mut phase) = self.active.take() {
+            phase.elapsed = phase.started.elapsed();
+            self.last_phase = Some(phase);
+        }
+    }
+
+    const fn set_deadline_before_pass(&mut self) {
+        self.failure_kind = Some("deadline-before-pass");
+        self.deadline_expired_before_pass = true;
+    }
+
+    fn log_failure(&self, deadline: Instant) {
+        let remaining = deadline.saturating_duration_since(Instant::now());
+        let active_publisher = self.active.map(|phase| phase.publisher.name());
+        let active_elapsed = self
+            .active
+            .map(|phase| duration_millis(phase.started.elapsed()));
+        let last_publisher = self.last_phase.map(|phase| phase.publisher.name());
+        let last_elapsed = self.last_phase.map(|phase| duration_millis(phase.elapsed));
+        tracing::warn!(
+            entered_remaining_ms = duration_millis(self.entered_remaining),
+            remaining_ms = duration_millis(remaining),
+            passes = self.passes,
+            deadline_expired_before_pass = self.deadline_expired_before_pass,
+            deadline_expired_during_pass = self.deadline_expired_during_pass,
+            deadline_expired_during_publisher = self.deadline_expired_during_publisher,
+            active_publisher = active_publisher.unwrap_or("none"),
+            active_elapsed_ms = active_elapsed.unwrap_or(0),
+            last_publisher = last_publisher.unwrap_or("none"),
+            last_elapsed_ms = last_elapsed.unwrap_or(0),
+            forge_last_batch = ?self.last_batches[FlushPublisher::Forge.index()],
+            release_last_batch = ?self.last_batches[FlushPublisher::Release.index()],
+            review_last_batch = ?self.last_batches[FlushPublisher::Review.index()],
+            product_event_last_batch = ?self.last_batches[FlushPublisher::ProductEvent.index()],
+            mailbox_last_batch = ?self.last_batches[FlushPublisher::Mailbox.index()],
+            failure_kind = self.failure_kind.unwrap_or("unknown"),
+            "final outbox flush did not quiesce"
+        );
+    }
+}
+
+fn duration_millis(duration: Duration) -> u64 {
+    u64::try_from(duration.as_millis()).unwrap_or(u64::MAX)
+}
+
+async fn flush_publisher<Fut, Error>(
+    diagnostics: &Arc<StdMutex<FlushDiagnostics>>,
+    publisher: FlushPublisher,
+    operation: Fut,
+    component_name: &'static str,
+) -> Result<usize, AppError>
+where
+    Fut: Future<Output = Result<usize, Error>>,
+    Error: std::fmt::Display,
+{
+    diagnostics
+        .lock()
+        .expect("flush diagnostics mutex is not poisoned")
+        .begin(publisher);
+    match operation.await {
+        Ok(batch_count) => {
+            diagnostics
+                .lock()
+                .expect("flush diagnostics mutex is not poisoned")
+                .finish(batch_count);
+            Ok(batch_count)
+        }
+        Err(error) => {
+            let mut diagnostics = diagnostics
+                .lock()
+                .expect("flush diagnostics mutex is not poisoned");
+            diagnostics.failure_kind = Some("publisher-error");
+            diagnostics.finish_error();
+            drop(diagnostics);
+            Err(component(component_name)(error))
+        }
+    }
+}
+
+async fn flush_until_quiescent<F, Fut>(
+    deadline: Instant,
+    diagnostics: Arc<StdMutex<FlushDiagnostics>>,
+    mut pass: F,
+) -> Result<(), AppError>
+where
+    F: FnMut() -> Fut,
+    Fut: Future<Output = Result<bool, AppError>>,
+{
+    loop {
+        {
+            let mut diagnostics = diagnostics
+                .lock()
+                .expect("flush diagnostics mutex is not poisoned");
+            diagnostics.passes = diagnostics.passes.saturating_add(1);
+        }
+        let remaining = deadline.saturating_duration_since(Instant::now());
+        if remaining.is_zero() {
+            diagnostics
+                .lock()
+                .expect("flush diagnostics mutex is not poisoned")
+                .set_deadline_before_pass();
+            return Err(AppError::Shutdown(String::from(
+                "final outbox flush did not quiesce",
+            )));
+        }
+        let quiescent = tokio::time::timeout(remaining, pass())
+            .await
+            .map_err(|_| {
+                let mut diagnostics = diagnostics
+                    .lock()
+                    .expect("flush diagnostics mutex is not poisoned");
+                diagnostics.failure_kind = Some(if diagnostics.active.is_some() {
+                    "deadline-during-publisher"
+                } else {
+                    "deadline-during-pass"
+                });
+                diagnostics.deadline_expired_during_pass = true;
+                diagnostics.deadline_expired_during_publisher = diagnostics.active.is_some();
+                drop(diagnostics);
+                AppError::Shutdown(String::from("final outbox flush did not quiesce"))
+            })??;
+        if quiescent && Instant::now() < deadline {
+            return Ok(());
+        }
     }
 }
 
@@ -3432,6 +4792,7 @@ impl VmSpecFactory for PgAgentVmSpecFactory {
                 working_dir: Some(working_directory.into()),
             },
             runtime_authority: None,
+            private_http_service: None,
             labels,
         })
     }
@@ -3743,15 +5104,44 @@ pub enum AppError {
 #[cfg(test)]
 mod tests {
     use super::{
-        BuildExecutionError, MaterializedRoot, OciImageReference, OciWorkerError, RuntimePolicy,
-        StoredNetworkAccess, build_delivery_requires_redelivery, deterministic_update_hook_run_id,
-        guest_environment, refresh_image_filesystem_cache, validate_runtime_policy,
-        write_oci_manifest_if_dirty,
+        BuildExecutionError, FlushDiagnostics, FlushPublisher, GatewayServiceArtifact,
+        GatewayServiceArtifactKind, GatewayServiceIdentity, GatewayServiceMaterializer,
+        LocalGatewayReleaseMaterializer, LocalRunRuntimeConfig, LocalRunRuntimeManager,
+        MaterializedRoot, OciImageReference, OciWorkerError, RuntimePolicy, StoredNetworkAccess,
+        build_delivery_requires_redelivery, deterministic_update_hook_run_id, flush_publisher,
+        flush_until_quiescent, guest_environment, refresh_image_filesystem_cache,
+        validate_runtime_policy, write_oci_manifest_if_dirty,
     };
-    use run_domain::RunKind;
+    use async_trait::async_trait;
+    use gateway_edge::GatewayEdgeError;
+    use run_domain::{Run, RunKind};
+    use run_orchestrator::{RunRuntimeCatalog, RunRuntimeCatalogError};
+    use runtime_types::RunId;
+    use sha2::{Digest, Sha256};
+    use std::sync::Arc;
     use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+    use std::{
+        path::PathBuf,
+        time::{Duration, Instant},
+    };
     use uuid::Uuid;
     use vm_trait::{VmError, VmResources};
+
+    struct EmptyRunRuntimeCatalog;
+
+    #[async_trait]
+    impl RunRuntimeCatalog for EmptyRunRuntimeCatalog {
+        async fn load_runtime(
+            &self,
+            _run: &Run,
+        ) -> Result<run_orchestrator::RunRuntimeInput, RunRuntimeCatalogError> {
+            Err(RunRuntimeCatalogError::Unavailable)
+        }
+
+        async fn run_is_live(&self, _run_id: RunId) -> Result<bool, RunRuntimeCatalogError> {
+            Ok(false)
+        }
+    }
 
     fn policy() -> RuntimePolicy {
         RuntimePolicy {
@@ -3761,6 +5151,194 @@ mod tests {
             allow_broker_only: true,
             allow_egress: false,
         }
+    }
+
+    #[tokio::test]
+    async fn final_outbox_flush_drains_beyond_the_old_pass_cap() {
+        let mut passes = 0_u16;
+        let deadline = Instant::now() + Duration::from_secs(1);
+        let diagnostics = Arc::new(std::sync::Mutex::new(FlushDiagnostics::new(deadline)));
+        flush_until_quiescent(deadline, Arc::clone(&diagnostics), || {
+            passes += 1;
+            let quiescent = passes > 100;
+            async move { Ok(quiescent) }
+        })
+        .await
+        .expect("flush reaches quiescence after more than 100 passes");
+        assert_eq!(passes, 101);
+    }
+
+    #[tokio::test]
+    async fn final_outbox_flush_preserves_deadline_failure() {
+        let called = Arc::new(AtomicBool::new(false));
+        let deadline = Instant::now()
+            .checked_sub(Duration::from_secs(1))
+            .expect("deadline remains representable");
+        let diagnostics = Arc::new(std::sync::Mutex::new(FlushDiagnostics::new(deadline)));
+        let result = flush_until_quiescent(deadline, Arc::clone(&diagnostics), {
+            let called = Arc::clone(&called);
+            move || {
+                called.store(true, Ordering::Release);
+                async { Ok(false) }
+            }
+        })
+        .await;
+        assert!(matches!(
+            result,
+            Err(super::AppError::Shutdown(message))
+                if message == "final outbox flush did not quiesce"
+        ));
+        assert!(!called.load(Ordering::Acquire));
+        let diagnostics = diagnostics.lock().expect("flush diagnostics mutex");
+        assert!(diagnostics.deadline_expired_before_pass);
+        assert_eq!(diagnostics.passes, 1);
+        drop(diagnostics);
+    }
+
+    #[tokio::test]
+    async fn final_outbox_flush_diagnoses_an_interrupted_publisher() {
+        // This crate does not enable Tokio's test clock; leave enough real time for
+        // the publisher phase to be entered before the pending operation times out.
+        let deadline = Instant::now() + Duration::from_millis(250);
+        let diagnostics = Arc::new(std::sync::Mutex::new(FlushDiagnostics::new(deadline)));
+        let pass_diagnostics = Arc::clone(&diagnostics);
+        let result = flush_until_quiescent(deadline, Arc::clone(&diagnostics), || {
+            let diagnostics = Arc::clone(&pass_diagnostics);
+            async move {
+                let forge = flush_publisher(
+                    &diagnostics,
+                    FlushPublisher::Forge,
+                    async { Ok::<usize, std::io::Error>(3) },
+                    "test forge outbox flush",
+                )
+                .await?;
+                assert_eq!(forge, 3);
+                let _ = flush_publisher(
+                    &diagnostics,
+                    FlushPublisher::ProductEvent,
+                    std::future::pending::<Result<usize, std::io::Error>>(),
+                    "test product-event outbox flush",
+                )
+                .await?;
+                Ok(false)
+            }
+        })
+        .await;
+        assert!(matches!(
+            result,
+            Err(super::AppError::Shutdown(message))
+                if message == "final outbox flush did not quiesce"
+        ));
+        let diagnostics = diagnostics.lock().expect("flush diagnostics mutex");
+        assert!(diagnostics.deadline_expired_during_pass);
+        assert!(diagnostics.deadline_expired_during_publisher);
+        assert_eq!(
+            diagnostics.active.map(|phase| phase.publisher.name()),
+            Some("product-event")
+        );
+        assert_eq!(
+            diagnostics.last_batches[FlushPublisher::Forge.index()],
+            Some(3)
+        );
+        assert_eq!(
+            diagnostics.last_batches[FlushPublisher::ProductEvent.index()],
+            None
+        );
+        assert_eq!(diagnostics.failure_kind, Some("deadline-during-publisher"));
+        drop(diagnostics);
+    }
+
+    #[tokio::test]
+    async fn final_outbox_flush_classifies_publisher_errors() {
+        let deadline = Instant::now() + Duration::from_secs(1);
+        let diagnostics = Arc::new(std::sync::Mutex::new(FlushDiagnostics::new(deadline)));
+        let result = flush_publisher(
+            &diagnostics,
+            FlushPublisher::ProductEvent,
+            async { Err::<usize, _>(std::io::Error::other("publisher unavailable")) },
+            "test product-event outbox flush",
+        )
+        .await;
+        assert!(matches!(
+            result,
+            Err(super::AppError::Component {
+                component: "test product-event outbox flush",
+                ..
+            })
+        ));
+        let diagnostics = diagnostics.lock().expect("flush diagnostics mutex");
+        assert_eq!(diagnostics.failure_kind, Some("publisher-error"));
+        assert!(diagnostics.active.is_none());
+        assert_eq!(
+            diagnostics.last_phase.map(|phase| phase.publisher.name()),
+            Some("product-event")
+        );
+        drop(diagnostics);
+    }
+
+    #[test]
+    fn app_materializer_bridges_service_identity_and_exact_cleanup() {
+        let fixture = tempfile::tempdir().expect("temporary materializer roots");
+        let runtime_root = fixture.path().join("runtime");
+        let store_root = fixture.path().join("store");
+        let key = Uuid::new_v4();
+        let bytes = b"persistent service executable";
+        std::fs::create_dir(&store_root).expect("store root");
+        std::fs::write(store_root.join(key.simple().to_string()), bytes).expect("store object");
+        let manager = LocalRunRuntimeManager::initialize(
+            Arc::new(EmptyRunRuntimeCatalog),
+            LocalRunRuntimeConfig {
+                runtime_root: runtime_root.clone(),
+                release_artifact_root: store_root,
+            },
+        )
+        .expect("initialize runtime");
+        let materializer = LocalGatewayReleaseMaterializer {
+            runtime: manager.gateway_release_runtime(),
+        };
+        let identity = GatewayServiceIdentity {
+            instance_id: Uuid::new_v4(),
+            gateway_id: Uuid::new_v4(),
+            revision_id: Uuid::new_v4(),
+        };
+        let mounts = materializer
+            .prepare_service(
+                identity,
+                &[GatewayServiceArtifact {
+                    path: String::from("bin/server"),
+                    kind: GatewayServiceArtifactKind::Executable,
+                    mode: 0o555,
+                    content_hash: Sha256::digest(bytes).into(),
+                    size_bytes: u64::try_from(bytes.len()).expect("artifact length"),
+                    storage_key: key,
+                }],
+                &serde_json::json!({"port": 8080}),
+            )
+            .expect("materialize service");
+        assert_eq!(mounts.len(), 2);
+        assert!(mounts.iter().all(|mount| mount.read_only));
+        assert_eq!(mounts[0].guest_path, PathBuf::from("/release"));
+        assert_eq!(mounts[1].guest_path, PathBuf::from("/run/hephaestus"));
+
+        let wrong_identity = GatewayServiceIdentity {
+            gateway_id: Uuid::new_v4(),
+            ..identity
+        };
+        assert!(matches!(
+            materializer.destroy_service(wrong_identity),
+            Err(GatewayEdgeError::HandlerUnavailable)
+        ));
+        assert!(runtime_service_path(&runtime_root, identity.instance_id).exists());
+        materializer
+            .destroy_service(identity)
+            .expect("destroy exact service identity");
+        assert!(!runtime_service_path(&runtime_root, identity.instance_id).exists());
+    }
+
+    fn runtime_service_path(runtime_root: &std::path::Path, instance_id: Uuid) -> PathBuf {
+        runtime_root
+            .join("gateway-services")
+            .join(instance_id.to_string())
     }
 
     #[test]
@@ -3919,3 +5497,6 @@ mod tests {
         );
     }
 }
+
+#[cfg(test)]
+mod gateway_recovery_tests;

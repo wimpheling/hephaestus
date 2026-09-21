@@ -1,6 +1,10 @@
 //! `PostgreSQL` release and instance command adapter.
 
-use agent_config::{AgentConfig, NetworkProfile, ParameterDefault, REUSABLE_RELEASE_VERSION};
+use agent_config::{
+    AgentConfig, NetworkProfile, ParameterDefault, REUSABLE_RELEASE_VERSION,
+    build_identity::base_build_definition_hash,
+    ui::{gateway_resolution::ReleaseAgentBinding, static_resolution::StaticArtifactCandidate},
+};
 use authz_domain::{AuthorizationDecision, ObjectRef, ObjectType, Permission, Subject};
 use authz_postgres::{PostgresMelangeAuthorizer, audit_decision, begin_actor_transaction};
 use brokered_egress_domain::{
@@ -34,7 +38,20 @@ use std::{
     sync::Arc,
 };
 use time::OffsetDateTime;
+pub use ui_browser::PgUiBrowserSessionStore;
+pub use ui_browser_resources::{PgUiBrowserServingStore, PgUiGenerationHostResolver};
+pub use ui_installation_navigation::PgUiInstallationNavigator;
+pub use ui_request_audit::{
+    PgUiRequestAuditRepository, append_in_transaction as append_ui_request_audit_in_transaction,
+};
 use uuid::Uuid;
+
+mod ui_browser;
+mod ui_browser_resources;
+mod ui_installation;
+mod ui_installation_navigation;
+mod ui_publication;
+mod ui_request_audit;
 
 const RUN_START_SUBJECT: &str = "hephaestus.run.start";
 const MAILBOX_WAKE_SUBJECT: &str = "heph.mailbox.v1.wake";
@@ -125,6 +142,40 @@ impl ReleaseService {
                 .clone()
                 .ok_or(ReleaseServiceError::ReusableConfigurationMissing)?,
         )?;
+        let base_build_definition_hash = config
+            .build
+            .as_ref()
+            .map(base_build_definition_hash)
+            .transpose()?;
+        let static_artifacts = command
+            .artifacts
+            .iter()
+            .map(|artifact| {
+                validate_artifact(artifact)?;
+                Ok(StaticArtifactCandidate {
+                    path: artifact.path.clone(),
+                    id: artifact.id,
+                    kind: artifact.kind,
+                    media_type: artifact.media_type.clone(),
+                    size_bytes: artifact.size_bytes,
+                })
+            })
+            .collect::<Result<Vec<_>, ReleaseServiceError>>()?;
+        let release_agents = vec![ReleaseAgentBinding {
+            agent_key: agent_key.clone(),
+            release_agent_id: command.release_agent_id,
+        }];
+        let ui_publication = ui_publication::load_ui_publication(
+            &mut tx,
+            command.build_request_id,
+            ui_publication::UiPublicationCandidates {
+                repository_id: forge_domain::RepositoryId::from_uuid(build.repository_id),
+                base_build_definition_hash,
+                static_artifacts: &static_artifacts,
+                release_agents: &release_agents,
+            },
+        )
+        .await?;
         let family_id = AgentFamilyId::new();
         let stored_family: Uuid = sqlx::query_scalar(
             "INSERT INTO agent_families (id, repository_id, agent_key)
@@ -166,7 +217,6 @@ impl ReleaseService {
         .execute(&mut *tx)
         .await?;
         for artifact in &command.artifacts {
-            validate_artifact(artifact)?;
             sqlx::query(
                 "INSERT INTO release_artifacts
                  (id, release_id, path, kind, mode, content_hash, size_bytes,
@@ -304,6 +354,15 @@ impl ReleaseService {
                 )
                 .await?;
             }
+        }
+        if let Some(publication) = ui_publication.as_ref() {
+            ui_publication::persist_ui_publication(
+                &mut tx,
+                command.release_id,
+                command.build_request_id,
+                publication,
+            )
+            .await?;
         }
         sqlx::query(
             "UPDATE build_requests SET state = 'succeeded', completed_at = now()
@@ -4743,6 +4802,9 @@ pub enum ReleaseServiceError {
     #[error("release persistence failed")]
     Database(#[from] sqlx::Error),
 }
+
+#[cfg(test)]
+mod ui_schema_tests;
 
 #[cfg(test)]
 mod tests {

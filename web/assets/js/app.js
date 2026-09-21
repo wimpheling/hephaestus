@@ -25,6 +25,7 @@ import {LiveSocket} from "phoenix_live_view"
 import {hooks as colocatedHooks} from "phoenix-colocated/hephaestus_web"
 import {installNavigationProgress} from "./design_system/hooks/navigation_progress"
 import {installSourceHighlight, SourceHighlight} from "./design_system/hooks/source_highlight"
+import {InstalledUiNavigation} from "./design_system/hooks/installed_ui_navigation"
 import {installTheme} from "./design_system/theme"
 
 installTheme()
@@ -34,7 +35,7 @@ const csrfToken = document.querySelector("meta[name='csrf-token']").getAttribute
 const liveSocket = new LiveSocket("/live", Socket, {
   longPollFallbackMs: 2500,
   params: {_csrf_token: csrfToken},
-  hooks: {...colocatedHooks, SourceHighlight},
+  hooks: {...colocatedHooks, SourceHighlight, InstalledUiNavigation},
 })
 
 // Show bounded design-system progress on live navigation and form submits.

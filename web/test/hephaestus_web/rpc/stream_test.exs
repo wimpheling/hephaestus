@@ -117,7 +117,9 @@ defmodule HephaestusWeb.RPC.StreamTest do
       user_id: "38fa596b-d96f-43c7-a4bc-6ad9f2ce07ad",
       issuer: "https://issuer.example",
       subject: "external-subject",
-      display_name: "Reviewer"
+      display_name: "Reviewer",
+      sid: "20000000-0000-4000-8000-000000000002",
+      session_expires_at: 4_000_000_000
     }
   end
 

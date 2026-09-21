@@ -10,6 +10,30 @@ pub type OwnedResolveIdentityResponseView = ::buffa::view::OwnedView<
         'static,
     >,
 >;
+///Shorthand for `OwnedView<CreateBrowserSessionRequestView<'static>>`.
+pub type OwnedCreateBrowserSessionRequestView = ::buffa::view::OwnedView<
+    crate::messages::hephaestus::identity::v1::__buffa::view::CreateBrowserSessionRequestView<
+        'static,
+    >,
+>;
+///Shorthand for `OwnedView<CreateBrowserSessionResponseView<'static>>`.
+pub type OwnedCreateBrowserSessionResponseView = ::buffa::view::OwnedView<
+    crate::messages::hephaestus::identity::v1::__buffa::view::CreateBrowserSessionResponseView<
+        'static,
+    >,
+>;
+///Shorthand for `OwnedView<RevokeBrowserSessionRequestView<'static>>`.
+pub type OwnedRevokeBrowserSessionRequestView = ::buffa::view::OwnedView<
+    crate::messages::hephaestus::identity::v1::__buffa::view::RevokeBrowserSessionRequestView<
+        'static,
+    >,
+>;
+///Shorthand for `OwnedView<RevokeBrowserSessionResponseView<'static>>`.
+pub type OwnedRevokeBrowserSessionResponseView = ::buffa::view::OwnedView<
+    crate::messages::hephaestus::identity::v1::__buffa::view::RevokeBrowserSessionResponseView<
+        'static,
+    >,
+>;
 impl ::connectrpc::Encodable<
     crate::messages::hephaestus::identity::v1::ResolveIdentityResponse,
 >
@@ -38,6 +62,62 @@ for ::buffa::view::OwnedView<
         ::connectrpc::__codegen::encode_view_body(self.reborrow(), codec)
     }
 }
+impl ::connectrpc::Encodable<
+    crate::messages::hephaestus::identity::v1::CreateBrowserSessionResponse,
+>
+for crate::messages::hephaestus::identity::v1::__buffa::view::CreateBrowserSessionResponseView<
+    '_,
+> {
+    fn encode(
+        &self,
+        codec: ::connectrpc::CodecFormat,
+    ) -> ::std::result::Result<::buffa::bytes::Bytes, ::connectrpc::ConnectError> {
+        ::connectrpc::__codegen::encode_view_body(self, codec)
+    }
+}
+impl ::connectrpc::Encodable<
+    crate::messages::hephaestus::identity::v1::CreateBrowserSessionResponse,
+>
+for ::buffa::view::OwnedView<
+    crate::messages::hephaestus::identity::v1::__buffa::view::CreateBrowserSessionResponseView<
+        'static,
+    >,
+> {
+    fn encode(
+        &self,
+        codec: ::connectrpc::CodecFormat,
+    ) -> ::std::result::Result<::buffa::bytes::Bytes, ::connectrpc::ConnectError> {
+        ::connectrpc::__codegen::encode_view_body(self.reborrow(), codec)
+    }
+}
+impl ::connectrpc::Encodable<
+    crate::messages::hephaestus::identity::v1::RevokeBrowserSessionResponse,
+>
+for crate::messages::hephaestus::identity::v1::__buffa::view::RevokeBrowserSessionResponseView<
+    '_,
+> {
+    fn encode(
+        &self,
+        codec: ::connectrpc::CodecFormat,
+    ) -> ::std::result::Result<::buffa::bytes::Bytes, ::connectrpc::ConnectError> {
+        ::connectrpc::__codegen::encode_view_body(self, codec)
+    }
+}
+impl ::connectrpc::Encodable<
+    crate::messages::hephaestus::identity::v1::RevokeBrowserSessionResponse,
+>
+for ::buffa::view::OwnedView<
+    crate::messages::hephaestus::identity::v1::__buffa::view::RevokeBrowserSessionResponseView<
+        'static,
+    >,
+> {
+    fn encode(
+        &self,
+        codec: ::connectrpc::CodecFormat,
+    ) -> ::std::result::Result<::buffa::bytes::Bytes, ::connectrpc::ConnectError> {
+        ::connectrpc::__codegen::encode_view_body(self.reborrow(), codec)
+    }
+}
 /// Full service name for this service.
 pub const IDENTITY_SERVICE_SERVICE_NAME: &str = "hephaestus.identity.v1.IdentityService";
 /// Static [`Spec`](::connectrpc::Spec) for the server-side `ResolveIdentity` RPC.
@@ -46,6 +126,24 @@ pub const IDENTITY_SERVICE_SERVICE_NAME: &str = "hephaestus.identity.v1.Identity
 /// [`RequestContext::spec`](::connectrpc::RequestContext::spec).
 pub const IDENTITY_SERVICE_RESOLVE_IDENTITY_SPEC: ::connectrpc::Spec = ::connectrpc::Spec::server(
         "/hephaestus.identity.v1.IdentityService/ResolveIdentity",
+        ::connectrpc::StreamType::Unary,
+    )
+    .with_idempotency_level(::connectrpc::IdempotencyLevel::Unknown);
+/// Static [`Spec`](::connectrpc::Spec) for the server-side `CreateBrowserSession` RPC.
+///
+/// The dispatcher surfaces this on
+/// [`RequestContext::spec`](::connectrpc::RequestContext::spec).
+pub const IDENTITY_SERVICE_CREATE_BROWSER_SESSION_SPEC: ::connectrpc::Spec = ::connectrpc::Spec::server(
+        "/hephaestus.identity.v1.IdentityService/CreateBrowserSession",
+        ::connectrpc::StreamType::Unary,
+    )
+    .with_idempotency_level(::connectrpc::IdempotencyLevel::Unknown);
+/// Static [`Spec`](::connectrpc::Spec) for the server-side `RevokeBrowserSession` RPC.
+///
+/// The dispatcher surfaces this on
+/// [`RequestContext::spec`](::connectrpc::RequestContext::spec).
+pub const IDENTITY_SERVICE_REVOKE_BROWSER_SESSION_SPEC: ::connectrpc::Spec = ::connectrpc::Spec::server(
+        "/hephaestus.identity.v1.IdentityService/RevokeBrowserSession",
         ::connectrpc::StreamType::Unary,
     )
     .with_idempotency_level(::connectrpc::IdempotencyLevel::Unknown);
@@ -123,6 +221,52 @@ pub trait IdentityService: Send + Sync + 'static {
             > + Send + use<'a, Self>,
         >,
     > + Send;
+    /// Handle the CreateBrowserSession RPC.
+    ///
+    /// `'a` lets the response body borrow from `&self` (e.g. server-resident state).
+    ///
+    /// `request` is borrowed from the request body and is valid for the
+    /// duration of the call; message fields are read directly on it
+    /// (zero-copy). The response cannot borrow from `request` — use
+    /// `.to_owned_message()` (or copy the specific fields) for anything
+    /// returned, stored, or moved into `tokio::spawn`.
+    fn create_browser_session<'a>(
+        &'a self,
+        ctx: ::connectrpc::RequestContext,
+        request: ::connectrpc::ServiceRequest<
+            '_,
+            crate::messages::hephaestus::identity::v1::CreateBrowserSessionRequest,
+        >,
+    ) -> impl ::std::future::Future<
+        Output = ::connectrpc::ServiceResult<
+            impl ::connectrpc::Encodable<
+                crate::messages::hephaestus::identity::v1::CreateBrowserSessionResponse,
+            > + Send + use<'a, Self>,
+        >,
+    > + Send;
+    /// Handle the RevokeBrowserSession RPC.
+    ///
+    /// `'a` lets the response body borrow from `&self` (e.g. server-resident state).
+    ///
+    /// `request` is borrowed from the request body and is valid for the
+    /// duration of the call; message fields are read directly on it
+    /// (zero-copy). The response cannot borrow from `request` — use
+    /// `.to_owned_message()` (or copy the specific fields) for anything
+    /// returned, stored, or moved into `tokio::spawn`.
+    fn revoke_browser_session<'a>(
+        &'a self,
+        ctx: ::connectrpc::RequestContext,
+        request: ::connectrpc::ServiceRequest<
+            '_,
+            crate::messages::hephaestus::identity::v1::RevokeBrowserSessionRequest,
+        >,
+    ) -> impl ::std::future::Future<
+        Output = ::connectrpc::ServiceResult<
+            impl ::connectrpc::Encodable<
+                crate::messages::hephaestus::identity::v1::RevokeBrowserSessionResponse,
+            > + Send + use<'a, Self>,
+        >,
+    > + Send;
 }
 /// Extension trait for registering a service implementation with a Router.
 ///
@@ -184,6 +328,64 @@ impl<S: IdentityService> IdentityServiceExt for S {
                 },
             )
             .with_spec(IDENTITY_SERVICE_RESOLVE_IDENTITY_SPEC)
+            .route_view(
+                IDENTITY_SERVICE_SERVICE_NAME,
+                "CreateBrowserSession",
+                {
+                    let svc = ::std::sync::Arc::clone(&self);
+                    ::connectrpc::view_handler_fn(move |
+                        ctx,
+                        req: ::buffa::view::OwnedView<
+                            crate::messages::hephaestus::identity::v1::__buffa::view::CreateBrowserSessionRequestView<
+                                'static,
+                            >,
+                        >,
+                        format|
+                    {
+                        let svc = ::std::sync::Arc::clone(&svc);
+                        async move {
+                            let sreq = ::connectrpc::ServiceRequest::<
+                                crate::messages::hephaestus::identity::v1::CreateBrowserSessionRequest,
+                            >::from_parts(req.reborrow(), req.bytes());
+                            svc.create_browser_session(ctx, sreq)
+                                .await?
+                                .encode::<
+                                    crate::messages::hephaestus::identity::v1::CreateBrowserSessionResponse,
+                                >(format)
+                        }
+                    })
+                },
+            )
+            .with_spec(IDENTITY_SERVICE_CREATE_BROWSER_SESSION_SPEC)
+            .route_view(
+                IDENTITY_SERVICE_SERVICE_NAME,
+                "RevokeBrowserSession",
+                {
+                    let svc = ::std::sync::Arc::clone(&self);
+                    ::connectrpc::view_handler_fn(move |
+                        ctx,
+                        req: ::buffa::view::OwnedView<
+                            crate::messages::hephaestus::identity::v1::__buffa::view::RevokeBrowserSessionRequestView<
+                                'static,
+                            >,
+                        >,
+                        format|
+                    {
+                        let svc = ::std::sync::Arc::clone(&svc);
+                        async move {
+                            let sreq = ::connectrpc::ServiceRequest::<
+                                crate::messages::hephaestus::identity::v1::RevokeBrowserSessionRequest,
+                            >::from_parts(req.reborrow(), req.bytes());
+                            svc.revoke_browser_session(ctx, sreq)
+                                .await?
+                                .encode::<
+                                    crate::messages::hephaestus::identity::v1::RevokeBrowserSessionResponse,
+                                >(format)
+                        }
+                    })
+                },
+            )
+            .with_spec(IDENTITY_SERVICE_REVOKE_BROWSER_SESSION_SPEC)
     }
 }
 /// Type-inference marker used by [`Router::add_service`](::connectrpc::Router::add_service).
@@ -244,6 +446,18 @@ impl<T: IdentityService> ::connectrpc::Dispatcher for IdentityServiceServer<T> {
                         .with_spec(IDENTITY_SERVICE_RESOLVE_IDENTITY_SPEC),
                 )
             }
+            "CreateBrowserSession" => {
+                Some(
+                    ::connectrpc::dispatcher::codegen::MethodDescriptor::unary(false)
+                        .with_spec(IDENTITY_SERVICE_CREATE_BROWSER_SESSION_SPEC),
+                )
+            }
+            "RevokeBrowserSession" => {
+                Some(
+                    ::connectrpc::dispatcher::codegen::MethodDescriptor::unary(false)
+                        .with_spec(IDENTITY_SERVICE_REVOKE_BROWSER_SESSION_SPEC),
+                )
+            }
             _ => None,
         }
     }
@@ -278,6 +492,48 @@ impl<T: IdentityService> ::connectrpc::Dispatcher for IdentityServiceServer<T> {
                         .await?
                         .encode::<
                             crate::messages::hephaestus::identity::v1::ResolveIdentityResponse,
+                        >(format)
+                })
+            }
+            "CreateBrowserSession" => {
+                let svc = ::std::sync::Arc::clone(&self.inner);
+                Box::pin(async move {
+                    let body = ::connectrpc::dispatcher::codegen::request_proto_bytes::<
+                        crate::messages::hephaestus::identity::v1::CreateBrowserSessionRequest,
+                    >(request.encoded()?, format)?;
+                    let req: crate::messages::hephaestus::identity::v1::__buffa::view::CreateBrowserSessionRequestView<
+                        '_,
+                    > = ::connectrpc::dispatcher::codegen::decode_borrowed_request_view(
+                        &body,
+                    )?;
+                    let req = ::connectrpc::ServiceRequest::<
+                        crate::messages::hephaestus::identity::v1::CreateBrowserSessionRequest,
+                    >::from_parts(&req, &body);
+                    svc.create_browser_session(ctx, req)
+                        .await?
+                        .encode::<
+                            crate::messages::hephaestus::identity::v1::CreateBrowserSessionResponse,
+                        >(format)
+                })
+            }
+            "RevokeBrowserSession" => {
+                let svc = ::std::sync::Arc::clone(&self.inner);
+                Box::pin(async move {
+                    let body = ::connectrpc::dispatcher::codegen::request_proto_bytes::<
+                        crate::messages::hephaestus::identity::v1::RevokeBrowserSessionRequest,
+                    >(request.encoded()?, format)?;
+                    let req: crate::messages::hephaestus::identity::v1::__buffa::view::RevokeBrowserSessionRequestView<
+                        '_,
+                    > = ::connectrpc::dispatcher::codegen::decode_borrowed_request_view(
+                        &body,
+                    )?;
+                    let req = ::connectrpc::ServiceRequest::<
+                        crate::messages::hephaestus::identity::v1::RevokeBrowserSessionRequest,
+                    >::from_parts(&req, &body);
+                    svc.revoke_browser_session(ctx, req)
+                        .await?
+                        .encode::<
+                            crate::messages::hephaestus::identity::v1::RevokeBrowserSessionResponse,
                         >(format)
                 })
             }
@@ -454,6 +710,96 @@ where
                 &self.config,
                 IDENTITY_SERVICE_SERVICE_NAME,
                 "ResolveIdentity",
+                request,
+                options,
+            )
+            .await
+    }
+    /// Call the CreateBrowserSession RPC. Sends a request to /hephaestus.identity.v1.IdentityService/CreateBrowserSession.
+    pub async fn create_browser_session(
+        &self,
+        request: crate::messages::hephaestus::identity::v1::CreateBrowserSessionRequest,
+    ) -> Result<
+        ::connectrpc::client::UnaryResponse<
+            ::buffa::view::OwnedView<
+                crate::messages::hephaestus::identity::v1::__buffa::view::CreateBrowserSessionResponseView<
+                    'static,
+                >,
+            >,
+        >,
+        ::connectrpc::ConnectError,
+    > {
+        self.create_browser_session_with_options(
+                request,
+                ::connectrpc::client::CallOptions::default(),
+            )
+            .await
+    }
+    /// Call the CreateBrowserSession RPC with explicit per-call options. Options override [`ClientConfig`](::connectrpc::client::ClientConfig) defaults.
+    pub async fn create_browser_session_with_options(
+        &self,
+        request: crate::messages::hephaestus::identity::v1::CreateBrowserSessionRequest,
+        options: ::connectrpc::client::CallOptions,
+    ) -> Result<
+        ::connectrpc::client::UnaryResponse<
+            ::buffa::view::OwnedView<
+                crate::messages::hephaestus::identity::v1::__buffa::view::CreateBrowserSessionResponseView<
+                    'static,
+                >,
+            >,
+        >,
+        ::connectrpc::ConnectError,
+    > {
+        ::connectrpc::client::call_unary(
+                &self.transport,
+                &self.config,
+                IDENTITY_SERVICE_SERVICE_NAME,
+                "CreateBrowserSession",
+                request,
+                options,
+            )
+            .await
+    }
+    /// Call the RevokeBrowserSession RPC. Sends a request to /hephaestus.identity.v1.IdentityService/RevokeBrowserSession.
+    pub async fn revoke_browser_session(
+        &self,
+        request: crate::messages::hephaestus::identity::v1::RevokeBrowserSessionRequest,
+    ) -> Result<
+        ::connectrpc::client::UnaryResponse<
+            ::buffa::view::OwnedView<
+                crate::messages::hephaestus::identity::v1::__buffa::view::RevokeBrowserSessionResponseView<
+                    'static,
+                >,
+            >,
+        >,
+        ::connectrpc::ConnectError,
+    > {
+        self.revoke_browser_session_with_options(
+                request,
+                ::connectrpc::client::CallOptions::default(),
+            )
+            .await
+    }
+    /// Call the RevokeBrowserSession RPC with explicit per-call options. Options override [`ClientConfig`](::connectrpc::client::ClientConfig) defaults.
+    pub async fn revoke_browser_session_with_options(
+        &self,
+        request: crate::messages::hephaestus::identity::v1::RevokeBrowserSessionRequest,
+        options: ::connectrpc::client::CallOptions,
+    ) -> Result<
+        ::connectrpc::client::UnaryResponse<
+            ::buffa::view::OwnedView<
+                crate::messages::hephaestus::identity::v1::__buffa::view::RevokeBrowserSessionResponseView<
+                    'static,
+                >,
+            >,
+        >,
+        ::connectrpc::ConnectError,
+    > {
+        ::connectrpc::client::call_unary(
+                &self.transport,
+                &self.config,
+                IDENTITY_SERVICE_SERVICE_NAME,
+                "RevokeBrowserSession",
                 request,
                 options,
             )

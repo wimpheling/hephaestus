@@ -8,14 +8,15 @@ defmodule HephaestusWebWeb.DesignSystem.Components.Structure do
 
   use Phoenix.Component
 
-  attr :as, :string,
+  attr(:as, :string,
     default: "div",
     values:
-      ~w(article aside details div dl footer header i li main nav ol p section span summary ul)
+      ~w(article aside details div dl footer header i iframe li main nav ol p section span summary ul)
+  )
 
-  attr :id, :string, default: nil
+  attr(:id, :string, default: nil)
 
-  attr :variant, :atom,
+  attr(:variant, :atom,
     required: true,
     values: [
       :organization_header,
@@ -103,21 +104,54 @@ defmodule HephaestusWebWeb.DesignSystem.Components.Structure do
       :console_line,
       :console_line_active,
       :console_foot,
-      :landing_footer
+      :landing_footer,
+      :installed_ui_navigation,
+      :installed_ui_list,
+      :installed_ui_card,
+      :installed_ui_card_header,
+      :installed_ui_card_identity,
+      :installed_ui_card_copy,
+      :installed_ui_card_actions,
+      :installed_ui_embed,
+      :installed_ui_embed_header,
+      :installed_ui_iframe,
+      :installed_ui_status,
+      :installed_ui_terminal_status
     ]
+  )
 
-  attr :layout, :atom,
+  attr(:layout, :atom,
     default: :default,
     values: [:default, :compact, :projects, :secrets, :grants]
+  )
 
-  attr :role, :string, default: nil, values: [nil, "alert", "status"]
-  attr :aria_label, :string, default: nil
-  attr :aria_live, :string, default: nil, values: [nil, "polite", "assertive"]
-  attr :phx_update, :string, default: nil, values: [nil, "stream", "ignore"]
-  attr :test_id, :string, default: nil
-  attr :tabindex, :integer, default: nil, values: [nil, 0]
-  attr :open, :boolean, default: false
-  slot :inner_block
+  attr(:role, :string, default: nil, values: [nil, "alert", "status"])
+  attr(:aria_label, :string, default: nil)
+  attr(:aria_live, :string, default: nil, values: [nil, "polite", "assertive"])
+  attr(:phx_update, :string, default: nil, values: [nil, "stream", "ignore"])
+  attr(:test_id, :string, default: nil)
+  attr(:tabindex, :integer, default: nil, values: [nil, 0])
+  attr(:open, :boolean, default: false)
+
+  attr(:phx_hook, :string,
+    default: nil,
+    values: [nil, "InstalledUiNavigation", "SourceHighlight"]
+  )
+
+  attr(:src, :string, default: nil)
+  attr(:title, :string, default: nil)
+  attr(:sandbox, :string, default: nil, values: [nil, "allow-scripts allow-same-origin"])
+  attr(:referrerpolicy, :string, default: nil, values: [nil, "no-referrer"])
+  attr(:data_ui_frame_src, :string, default: nil)
+  attr(:data_ui_port, :string, default: nil)
+  attr(:data_ui_namespace, :string, default: nil)
+  attr(:data_ui_platform_origin, :string, default: nil)
+  attr(:data_ui_installation, :boolean, default: false)
+  attr(:data_ui_frame, :boolean, default: false)
+  attr(:data_ui_status, :boolean, default: false)
+  attr(:data_ui_close, :boolean, default: false)
+  attr(:data_ui_terminal_status, :boolean, default: false)
+  slot(:inner_block)
 
   @doc "Renders a semantic container with a bounded visual role."
   def frame(assigns) do
@@ -130,13 +164,14 @@ defmodule HephaestusWebWeb.DesignSystem.Components.Structure do
     """
   end
 
-  attr :as, :string,
+  attr(:as, :string,
     default: "span",
     values: ~w(b code dd dt em h1 h2 h3 p pre small span strong time)
+  )
 
-  attr :id, :string, default: nil
+  attr(:id, :string, default: nil)
 
-  attr :variant, :atom,
+  attr(:variant, :atom,
     default: :body,
     values: [
       :body,
@@ -153,11 +188,12 @@ defmodule HephaestusWebWeb.DesignSystem.Components.Structure do
       :status,
       :landing_emphasis
     ]
+  )
 
-  attr :aria_current, :string, default: nil, values: [nil, "page", "step"]
-  attr :datetime, :string, default: nil
-  attr :test_id, :string, default: nil
-  slot :inner_block, required: true
+  attr(:aria_current, :string, default: nil, values: [nil, "page", "step"])
+  attr(:datetime, :string, default: nil)
+  attr(:test_id, :string, default: nil)
+  slot(:inner_block, required: true)
 
   @doc "Renders bounded typography with a caller-selected semantic element."
   def text(assigns) do
@@ -168,11 +204,11 @@ defmodule HephaestusWebWeb.DesignSystem.Components.Structure do
     """
   end
 
-  attr :id, :string, default: nil
-  attr :destination, :string, default: nil
-  attr :method, :string, default: nil, values: [nil, "delete", "get", "patch", "post", "put"]
+  attr(:id, :string, default: nil)
+  attr(:destination, :string, default: nil)
+  attr(:method, :string, default: nil, values: [nil, "delete", "get", "patch", "post", "put"])
 
-  attr :event, :string,
+  attr(:event, :string,
     default: nil,
     values: [
       nil,
@@ -200,23 +236,28 @@ defmodule HephaestusWebWeb.DesignSystem.Components.Structure do
       "publish-release",
       "remove-brokered-rule-copy",
       "retry-build",
-      "verification-rebuild"
+      "verification-rebuild",
+      "launch-installed-ui",
+      "load-more-installed-ui"
     ]
+  )
 
-  attr :value, :string, default: nil
-  attr :confirm, :string, default: nil
-  attr :disable_with, :string, default: nil
-  attr :event_payload, :map, default: %{}
-  attr :test_id, :string, default: nil
-  attr :aria_label, :string, default: nil
-  attr :disabled, :boolean, default: false
-  attr :current, :boolean, default: false
+  attr(:value, :string, default: nil)
+  attr(:confirm, :string, default: nil)
+  attr(:disable_with, :string, default: nil)
+  attr(:event_payload, :map, default: %{})
+  attr(:test_id, :string, default: nil)
+  attr(:aria_label, :string, default: nil)
+  attr(:disabled, :boolean, default: false)
+  attr(:current, :boolean, default: false)
+  attr(:data_ui_close, :boolean, default: false)
 
-  attr :interaction, :atom,
+  attr(:interaction, :atom,
     default: :navigate,
     values: [:navigate, :patch, :href, :event, :submit]
+  )
 
-  attr :variant, :atom,
+  attr(:variant, :atom,
     default: :text,
     values: [
       :text,
@@ -230,10 +271,14 @@ defmodule HephaestusWebWeb.DesignSystem.Components.Structure do
       :resource_row,
       :brand,
       :landing_primary,
-      :tree_file
+      :tree_file,
+      :installed_launch,
+      :installed_load_more,
+      :installed_close
     ]
+  )
 
-  slot :inner_block, required: true
+  slot(:inner_block, required: true)
 
   @doc "Renders a link or button from a finite interaction vocabulary."
   def action(%{interaction: interaction} = assigns)
@@ -271,6 +316,7 @@ defmodule HephaestusWebWeb.DesignSystem.Components.Structure do
       aria-label={@aria_label}
       phx-disable-with={@disable_with}
       phx-value-action={@event_payload[:action]}
+      phx-value-id={@event_payload[:id]}
       phx-value-attachment_id={@event_payload[:attachment_id]}
       phx-value-enabled={@event_payload[:enabled]}
       phx-value-kind={@event_payload[:kind]}
@@ -281,6 +327,7 @@ defmodule HephaestusWebWeb.DesignSystem.Components.Structure do
       phx-value-token_id={@event_payload[:token_id]}
       phx-value-update_id={@event_payload[:update_id]}
       disabled={@disabled}
+      data-ui-close={@data_ui_close}
       class={action_class(@variant, @current)}
     >
       {render_slot(@inner_block)}
@@ -288,9 +335,9 @@ defmodule HephaestusWebWeb.DesignSystem.Components.Structure do
     """
   end
 
-  attr :name, :string, required: true
-  attr :size, :atom, default: :medium, values: [:small, :medium, :large]
-  attr :detail, :atom, default: :default, values: [:default, :chevron]
+  attr(:name, :string, required: true)
+  attr(:size, :atom, default: :medium, values: [:small, :medium, :large])
+  attr(:detail, :atom, default: :default, values: [:default, :chevron])
 
   @doc "Renders an icon with bounded size and detail treatment."
   def glyph(%{name: "hero-" <> _rest} = assigns) do
@@ -302,8 +349,8 @@ defmodule HephaestusWebWeb.DesignSystem.Components.Structure do
     """
   end
 
-  attr :tree, :map, required: true
-  attr :current_path, :string, default: nil
+  attr(:tree, :map, required: true)
+  attr(:current_path, :string, default: nil)
 
   @doc "Renders a repository tree whose destinations were prepared by its composite."
   def repository_tree(assigns) do
@@ -317,14 +364,15 @@ defmodule HephaestusWebWeb.DesignSystem.Components.Structure do
     """
   end
 
-  attr :id, :string, required: true
-  attr :contents, :string, default: nil
-  attr :diff_lines, :list, default: []
-  attr :aria_label, :string, default: "File contents"
+  attr(:id, :string, required: true)
+  attr(:contents, :string, default: nil)
+  attr(:diff_lines, :list, default: [])
+  attr(:aria_label, :string, default: "File contents")
 
-  attr :language, :string,
+  attr(:language, :string,
     default: "text",
     values: ["elixir", "json", "markdown", "rust", "shell", "sql", "text", "toml", "yaml"]
+  )
 
   @doc "Renders escaped source text without template whitespace and with stable line numbers."
   def source_viewer(assigns) do
@@ -341,8 +389,8 @@ defmodule HephaestusWebWeb.DesignSystem.Components.Structure do
     """
   end
 
-  attr :node, :map, required: true
-  attr :current_path, :string, default: nil
+  attr(:node, :map, required: true)
+  attr(:current_path, :string, default: nil)
 
   defp tree_node(assigns) do
     ~H"""
@@ -493,6 +541,32 @@ defmodule HephaestusWebWeb.DesignSystem.Components.Structure do
   defp frame_classes(:console_line_active, _layout), do: "active"
   defp frame_classes(:console_foot, _layout), do: "console-foot"
   defp frame_classes(:landing_footer, _layout), do: "landing-footer"
+  defp frame_classes(:installed_ui_navigation, _layout), do: "mt-8 space-y-4"
+  defp frame_classes(:installed_ui_list, _layout), do: "grid gap-3 md:grid-cols-2"
+
+  defp frame_classes(:installed_ui_card, _layout),
+    do: "card border border-base-300 bg-base-100 p-4 shadow-sm"
+
+  defp frame_classes(:installed_ui_card_header, _layout),
+    do: "flex items-start justify-between gap-3"
+
+  defp frame_classes(:installed_ui_card_identity, _layout), do: "flex min-w-0 items-start gap-3"
+  defp frame_classes(:installed_ui_card_copy, _layout), do: "min-w-0"
+
+  defp frame_classes(:installed_ui_card_actions, _layout),
+    do: "mt-4 flex items-center justify-between gap-3"
+
+  defp frame_classes(:installed_ui_embed, _layout),
+    do: "hidden overflow-hidden rounded-xl border border-base-300 bg-base-100 shadow-lg"
+
+  defp frame_classes(:installed_ui_embed_header, _layout),
+    do: "flex items-center justify-between border-b border-base-300 px-4 py-3"
+
+  defp frame_classes(:installed_ui_iframe, _layout), do: "h-[min(70vh,48rem)] w-full"
+  defp frame_classes(:installed_ui_status, _layout), do: nil
+
+  defp frame_classes(:installed_ui_terminal_status, _layout),
+    do: "hidden rounded-lg border border-warning/40 bg-warning/10 px-4 py-3 text-sm"
 
   defp resource_layout_class(:default), do: "resource-columns-default"
   defp resource_layout_class(:compact), do: "resource-columns-compact"
@@ -528,6 +602,9 @@ defmodule HephaestusWebWeb.DesignSystem.Components.Structure do
   defp action_class(:landing_primary, _current), do: "button primary landing-button"
   defp action_class(:tree_file, false), do: "tree-file"
   defp action_class(:tree_file, true), do: "tree-file active"
+  defp action_class(:installed_launch, _current), do: "btn btn-primary btn-sm"
+  defp action_class(:installed_load_more, _current), do: "btn btn-outline btn-sm"
+  defp action_class(:installed_close, _current), do: "btn btn-ghost btn-sm"
 
   defp glyph_size(:small), do: "size-3"
   defp glyph_size(:medium), do: "size-4"
@@ -552,7 +629,21 @@ defmodule HephaestusWebWeb.DesignSystem.Components.Structure do
       "aria-label": assigns.aria_label,
       "aria-live": assigns.aria_live,
       "phx-update": assigns.phx_update,
+      "phx-hook": assigns.phx_hook,
       "data-testid": assigns.test_id,
+      src: assigns.src,
+      title: assigns.title,
+      sandbox: assigns.sandbox,
+      referrerpolicy: assigns.referrerpolicy,
+      "data-ui-frame-src": assigns.data_ui_frame_src,
+      "data-ui-port": assigns.data_ui_port,
+      "data-ui-namespace": assigns.data_ui_namespace,
+      "data-ui-platform-origin": assigns.data_ui_platform_origin,
+      "data-ui-installation": assigns.data_ui_installation,
+      "data-ui-frame": assigns.data_ui_frame,
+      "data-ui-status": assigns.data_ui_status,
+      "data-ui-close": assigns.data_ui_close,
+      "data-ui-terminal-status": assigns.data_ui_terminal_status,
       tabindex: assigns.tabindex,
       open: assigns.as == "details" && assigns.open
     }
@@ -577,6 +668,7 @@ defmodule HephaestusWebWeb.DesignSystem.Components.Structure do
     :attachment_id,
     :enabled,
     :kind,
+    :id,
     :mailbox_id,
     :event_id,
     :next,

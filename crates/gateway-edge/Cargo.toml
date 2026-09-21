@@ -13,18 +13,24 @@ context = "gateway"
 async-trait.workspace = true
 bytes.workspace = true
 gateway-domain = { path = "../gateway-domain" }
+http-body-util.workspace = true
 http.workspace = true
+hyper.workspace = true
+hyper-util.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 subtle.workspace = true
 thiserror.workspace = true
+time.workspace = true
+tracing.workspace = true
 reqwest.workspace = true
 tokio = { workspace = true, features = ["macros", "rt", "time"] }
+tokio-util.workspace = true
 uuid.workspace = true
 vm-trait.workspace = true
 
 [dev-dependencies]
-tokio = { workspace = true, features = ["io-util", "net", "rt-multi-thread"] }
+tokio = { workspace = true, features = ["io-util", "net", "rt-multi-thread", "test-util"] }
 vm-fake = { path = "../vm-fake" }
 
 [lints]

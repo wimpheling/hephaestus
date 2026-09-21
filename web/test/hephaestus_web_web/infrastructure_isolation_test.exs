@@ -5,7 +5,9 @@ defmodule HephaestusWebWeb.InfrastructureIsolationTest do
     "display_name" => "RPC Reviewer",
     "issuer" => "https://issuer.example",
     "subject" => "reviewer",
-    "user_id" => "10000000-0000-4000-8000-000000000001"
+    "user_id" => "10000000-0000-4000-8000-000000000001",
+    "sid" => "20000000-0000-4000-8000-000000000002",
+    "session_expires_at" => 4_000_000_000
   }
 
   @removed_children [

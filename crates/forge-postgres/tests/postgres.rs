@@ -1,5 +1,6 @@
 //! Opt-in `PostgreSQL` and `JetStream` receive-processing coverage.
 
+use authz_postgres::PostgresMelangeAuthorizer;
 use forge_domain::{CommitSha, GitRef, OrganizationId, ReceiveId, RefUpdate, Repository};
 use forge_postgres::PgForgeRepository;
 use forge_service::{
@@ -7,12 +8,14 @@ use forge_service::{
     ensure_forge_jetstream_topology,
 };
 use futures_util::StreamExt;
+use identity_domain::{AuthenticatedIdentity, RequestId, UserId};
 use run_domain::{CancelRun, Run, RunState, StartRun};
 use run_orchestrator::{
     NatsCommandHandler, RunOrchestrator, RunRepository, VmSpecFactory, ensure_jetstream_topology,
 };
 use run_postgres::PgRunRepository;
 use runtime_types::{CommandId, RunId};
+use serde_json::json;
 use serial_test::serial;
 use sqlx::{PgPool, postgres::PgPoolOptions};
 use std::{collections::BTreeMap, path::Path, sync::Arc, time::Duration};
@@ -22,6 +25,441 @@ use vm_fake::FakeProvider;
 use vm_trait::{GuestCommand, NetworkMode, RootFilesystem, VmError, VmId, VmResources, VmSpec};
 use volume_local::{LocalVolumeConfig, LocalVolumeStore};
 use volume_postgres::PostgresVolumeMetadataRepository;
+
+const STATIC_UI: &str = r#"
+version = 1
+
+[[uis]]
+key = "assistant"
+scope = "project"
+label = "Assistant"
+icon = "chat"
+presentation = "iframe"
+route_base = "assistant"
+ui_kit_version = 1
+cache = "no_store"
+
+[uis.content]
+kind = "static"
+entrypoint = "index.html"
+
+[[uis.content.files]]
+route = "index.html"
+artifact = "dist/index.html"
+media_type = "text/html"
+"#;
+
+#[tokio::test]
+#[serial]
+async fn accepted_ui_capture_links_build_and_replays_without_git() {
+    let Some((pool, service, repository, temporary)) = fixture().await else {
+        return;
+    };
+    seed_reusable_attachment(&pool, &repository).await;
+    let config = valid_config(repository.id.as_uuid());
+    let (commit, update) =
+        commit_and_update_with_ui(&temporary, &repository, &config, STATIC_UI).await;
+    let receive_id = ReceiveId::new();
+    let first = service
+        .accept_receive(
+            &repository,
+            receive_id,
+            "integration-user",
+            std::slice::from_ref(&update),
+        )
+        .await
+        .expect("accepted UI receive");
+    assert_eq!(first.build_requests.len(), 1);
+
+    let (revision_id, stored_receive, ui_hash): (Uuid, Uuid, Vec<u8>) = sqlx::query_as(
+        "SELECT id, receive_id, normalized_ui_hash
+         FROM ui_source_manifest_revisions
+         WHERE repository_id = $1 AND source_commit = $2",
+    )
+    .bind(repository.id.as_uuid())
+    .bind(commit.as_str())
+    .fetch_one(&pool)
+    .await
+    .expect("stored valid UI revision");
+    assert_eq!(stored_receive, receive_id.as_uuid());
+    assert_eq!(ui_hash.len(), 32);
+
+    let link: (Uuid, Uuid, String) = sqlx::query_as(
+        "SELECT build_request_id, source_manifest_revision_id, source_commit
+         FROM build_request_ui_source_manifests
+         WHERE build_request_id = $1",
+    )
+    .bind(first.build_requests[0].as_uuid())
+    .fetch_one(&pool)
+    .await
+    .expect("build UI link");
+    assert_eq!(link.0, first.build_requests[0].as_uuid());
+    assert_eq!(link.1, revision_id);
+    assert_eq!(link.2, commit.as_str());
+
+    let parsed = agent_config::parse(config.as_bytes());
+    let agent = parsed.config.expect("valid agent config");
+    let base_hash = agent_config::build_identity::base_build_definition_hash(
+        agent.build.as_ref().expect("build config"),
+    )
+    .expect("base build identity");
+    let ui_hash: [u8; 32] = ui_hash.try_into().expect("UI hash width");
+    let expected_hash =
+        agent_config::build_identity::ui_build_definition_hash(base_hash, ui_hash, None);
+    let stored_build_hash: Vec<u8> =
+        sqlx::query_scalar("SELECT build_definition_hash FROM build_requests WHERE id = $1")
+            .bind(first.build_requests[0].as_uuid())
+            .fetch_one(&pool)
+            .await
+            .expect("UI build identity");
+    assert_eq!(stored_build_hash, expected_hash.to_vec());
+
+    tokio::fs::remove_dir_all(temporary.path().join("repositories"))
+        .await
+        .expect("remove Git storage for replay");
+    let replay = service
+        .accept_receive(
+            &repository,
+            receive_id,
+            "integration-user",
+            std::slice::from_ref(&update),
+        )
+        .await
+        .expect("replay without Git storage");
+    assert_eq!(replay.build_requests, first.build_requests);
+    assert_eq!(replay.run_requests, first.run_requests);
+
+    cleanup(&pool, repository).await;
+}
+
+#[tokio::test]
+#[serial]
+async fn app_role_receive_persists_reusable_ui_build_once() {
+    let Some((pool, _admin_service, repository, temporary)) = fixture().await else {
+        return;
+    };
+    let database_url = std::env::var("HEPHAESTUS_POSTGRES_TEST_URL").expect("test URL");
+    let owner = UserId::new();
+    sqlx::query("INSERT INTO users (id, display_name) VALUES ($1, 'app-receive-owner')")
+        .bind(owner.as_uuid())
+        .execute(&pool)
+        .await
+        .expect("app receive user");
+    sqlx::query(
+        "INSERT INTO project_maintainers (project_id, user_id)
+         VALUES ($1, $2)",
+    )
+    .bind(repository.project_id.as_uuid())
+    .bind(owner.as_uuid())
+    .execute(&pool)
+    .await
+    .expect("project maintainer");
+    sqlx::query(
+        "INSERT INTO repository_managers (repository_id, user_id)
+         VALUES ($1, $2)",
+    )
+    .bind(repository.id.as_uuid())
+    .bind(owner.as_uuid())
+    .execute(&pool)
+    .await
+    .expect("repository manager");
+    seed_reusable_attachment(&pool, &repository).await;
+    let config = valid_config(repository.id.as_uuid());
+    let (commit, update) =
+        commit_and_update_with_ui(&temporary, &repository, &config, STATIC_UI).await;
+    let app_pool = app_role_pool(&database_url).await;
+    let app_storage = Arc::new(
+        GitStorage::initialize(temporary.path().join("repositories"))
+            .await
+            .expect("application Git storage"),
+    );
+    let app_service = PgForgeRepository::new(app_pool, app_storage)
+        .with_authorizer(Arc::new(PostgresMelangeAuthorizer));
+    let identity = AuthenticatedIdentity::new(
+        owner,
+        "https://forge-app-role.example",
+        "app-receive-owner",
+        json!({"email_verified": true}),
+        RequestId::new(),
+    );
+    let receive_id = ReceiveId::new();
+    let first = app_service
+        .accept_receive_as(
+            &repository,
+            receive_id,
+            "app-role-receive",
+            Some(&identity),
+            std::slice::from_ref(&update),
+        )
+        .await
+        .expect("application role receive");
+    assert_eq!(first.build_requests.len(), 1);
+
+    let build_id = first.build_requests[0].as_uuid();
+    let parsed = agent_config::parse(config.as_bytes());
+    let agent = parsed.config.expect("valid agent config");
+    let base_hash = agent_config::build_identity::base_build_definition_hash(
+        agent.build.as_ref().expect("build config"),
+    )
+    .expect("base build identity");
+    let ui_hash: Vec<u8> = sqlx::query_scalar(
+        "SELECT normalized_ui_hash FROM ui_source_manifest_revisions
+         WHERE repository_id = $1 AND source_commit = $2",
+    )
+    .bind(repository.id.as_uuid())
+    .bind(commit.as_str())
+    .fetch_one(&pool)
+    .await
+    .expect("captured UI hash");
+    let ui_hash: [u8; 32] = ui_hash.try_into().expect("UI hash width");
+    let expected_hash =
+        agent_config::build_identity::ui_build_definition_hash(base_hash, ui_hash, None);
+    let stored_hash: Vec<u8> =
+        sqlx::query_scalar("SELECT build_definition_hash FROM build_requests WHERE id = $1")
+            .bind(build_id)
+            .fetch_one(&pool)
+            .await
+            .expect("stored derived build identity");
+    assert_eq!(stored_hash, expected_hash);
+    let link_count: i64 = sqlx::query_scalar(
+        "SELECT count(*) FROM build_request_ui_source_manifests
+         WHERE build_request_id = $1 AND source_manifest_revision_id = (
+             SELECT id FROM ui_source_manifest_revisions
+             WHERE repository_id = $2 AND source_commit = $3
+         )",
+    )
+    .bind(build_id)
+    .bind(repository.id.as_uuid())
+    .bind(commit.as_str())
+    .fetch_one(&pool)
+    .await
+    .expect("exact UI build link count");
+    assert_eq!(link_count, 1);
+    let event_count: i64 = sqlx::query_scalar(
+        "SELECT count(*) FROM outbox
+         WHERE subject = 'hephaestus.build.requested.v1' AND aggregate_id = $1",
+    )
+    .bind(build_id)
+    .fetch_one(&pool)
+    .await
+    .expect("build outbox count");
+    assert_eq!(event_count, 1);
+
+    let second_receive = app_service
+        .accept_receive_as(
+            &repository,
+            ReceiveId::new(),
+            "app-role-receive",
+            Some(&identity),
+            std::slice::from_ref(&update),
+        )
+        .await
+        .expect("application role same-build receive");
+    assert_eq!(second_receive.build_requests, first.build_requests);
+    let second_event_count: i64 = sqlx::query_scalar(
+        "SELECT count(*) FROM outbox
+         WHERE subject = 'hephaestus.build.requested.v1' AND aggregate_id = $1",
+    )
+    .bind(build_id)
+    .fetch_one(&pool)
+    .await
+    .expect("same-build outbox count");
+    assert_eq!(second_event_count, 1);
+
+    let replay = app_service
+        .accept_receive_as(
+            &repository,
+            receive_id,
+            "app-role-receive",
+            Some(&identity),
+            std::slice::from_ref(&update),
+        )
+        .await
+        .expect("application role receive replay");
+    assert_eq!(replay.build_requests, first.build_requests);
+    let replay_event_count: i64 = sqlx::query_scalar(
+        "SELECT count(*) FROM outbox
+         WHERE subject = 'hephaestus.build.requested.v1' AND aggregate_id = $1",
+    )
+    .bind(build_id)
+    .fetch_one(&pool)
+    .await
+    .expect("replay build outbox count");
+    assert_eq!(replay_event_count, 1);
+    cleanup(&pool, repository).await;
+}
+
+#[tokio::test]
+#[serial]
+async fn concurrent_receives_same_repository_serialize_ui_capture() {
+    let Some((pool, service, repository, temporary)) = fixture().await else {
+        return;
+    };
+    seed_reusable_attachment(&pool, &repository).await;
+    let config = valid_config(repository.id.as_uuid());
+    let (commit, update) =
+        commit_and_update_with_ui(&temporary, &repository, &config, STATIC_UI).await;
+    let first_service = service.clone();
+    let second_service = service.clone();
+    let first_repository = repository.clone();
+    let second_repository = repository.clone();
+    let first_update = update.clone();
+    let second_update = update.clone();
+    let joined = tokio::time::timeout(Duration::from_secs(30), async move {
+        tokio::join!(
+            first_service.accept_receive(
+                &first_repository,
+                ReceiveId::new(),
+                "concurrent-first",
+                std::slice::from_ref(&first_update),
+            ),
+            second_service.accept_receive(
+                &second_repository,
+                ReceiveId::new(),
+                "concurrent-second",
+                std::slice::from_ref(&second_update),
+            ),
+        )
+    })
+    .await
+    .expect("concurrent receives must not deadlock");
+    let first = joined.0.expect("first concurrent receive");
+    let second = joined.1.expect("second concurrent receive");
+    assert_eq!(first.build_requests, second.build_requests);
+
+    let captures: i64 = sqlx::query_scalar(
+        "SELECT count(*) FROM ui_source_manifest_revisions
+         WHERE repository_id = $1 AND source_commit = $2",
+    )
+    .bind(repository.id.as_uuid())
+    .bind(commit.as_str())
+    .fetch_one(&pool)
+    .await
+    .expect("capture count");
+    assert_eq!(captures, 1, "same commit has one immutable capture");
+    cleanup(&pool, repository).await;
+}
+
+#[tokio::test]
+#[serial]
+async fn invalid_ui_capture_accepts_ref_and_run_but_skips_build() {
+    let Some((pool, service, repository, temporary)) = fixture().await else {
+        return;
+    };
+    seed_reusable_attachment(&pool, &repository).await;
+    let config = valid_config(repository.id.as_uuid());
+    let invalid_ui = "version = 1\nunknown_field = \"invalid\"\n";
+    let (commit, update) =
+        commit_and_update_with_ui(&temporary, &repository, &config, invalid_ui).await;
+    let receive = service
+        .accept_receive(&repository, ReceiveId::new(), "integration-user", &[update])
+        .await
+        .expect("invalid UI receive remains accepted");
+    assert!(receive.build_requests.is_empty());
+    assert_eq!(receive.run_requests.len(), 1);
+    let (status, diagnostics): (String, serde_json::Value) = sqlx::query_as(
+        "SELECT status, diagnostics FROM ui_source_manifest_revisions
+         WHERE repository_id = $1 AND source_commit = $2",
+    )
+    .bind(repository.id.as_uuid())
+    .bind(commit.as_str())
+    .fetch_one(&pool)
+    .await
+    .expect("invalid UI revision");
+    assert_eq!(status, "invalid");
+    assert!(!diagnostics.as_array().expect("diagnostic array").is_empty());
+    let linked: i64 = sqlx::query_scalar(
+        "SELECT count(*) FROM build_request_ui_source_manifests
+         WHERE repository_id = $1 AND source_commit = $2",
+    )
+    .bind(repository.id.as_uuid())
+    .bind(commit.as_str())
+    .fetch_one(&pool)
+    .await
+    .expect("invalid UI build links");
+    assert_eq!(linked, 0);
+    cleanup(&pool, repository).await;
+}
+
+#[tokio::test]
+#[serial]
+async fn invalid_ui_capture_is_retained_without_agent_config() {
+    let Some((pool, service, repository, temporary)) = fixture().await else {
+        return;
+    };
+    seed_reusable_attachment(&pool, &repository).await;
+    let invalid_ui = "version = 1\nunknown_field = \"invalid\"\n";
+    let (commit, update) =
+        commit_and_update_files(&temporary, &repository, None, Some(invalid_ui)).await;
+    let receive = service
+        .accept_receive(&repository, ReceiveId::new(), "integration-user", &[update])
+        .await
+        .expect("invalid UI without agent remains accepted");
+    assert!(receive.build_requests.is_empty());
+    assert_eq!(receive.run_requests.len(), 1);
+    let status: String = sqlx::query_scalar(
+        "SELECT status FROM ui_source_manifest_revisions
+         WHERE repository_id = $1 AND source_commit = $2",
+    )
+    .bind(repository.id.as_uuid())
+    .bind(commit.as_str())
+    .fetch_one(&pool)
+    .await
+    .expect("retained invalid UI revision");
+    assert_eq!(status, "invalid");
+    cleanup(&pool, repository).await;
+}
+
+#[tokio::test]
+#[serial]
+async fn same_commit_on_multiple_refs_reuses_capture_and_links_each_build() {
+    let Some((pool, service, repository, temporary)) = fixture().await else {
+        return;
+    };
+    seed_reusable_attachment(&pool, &repository).await;
+    let config = valid_config(repository.id.as_uuid()).replace(
+        "triggers = [\"refs/heads/main\"]",
+        "triggers = [\"refs/heads/main\", \"refs/heads/feature\"]",
+    );
+    let (commit, main_update) =
+        commit_and_update_with_ui(&temporary, &repository, &config, STATIC_UI).await;
+    let feature_update = RefUpdate {
+        git_ref: GitRef::parse("refs/heads/feature").expect("feature ref"),
+        old_commit: None,
+        new_commit: Some(commit.clone()),
+    };
+    let receive = service
+        .accept_receive(
+            &repository,
+            ReceiveId::new(),
+            "integration-user",
+            &[main_update, feature_update],
+        )
+        .await
+        .expect("accepted multi-ref receive");
+    assert_eq!(receive.build_requests.len(), 2);
+    let revisions: i64 = sqlx::query_scalar(
+        "SELECT count(*) FROM ui_source_manifest_revisions
+         WHERE repository_id = $1 AND source_commit = $2",
+    )
+    .bind(repository.id.as_uuid())
+    .bind(commit.as_str())
+    .fetch_one(&pool)
+    .await
+    .expect("single shared UI revision");
+    assert_eq!(revisions, 1);
+    let links: i64 = sqlx::query_scalar(
+        "SELECT count(*) FROM build_request_ui_source_manifests
+         WHERE repository_id = $1 AND source_commit = $2",
+    )
+    .bind(repository.id.as_uuid())
+    .bind(commit.as_str())
+    .fetch_one(&pool)
+    .await
+    .expect("two UI build links");
+    assert_eq!(links, 2);
+    cleanup(&pool, repository).await;
+}
 
 #[tokio::test]
 #[serial]
@@ -390,6 +828,7 @@ impl VmSpecFactory for TestSpecFactory {
                 working_dir: None,
             },
             runtime_authority: None,
+            private_http_service: None,
             labels: BTreeMap::new(),
         })
     }
@@ -484,6 +923,22 @@ async fn fixture() -> Option<(PgPool, PgForgeRepository, Repository, tempfile::T
         .expect("repository");
     seed_catalog_images(&pool, repository.id.as_uuid()).await;
     Some((pool, service, repository, temporary))
+}
+
+async fn app_role_pool(database_url: &str) -> PgPool {
+    PgPoolOptions::new()
+        .max_connections(4)
+        .after_connect(|connection, _metadata| {
+            Box::pin(async move {
+                sqlx::query("SET ROLE hephaestus_app")
+                    .execute(&mut *connection)
+                    .await?;
+                Ok(())
+            })
+        })
+        .connect(database_url)
+        .await
+        .expect("connect application role")
 }
 
 async fn seed_catalog_images(pool: &PgPool, repository_id: Uuid) {
@@ -676,6 +1131,24 @@ async fn commit_and_update(
     repository: &Repository,
     config: &str,
 ) -> (CommitSha, RefUpdate) {
+    commit_and_update_files(temporary, repository, Some(config), None).await
+}
+
+async fn commit_and_update_with_ui(
+    temporary: &tempfile::TempDir,
+    repository: &Repository,
+    config: &str,
+    ui_manifest: &str,
+) -> (CommitSha, RefUpdate) {
+    commit_and_update_files(temporary, repository, Some(config), Some(ui_manifest)).await
+}
+
+async fn commit_and_update_files(
+    temporary: &tempfile::TempDir,
+    repository: &Repository,
+    config: Option<&str>,
+    ui_manifest: Option<&str>,
+) -> (CommitSha, RefUpdate) {
     let work = temporary.path().join("work");
     tokio::fs::create_dir(&work).await.expect("work directory");
     git(&work, &["init", "--initial-branch=main"]).await;
@@ -685,10 +1158,17 @@ async fn commit_and_update(
         &["config", "user.email", "hephaestus@example.invalid"],
     )
     .await;
-    tokio::fs::write(work.join("agent.toml"), config)
-        .await
-        .expect("agent configuration");
-    git(&work, &["add", "agent.toml"]).await;
+    if let Some(config) = config {
+        tokio::fs::write(work.join("agent.toml"), config)
+            .await
+            .expect("agent configuration");
+    }
+    if let Some(ui_manifest) = ui_manifest {
+        tokio::fs::write(work.join("heph.ui.toml"), ui_manifest)
+            .await
+            .expect("UI manifest");
+    }
+    git(&work, &["add", "."]).await;
     git(&work, &["commit", "-m", "agent config"]).await;
     let commit =
         CommitSha::parse(git_output(&work, &["rev-parse", "HEAD"]).await).expect("commit ID");

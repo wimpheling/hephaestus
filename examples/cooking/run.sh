@@ -159,6 +159,28 @@ if [[ "${HEPHAESTUS_COOKING_BROWSER_E2E:-1}" == "1" ]]; then
     browser_oidc_port="$(python3 -c 'import socket; sock=socket.socket(); sock.bind(("127.0.0.1", 0)); print(sock.getsockname()[1]); sock.close()')"
     browser_web_port="$(python3 -c 'import socket; sock=socket.socket(); sock.bind(("127.0.0.1", 0)); print(sock.getsockname()[1]); sock.close()')"
     browser_oidc_url="http://127.0.0.1:${browser_oidc_port}"
+    installed_ui_fixture="${HEPHAESTUS_COOKING_INSTALLED_UI_FIXTURE:-0}"
+    if [[ "${installed_ui_fixture}" == "1" ]]; then
+        [[ "${HEPHAESTUS_CADDY_TEST_TLS:-0}" == "1" ]] || {
+            printf 'The installed UI browser fixture requires Caddy TLS.\n' >&2
+            exit 1
+        }
+        caddy_public_port="${HEPHAESTUS_CADDY_TEST_PUBLIC_PORT:-$(python3 -c 'import socket; sock=socket.socket(); sock.bind(("127.0.0.1", 0)); print(sock.getsockname()[1]); sock.close()')}"
+        [[ "${caddy_public_port}" =~ ^[1-9][0-9]{0,4}$ && "${caddy_public_port}" -le 65535 ]] || {
+            printf 'HEPHAESTUS_CADDY_TEST_PUBLIC_PORT must be a valid TCP port.\n' >&2
+            exit 1
+        }
+        browser_oidc_web_url="https://platform.localhost:${caddy_public_port}"
+        if [[ -n "${HEPHAESTUS_PLATFORM_HTTPS_ORIGIN:-}" &&
+            "${HEPHAESTUS_PLATFORM_HTTPS_ORIGIN}" != "${browser_oidc_web_url}" ]]; then
+            printf 'HEPHAESTUS_PLATFORM_HTTPS_ORIGIN must match the reserved Caddy origin.\n' >&2
+            exit 1
+        fi
+        export HEPHAESTUS_CADDY_TEST_PUBLIC_PORT="${caddy_public_port}"
+        export HEPHAESTUS_PLATFORM_HTTPS_ORIGIN="${browser_oidc_web_url}"
+    else
+        browser_oidc_web_url="http://127.0.0.1:${browser_web_port}"
+    fi
     if [[ -n "${diagnostics_dir}" ]]; then
         browser_bridge_dir="$(mktemp -d "${diagnostics_dir}/browser-bridge.XXXXXX")"
         chmod 700 -- "${browser_bridge_dir}"
@@ -203,7 +225,7 @@ if [[ "${HEPHAESTUS_COOKING_BROWSER_E2E:-1}" == "1" ]]; then
     export HEPHAESTUS_COOKING_BROWSER_BRIDGE_DIR="${browser_bridge_dir}"
     export HEPHAESTUS_COOKING_BRIDGE_DEADLINE_EPOCH="${bridge_deadline_epoch}"
     HEPHAESTUS_E2E_OIDC_PORT="${browser_oidc_port}" \
-    HEPHAESTUS_E2E_WEB_URL="http://127.0.0.1:${browser_web_port}" \
+    HEPHAESTUS_E2E_WEB_URL="${browser_oidc_web_url}" \
     HEPHAESTUS_E2E_OIDC_REVIEWER_SUBJECT="golden-subject" \
         node "${repo_root}/e2e/playwright/oidc-provider.mjs" \
         >"${browser_fixture}.oidc.log" 2>&1 &

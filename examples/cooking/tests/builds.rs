@@ -3,7 +3,7 @@
 //! The golden fixture passes its database, daemon, and identity context here
 //! so these operations exercise the production RPC boundaries.
 
-use forge_domain::{GitRef, ProjectId, RepositoryId};
+use forge_domain::{GitRef, OrganizationId, ProjectId, RepositoryId};
 use forge_postgres::PgForgeRepository;
 use forge_service::CreateRepository;
 use hephaestus_app::RunningHephaestus;
@@ -15,16 +15,27 @@ use rpc_proto::{
     },
     messages::hephaestus::{
         build::v1::{BuildState, GetBuildRequest},
-        common::v1::{NetworkPolicy, OpaqueId, ParameterValue, RequestContext, RuntimePolicy},
+        common::v1::{
+            Cursor, NetworkPolicy, OpaqueId, PageRequest, ParameterValue, RequestContext,
+            RuntimePolicy,
+        },
         gateway::v1::{
-            ConfigureGatewayRequest, CreateMailboxBindingRequest, GatewaySecretSelection,
-            GetGatewayRequest, InstallReleaseGatewaysRequest, ListProjectGatewaysRequest,
+            ConfigureGatewayRequest, CreateMailboxBindingRequest, GatewayLifecycle,
+            GatewaySecretSelection, GatewayServiceLogScope, GatewayServiceLogStream,
+            GetGatewayRequest, InstallReleaseGatewaysRequest, ListGatewayServiceLogsRequest,
+            ListProjectGatewaysRequest,
         },
         instance::v1::{
             CreateAttachmentRequest, CreateMailboxRequest, ImportAgentRequest, RefSelector,
             TriggerPolicy, ref_selector,
         },
-        release::v1::{GetReleaseRequest, PublishReleaseRequest, SetDraftVersionRequest},
+        release::v1::{
+            ActivateUiRequest, DisableUiRequest, GetReleaseRequest, InstallUiRequest,
+            ListUiInstallationsRequest, PublishReleaseRequest, ReleaseUiPresentation,
+            ReleaseUiScope, RemoveUiRequest, SetDraftVersionRequest, UiInstallationContentKind,
+            UiInstallationLifecycle, UiInstallationNavigation, UiInstallationTarget,
+            release_ui_descriptor, ui_installation_target,
+        },
     },
 };
 use serde_json::Value;
@@ -43,6 +54,8 @@ use uuid::Uuid;
 /// Error returned when source preparation, build observation, or publication
 /// crosses a production boundary unsuccessfully.
 pub type BuildError = Box<dyn Error + Send + Sync>;
+
+type CookingGatewayServiceInstance = (Uuid, i64, String, Option<String>, Option<i32>, Option<i32>);
 
 /// Authentication material needed by the Git and Connect boundaries.
 ///
@@ -362,14 +375,52 @@ pub struct PreparedCookingBlog {
     pub source_commit: String,
 }
 
-/// Active gateway identifiers returned after installing its released
-/// declaration and reading it back through the query API.
+/// Gateway identifiers returned after installing its released declaration and
+/// reading it back through the query API.
 #[derive(Debug, Clone, Copy)]
 pub struct InstalledCookingGateway {
     /// Gateway metadata identifier.
     pub gateway_id: Uuid,
-    /// Active immutable declaration revision.
+    /// Latest immutable declaration revision accepted by `ConfigureGateway`.
     pub revision_id: Uuid,
+}
+
+/// Safe identifiers returned by the installed-reference-UI fixture.  The
+/// later browser phase needs only the owner target and current immutable
+/// generations; release provenance, tokens, and handoff material stay inside
+/// the disposable fixture.
+#[derive(Debug, Clone, Copy)]
+pub struct InstalledCookingUi {
+    /// Installation command identity returned by the Release service.
+    pub installation_id: Uuid,
+    /// Current generation selected by the installation projection.
+    pub generation_id: Uuid,
+}
+
+/// Checked-in reference UIs installed across project, repository, and global
+/// owners, plus the managed project UI used by browser authority coverage.
+#[derive(Debug, Clone, Copy)]
+pub struct InstalledCookingReferenceUis {
+    /// Organization owning the project target.
+    pub organization_id: OrganizationId,
+    /// Project target receiving both installations.
+    pub project_id: ProjectId,
+    /// Repository target receiving the repository-scoped static installation.
+    pub repository_id: RepositoryId,
+    /// Managed reference gateway identifier retained for post-restart readiness.
+    pub managed_gateway_id: Uuid,
+    /// Immutable managed reference gateway revision installed by the fixture.
+    pub managed_gateway_revision_id: Uuid,
+    /// Published managed reference release retained for later reactivation.
+    pub managed_release_id: Uuid,
+    /// Static full-page reference UI.
+    pub static_ui: InstalledCookingUi,
+    /// Repository-scoped static reference UI.
+    pub repository_static_ui: InstalledCookingUi,
+    /// Organization-global static reference UI.
+    pub global_static_ui: InstalledCookingUi,
+    /// Managed iframe reference UI.
+    pub managed_ui: InstalledCookingUi,
 }
 
 /// Result of configuring the gateway and creating its ordinary mailbox grant.
@@ -631,11 +682,16 @@ pub async fn install_cooking_gateway(
         .await?
         .into_owned();
     let revision_id = response_id(
-        current
-            .gateway
-            .into_option()
-            .and_then(|summary| summary.active_revision_id.into_option()),
-        "GetGateway active revision",
+        current.gateway.into_option().and_then(|summary| {
+            // HTTP services are installed with a desired revision before the
+            // asynchronous reconciler makes it active. Stateless gateways
+            // have no desired service revision, so retain their active one.
+            summary
+                .desired_service_revision_id
+                .into_option()
+                .or_else(|| summary.active_revision_id.into_option())
+        }),
+        "GetGateway declared revision",
     )?;
     Ok(InstalledCookingGateway {
         gateway_id,
@@ -817,6 +873,977 @@ pub async fn build_and_publish(
     )
     .await?;
     Ok(PublishedCookingBuilds { gateway, agent })
+}
+
+/// Builds, publishes, and installs the two checked-in reference UIs through
+/// the production Git/build/release and Release RPC boundaries.
+///
+/// The service declaration is installed before the managed UI so its gateway
+/// metadata exists when the UI command validates the descriptor.  This helper
+/// deliberately stops at durable installation metadata: instance startup,
+/// browser handoffs, and child sessions belong to the later acceptance phase.
+// The bounded owner matrix is kept together so its install/list/SQL checks
+// remain visibly paired with the descriptors they prove.
+#[allow(clippy::too_many_lines)]
+pub async fn build_and_install_reference_uis(
+    context: &CookingBuildContext<'_>,
+    organization_id: OrganizationId,
+) -> Result<InstalledCookingReferenceUis, BuildError> {
+    let static_build = build_one(
+        context,
+        "cooking-reference-ui",
+        canonical_source(context.source_root, "cooking-reference-ui"),
+        "Cooking reference static UI",
+        false,
+    )
+    .await?;
+    let managed_build = build_one(
+        context,
+        "cooking-reference-service-ui",
+        canonical_source(context.source_root, "cooking-reference-service-ui"),
+        "Cooking reference managed UI",
+        false,
+    )
+    .await?;
+
+    let static_release = get_published_release(context, static_build.release_id).await?;
+    validate_reference_ui_descriptor(
+        &static_release,
+        "release-reference",
+        ReleaseUiScope::RELEASE_UI_SCOPE_PROJECT,
+        ReleaseUiPresentation::RELEASE_UI_PRESENTATION_FULL_PAGE,
+        UiInstallationContentKind::UI_INSTALLATION_CONTENT_KIND_STATIC,
+        "reference",
+        Some(&[
+            "heph-ui-kit-v1.0.0.css",
+            "heph-ui-kit-v1.0.0.js",
+            "index.html",
+        ]),
+        None,
+        None,
+    )?;
+    validate_reference_ui_descriptor(
+        &static_release,
+        "release-reference-repository",
+        ReleaseUiScope::RELEASE_UI_SCOPE_REPOSITORY,
+        ReleaseUiPresentation::RELEASE_UI_PRESENTATION_FULL_PAGE,
+        UiInstallationContentKind::UI_INSTALLATION_CONTENT_KIND_STATIC,
+        "reference-repository",
+        Some(&[
+            "heph-ui-kit-v1.0.0.css",
+            "heph-ui-kit-v1.0.0.js",
+            "index.html",
+        ]),
+        None,
+        None,
+    )?;
+    validate_reference_ui_descriptor(
+        &static_release,
+        "release-reference-global",
+        ReleaseUiScope::RELEASE_UI_SCOPE_GLOBAL,
+        ReleaseUiPresentation::RELEASE_UI_PRESENTATION_FULL_PAGE,
+        UiInstallationContentKind::UI_INSTALLATION_CONTENT_KIND_STATIC,
+        "reference-global",
+        Some(&[
+            "heph-ui-kit-v1.0.0.css",
+            "heph-ui-kit-v1.0.0.js",
+            "index.html",
+        ]),
+        None,
+        None,
+    )?;
+    let managed_release = get_published_release(context, managed_build.release_id).await?;
+    validate_reference_ui_descriptor(
+        &managed_release,
+        "managed-reference",
+        ReleaseUiScope::RELEASE_UI_SCOPE_PROJECT,
+        ReleaseUiPresentation::RELEASE_UI_PRESENTATION_IFRAME,
+        UiInstallationContentKind::UI_INSTALLATION_CONTENT_KIND_MANAGED_SERVICE,
+        "managed-reference",
+        None,
+        Some(("cooking-reference-service-ui", "/reference")),
+        Some(&[
+            "/reference/header-policy",
+            "/reference/identity",
+            "/reference/probe-location",
+            "/reference/probe-refresh",
+            "/reference/probe-set-cookie",
+        ]),
+    )?;
+
+    // The managed descriptor's gateway declaration is installed through the
+    // existing authenticated gateway API.  No gateway or instance rows are
+    // fabricated by this UI fixture helper.
+    let installed_gateway = install_cooking_gateway(
+        context,
+        managed_build.release_id,
+        managed_build.repository_id,
+    )
+    .await?;
+    wait_for_cooking_gateway_active(context, installed_gateway).await?;
+
+    let static_ui = install_reference_ui(
+        context,
+        organization_id,
+        static_build.release_id,
+        "release-reference",
+        "static",
+        project_ui_target(context.project_id),
+    )
+    .await?;
+    let repository_static_ui = install_reference_ui(
+        context,
+        organization_id,
+        static_build.release_id,
+        "release-reference-repository",
+        "repository-static",
+        repository_ui_target(static_build.repository_id),
+    )
+    .await?;
+    let global_static_ui = install_reference_ui(
+        context,
+        organization_id,
+        static_build.release_id,
+        "release-reference-global",
+        "global-static",
+        global_ui_target(),
+    )
+    .await?;
+    let managed_ui = install_reference_ui(
+        context,
+        organization_id,
+        managed_build.release_id,
+        "managed-reference",
+        "managed",
+        project_ui_target(context.project_id),
+    )
+    .await?;
+    let listed = list_reference_uis(
+        context,
+        organization_id,
+        static_build.release_id,
+        managed_build.release_id,
+        static_build.repository_id,
+        static_ui,
+        repository_static_ui,
+        global_static_ui,
+        managed_ui,
+    )
+    .await?;
+
+    assert_reference_ui_installation_rows(
+        context,
+        organization_id,
+        context.project_id,
+        static_build.repository_id,
+        listed,
+    )
+    .await?;
+
+    Ok(InstalledCookingReferenceUis {
+        organization_id,
+        project_id: context.project_id,
+        repository_id: static_build.repository_id,
+        managed_gateway_id: installed_gateway.gateway_id,
+        managed_gateway_revision_id: installed_gateway.revision_id,
+        managed_release_id: managed_build.release_id,
+        static_ui: listed.0,
+        repository_static_ui: listed.1,
+        global_static_ui: listed.2,
+        managed_ui: listed.3,
+    })
+}
+
+/// Waits for an installed HTTP service gateway to become the serving revision
+/// before a managed UI asks the release service to resolve its route. Gateway
+/// installation publishes the desired revision first; the daemon promotes it
+/// only after the service readiness probe succeeds.
+async fn wait_for_cooking_gateway_active(
+    context: &CookingBuildContext<'_>,
+    gateway: InstalledCookingGateway,
+) -> Result<(), BuildError> {
+    let deadline = tokio::time::Instant::now() + context.timeout.min(Duration::from_secs(120));
+    let mut last_observed = None;
+    loop {
+        let client = rpc_gateway_client(
+            context.running,
+            context.identity.rpc_token,
+            "/hephaestus.gateway.v1.GatewayService/GetGateway",
+        )?;
+        let response = if let Ok(response) = tokio::time::timeout_at(
+            deadline,
+            client.get_gateway(GetGatewayRequest {
+                gateway_id: opaque(gateway.gateway_id).into(),
+                ..Default::default()
+            }),
+        )
+        .await
+        {
+            response?
+        } else {
+            return Err(cooking_gateway_readiness_timeout(
+                context,
+                gateway,
+                last_observed.as_deref(),
+            )
+            .await);
+        };
+        let summary = response.into_owned().gateway.into_option().ok_or_else(|| {
+            invalid_state("GetGateway returned no gateway while waiting for readiness")
+        })?;
+        let active_revision_id = summary.active_revision_id.into_option();
+        last_observed = Some(format!(
+            "lifecycle={} active_revision={} desired_revision={}",
+            summary.lifecycle.to_i32(),
+            active_revision_id
+                .as_ref()
+                .map_or("none", |id| id.value.as_str()),
+            summary
+                .desired_service_revision_id
+                .as_option()
+                .map_or("none", |id| id.value.as_str()),
+        ));
+        if summary.lifecycle.to_i32() == GatewayLifecycle::Enabled as i32
+            && active_revision_id.is_some_and(|id| id.value == gateway.revision_id.to_string())
+        {
+            return Ok(());
+        }
+        if tokio::time::Instant::now() >= deadline {
+            return Err(cooking_gateway_readiness_timeout(
+                context,
+                gateway,
+                last_observed.as_deref(),
+            )
+            .await);
+        }
+        let remaining = deadline.saturating_duration_since(tokio::time::Instant::now());
+        sleep(Duration::from_millis(250).min(remaining)).await;
+    }
+}
+
+async fn cooking_gateway_readiness_timeout(
+    context: &CookingBuildContext<'_>,
+    gateway: InstalledCookingGateway,
+    last_observed: Option<&str>,
+) -> BuildError {
+    let diagnostic = tokio::time::timeout(
+        Duration::from_secs(5),
+        cooking_gateway_readiness_diagnostic(context, gateway, last_observed),
+    )
+    .await
+    .unwrap_or_else(|_| String::from("readiness_diagnostic=timeout"));
+    invalid_state(&format!(
+        "cooking gateway readiness polling deadline elapsed; {diagnostic}"
+    ))
+}
+
+/// Reads only the authorized, bounded service-log page after readiness stalls.
+/// The database lookup supplies the exact fencing scope; output is reduced to
+/// a fixed diagnostic category so guest payloads never enter the host error.
+async fn cooking_gateway_readiness_diagnostic(
+    context: &CookingBuildContext<'_>,
+    gateway: InstalledCookingGateway,
+    last_observed: Option<&str>,
+) -> String {
+    let instance: Option<CookingGatewayServiceInstance> = match sqlx::query_as(
+        "SELECT id, fencing_token, state, failure_code, exit_code, exit_signal
+           FROM gateway_service_instances
+          WHERE gateway_id = $1 AND revision_id = $2
+          ORDER BY created_at DESC
+          LIMIT 1",
+    )
+    .bind(gateway.gateway_id)
+    .bind(gateway.revision_id)
+    .fetch_optional(context.pool)
+    .await
+    {
+        Ok(instance) => instance,
+        Err(_) => {
+            return format!(
+                "last_gateway_status={}; service_instance_diagnostic=unavailable",
+                last_observed.unwrap_or("none")
+            );
+        }
+    };
+    let Some((instance_id, fencing_token, state, failure_code, exit_code, exit_signal)) = instance
+    else {
+        return format!(
+            "last_gateway_status={}; service_instance=none",
+            last_observed.unwrap_or("none")
+        );
+    };
+    let mut diagnostic = format!(
+        "last_gateway_status={}; service_instance_state={state} failure_code={} exit_code={} exit_signal={}",
+        last_observed.unwrap_or("none"),
+        failure_code.as_deref().unwrap_or("none"),
+        exit_code.map_or_else(|| String::from("none"), |value| value.to_string()),
+        exit_signal.map_or_else(|| String::from("none"), |value| value.to_string()),
+    );
+    let Ok(client) = rpc_gateway_client(
+        context.running,
+        context.identity.rpc_token,
+        "/hephaestus.gateway.v1.GatewayService/ListGatewayServiceLogs",
+    ) else {
+        diagnostic.push_str(" service_logs=client_unavailable");
+        return diagnostic;
+    };
+    let response = client
+        .list_gateway_service_logs(ListGatewayServiceLogsRequest {
+            scope: GatewayServiceLogScope {
+                project_id: opaque(context.project_id.as_uuid()).into(),
+                gateway_id: opaque(gateway.gateway_id).into(),
+                revision_id: opaque(gateway.revision_id).into(),
+                instance_id: opaque(instance_id).into(),
+                fencing_token: u64::try_from(fencing_token).unwrap_or_default(),
+                ..Default::default()
+            }
+            .into(),
+            limit: 16,
+            after: None::<Cursor>.into(),
+            ..Default::default()
+        })
+        .await;
+    let Ok(response) = response else {
+        diagnostic.push_str(" service_logs=read_unavailable");
+        return diagnostic;
+    };
+    let response = response.into_owned();
+    let mut stderr_category = "no_output";
+    for record in response.records.iter().take(16) {
+        if record.stream == GatewayServiceLogStream::Stderr {
+            stderr_category = classify_service_stderr(&record.contents);
+            if stderr_category != "other_output" {
+                break;
+            }
+        }
+    }
+    diagnostic.push_str(" service_log_stderr_category=");
+    diagnostic.push_str(stderr_category);
+    diagnostic
+}
+
+fn classify_service_stderr(contents: &[u8]) -> &'static str {
+    let text = String::from_utf8_lossy(contents).to_ascii_lowercase();
+    if text.contains("no such file") && text.contains("python") {
+        "python_command_missing"
+    } else if text.contains("permission denied") {
+        "permission_denied"
+    } else if text.contains("traceback") {
+        "python_traceback"
+    } else if text.contains("killed") || text.contains("sigkill") {
+        "process_killed"
+    } else {
+        "other_output"
+    }
+}
+
+async fn get_published_release(
+    context: &CookingBuildContext<'_>,
+    release_id: Uuid,
+) -> Result<rpc_proto::messages::hephaestus::release::v1::Release, BuildError> {
+    let client = rpc_release_client(
+        context.running,
+        context.identity.rpc_token,
+        "/hephaestus.release.v1.ReleaseService/GetRelease",
+    )?;
+    client
+        .get_release(GetReleaseRequest {
+            release_id: opaque(release_id).into(),
+            ..Default::default()
+        })
+        .await?
+        .into_owned()
+        .release
+        .into_option()
+        .ok_or_else(|| invalid_state("GetRelease returned no published release"))
+}
+
+#[allow(clippy::too_many_arguments)]
+fn validate_reference_ui_descriptor(
+    release: &rpc_proto::messages::hephaestus::release::v1::Release,
+    expected_key: &str,
+    expected_scope: ReleaseUiScope,
+    expected_presentation: ReleaseUiPresentation,
+    expected_kind: UiInstallationContentKind,
+    expected_route_base: &str,
+    expected_static_routes: Option<&[&str]>,
+    expected_managed: Option<(&str, &str)>,
+    expected_api_routes: Option<&[&str]>,
+) -> Result<(), BuildError> {
+    let descriptor = release
+        .ui_descriptors
+        .iter()
+        .find(|descriptor| descriptor.key == expected_key)
+        .ok_or_else(|| invalid_state(&format!("published release omitted UI {expected_key}")))?;
+    if descriptor.scope.to_i32() != expected_scope as i32
+        || descriptor.presentation.to_i32() != expected_presentation as i32
+        || descriptor.route_base != expected_route_base
+        || descriptor.entrypoint != "index.html"
+    {
+        return Err(invalid_state(&format!(
+            "published UI {expected_key} has unexpected scope/presentation/route metadata"
+        )));
+    }
+    match (expected_kind, descriptor.content.as_ref()) {
+        (
+            UiInstallationContentKind::UI_INSTALLATION_CONTENT_KIND_STATIC,
+            Some(release_ui_descriptor::Content::StaticContent(content)),
+        ) => {
+            let Some(expected_routes) = expected_static_routes else {
+                return Err(invalid_state("static reference UI has no expected routes"));
+            };
+            let actual_routes = content
+                .files
+                .iter()
+                .map(|file| file.route.as_str())
+                .collect::<Vec<_>>();
+            if actual_routes != expected_routes {
+                return Err(invalid_state(&format!(
+                    "static UI {expected_key} files differ from checked-in declaration"
+                )));
+            }
+        }
+        (
+            UiInstallationContentKind::UI_INSTALLATION_CONTENT_KIND_MANAGED_SERVICE,
+            Some(release_ui_descriptor::Content::ManagedService(content)),
+        ) => {
+            let Some((expected_gateway, expected_route)) = expected_managed else {
+                return Err(invalid_state(
+                    "managed reference UI has no gateway expectation",
+                ));
+            };
+            if content.gateway_name != expected_gateway || content.route != expected_route {
+                return Err(invalid_state(&format!(
+                    "managed UI {expected_key} gateway route differs from checked-in declaration"
+                )));
+            }
+        }
+        _ => {
+            return Err(invalid_state(&format!(
+                "published UI {expected_key} has unexpected content kind"
+            )));
+        }
+    }
+    if let Some(expected_routes) = expected_api_routes {
+        let actual_routes = descriptor
+            .apis
+            .iter()
+            .map(|api| api.route.as_str())
+            .collect::<Vec<_>>();
+        if actual_routes != expected_routes {
+            return Err(invalid_state(&format!(
+                "managed UI {expected_key} APIs differ from checked-in declaration"
+            )));
+        }
+    }
+    Ok(())
+}
+
+async fn install_reference_ui(
+    context: &CookingBuildContext<'_>,
+    organization_id: OrganizationId,
+    release_id: Uuid,
+    ui_key: &str,
+    operation: &str,
+    target: UiInstallationTarget,
+) -> Result<InstalledCookingUi, BuildError> {
+    let client = rpc_release_client(
+        context.running,
+        context.identity.rpc_token,
+        "/hephaestus.release.v1.ReleaseService/InstallUi",
+    )?;
+    let response = client
+        .install_ui(InstallUiRequest {
+            context: mutation_context(&format!("install-reference-ui-{operation}")).into(),
+            organization_id: opaque(organization_id.as_uuid()).into(),
+            target: target.into(),
+            release_id: opaque(release_id).into(),
+            ui_key: ui_key.to_owned(),
+            ..Default::default()
+        })
+        .await?
+        .into_owned();
+    if response.lifecycle.to_i32()
+        != UiInstallationLifecycle::UI_INSTALLATION_LIFECYCLE_ENABLED as i32
+    {
+        return Err(invalid_state(&format!("InstallUi did not enable {ui_key}")));
+    }
+    Ok(InstalledCookingUi {
+        installation_id: response_id(
+            response.installation_id.into_option(),
+            "InstallUi installation",
+        )?,
+        generation_id: response_id(response.generation_id.into_option(), "InstallUi generation")?,
+    })
+}
+
+/// Disables the managed reference installation through the owner-authorized
+/// Release RPC.  The caller supplies the generation observed at installation
+/// time so the lifecycle transition remains a real compare-and-set operation.
+pub async fn disable_installed_ui(
+    running: &RunningHephaestus,
+    token_factory: &(dyn Fn(&str) -> String + Send + Sync),
+    installed_ui: InstalledCookingUi,
+) -> Result<InstalledCookingUi, BuildError> {
+    let client = rpc_release_client(
+        running,
+        token_factory,
+        "/hephaestus.release.v1.ReleaseService/DisableUi",
+    )?;
+    let response = client
+        .disable_ui(DisableUiRequest {
+            context: mutation_context("installed-ui-disable-lifecycle").into(),
+            installation_id: opaque(installed_ui.installation_id).into(),
+            expected_generation_id: opaque(installed_ui.generation_id).into(),
+            ..Default::default()
+        })
+        .await?
+        .into_owned();
+    if response.lifecycle.to_i32()
+        != UiInstallationLifecycle::UI_INSTALLATION_LIFECYCLE_DISABLED as i32
+    {
+        return Err(invalid_state("DisableUi did not disable the managed UI"));
+    }
+    let returned_installation_id = response_id(
+        response.installation_id.into_option(),
+        "DisableUi installation",
+    )?;
+    let returned_generation_id =
+        response_id(response.generation_id.into_option(), "DisableUi generation")?;
+    if returned_installation_id != installed_ui.installation_id {
+        return Err(invalid_state("DisableUi returned a different installation"));
+    }
+    if returned_generation_id != installed_ui.generation_id {
+        return Err(invalid_state("DisableUi returned a different generation"));
+    }
+    Ok(InstalledCookingUi {
+        installation_id: returned_installation_id,
+        generation_id: returned_generation_id,
+    })
+}
+
+/// Activates a fresh managed-reference generation after a lifecycle disable.
+/// The old generation is supplied as the compare-and-set expectation so a
+/// concurrent lifecycle change cannot silently relaunch stale UI state.
+pub async fn activate_installed_ui(
+    running: &RunningHephaestus,
+    token_factory: &(dyn Fn(&str) -> String + Send + Sync),
+    installed_ui: InstalledCookingUi,
+    release_id: Uuid,
+) -> Result<InstalledCookingUi, BuildError> {
+    let client = rpc_release_client(
+        running,
+        token_factory,
+        "/hephaestus.release.v1.ReleaseService/ActivateUi",
+    )?;
+    let response = client
+        .activate_ui(ActivateUiRequest {
+            context: mutation_context("installed-ui-reactivate-lifecycle").into(),
+            installation_id: opaque(installed_ui.installation_id).into(),
+            expected_generation_id: opaque(installed_ui.generation_id).into(),
+            release_id: opaque(release_id).into(),
+            ui_key: String::from("managed-reference"),
+            ..Default::default()
+        })
+        .await?
+        .into_owned();
+    if response.lifecycle.to_i32()
+        != UiInstallationLifecycle::UI_INSTALLATION_LIFECYCLE_ENABLED as i32
+    {
+        return Err(invalid_state("ActivateUi did not enable the managed UI"));
+    }
+    let returned_installation_id = response_id(
+        response.installation_id.into_option(),
+        "ActivateUi installation",
+    )?;
+    let returned_generation_id = response_id(
+        response.generation_id.into_option(),
+        "ActivateUi generation",
+    )?;
+    if returned_installation_id != installed_ui.installation_id {
+        return Err(invalid_state(
+            "ActivateUi returned a different installation",
+        ));
+    }
+    if returned_generation_id == installed_ui.generation_id {
+        return Err(invalid_state("ActivateUi reused the disabled generation"));
+    }
+    Ok(InstalledCookingUi {
+        installation_id: returned_installation_id,
+        generation_id: returned_generation_id,
+    })
+}
+
+/// Removes the reactivated managed reference installation with its current
+/// generation as the compare-and-set expectation.
+pub async fn remove_installed_ui(
+    running: &RunningHephaestus,
+    token_factory: &(dyn Fn(&str) -> String + Send + Sync),
+    installed_ui: InstalledCookingUi,
+) -> Result<InstalledCookingUi, BuildError> {
+    let client = rpc_release_client(
+        running,
+        token_factory,
+        "/hephaestus.release.v1.ReleaseService/RemoveUi",
+    )?;
+    let response = client
+        .remove_ui(RemoveUiRequest {
+            context: mutation_context("installed-ui-remove-lifecycle").into(),
+            installation_id: opaque(installed_ui.installation_id).into(),
+            expected_generation_id: opaque(installed_ui.generation_id).into(),
+            ..Default::default()
+        })
+        .await?
+        .into_owned();
+    if response.lifecycle.to_i32()
+        != UiInstallationLifecycle::UI_INSTALLATION_LIFECYCLE_REMOVED as i32
+    {
+        return Err(invalid_state("RemoveUi did not remove the managed UI"));
+    }
+    let returned_installation_id = response_id(
+        response.installation_id.into_option(),
+        "RemoveUi installation",
+    )?;
+    let returned_generation_id =
+        response_id(response.generation_id.into_option(), "RemoveUi generation")?;
+    if returned_installation_id != installed_ui.installation_id {
+        return Err(invalid_state("RemoveUi returned a different installation"));
+    }
+    if returned_generation_id != installed_ui.generation_id {
+        return Err(invalid_state("RemoveUi returned a different generation"));
+    }
+    Ok(InstalledCookingUi {
+        installation_id: returned_installation_id,
+        generation_id: returned_generation_id,
+    })
+}
+
+// Each target is intentionally listed independently because the RPC filter is
+// exact; keeping the four command results adjacent makes cross-target drift
+// visible at the fixture boundary.
+#[allow(clippy::too_many_arguments)]
+async fn list_reference_uis(
+    context: &CookingBuildContext<'_>,
+    organization_id: OrganizationId,
+    static_release_id: Uuid,
+    managed_release_id: Uuid,
+    static_repository_id: RepositoryId,
+    static_command: InstalledCookingUi,
+    repository_static_command: InstalledCookingUi,
+    global_static_command: InstalledCookingUi,
+    managed_command: InstalledCookingUi,
+) -> Result<
+    (
+        InstalledCookingUi,
+        InstalledCookingUi,
+        InstalledCookingUi,
+        InstalledCookingUi,
+    ),
+    BuildError,
+> {
+    let client = rpc_release_client(
+        context.running,
+        context.identity.rpc_token,
+        "/hephaestus.release.v1.ReleaseService/ListUiInstallations",
+    )?;
+    let static_ui = list_reference_ui_target(
+        &client,
+        organization_id,
+        project_ui_target(context.project_id),
+        "release-reference",
+        static_release_id,
+        static_command,
+    )
+    .await?;
+    let repository_static_ui = list_reference_ui_target(
+        &client,
+        organization_id,
+        repository_ui_target(static_repository_id),
+        "release-reference-repository",
+        static_release_id,
+        repository_static_command,
+    )
+    .await?;
+    let global_static_ui = list_reference_ui_target(
+        &client,
+        organization_id,
+        global_ui_target(),
+        "release-reference-global",
+        static_release_id,
+        global_static_command,
+    )
+    .await?;
+    let managed_ui = list_reference_ui_target(
+        &client,
+        organization_id,
+        project_ui_target(context.project_id),
+        "managed-reference",
+        managed_release_id,
+        managed_command,
+    )
+    .await?;
+    Ok((
+        static_ui,
+        repository_static_ui,
+        global_static_ui,
+        managed_ui,
+    ))
+}
+
+// The target is cloned into the wire request and borrowed for response
+// validation; value ownership keeps each exact target call self-contained.
+#[allow(clippy::needless_pass_by_value)]
+async fn list_reference_ui_target(
+    client: &ReleaseServiceClient<connectrpc::client::HttpClient>,
+    organization_id: OrganizationId,
+    target: UiInstallationTarget,
+    ui_key: &str,
+    release_id: Uuid,
+    command: InstalledCookingUi,
+) -> Result<InstalledCookingUi, BuildError> {
+    let response = client
+        .list_ui_installations(ListUiInstallationsRequest {
+            organization_id: opaque(organization_id.as_uuid()).into(),
+            target: target.clone().into(),
+            page: PageRequest {
+                page_size: 100,
+                ..Default::default()
+            }
+            .into(),
+            ..Default::default()
+        })
+        .await?
+        .into_owned();
+    listed_reference_ui(
+        &response.installations,
+        ui_key,
+        release_id,
+        organization_id,
+        &target,
+        command,
+    )
+}
+
+// The owner matrix is a small, fixed SQL proof for the four returned commands.
+#[allow(clippy::too_many_lines)]
+async fn assert_reference_ui_installation_rows(
+    context: &CookingBuildContext<'_>,
+    organization_id: OrganizationId,
+    project_id: ProjectId,
+    repository_id: RepositoryId,
+    listed: (
+        InstalledCookingUi,
+        InstalledCookingUi,
+        InstalledCookingUi,
+        InstalledCookingUi,
+    ),
+) -> Result<(), BuildError> {
+    let repository_owner_count: i64 = sqlx::query_scalar(
+        "SELECT count(*)
+           FROM repositories repository
+           JOIN projects project ON project.id = repository.project_id
+          WHERE repository.id = $1
+            AND repository.project_id = $2
+            AND project.organization_id = $3",
+    )
+    .bind(repository_id.as_uuid())
+    .bind(project_id.as_uuid())
+    .bind(organization_id.as_uuid())
+    .fetch_one(context.pool)
+    .await?;
+    if repository_owner_count != 1 {
+        return Err(invalid_state(
+            "repository static UI target is outside the cooking organization/project",
+        ));
+    }
+
+    let expected = [
+        (
+            listed.0,
+            "project",
+            "release-reference",
+            None,
+            Some(project_id.as_uuid()),
+            None,
+        ),
+        (
+            listed.1,
+            "repository",
+            "release-reference-repository",
+            None,
+            Some(project_id.as_uuid()),
+            Some(repository_id.as_uuid()),
+        ),
+        (
+            listed.2,
+            "global",
+            "release-reference-global",
+            Some(organization_id.as_uuid()),
+            None,
+            None,
+        ),
+        (
+            listed.3,
+            "project",
+            "managed-reference",
+            None,
+            Some(project_id.as_uuid()),
+            None,
+        ),
+    ];
+    for (command, scope, ui_key, expected_organization, expected_project, expected_repository) in
+        expected
+    {
+        type InstallationOwnerRow = (
+            Option<Uuid>,
+            Option<Uuid>,
+            Option<Uuid>,
+            String,
+            String,
+            String,
+            Uuid,
+        );
+        let row: Option<InstallationOwnerRow> = sqlx::query_as(
+            "SELECT organization_id, project_id, repository_id,
+                        scope, ui_key, lifecycle, current_generation_id
+                   FROM ui_installations
+                  WHERE id = $1",
+        )
+        .bind(command.installation_id)
+        .fetch_optional(context.pool)
+        .await?;
+        let Some((
+            stored_organization,
+            stored_project,
+            stored_repository,
+            stored_scope,
+            stored_key,
+            lifecycle,
+            generation,
+        )) = row
+        else {
+            return Err(invalid_state(
+                "ListUiInstallations returned an unknown installation",
+            ));
+        };
+        if stored_organization != expected_organization
+            || stored_project != expected_project
+            || stored_repository != expected_repository
+            || stored_scope != scope
+            || stored_key != ui_key
+            || lifecycle != "enabled"
+            || generation != command.generation_id
+        {
+            return Err(invalid_state(&format!(
+                "stored UI installation owner differs for {ui_key}"
+            )));
+        }
+    }
+    Ok(())
+}
+
+fn listed_reference_ui(
+    installations: &[UiInstallationNavigation],
+    ui_key: &str,
+    release_id: Uuid,
+    organization_id: OrganizationId,
+    target: &UiInstallationTarget,
+    command: InstalledCookingUi,
+) -> Result<InstalledCookingUi, BuildError> {
+    let entry = installations
+        .iter()
+        .find(|entry| {
+            entry.ui_key == ui_key
+                && entry
+                    .release_id
+                    .as_option()
+                    .is_some_and(|id| id.value == release_id.to_string())
+        })
+        .ok_or_else(|| invalid_state(&format!("ListUiInstallations omitted {ui_key}")))?;
+    if entry
+        .organization_id
+        .as_option()
+        .is_none_or(|id| id.value != organization_id.as_uuid().to_string())
+        || !matches_installation_target(entry, target)
+        || entry.lifecycle.to_i32()
+            != UiInstallationLifecycle::UI_INSTALLATION_LIFECYCLE_ENABLED as i32
+        || !entry.launchable
+    {
+        return Err(invalid_state(&format!(
+            "listed {ui_key} is not enabled and launchable for the requested owner"
+        )));
+    }
+    let listed = InstalledCookingUi {
+        installation_id: response_id(
+            entry.installation_id.as_option().cloned(),
+            "ListUiInstallations installation",
+        )?,
+        generation_id: response_id(
+            entry.generation_id.as_option().cloned(),
+            "ListUiInstallations generation",
+        )?,
+    };
+    if listed.installation_id != command.installation_id
+        || listed.generation_id != command.generation_id
+    {
+        return Err(invalid_state(&format!(
+            "ListUiInstallations changed the fresh {ui_key} command result"
+        )));
+    }
+    Ok(listed)
+}
+
+fn project_ui_target(project_id: ProjectId) -> UiInstallationTarget {
+    UiInstallationTarget {
+        target: Some(ui_installation_target::Target::ProjectId(
+            opaque(project_id.as_uuid()).into(),
+        )),
+        ..Default::default()
+    }
+}
+
+fn repository_ui_target(repository_id: RepositoryId) -> UiInstallationTarget {
+    UiInstallationTarget {
+        target: Some(ui_installation_target::Target::RepositoryId(
+            opaque(repository_id.as_uuid()).into(),
+        )),
+        ..Default::default()
+    }
+}
+
+fn global_ui_target() -> UiInstallationTarget {
+    UiInstallationTarget {
+        target: Some(ui_installation_target::Target::Global(Box::default())),
+        ..Default::default()
+    }
+}
+
+fn matches_installation_target(
+    entry: &UiInstallationNavigation,
+    expected: &UiInstallationTarget,
+) -> bool {
+    let Some(target) = entry.target.as_option() else {
+        return false;
+    };
+    match expected.target.as_ref() {
+        Some(ui_installation_target::Target::Global(_)) => {
+            matches!(
+                target.target.as_ref(),
+                Some(ui_installation_target::Target::Global(_))
+            )
+        }
+        Some(ui_installation_target::Target::ProjectId(id)) => matches!(
+            target.target.as_ref(),
+            Some(ui_installation_target::Target::ProjectId(actual))
+                if actual.value == id.value
+        ),
+        Some(ui_installation_target::Target::RepositoryId(id)) => matches!(
+            target.target.as_ref(),
+            Some(ui_installation_target::Target::RepositoryId(actual))
+                if actual.value == id.value
+        ),
+        None => false,
+    }
 }
 
 /// Builds a distinct cooking-agent release through the ordinary
@@ -1169,7 +2196,7 @@ pub async fn build_and_publish_update_variants(
 // Keep source publication and the resulting RPC mutations in one ordered
 // sequence so returned provenance cannot describe a partially published pair.
 #[allow(clippy::too_many_lines)]
-async fn build_one(
+pub async fn build_one(
     context: &CookingBuildContext<'_>,
     key: &str,
     source: PathBuf,
@@ -1407,7 +2434,7 @@ fn rpc_build_client(
     Ok(BuildServiceClient::new(transport, config))
 }
 
-fn rpc_gateway_client(
+pub fn rpc_gateway_client(
     running: &RunningHephaestus,
     token_factory: &(dyn Fn(&str) -> String + Send + Sync),
     audience: &str,
@@ -1569,7 +2596,7 @@ async fn wait_for_draft_release(
     }
 }
 
-fn mutation_context(operation: &str) -> RequestContext {
+pub fn mutation_context(operation: &str) -> RequestContext {
     mutation_context_with_key(&format!("cooking-build-{operation}-{}", Uuid::new_v4()))
 }
 
@@ -1581,14 +2608,14 @@ fn mutation_context_with_key(key: &str) -> RequestContext {
     }
 }
 
-fn opaque(value: Uuid) -> OpaqueId {
+pub fn opaque(value: Uuid) -> OpaqueId {
     OpaqueId {
         value: value.to_string(),
         ..Default::default()
     }
 }
 
-fn response_id(value: Option<OpaqueId>, operation: &str) -> Result<Uuid, BuildError> {
+pub fn response_id(value: Option<OpaqueId>, operation: &str) -> Result<Uuid, BuildError> {
     value
         .ok_or_else(|| invalid_state(&format!("{operation} returned no ID")))?
         .value

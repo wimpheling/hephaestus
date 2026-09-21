@@ -1,0 +1,224 @@
+/*
+ * Design-system token authority.
+ *
+ * Component implementations consume these semantic tokens. Product pages and
+ * composites must select bounded properties rather than defining new literal
+ * colors, type families, radii, shadows, or spacing values.
+ */
+:root {
+  --ink: #171714;
+  --muted: #6d6b63;
+  --paper: #f3f1ea;
+  --panel: #fbfaf6;
+  --line: #d8d4c7;
+  --ember: #e55227;
+  --ember-dark: #bc3717;
+  --green: #24725a;
+  --amber: #a86513;
+  --red: #a73c34;
+  --shadow: 0 18px 60px rgba(45, 39, 28, .08);
+
+  --font-body: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  --font-display: Georgia, "Times New Roman", serif;
+  --font-mono: "IBM Plex Mono", "SFMono-Regular", Consolas, monospace;
+
+  --radius-small: .28rem;
+  --radius-medium: .55rem;
+  --radius-large: .8rem;
+
+  --space-small: .5rem;
+  --space-medium: 1rem;
+  --space-large: 2rem;
+}
+
+[data-theme="dark"] {
+  --ink: #efeee8;
+  --muted: #aaa79c;
+  --paper: #161713;
+  --panel: #1f201b;
+  --line: #35372f;
+  --ember: #f0683d;
+  --ember-dark: #ff8a66;
+  --green: #56b493;
+  --amber: #e0a04c;
+  --red: #e97970;
+  --shadow: 0 20px 70px rgba(0, 0, 0, .25);
+}
+
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]):not([data-theme="dark"]) {
+  --ink: #efeee8;
+  --muted: #aaa79c;
+  --paper: #161713;
+  --panel: #1f201b;
+  --line: #35372f;
+  --ember: #f0683d;
+  --ember-dark: #ff8a66;
+  --green: #56b493;
+  --amber: #e0a04c;
+  --red: #e97970;
+  --shadow: 0 20px 70px rgba(0, 0, 0, .25);
+  }
+}
+
+/*
+ * Standalone release-UI components.
+ *
+ * These classes use only the semantic variables from the existing design
+ * system token source. They intentionally have a kit prefix so a static
+ * release cannot accidentally style the host application shell.
+ */
+.heph-ui-kit,
+.heph-ui-kit *,
+.heph-ui-kit *::before,
+.heph-ui-kit *::after {
+  box-sizing: border-box;
+}
+
+.heph-ui-kit {
+  margin: 0;
+  min-height: 100vh;
+  color: var(--ink);
+  background: var(--paper);
+  font-family: var(--font-body);
+}
+
+.heph-ui-container {
+  width: min(100% - 2rem, 72rem);
+  margin-inline: auto;
+}
+
+.heph-ui-stack {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-medium);
+}
+
+.heph-ui-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 16rem), 1fr));
+  gap: var(--space-medium);
+}
+
+.heph-ui-title {
+  margin: 0;
+  color: var(--ink);
+  font-family: var(--font-display);
+  font-size: clamp(2rem, 5vw, 4rem);
+  font-weight: 500;
+  letter-spacing: -.04em;
+  line-height: .95;
+}
+
+.heph-ui-text {
+  margin: 0;
+  color: var(--muted);
+  line-height: 1.65;
+}
+
+.heph-ui-panel {
+  padding: var(--space-large);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-large);
+  background: var(--panel);
+  box-shadow: var(--shadow);
+}
+
+.heph-ui-button {
+  display: inline-flex;
+  align-self: flex-start;
+  align-items: center;
+  justify-content: center;
+  min-height: 2.65rem;
+  padding: .65rem 1rem;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-medium);
+  color: var(--ink);
+  background: var(--panel);
+  cursor: pointer;
+  font: 800 .78rem/1 var(--font-body);
+  text-decoration: none;
+  transition: transform .15s ease, box-shadow .15s ease;
+}
+
+.heph-ui-button:hover {
+  transform: translateY(-1px);
+  box-shadow: 0 6px 18px rgba(0, 0, 0, .1);
+}
+
+.heph-ui-button:focus-visible,
+.heph-ui-input:focus-visible {
+  border-color: var(--ember);
+  outline: 0;
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--ember) 12%, transparent);
+}
+
+.heph-ui-button--primary {
+  color: var(--panel);
+  background: var(--ember-dark);
+  border-color: var(--ember-dark);
+}
+
+.heph-ui-button--primary:hover {
+  background: color-mix(in srgb, var(--ember-dark) 85%, var(--ink));
+}
+
+[data-theme="dark"] .heph-ui-button--primary {
+  color: var(--paper);
+}
+
+[data-theme="dark"] .heph-ui-button--primary:hover {
+  color: var(--ink);
+  background: color-mix(in srgb, var(--ember-dark) 50%, var(--paper));
+}
+
+.heph-ui-status {
+  display: inline-flex;
+  align-items: center;
+  gap: .42rem;
+  width: fit-content;
+  padding: .42rem .65rem;
+  border: 1px solid color-mix(in srgb, var(--line) 80%, var(--green));
+  border-radius: 99rem;
+  color: var(--green);
+  background: color-mix(in srgb, var(--green) 7%, transparent);
+  font: 750 .62rem/1 var(--font-mono);
+  letter-spacing: .06em;
+  text-transform: uppercase;
+}
+
+.heph-ui-status::before {
+  width: .42rem;
+  height: .42rem;
+  border-radius: 50%;
+  background: currentColor;
+  content: "";
+}
+
+.heph-ui-label {
+  color: var(--muted);
+  font: 750 .68rem/1.2 var(--font-mono);
+  letter-spacing: .08em;
+  text-transform: uppercase;
+}
+
+.heph-ui-input {
+  width: 100%;
+  min-height: 2.75rem;
+  padding: .68rem .78rem;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-small);
+  color: var(--ink);
+  background: var(--paper);
+  font: 650 .78rem/1.35 var(--font-mono);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .heph-ui-button {
+    transition: none;
+  }
+
+  .heph-ui-button:hover {
+    transform: none;
+  }
+}

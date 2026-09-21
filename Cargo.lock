@@ -51,6 +51,7 @@ dependencies = [
  "forge-domain",
  "gateway-domain",
  "git-capability-domain",
+ "release-domain",
  "serde",
  "serde_json",
  "sha2",
@@ -1513,12 +1514,18 @@ dependencies = [
  "bytes",
  "gateway-domain",
  "http",
+ "http-body-util",
+ "hyper",
+ "hyper-util",
  "reqwest",
  "serde",
  "serde_json",
  "subtle",
  "thiserror 2.0.19",
+ "time",
  "tokio",
+ "tokio-util",
+ "tracing",
  "uuid",
  "vm-fake",
  "vm-trait",
@@ -2388,6 +2395,7 @@ dependencies = [
  "forge-postgres",
  "forge-service",
  "futures-util",
+ "gateway-domain",
  "gateway-edge",
  "gateway-postgres",
  "git-capability-domain",
@@ -2455,8 +2463,10 @@ dependencies = [
  "tokio",
  "tokio-rustls",
  "tokio-util",
+ "tower",
  "tracing",
  "tracing-subscriber",
+ "url",
  "uuid",
  "vm-fake",
  "vm-libkrun",
@@ -2475,6 +2485,7 @@ version = "0.1.0"
 dependencies = [
  "clap",
  "ctrlc",
+ "proc-macro2",
  "registry-token",
  "serde",
  "serde_json",
@@ -2724,6 +2735,7 @@ dependencies = [
  "serde",
  "serde_json",
  "sha2",
+ "time",
  "uuid",
 ]
 
@@ -2743,6 +2755,8 @@ name = "identity-postgres"
 version = "0.1.0"
 dependencies = [
  "async-trait",
+ "event-application",
+ "event-postgres",
  "git-http",
  "identity-application",
  "identity-domain",
@@ -3922,6 +3936,7 @@ dependencies = [
 name = "release-artifact-store"
 version = "0.1.0"
 dependencies = [
+ "libc",
  "release-domain",
  "sha2",
  "tempfile",
@@ -3949,6 +3964,7 @@ version = "0.1.0"
 dependencies = [
  "agent-config",
  "async-nats",
+ "async-trait",
  "authz-domain",
  "authz-postgres",
  "brokered-egress-domain",
@@ -3956,6 +3972,7 @@ dependencies = [
  "event-postgres",
  "forge-domain",
  "futures-util",
+ "gateway-domain",
  "git-capability-domain",
  "identity-domain",
  "mailbox-dispatch",
@@ -3976,6 +3993,7 @@ dependencies = [
  "thiserror 2.0.19",
  "time",
  "tokio",
+ "toml",
  "tracing",
  "uuid",
 ]
@@ -3984,11 +4002,16 @@ dependencies = [
 name = "release-service"
 version = "0.1.0"
 dependencies = [
+ "async-trait",
  "capability-domain",
  "forge-domain",
+ "gateway-domain",
  "git-capability-domain",
+ "identity-domain",
  "release-domain",
  "runtime-types",
+ "thiserror 2.0.19",
+ "time",
  "uuid",
 ]
 
@@ -4232,8 +4255,10 @@ dependencies = [
  "capability-domain",
  "run-domain",
  "runtime-authority",
+ "serial_test",
  "sqlx",
  "time",
+ "tokio",
  "tracing",
  "uuid",
 ]
@@ -5707,6 +5732,8 @@ dependencies = [
  "brokered-egress-client",
  "bytes",
  "ciborium",
+ "gateway-domain",
+ "gateway-edge",
  "http",
  "libc",
  "libloading",
@@ -5718,6 +5745,7 @@ dependencies = [
  "secret-runtime",
  "serde",
  "serde_json",
+ "subtle",
  "tempfile",
  "thiserror 2.0.19",
  "tokio",

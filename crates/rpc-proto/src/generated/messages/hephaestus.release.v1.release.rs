@@ -161,6 +161,1002 @@ impl ::buffa::Enumeration for ReleaseState {
         ]
     }
 }
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
+#[repr(i32)]
+pub enum ReleaseUiScope {
+    RELEASE_UI_SCOPE_UNSPECIFIED = 0i32,
+    RELEASE_UI_SCOPE_PROJECT = 1i32,
+    RELEASE_UI_SCOPE_REPOSITORY = 2i32,
+    RELEASE_UI_SCOPE_GLOBAL = 3i32,
+}
+impl ReleaseUiScope {
+    ///Idiomatic alias for [`Self::RELEASE_UI_SCOPE_UNSPECIFIED`]; `Debug` prints the variant name.
+    #[allow(non_upper_case_globals)]
+    pub const Unspecified: Self = Self::RELEASE_UI_SCOPE_UNSPECIFIED;
+    ///Idiomatic alias for [`Self::RELEASE_UI_SCOPE_PROJECT`]; `Debug` prints the variant name.
+    #[allow(non_upper_case_globals)]
+    pub const Project: Self = Self::RELEASE_UI_SCOPE_PROJECT;
+    ///Idiomatic alias for [`Self::RELEASE_UI_SCOPE_REPOSITORY`]; `Debug` prints the variant name.
+    #[allow(non_upper_case_globals)]
+    pub const Repository: Self = Self::RELEASE_UI_SCOPE_REPOSITORY;
+    ///Idiomatic alias for [`Self::RELEASE_UI_SCOPE_GLOBAL`]; `Debug` prints the variant name.
+    #[allow(non_upper_case_globals)]
+    pub const Global: Self = Self::RELEASE_UI_SCOPE_GLOBAL;
+}
+impl ::core::default::Default for ReleaseUiScope {
+    fn default() -> Self {
+        Self::RELEASE_UI_SCOPE_UNSPECIFIED
+    }
+}
+impl ::serde::Serialize for ReleaseUiScope {
+    fn serialize<S: ::serde::Serializer>(
+        &self,
+        s: S,
+    ) -> ::core::result::Result<S::Ok, S::Error> {
+        s.serialize_str(::buffa::Enumeration::proto_name(self))
+    }
+}
+impl<'de> ::serde::Deserialize<'de> for ReleaseUiScope {
+    fn deserialize<D: ::serde::Deserializer<'de>>(
+        d: D,
+    ) -> ::core::result::Result<Self, D::Error> {
+        struct _V;
+        impl ::serde::de::Visitor<'_> for _V {
+            type Value = ReleaseUiScope;
+            fn expecting(
+                &self,
+                f: &mut ::core::fmt::Formatter<'_>,
+            ) -> ::core::fmt::Result {
+                f.write_str(
+                    concat!(
+                        "a string, integer, or null for ", stringify!(ReleaseUiScope)
+                    ),
+                )
+            }
+            fn visit_str<E: ::serde::de::Error>(
+                self,
+                v: &str,
+            ) -> ::core::result::Result<ReleaseUiScope, E> {
+                <ReleaseUiScope as ::buffa::Enumeration>::from_proto_name(v)
+                    .ok_or_else(|| { ::serde::de::Error::unknown_variant(v, &[]) })
+            }
+            fn visit_i64<E: ::serde::de::Error>(
+                self,
+                v: i64,
+            ) -> ::core::result::Result<ReleaseUiScope, E> {
+                let v32 = i32::try_from(v)
+                    .map_err(|_| {
+                        ::serde::de::Error::custom(
+                            ::buffa::alloc::format!("enum value {v} out of i32 range"),
+                        )
+                    })?;
+                <ReleaseUiScope as ::buffa::Enumeration>::from_i32(v32)
+                    .ok_or_else(|| {
+                        ::serde::de::Error::custom(
+                            ::buffa::alloc::format!("unknown enum value {v32}"),
+                        )
+                    })
+            }
+            fn visit_u64<E: ::serde::de::Error>(
+                self,
+                v: u64,
+            ) -> ::core::result::Result<ReleaseUiScope, E> {
+                let v32 = i32::try_from(v)
+                    .map_err(|_| {
+                        ::serde::de::Error::custom(
+                            ::buffa::alloc::format!("enum value {v} out of i32 range"),
+                        )
+                    })?;
+                <ReleaseUiScope as ::buffa::Enumeration>::from_i32(v32)
+                    .ok_or_else(|| {
+                        ::serde::de::Error::custom(
+                            ::buffa::alloc::format!("unknown enum value {v32}"),
+                        )
+                    })
+            }
+            fn visit_unit<E: ::serde::de::Error>(
+                self,
+            ) -> ::core::result::Result<ReleaseUiScope, E> {
+                ::core::result::Result::Ok(::core::default::Default::default())
+            }
+        }
+        d.deserialize_any(_V)
+    }
+}
+impl ::buffa::json_helpers::ProtoElemJson for ReleaseUiScope {
+    fn serialize_proto_json<S: ::serde::Serializer>(
+        v: &Self,
+        s: S,
+    ) -> ::core::result::Result<S::Ok, S::Error> {
+        ::serde::Serialize::serialize(v, s)
+    }
+    fn deserialize_proto_json<'de, D: ::serde::Deserializer<'de>>(
+        d: D,
+    ) -> ::core::result::Result<Self, D::Error> {
+        <Self as ::serde::Deserialize>::deserialize(d)
+    }
+}
+impl ::buffa::Enumeration for ReleaseUiScope {
+    fn from_i32(value: i32) -> ::core::option::Option<Self> {
+        match value {
+            0i32 => ::core::option::Option::Some(Self::RELEASE_UI_SCOPE_UNSPECIFIED),
+            1i32 => ::core::option::Option::Some(Self::RELEASE_UI_SCOPE_PROJECT),
+            2i32 => ::core::option::Option::Some(Self::RELEASE_UI_SCOPE_REPOSITORY),
+            3i32 => ::core::option::Option::Some(Self::RELEASE_UI_SCOPE_GLOBAL),
+            _ => ::core::option::Option::None,
+        }
+    }
+    fn to_i32(&self) -> i32 {
+        *self as i32
+    }
+    fn proto_name(&self) -> &'static str {
+        match self {
+            Self::RELEASE_UI_SCOPE_UNSPECIFIED => "RELEASE_UI_SCOPE_UNSPECIFIED",
+            Self::RELEASE_UI_SCOPE_PROJECT => "RELEASE_UI_SCOPE_PROJECT",
+            Self::RELEASE_UI_SCOPE_REPOSITORY => "RELEASE_UI_SCOPE_REPOSITORY",
+            Self::RELEASE_UI_SCOPE_GLOBAL => "RELEASE_UI_SCOPE_GLOBAL",
+        }
+    }
+    fn from_proto_name(name: &str) -> ::core::option::Option<Self> {
+        match name {
+            "RELEASE_UI_SCOPE_UNSPECIFIED" => {
+                ::core::option::Option::Some(Self::RELEASE_UI_SCOPE_UNSPECIFIED)
+            }
+            "RELEASE_UI_SCOPE_PROJECT" => {
+                ::core::option::Option::Some(Self::RELEASE_UI_SCOPE_PROJECT)
+            }
+            "RELEASE_UI_SCOPE_REPOSITORY" => {
+                ::core::option::Option::Some(Self::RELEASE_UI_SCOPE_REPOSITORY)
+            }
+            "RELEASE_UI_SCOPE_GLOBAL" => {
+                ::core::option::Option::Some(Self::RELEASE_UI_SCOPE_GLOBAL)
+            }
+            _ => ::core::option::Option::None,
+        }
+    }
+    fn values() -> &'static [Self] {
+        &[
+            Self::RELEASE_UI_SCOPE_UNSPECIFIED,
+            Self::RELEASE_UI_SCOPE_PROJECT,
+            Self::RELEASE_UI_SCOPE_REPOSITORY,
+            Self::RELEASE_UI_SCOPE_GLOBAL,
+        ]
+    }
+}
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
+#[repr(i32)]
+pub enum ReleaseUiIcon {
+    RELEASE_UI_ICON_UNSPECIFIED = 0i32,
+    RELEASE_UI_ICON_APP = 1i32,
+    RELEASE_UI_ICON_CHAT = 2i32,
+    RELEASE_UI_ICON_CODE = 3i32,
+    RELEASE_UI_ICON_BOOK = 4i32,
+    RELEASE_UI_ICON_CHART = 5i32,
+}
+impl ReleaseUiIcon {
+    ///Idiomatic alias for [`Self::RELEASE_UI_ICON_UNSPECIFIED`]; `Debug` prints the variant name.
+    #[allow(non_upper_case_globals)]
+    pub const Unspecified: Self = Self::RELEASE_UI_ICON_UNSPECIFIED;
+    ///Idiomatic alias for [`Self::RELEASE_UI_ICON_APP`]; `Debug` prints the variant name.
+    #[allow(non_upper_case_globals)]
+    pub const App: Self = Self::RELEASE_UI_ICON_APP;
+    ///Idiomatic alias for [`Self::RELEASE_UI_ICON_CHAT`]; `Debug` prints the variant name.
+    #[allow(non_upper_case_globals)]
+    pub const Chat: Self = Self::RELEASE_UI_ICON_CHAT;
+    ///Idiomatic alias for [`Self::RELEASE_UI_ICON_CODE`]; `Debug` prints the variant name.
+    #[allow(non_upper_case_globals)]
+    pub const Code: Self = Self::RELEASE_UI_ICON_CODE;
+    ///Idiomatic alias for [`Self::RELEASE_UI_ICON_BOOK`]; `Debug` prints the variant name.
+    #[allow(non_upper_case_globals)]
+    pub const Book: Self = Self::RELEASE_UI_ICON_BOOK;
+    ///Idiomatic alias for [`Self::RELEASE_UI_ICON_CHART`]; `Debug` prints the variant name.
+    #[allow(non_upper_case_globals)]
+    pub const Chart: Self = Self::RELEASE_UI_ICON_CHART;
+}
+impl ::core::default::Default for ReleaseUiIcon {
+    fn default() -> Self {
+        Self::RELEASE_UI_ICON_UNSPECIFIED
+    }
+}
+impl ::serde::Serialize for ReleaseUiIcon {
+    fn serialize<S: ::serde::Serializer>(
+        &self,
+        s: S,
+    ) -> ::core::result::Result<S::Ok, S::Error> {
+        s.serialize_str(::buffa::Enumeration::proto_name(self))
+    }
+}
+impl<'de> ::serde::Deserialize<'de> for ReleaseUiIcon {
+    fn deserialize<D: ::serde::Deserializer<'de>>(
+        d: D,
+    ) -> ::core::result::Result<Self, D::Error> {
+        struct _V;
+        impl ::serde::de::Visitor<'_> for _V {
+            type Value = ReleaseUiIcon;
+            fn expecting(
+                &self,
+                f: &mut ::core::fmt::Formatter<'_>,
+            ) -> ::core::fmt::Result {
+                f.write_str(
+                    concat!("a string, integer, or null for ", stringify!(ReleaseUiIcon)),
+                )
+            }
+            fn visit_str<E: ::serde::de::Error>(
+                self,
+                v: &str,
+            ) -> ::core::result::Result<ReleaseUiIcon, E> {
+                <ReleaseUiIcon as ::buffa::Enumeration>::from_proto_name(v)
+                    .ok_or_else(|| { ::serde::de::Error::unknown_variant(v, &[]) })
+            }
+            fn visit_i64<E: ::serde::de::Error>(
+                self,
+                v: i64,
+            ) -> ::core::result::Result<ReleaseUiIcon, E> {
+                let v32 = i32::try_from(v)
+                    .map_err(|_| {
+                        ::serde::de::Error::custom(
+                            ::buffa::alloc::format!("enum value {v} out of i32 range"),
+                        )
+                    })?;
+                <ReleaseUiIcon as ::buffa::Enumeration>::from_i32(v32)
+                    .ok_or_else(|| {
+                        ::serde::de::Error::custom(
+                            ::buffa::alloc::format!("unknown enum value {v32}"),
+                        )
+                    })
+            }
+            fn visit_u64<E: ::serde::de::Error>(
+                self,
+                v: u64,
+            ) -> ::core::result::Result<ReleaseUiIcon, E> {
+                let v32 = i32::try_from(v)
+                    .map_err(|_| {
+                        ::serde::de::Error::custom(
+                            ::buffa::alloc::format!("enum value {v} out of i32 range"),
+                        )
+                    })?;
+                <ReleaseUiIcon as ::buffa::Enumeration>::from_i32(v32)
+                    .ok_or_else(|| {
+                        ::serde::de::Error::custom(
+                            ::buffa::alloc::format!("unknown enum value {v32}"),
+                        )
+                    })
+            }
+            fn visit_unit<E: ::serde::de::Error>(
+                self,
+            ) -> ::core::result::Result<ReleaseUiIcon, E> {
+                ::core::result::Result::Ok(::core::default::Default::default())
+            }
+        }
+        d.deserialize_any(_V)
+    }
+}
+impl ::buffa::json_helpers::ProtoElemJson for ReleaseUiIcon {
+    fn serialize_proto_json<S: ::serde::Serializer>(
+        v: &Self,
+        s: S,
+    ) -> ::core::result::Result<S::Ok, S::Error> {
+        ::serde::Serialize::serialize(v, s)
+    }
+    fn deserialize_proto_json<'de, D: ::serde::Deserializer<'de>>(
+        d: D,
+    ) -> ::core::result::Result<Self, D::Error> {
+        <Self as ::serde::Deserialize>::deserialize(d)
+    }
+}
+impl ::buffa::Enumeration for ReleaseUiIcon {
+    fn from_i32(value: i32) -> ::core::option::Option<Self> {
+        match value {
+            0i32 => ::core::option::Option::Some(Self::RELEASE_UI_ICON_UNSPECIFIED),
+            1i32 => ::core::option::Option::Some(Self::RELEASE_UI_ICON_APP),
+            2i32 => ::core::option::Option::Some(Self::RELEASE_UI_ICON_CHAT),
+            3i32 => ::core::option::Option::Some(Self::RELEASE_UI_ICON_CODE),
+            4i32 => ::core::option::Option::Some(Self::RELEASE_UI_ICON_BOOK),
+            5i32 => ::core::option::Option::Some(Self::RELEASE_UI_ICON_CHART),
+            _ => ::core::option::Option::None,
+        }
+    }
+    fn to_i32(&self) -> i32 {
+        *self as i32
+    }
+    fn proto_name(&self) -> &'static str {
+        match self {
+            Self::RELEASE_UI_ICON_UNSPECIFIED => "RELEASE_UI_ICON_UNSPECIFIED",
+            Self::RELEASE_UI_ICON_APP => "RELEASE_UI_ICON_APP",
+            Self::RELEASE_UI_ICON_CHAT => "RELEASE_UI_ICON_CHAT",
+            Self::RELEASE_UI_ICON_CODE => "RELEASE_UI_ICON_CODE",
+            Self::RELEASE_UI_ICON_BOOK => "RELEASE_UI_ICON_BOOK",
+            Self::RELEASE_UI_ICON_CHART => "RELEASE_UI_ICON_CHART",
+        }
+    }
+    fn from_proto_name(name: &str) -> ::core::option::Option<Self> {
+        match name {
+            "RELEASE_UI_ICON_UNSPECIFIED" => {
+                ::core::option::Option::Some(Self::RELEASE_UI_ICON_UNSPECIFIED)
+            }
+            "RELEASE_UI_ICON_APP" => {
+                ::core::option::Option::Some(Self::RELEASE_UI_ICON_APP)
+            }
+            "RELEASE_UI_ICON_CHAT" => {
+                ::core::option::Option::Some(Self::RELEASE_UI_ICON_CHAT)
+            }
+            "RELEASE_UI_ICON_CODE" => {
+                ::core::option::Option::Some(Self::RELEASE_UI_ICON_CODE)
+            }
+            "RELEASE_UI_ICON_BOOK" => {
+                ::core::option::Option::Some(Self::RELEASE_UI_ICON_BOOK)
+            }
+            "RELEASE_UI_ICON_CHART" => {
+                ::core::option::Option::Some(Self::RELEASE_UI_ICON_CHART)
+            }
+            _ => ::core::option::Option::None,
+        }
+    }
+    fn values() -> &'static [Self] {
+        &[
+            Self::RELEASE_UI_ICON_UNSPECIFIED,
+            Self::RELEASE_UI_ICON_APP,
+            Self::RELEASE_UI_ICON_CHAT,
+            Self::RELEASE_UI_ICON_CODE,
+            Self::RELEASE_UI_ICON_BOOK,
+            Self::RELEASE_UI_ICON_CHART,
+        ]
+    }
+}
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
+#[repr(i32)]
+pub enum ReleaseUiPresentation {
+    RELEASE_UI_PRESENTATION_UNSPECIFIED = 0i32,
+    RELEASE_UI_PRESENTATION_IFRAME = 1i32,
+    RELEASE_UI_PRESENTATION_FULL_PAGE = 2i32,
+}
+impl ReleaseUiPresentation {
+    ///Idiomatic alias for [`Self::RELEASE_UI_PRESENTATION_UNSPECIFIED`]; `Debug` prints the variant name.
+    #[allow(non_upper_case_globals)]
+    pub const Unspecified: Self = Self::RELEASE_UI_PRESENTATION_UNSPECIFIED;
+    ///Idiomatic alias for [`Self::RELEASE_UI_PRESENTATION_IFRAME`]; `Debug` prints the variant name.
+    #[allow(non_upper_case_globals)]
+    pub const Iframe: Self = Self::RELEASE_UI_PRESENTATION_IFRAME;
+    ///Idiomatic alias for [`Self::RELEASE_UI_PRESENTATION_FULL_PAGE`]; `Debug` prints the variant name.
+    #[allow(non_upper_case_globals)]
+    pub const FullPage: Self = Self::RELEASE_UI_PRESENTATION_FULL_PAGE;
+}
+impl ::core::default::Default for ReleaseUiPresentation {
+    fn default() -> Self {
+        Self::RELEASE_UI_PRESENTATION_UNSPECIFIED
+    }
+}
+impl ::serde::Serialize for ReleaseUiPresentation {
+    fn serialize<S: ::serde::Serializer>(
+        &self,
+        s: S,
+    ) -> ::core::result::Result<S::Ok, S::Error> {
+        s.serialize_str(::buffa::Enumeration::proto_name(self))
+    }
+}
+impl<'de> ::serde::Deserialize<'de> for ReleaseUiPresentation {
+    fn deserialize<D: ::serde::Deserializer<'de>>(
+        d: D,
+    ) -> ::core::result::Result<Self, D::Error> {
+        struct _V;
+        impl ::serde::de::Visitor<'_> for _V {
+            type Value = ReleaseUiPresentation;
+            fn expecting(
+                &self,
+                f: &mut ::core::fmt::Formatter<'_>,
+            ) -> ::core::fmt::Result {
+                f.write_str(
+                    concat!(
+                        "a string, integer, or null for ",
+                        stringify!(ReleaseUiPresentation)
+                    ),
+                )
+            }
+            fn visit_str<E: ::serde::de::Error>(
+                self,
+                v: &str,
+            ) -> ::core::result::Result<ReleaseUiPresentation, E> {
+                <ReleaseUiPresentation as ::buffa::Enumeration>::from_proto_name(v)
+                    .ok_or_else(|| { ::serde::de::Error::unknown_variant(v, &[]) })
+            }
+            fn visit_i64<E: ::serde::de::Error>(
+                self,
+                v: i64,
+            ) -> ::core::result::Result<ReleaseUiPresentation, E> {
+                let v32 = i32::try_from(v)
+                    .map_err(|_| {
+                        ::serde::de::Error::custom(
+                            ::buffa::alloc::format!("enum value {v} out of i32 range"),
+                        )
+                    })?;
+                <ReleaseUiPresentation as ::buffa::Enumeration>::from_i32(v32)
+                    .ok_or_else(|| {
+                        ::serde::de::Error::custom(
+                            ::buffa::alloc::format!("unknown enum value {v32}"),
+                        )
+                    })
+            }
+            fn visit_u64<E: ::serde::de::Error>(
+                self,
+                v: u64,
+            ) -> ::core::result::Result<ReleaseUiPresentation, E> {
+                let v32 = i32::try_from(v)
+                    .map_err(|_| {
+                        ::serde::de::Error::custom(
+                            ::buffa::alloc::format!("enum value {v} out of i32 range"),
+                        )
+                    })?;
+                <ReleaseUiPresentation as ::buffa::Enumeration>::from_i32(v32)
+                    .ok_or_else(|| {
+                        ::serde::de::Error::custom(
+                            ::buffa::alloc::format!("unknown enum value {v32}"),
+                        )
+                    })
+            }
+            fn visit_unit<E: ::serde::de::Error>(
+                self,
+            ) -> ::core::result::Result<ReleaseUiPresentation, E> {
+                ::core::result::Result::Ok(::core::default::Default::default())
+            }
+        }
+        d.deserialize_any(_V)
+    }
+}
+impl ::buffa::json_helpers::ProtoElemJson for ReleaseUiPresentation {
+    fn serialize_proto_json<S: ::serde::Serializer>(
+        v: &Self,
+        s: S,
+    ) -> ::core::result::Result<S::Ok, S::Error> {
+        ::serde::Serialize::serialize(v, s)
+    }
+    fn deserialize_proto_json<'de, D: ::serde::Deserializer<'de>>(
+        d: D,
+    ) -> ::core::result::Result<Self, D::Error> {
+        <Self as ::serde::Deserialize>::deserialize(d)
+    }
+}
+impl ::buffa::Enumeration for ReleaseUiPresentation {
+    fn from_i32(value: i32) -> ::core::option::Option<Self> {
+        match value {
+            0i32 => {
+                ::core::option::Option::Some(Self::RELEASE_UI_PRESENTATION_UNSPECIFIED)
+            }
+            1i32 => ::core::option::Option::Some(Self::RELEASE_UI_PRESENTATION_IFRAME),
+            2i32 => ::core::option::Option::Some(Self::RELEASE_UI_PRESENTATION_FULL_PAGE),
+            _ => ::core::option::Option::None,
+        }
+    }
+    fn to_i32(&self) -> i32 {
+        *self as i32
+    }
+    fn proto_name(&self) -> &'static str {
+        match self {
+            Self::RELEASE_UI_PRESENTATION_UNSPECIFIED => {
+                "RELEASE_UI_PRESENTATION_UNSPECIFIED"
+            }
+            Self::RELEASE_UI_PRESENTATION_IFRAME => "RELEASE_UI_PRESENTATION_IFRAME",
+            Self::RELEASE_UI_PRESENTATION_FULL_PAGE => {
+                "RELEASE_UI_PRESENTATION_FULL_PAGE"
+            }
+        }
+    }
+    fn from_proto_name(name: &str) -> ::core::option::Option<Self> {
+        match name {
+            "RELEASE_UI_PRESENTATION_UNSPECIFIED" => {
+                ::core::option::Option::Some(Self::RELEASE_UI_PRESENTATION_UNSPECIFIED)
+            }
+            "RELEASE_UI_PRESENTATION_IFRAME" => {
+                ::core::option::Option::Some(Self::RELEASE_UI_PRESENTATION_IFRAME)
+            }
+            "RELEASE_UI_PRESENTATION_FULL_PAGE" => {
+                ::core::option::Option::Some(Self::RELEASE_UI_PRESENTATION_FULL_PAGE)
+            }
+            _ => ::core::option::Option::None,
+        }
+    }
+    fn values() -> &'static [Self] {
+        &[
+            Self::RELEASE_UI_PRESENTATION_UNSPECIFIED,
+            Self::RELEASE_UI_PRESENTATION_IFRAME,
+            Self::RELEASE_UI_PRESENTATION_FULL_PAGE,
+        ]
+    }
+}
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
+#[repr(i32)]
+pub enum ReleaseUiCachePolicy {
+    RELEASE_UI_CACHE_POLICY_UNSPECIFIED = 0i32,
+    RELEASE_UI_CACHE_POLICY_NO_STORE = 1i32,
+}
+impl ReleaseUiCachePolicy {
+    ///Idiomatic alias for [`Self::RELEASE_UI_CACHE_POLICY_UNSPECIFIED`]; `Debug` prints the variant name.
+    #[allow(non_upper_case_globals)]
+    pub const Unspecified: Self = Self::RELEASE_UI_CACHE_POLICY_UNSPECIFIED;
+    ///Idiomatic alias for [`Self::RELEASE_UI_CACHE_POLICY_NO_STORE`]; `Debug` prints the variant name.
+    #[allow(non_upper_case_globals)]
+    pub const NoStore: Self = Self::RELEASE_UI_CACHE_POLICY_NO_STORE;
+}
+impl ::core::default::Default for ReleaseUiCachePolicy {
+    fn default() -> Self {
+        Self::RELEASE_UI_CACHE_POLICY_UNSPECIFIED
+    }
+}
+impl ::serde::Serialize for ReleaseUiCachePolicy {
+    fn serialize<S: ::serde::Serializer>(
+        &self,
+        s: S,
+    ) -> ::core::result::Result<S::Ok, S::Error> {
+        s.serialize_str(::buffa::Enumeration::proto_name(self))
+    }
+}
+impl<'de> ::serde::Deserialize<'de> for ReleaseUiCachePolicy {
+    fn deserialize<D: ::serde::Deserializer<'de>>(
+        d: D,
+    ) -> ::core::result::Result<Self, D::Error> {
+        struct _V;
+        impl ::serde::de::Visitor<'_> for _V {
+            type Value = ReleaseUiCachePolicy;
+            fn expecting(
+                &self,
+                f: &mut ::core::fmt::Formatter<'_>,
+            ) -> ::core::fmt::Result {
+                f.write_str(
+                    concat!(
+                        "a string, integer, or null for ",
+                        stringify!(ReleaseUiCachePolicy)
+                    ),
+                )
+            }
+            fn visit_str<E: ::serde::de::Error>(
+                self,
+                v: &str,
+            ) -> ::core::result::Result<ReleaseUiCachePolicy, E> {
+                <ReleaseUiCachePolicy as ::buffa::Enumeration>::from_proto_name(v)
+                    .ok_or_else(|| { ::serde::de::Error::unknown_variant(v, &[]) })
+            }
+            fn visit_i64<E: ::serde::de::Error>(
+                self,
+                v: i64,
+            ) -> ::core::result::Result<ReleaseUiCachePolicy, E> {
+                let v32 = i32::try_from(v)
+                    .map_err(|_| {
+                        ::serde::de::Error::custom(
+                            ::buffa::alloc::format!("enum value {v} out of i32 range"),
+                        )
+                    })?;
+                <ReleaseUiCachePolicy as ::buffa::Enumeration>::from_i32(v32)
+                    .ok_or_else(|| {
+                        ::serde::de::Error::custom(
+                            ::buffa::alloc::format!("unknown enum value {v32}"),
+                        )
+                    })
+            }
+            fn visit_u64<E: ::serde::de::Error>(
+                self,
+                v: u64,
+            ) -> ::core::result::Result<ReleaseUiCachePolicy, E> {
+                let v32 = i32::try_from(v)
+                    .map_err(|_| {
+                        ::serde::de::Error::custom(
+                            ::buffa::alloc::format!("enum value {v} out of i32 range"),
+                        )
+                    })?;
+                <ReleaseUiCachePolicy as ::buffa::Enumeration>::from_i32(v32)
+                    .ok_or_else(|| {
+                        ::serde::de::Error::custom(
+                            ::buffa::alloc::format!("unknown enum value {v32}"),
+                        )
+                    })
+            }
+            fn visit_unit<E: ::serde::de::Error>(
+                self,
+            ) -> ::core::result::Result<ReleaseUiCachePolicy, E> {
+                ::core::result::Result::Ok(::core::default::Default::default())
+            }
+        }
+        d.deserialize_any(_V)
+    }
+}
+impl ::buffa::json_helpers::ProtoElemJson for ReleaseUiCachePolicy {
+    fn serialize_proto_json<S: ::serde::Serializer>(
+        v: &Self,
+        s: S,
+    ) -> ::core::result::Result<S::Ok, S::Error> {
+        ::serde::Serialize::serialize(v, s)
+    }
+    fn deserialize_proto_json<'de, D: ::serde::Deserializer<'de>>(
+        d: D,
+    ) -> ::core::result::Result<Self, D::Error> {
+        <Self as ::serde::Deserialize>::deserialize(d)
+    }
+}
+impl ::buffa::Enumeration for ReleaseUiCachePolicy {
+    fn from_i32(value: i32) -> ::core::option::Option<Self> {
+        match value {
+            0i32 => {
+                ::core::option::Option::Some(Self::RELEASE_UI_CACHE_POLICY_UNSPECIFIED)
+            }
+            1i32 => ::core::option::Option::Some(Self::RELEASE_UI_CACHE_POLICY_NO_STORE),
+            _ => ::core::option::Option::None,
+        }
+    }
+    fn to_i32(&self) -> i32 {
+        *self as i32
+    }
+    fn proto_name(&self) -> &'static str {
+        match self {
+            Self::RELEASE_UI_CACHE_POLICY_UNSPECIFIED => {
+                "RELEASE_UI_CACHE_POLICY_UNSPECIFIED"
+            }
+            Self::RELEASE_UI_CACHE_POLICY_NO_STORE => "RELEASE_UI_CACHE_POLICY_NO_STORE",
+        }
+    }
+    fn from_proto_name(name: &str) -> ::core::option::Option<Self> {
+        match name {
+            "RELEASE_UI_CACHE_POLICY_UNSPECIFIED" => {
+                ::core::option::Option::Some(Self::RELEASE_UI_CACHE_POLICY_UNSPECIFIED)
+            }
+            "RELEASE_UI_CACHE_POLICY_NO_STORE" => {
+                ::core::option::Option::Some(Self::RELEASE_UI_CACHE_POLICY_NO_STORE)
+            }
+            _ => ::core::option::Option::None,
+        }
+    }
+    fn values() -> &'static [Self] {
+        &[
+            Self::RELEASE_UI_CACHE_POLICY_UNSPECIFIED,
+            Self::RELEASE_UI_CACHE_POLICY_NO_STORE,
+        ]
+    }
+}
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
+#[repr(i32)]
+pub enum UiInstallationLifecycle {
+    UI_INSTALLATION_LIFECYCLE_UNSPECIFIED = 0i32,
+    UI_INSTALLATION_LIFECYCLE_ENABLED = 1i32,
+    UI_INSTALLATION_LIFECYCLE_DISABLED = 2i32,
+    UI_INSTALLATION_LIFECYCLE_REMOVED = 3i32,
+}
+impl UiInstallationLifecycle {
+    ///Idiomatic alias for [`Self::UI_INSTALLATION_LIFECYCLE_UNSPECIFIED`]; `Debug` prints the variant name.
+    #[allow(non_upper_case_globals)]
+    pub const Unspecified: Self = Self::UI_INSTALLATION_LIFECYCLE_UNSPECIFIED;
+    ///Idiomatic alias for [`Self::UI_INSTALLATION_LIFECYCLE_ENABLED`]; `Debug` prints the variant name.
+    #[allow(non_upper_case_globals)]
+    pub const Enabled: Self = Self::UI_INSTALLATION_LIFECYCLE_ENABLED;
+    ///Idiomatic alias for [`Self::UI_INSTALLATION_LIFECYCLE_DISABLED`]; `Debug` prints the variant name.
+    #[allow(non_upper_case_globals)]
+    pub const Disabled: Self = Self::UI_INSTALLATION_LIFECYCLE_DISABLED;
+    ///Idiomatic alias for [`Self::UI_INSTALLATION_LIFECYCLE_REMOVED`]; `Debug` prints the variant name.
+    #[allow(non_upper_case_globals)]
+    pub const Removed: Self = Self::UI_INSTALLATION_LIFECYCLE_REMOVED;
+}
+impl ::core::default::Default for UiInstallationLifecycle {
+    fn default() -> Self {
+        Self::UI_INSTALLATION_LIFECYCLE_UNSPECIFIED
+    }
+}
+impl ::serde::Serialize for UiInstallationLifecycle {
+    fn serialize<S: ::serde::Serializer>(
+        &self,
+        s: S,
+    ) -> ::core::result::Result<S::Ok, S::Error> {
+        s.serialize_str(::buffa::Enumeration::proto_name(self))
+    }
+}
+impl<'de> ::serde::Deserialize<'de> for UiInstallationLifecycle {
+    fn deserialize<D: ::serde::Deserializer<'de>>(
+        d: D,
+    ) -> ::core::result::Result<Self, D::Error> {
+        struct _V;
+        impl ::serde::de::Visitor<'_> for _V {
+            type Value = UiInstallationLifecycle;
+            fn expecting(
+                &self,
+                f: &mut ::core::fmt::Formatter<'_>,
+            ) -> ::core::fmt::Result {
+                f.write_str(
+                    concat!(
+                        "a string, integer, or null for ",
+                        stringify!(UiInstallationLifecycle)
+                    ),
+                )
+            }
+            fn visit_str<E: ::serde::de::Error>(
+                self,
+                v: &str,
+            ) -> ::core::result::Result<UiInstallationLifecycle, E> {
+                <UiInstallationLifecycle as ::buffa::Enumeration>::from_proto_name(v)
+                    .ok_or_else(|| { ::serde::de::Error::unknown_variant(v, &[]) })
+            }
+            fn visit_i64<E: ::serde::de::Error>(
+                self,
+                v: i64,
+            ) -> ::core::result::Result<UiInstallationLifecycle, E> {
+                let v32 = i32::try_from(v)
+                    .map_err(|_| {
+                        ::serde::de::Error::custom(
+                            ::buffa::alloc::format!("enum value {v} out of i32 range"),
+                        )
+                    })?;
+                <UiInstallationLifecycle as ::buffa::Enumeration>::from_i32(v32)
+                    .ok_or_else(|| {
+                        ::serde::de::Error::custom(
+                            ::buffa::alloc::format!("unknown enum value {v32}"),
+                        )
+                    })
+            }
+            fn visit_u64<E: ::serde::de::Error>(
+                self,
+                v: u64,
+            ) -> ::core::result::Result<UiInstallationLifecycle, E> {
+                let v32 = i32::try_from(v)
+                    .map_err(|_| {
+                        ::serde::de::Error::custom(
+                            ::buffa::alloc::format!("enum value {v} out of i32 range"),
+                        )
+                    })?;
+                <UiInstallationLifecycle as ::buffa::Enumeration>::from_i32(v32)
+                    .ok_or_else(|| {
+                        ::serde::de::Error::custom(
+                            ::buffa::alloc::format!("unknown enum value {v32}"),
+                        )
+                    })
+            }
+            fn visit_unit<E: ::serde::de::Error>(
+                self,
+            ) -> ::core::result::Result<UiInstallationLifecycle, E> {
+                ::core::result::Result::Ok(::core::default::Default::default())
+            }
+        }
+        d.deserialize_any(_V)
+    }
+}
+impl ::buffa::json_helpers::ProtoElemJson for UiInstallationLifecycle {
+    fn serialize_proto_json<S: ::serde::Serializer>(
+        v: &Self,
+        s: S,
+    ) -> ::core::result::Result<S::Ok, S::Error> {
+        ::serde::Serialize::serialize(v, s)
+    }
+    fn deserialize_proto_json<'de, D: ::serde::Deserializer<'de>>(
+        d: D,
+    ) -> ::core::result::Result<Self, D::Error> {
+        <Self as ::serde::Deserialize>::deserialize(d)
+    }
+}
+impl ::buffa::Enumeration for UiInstallationLifecycle {
+    fn from_i32(value: i32) -> ::core::option::Option<Self> {
+        match value {
+            0i32 => {
+                ::core::option::Option::Some(Self::UI_INSTALLATION_LIFECYCLE_UNSPECIFIED)
+            }
+            1i32 => ::core::option::Option::Some(Self::UI_INSTALLATION_LIFECYCLE_ENABLED),
+            2i32 => {
+                ::core::option::Option::Some(Self::UI_INSTALLATION_LIFECYCLE_DISABLED)
+            }
+            3i32 => ::core::option::Option::Some(Self::UI_INSTALLATION_LIFECYCLE_REMOVED),
+            _ => ::core::option::Option::None,
+        }
+    }
+    fn to_i32(&self) -> i32 {
+        *self as i32
+    }
+    fn proto_name(&self) -> &'static str {
+        match self {
+            Self::UI_INSTALLATION_LIFECYCLE_UNSPECIFIED => {
+                "UI_INSTALLATION_LIFECYCLE_UNSPECIFIED"
+            }
+            Self::UI_INSTALLATION_LIFECYCLE_ENABLED => {
+                "UI_INSTALLATION_LIFECYCLE_ENABLED"
+            }
+            Self::UI_INSTALLATION_LIFECYCLE_DISABLED => {
+                "UI_INSTALLATION_LIFECYCLE_DISABLED"
+            }
+            Self::UI_INSTALLATION_LIFECYCLE_REMOVED => {
+                "UI_INSTALLATION_LIFECYCLE_REMOVED"
+            }
+        }
+    }
+    fn from_proto_name(name: &str) -> ::core::option::Option<Self> {
+        match name {
+            "UI_INSTALLATION_LIFECYCLE_UNSPECIFIED" => {
+                ::core::option::Option::Some(Self::UI_INSTALLATION_LIFECYCLE_UNSPECIFIED)
+            }
+            "UI_INSTALLATION_LIFECYCLE_ENABLED" => {
+                ::core::option::Option::Some(Self::UI_INSTALLATION_LIFECYCLE_ENABLED)
+            }
+            "UI_INSTALLATION_LIFECYCLE_DISABLED" => {
+                ::core::option::Option::Some(Self::UI_INSTALLATION_LIFECYCLE_DISABLED)
+            }
+            "UI_INSTALLATION_LIFECYCLE_REMOVED" => {
+                ::core::option::Option::Some(Self::UI_INSTALLATION_LIFECYCLE_REMOVED)
+            }
+            _ => ::core::option::Option::None,
+        }
+    }
+    fn values() -> &'static [Self] {
+        &[
+            Self::UI_INSTALLATION_LIFECYCLE_UNSPECIFIED,
+            Self::UI_INSTALLATION_LIFECYCLE_ENABLED,
+            Self::UI_INSTALLATION_LIFECYCLE_DISABLED,
+            Self::UI_INSTALLATION_LIFECYCLE_REMOVED,
+        ]
+    }
+}
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
+#[repr(i32)]
+pub enum UiInstallationContentKind {
+    UI_INSTALLATION_CONTENT_KIND_UNSPECIFIED = 0i32,
+    UI_INSTALLATION_CONTENT_KIND_STATIC = 1i32,
+    UI_INSTALLATION_CONTENT_KIND_MANAGED_SERVICE = 2i32,
+}
+impl UiInstallationContentKind {
+    ///Idiomatic alias for [`Self::UI_INSTALLATION_CONTENT_KIND_UNSPECIFIED`]; `Debug` prints the variant name.
+    #[allow(non_upper_case_globals)]
+    pub const Unspecified: Self = Self::UI_INSTALLATION_CONTENT_KIND_UNSPECIFIED;
+    ///Idiomatic alias for [`Self::UI_INSTALLATION_CONTENT_KIND_STATIC`]; `Debug` prints the variant name.
+    #[allow(non_upper_case_globals)]
+    pub const Static: Self = Self::UI_INSTALLATION_CONTENT_KIND_STATIC;
+    ///Idiomatic alias for [`Self::UI_INSTALLATION_CONTENT_KIND_MANAGED_SERVICE`]; `Debug` prints the variant name.
+    #[allow(non_upper_case_globals)]
+    pub const ManagedService: Self = Self::UI_INSTALLATION_CONTENT_KIND_MANAGED_SERVICE;
+}
+impl ::core::default::Default for UiInstallationContentKind {
+    fn default() -> Self {
+        Self::UI_INSTALLATION_CONTENT_KIND_UNSPECIFIED
+    }
+}
+impl ::serde::Serialize for UiInstallationContentKind {
+    fn serialize<S: ::serde::Serializer>(
+        &self,
+        s: S,
+    ) -> ::core::result::Result<S::Ok, S::Error> {
+        s.serialize_str(::buffa::Enumeration::proto_name(self))
+    }
+}
+impl<'de> ::serde::Deserialize<'de> for UiInstallationContentKind {
+    fn deserialize<D: ::serde::Deserializer<'de>>(
+        d: D,
+    ) -> ::core::result::Result<Self, D::Error> {
+        struct _V;
+        impl ::serde::de::Visitor<'_> for _V {
+            type Value = UiInstallationContentKind;
+            fn expecting(
+                &self,
+                f: &mut ::core::fmt::Formatter<'_>,
+            ) -> ::core::fmt::Result {
+                f.write_str(
+                    concat!(
+                        "a string, integer, or null for ",
+                        stringify!(UiInstallationContentKind)
+                    ),
+                )
+            }
+            fn visit_str<E: ::serde::de::Error>(
+                self,
+                v: &str,
+            ) -> ::core::result::Result<UiInstallationContentKind, E> {
+                <UiInstallationContentKind as ::buffa::Enumeration>::from_proto_name(v)
+                    .ok_or_else(|| { ::serde::de::Error::unknown_variant(v, &[]) })
+            }
+            fn visit_i64<E: ::serde::de::Error>(
+                self,
+                v: i64,
+            ) -> ::core::result::Result<UiInstallationContentKind, E> {
+                let v32 = i32::try_from(v)
+                    .map_err(|_| {
+                        ::serde::de::Error::custom(
+                            ::buffa::alloc::format!("enum value {v} out of i32 range"),
+                        )
+                    })?;
+                <UiInstallationContentKind as ::buffa::Enumeration>::from_i32(v32)
+                    .ok_or_else(|| {
+                        ::serde::de::Error::custom(
+                            ::buffa::alloc::format!("unknown enum value {v32}"),
+                        )
+                    })
+            }
+            fn visit_u64<E: ::serde::de::Error>(
+                self,
+                v: u64,
+            ) -> ::core::result::Result<UiInstallationContentKind, E> {
+                let v32 = i32::try_from(v)
+                    .map_err(|_| {
+                        ::serde::de::Error::custom(
+                            ::buffa::alloc::format!("enum value {v} out of i32 range"),
+                        )
+                    })?;
+                <UiInstallationContentKind as ::buffa::Enumeration>::from_i32(v32)
+                    .ok_or_else(|| {
+                        ::serde::de::Error::custom(
+                            ::buffa::alloc::format!("unknown enum value {v32}"),
+                        )
+                    })
+            }
+            fn visit_unit<E: ::serde::de::Error>(
+                self,
+            ) -> ::core::result::Result<UiInstallationContentKind, E> {
+                ::core::result::Result::Ok(::core::default::Default::default())
+            }
+        }
+        d.deserialize_any(_V)
+    }
+}
+impl ::buffa::json_helpers::ProtoElemJson for UiInstallationContentKind {
+    fn serialize_proto_json<S: ::serde::Serializer>(
+        v: &Self,
+        s: S,
+    ) -> ::core::result::Result<S::Ok, S::Error> {
+        ::serde::Serialize::serialize(v, s)
+    }
+    fn deserialize_proto_json<'de, D: ::serde::Deserializer<'de>>(
+        d: D,
+    ) -> ::core::result::Result<Self, D::Error> {
+        <Self as ::serde::Deserialize>::deserialize(d)
+    }
+}
+impl ::buffa::Enumeration for UiInstallationContentKind {
+    fn from_i32(value: i32) -> ::core::option::Option<Self> {
+        match value {
+            0i32 => {
+                ::core::option::Option::Some(
+                    Self::UI_INSTALLATION_CONTENT_KIND_UNSPECIFIED,
+                )
+            }
+            1i32 => {
+                ::core::option::Option::Some(Self::UI_INSTALLATION_CONTENT_KIND_STATIC)
+            }
+            2i32 => {
+                ::core::option::Option::Some(
+                    Self::UI_INSTALLATION_CONTENT_KIND_MANAGED_SERVICE,
+                )
+            }
+            _ => ::core::option::Option::None,
+        }
+    }
+    fn to_i32(&self) -> i32 {
+        *self as i32
+    }
+    fn proto_name(&self) -> &'static str {
+        match self {
+            Self::UI_INSTALLATION_CONTENT_KIND_UNSPECIFIED => {
+                "UI_INSTALLATION_CONTENT_KIND_UNSPECIFIED"
+            }
+            Self::UI_INSTALLATION_CONTENT_KIND_STATIC => {
+                "UI_INSTALLATION_CONTENT_KIND_STATIC"
+            }
+            Self::UI_INSTALLATION_CONTENT_KIND_MANAGED_SERVICE => {
+                "UI_INSTALLATION_CONTENT_KIND_MANAGED_SERVICE"
+            }
+        }
+    }
+    fn from_proto_name(name: &str) -> ::core::option::Option<Self> {
+        match name {
+            "UI_INSTALLATION_CONTENT_KIND_UNSPECIFIED" => {
+                ::core::option::Option::Some(
+                    Self::UI_INSTALLATION_CONTENT_KIND_UNSPECIFIED,
+                )
+            }
+            "UI_INSTALLATION_CONTENT_KIND_STATIC" => {
+                ::core::option::Option::Some(Self::UI_INSTALLATION_CONTENT_KIND_STATIC)
+            }
+            "UI_INSTALLATION_CONTENT_KIND_MANAGED_SERVICE" => {
+                ::core::option::Option::Some(
+                    Self::UI_INSTALLATION_CONTENT_KIND_MANAGED_SERVICE,
+                )
+            }
+            _ => ::core::option::Option::None,
+        }
+    }
+    fn values() -> &'static [Self] {
+        &[
+            Self::UI_INSTALLATION_CONTENT_KIND_UNSPECIFIED,
+            Self::UI_INSTALLATION_CONTENT_KIND_STATIC,
+            Self::UI_INSTALLATION_CONTENT_KIND_MANAGED_SERVICE,
+        ]
+    }
+}
 #[derive(Clone, PartialEq, Default)]
 #[derive(::serde::Serialize, ::serde::Deserialize)]
 #[serde(default)]
@@ -1118,6 +2114,17 @@ pub struct Release {
         deserialize_with = "::buffa::json_helpers::null_as_default"
     )]
     pub agents: ::buffa::alloc::vec::Vec<ReleaseAgent>,
+    /// Immutable, authorized inspection metadata for release-owned UIs. Gateway
+    /// routes here are declaration metadata, never authorized browser URLs.
+    ///
+    /// Field 22: `ui_descriptors`
+    #[serde(
+        rename = "uiDescriptors",
+        alias = "ui_descriptors",
+        skip_serializing_if = "::buffa::json_helpers::skip_if::is_empty_vec",
+        deserialize_with = "::buffa::json_helpers::null_as_default"
+    )]
+    pub ui_descriptors: ::buffa::alloc::vec::Vec<ReleaseUiDescriptor>,
     #[serde(skip)]
     #[doc(hidden)]
     pub __buffa_unknown_fields: ::buffa::UnknownFields,
@@ -1146,6 +2153,7 @@ impl ::core::fmt::Debug for Release {
             .field("build", &self.build)
             .field("artifacts", &self.artifacts)
             .field("agents", &self.agents)
+            .field("ui_descriptors", &self.ui_descriptors)
             .finish()
     }
 }
@@ -1307,6 +2315,14 @@ impl ::buffa::Message for Release {
                 += 2u32 + ::buffa::encoding::varint_len(inner_size as u64) as u32
                     + inner_size;
         }
+        for v in &self.ui_descriptors {
+            let __slot = __cache.reserve();
+            let inner_size = v.compute_size(__cache);
+            __cache.set(__slot, inner_size);
+            size
+                += 2u32 + ::buffa::encoding::varint_len(inner_size as u64) as u32
+                    + inner_size;
+        }
         size += self.__buffa_unknown_fields.encoded_len() as u32;
         size
     }
@@ -1392,6 +2408,10 @@ impl ::buffa::Message for Release {
         }
         for v in &self.agents {
             ::buffa::types::put_len_delimited_header(21u32, __cache.consume_next(), buf);
+            v.write_to(__cache, buf);
+        }
+        for v in &self.ui_descriptors {
+            ::buffa::types::put_len_delimited_header(22u32, __cache.consume_next(), buf);
             v.write_to(__cache, buf);
         }
         self.__buffa_unknown_fields.write_to(buf);
@@ -1596,6 +2616,15 @@ impl ::buffa::Message for Release {
                 ::buffa::Message::merge_length_delimited(&mut elem, buf, ctx)?;
                 self.agents.push(elem);
             }
+            22u32 => {
+                ::buffa::encoding::check_wire_type(
+                    tag,
+                    ::buffa::encoding::WireType::LengthDelimited,
+                )?;
+                let mut elem = ::core::default::Default::default();
+                ::buffa::Message::merge_length_delimited(&mut elem, buf, ctx)?;
+                self.ui_descriptors.push(elem);
+            }
             _ => {
                 self.__buffa_unknown_fields
                     .push(::buffa::encoding::decode_unknown_field(tag, buf, ctx)?);
@@ -1625,6 +2654,7 @@ impl ::buffa::Message for Release {
         self.build = ::buffa::MessageField::none();
         self.artifacts.clear();
         self.agents.clear();
+        self.ui_descriptors.clear();
         self.__buffa_unknown_fields.clear();
     }
 }
@@ -1655,6 +2685,5594 @@ pub const __RELEASE_JSON_ANY: ::buffa::type_registry::JsonAnyEntry = ::buffa::ty
     type_url: "type.googleapis.com/hephaestus.release.v1.Release",
     to_json: ::buffa::type_registry::any_to_json::<Release>,
     from_json: ::buffa::type_registry::any_from_json::<Release>,
+    is_wkt: false,
+};
+#[derive(Clone, PartialEq, Default)]
+#[derive(::serde::Serialize)]
+#[serde(default)]
+pub struct ReleaseUiDescriptor {
+    /// Field 1: `key`
+    #[serde(
+        rename = "key",
+        with = "::buffa::json_helpers::proto_string",
+        skip_serializing_if = "::buffa::json_helpers::skip_if::is_empty_str"
+    )]
+    pub key: ::buffa::alloc::string::String,
+    /// Field 2: `scope`
+    #[serde(
+        rename = "scope",
+        with = "::buffa::json_helpers::proto_enum",
+        skip_serializing_if = "::buffa::json_helpers::skip_if::is_default_enum_value"
+    )]
+    pub scope: ::buffa::EnumValue<ReleaseUiScope>,
+    /// Field 3: `label`
+    #[serde(
+        rename = "label",
+        with = "::buffa::json_helpers::proto_string",
+        skip_serializing_if = "::buffa::json_helpers::skip_if::is_empty_str"
+    )]
+    pub label: ::buffa::alloc::string::String,
+    /// Field 4: `icon`
+    #[serde(
+        rename = "icon",
+        with = "::buffa::json_helpers::proto_enum",
+        skip_serializing_if = "::buffa::json_helpers::skip_if::is_default_enum_value"
+    )]
+    pub icon: ::buffa::EnumValue<ReleaseUiIcon>,
+    /// Field 5: `presentation`
+    #[serde(
+        rename = "presentation",
+        with = "::buffa::json_helpers::proto_enum",
+        skip_serializing_if = "::buffa::json_helpers::skip_if::is_default_enum_value"
+    )]
+    pub presentation: ::buffa::EnumValue<ReleaseUiPresentation>,
+    /// Validated platform-relative route metadata; this is not a browser URL.
+    ///
+    /// Field 6: `route_base`
+    #[serde(
+        rename = "routeBase",
+        alias = "route_base",
+        with = "::buffa::json_helpers::proto_string",
+        skip_serializing_if = "::buffa::json_helpers::skip_if::is_empty_str"
+    )]
+    pub route_base: ::buffa::alloc::string::String,
+    /// Validated UI-relative entrypoint metadata; this is not a browser URL.
+    ///
+    /// Field 7: `entrypoint`
+    #[serde(
+        rename = "entrypoint",
+        with = "::buffa::json_helpers::proto_string",
+        skip_serializing_if = "::buffa::json_helpers::skip_if::is_empty_str"
+    )]
+    pub entrypoint: ::buffa::alloc::string::String,
+    /// Field 8: `ui_kit_version`
+    #[serde(
+        rename = "uiKitVersion",
+        alias = "ui_kit_version",
+        with = "::buffa::json_helpers::uint32",
+        skip_serializing_if = "::buffa::json_helpers::skip_if::is_zero_u32"
+    )]
+    pub ui_kit_version: u32,
+    /// Field 9: `cache`
+    #[serde(
+        rename = "cache",
+        with = "::buffa::json_helpers::proto_enum",
+        skip_serializing_if = "::buffa::json_helpers::skip_if::is_default_enum_value"
+    )]
+    pub cache: ::buffa::EnumValue<ReleaseUiCachePolicy>,
+    /// Field 12: `apis`
+    #[serde(
+        rename = "apis",
+        skip_serializing_if = "::buffa::json_helpers::skip_if::is_empty_vec",
+        deserialize_with = "::buffa::json_helpers::null_as_default"
+    )]
+    pub apis: ::buffa::alloc::vec::Vec<ReleaseUiApiBinding>,
+    #[serde(flatten)]
+    pub content: ::core::option::Option<__buffa::oneof::release_ui_descriptor::Content>,
+    #[serde(skip)]
+    #[doc(hidden)]
+    pub __buffa_unknown_fields: ::buffa::UnknownFields,
+}
+impl ::core::fmt::Debug for ReleaseUiDescriptor {
+    fn fmt(&self, f: &mut ::core::fmt::Formatter<'_>) -> ::core::fmt::Result {
+        f.debug_struct("ReleaseUiDescriptor")
+            .field("key", &self.key)
+            .field("scope", &self.scope)
+            .field("label", &self.label)
+            .field("icon", &self.icon)
+            .field("presentation", &self.presentation)
+            .field("route_base", &self.route_base)
+            .field("entrypoint", &self.entrypoint)
+            .field("ui_kit_version", &self.ui_kit_version)
+            .field("cache", &self.cache)
+            .field("apis", &self.apis)
+            .field("content", &self.content)
+            .finish()
+    }
+}
+impl ReleaseUiDescriptor {
+    /// Protobuf type URL for this message, for use with `Any::pack` and
+    /// `Any::unpack_if`.
+    ///
+    /// Format: `type.googleapis.com/<fully.qualified.TypeName>`
+    pub const TYPE_URL: &'static str = "type.googleapis.com/hephaestus.release.v1.ReleaseUiDescriptor";
+}
+::buffa::impl_default_instance!(ReleaseUiDescriptor);
+impl ::buffa::MessageName for ReleaseUiDescriptor {
+    const PACKAGE: &'static str = "hephaestus.release.v1";
+    const NAME: &'static str = "ReleaseUiDescriptor";
+    const FULL_NAME: &'static str = "hephaestus.release.v1.ReleaseUiDescriptor";
+    const TYPE_URL: &'static str = "type.googleapis.com/hephaestus.release.v1.ReleaseUiDescriptor";
+}
+impl ::buffa::Message for ReleaseUiDescriptor {
+    /// Returns the total encoded size in bytes.
+    ///
+    /// The result is a `u32`; the protobuf specification requires all
+    /// messages to fit within 2 GiB (2,147,483,647 bytes), so a
+    /// compliant message will never overflow this type.
+    #[allow(clippy::let_and_return)]
+    fn compute_size(&self, __cache: &mut ::buffa::SizeCache) -> u32 {
+        #[allow(unused_imports)]
+        use ::buffa::Enumeration as _;
+        let mut size = 0u32;
+        if !self.key.is_empty() {
+            size += 1u32 + ::buffa::types::string_encoded_len(&self.key) as u32;
+        }
+        {
+            let val = self.scope.to_i32();
+            if val != 0 {
+                size += 1u32 + ::buffa::types::int32_encoded_len(val) as u32;
+            }
+        }
+        if !self.label.is_empty() {
+            size += 1u32 + ::buffa::types::string_encoded_len(&self.label) as u32;
+        }
+        {
+            let val = self.icon.to_i32();
+            if val != 0 {
+                size += 1u32 + ::buffa::types::int32_encoded_len(val) as u32;
+            }
+        }
+        {
+            let val = self.presentation.to_i32();
+            if val != 0 {
+                size += 1u32 + ::buffa::types::int32_encoded_len(val) as u32;
+            }
+        }
+        if !self.route_base.is_empty() {
+            size += 1u32 + ::buffa::types::string_encoded_len(&self.route_base) as u32;
+        }
+        if !self.entrypoint.is_empty() {
+            size += 1u32 + ::buffa::types::string_encoded_len(&self.entrypoint) as u32;
+        }
+        if self.ui_kit_version != 0u32 {
+            size
+                += 1u32 + ::buffa::types::uint32_encoded_len(self.ui_kit_version) as u32;
+        }
+        {
+            let val = self.cache.to_i32();
+            if val != 0 {
+                size += 1u32 + ::buffa::types::int32_encoded_len(val) as u32;
+            }
+        }
+        if let ::core::option::Option::Some(ref v) = self.content {
+            match v {
+                __buffa::oneof::release_ui_descriptor::Content::StaticContent(x) => {
+                    let __slot = __cache.reserve();
+                    let inner = x.compute_size(__cache);
+                    __cache.set(__slot, inner);
+                    size
+                        += 1u32 + ::buffa::encoding::varint_len(inner as u64) as u32
+                            + inner;
+                }
+                __buffa::oneof::release_ui_descriptor::Content::ManagedService(x) => {
+                    let __slot = __cache.reserve();
+                    let inner = x.compute_size(__cache);
+                    __cache.set(__slot, inner);
+                    size
+                        += 1u32 + ::buffa::encoding::varint_len(inner as u64) as u32
+                            + inner;
+                }
+            }
+        }
+        for v in &self.apis {
+            let __slot = __cache.reserve();
+            let inner_size = v.compute_size(__cache);
+            __cache.set(__slot, inner_size);
+            size
+                += 1u32 + ::buffa::encoding::varint_len(inner_size as u64) as u32
+                    + inner_size;
+        }
+        size += self.__buffa_unknown_fields.encoded_len() as u32;
+        size
+    }
+    fn write_to(
+        &self,
+        __cache: &mut ::buffa::SizeCache,
+        buf: &mut impl ::buffa::bytes::BufMut,
+    ) {
+        #[allow(unused_imports)]
+        use ::buffa::Enumeration as _;
+        if !self.key.is_empty() {
+            ::buffa::types::put_string_field(1u32, &self.key, buf);
+        }
+        {
+            let val = self.scope.to_i32();
+            if val != 0 {
+                ::buffa::types::put_int32_field(2u32, val, buf);
+            }
+        }
+        if !self.label.is_empty() {
+            ::buffa::types::put_string_field(3u32, &self.label, buf);
+        }
+        {
+            let val = self.icon.to_i32();
+            if val != 0 {
+                ::buffa::types::put_int32_field(4u32, val, buf);
+            }
+        }
+        {
+            let val = self.presentation.to_i32();
+            if val != 0 {
+                ::buffa::types::put_int32_field(5u32, val, buf);
+            }
+        }
+        if !self.route_base.is_empty() {
+            ::buffa::types::put_string_field(6u32, &self.route_base, buf);
+        }
+        if !self.entrypoint.is_empty() {
+            ::buffa::types::put_string_field(7u32, &self.entrypoint, buf);
+        }
+        if self.ui_kit_version != 0u32 {
+            ::buffa::types::put_uint32_field(8u32, self.ui_kit_version, buf);
+        }
+        {
+            let val = self.cache.to_i32();
+            if val != 0 {
+                ::buffa::types::put_int32_field(9u32, val, buf);
+            }
+        }
+        if let ::core::option::Option::Some(ref v) = self.content {
+            match v {
+                __buffa::oneof::release_ui_descriptor::Content::StaticContent(x) => {
+                    ::buffa::types::put_len_delimited_header(
+                        10u32,
+                        __cache.consume_next(),
+                        buf,
+                    );
+                    x.write_to(__cache, buf);
+                }
+                __buffa::oneof::release_ui_descriptor::Content::ManagedService(x) => {
+                    ::buffa::types::put_len_delimited_header(
+                        11u32,
+                        __cache.consume_next(),
+                        buf,
+                    );
+                    x.write_to(__cache, buf);
+                }
+            }
+        }
+        for v in &self.apis {
+            ::buffa::types::put_len_delimited_header(12u32, __cache.consume_next(), buf);
+            v.write_to(__cache, buf);
+        }
+        self.__buffa_unknown_fields.write_to(buf);
+    }
+    fn merge_field(
+        &mut self,
+        tag: ::buffa::encoding::Tag,
+        buf: &mut impl ::buffa::bytes::Buf,
+        ctx: ::buffa::DecodeContext<'_>,
+    ) -> ::core::result::Result<(), ::buffa::DecodeError> {
+        #[allow(unused_imports)]
+        use ::buffa::bytes::Buf as _;
+        #[allow(unused_imports)]
+        use ::buffa::Enumeration as _;
+        match tag.field_number() {
+            1u32 => {
+                ::buffa::encoding::check_wire_type(
+                    tag,
+                    ::buffa::encoding::WireType::LengthDelimited,
+                )?;
+                ::buffa::types::merge_string(&mut self.key, buf)?;
+            }
+            2u32 => {
+                ::buffa::encoding::check_wire_type(
+                    tag,
+                    ::buffa::encoding::WireType::Varint,
+                )?;
+                self.scope = ::buffa::EnumValue::from(
+                    ::buffa::types::decode_int32(buf)?,
+                );
+            }
+            3u32 => {
+                ::buffa::encoding::check_wire_type(
+                    tag,
+                    ::buffa::encoding::WireType::LengthDelimited,
+                )?;
+                ::buffa::types::merge_string(&mut self.label, buf)?;
+            }
+            4u32 => {
+                ::buffa::encoding::check_wire_type(
+                    tag,
+                    ::buffa::encoding::WireType::Varint,
+                )?;
+                self.icon = ::buffa::EnumValue::from(::buffa::types::decode_int32(buf)?);
+            }
+            5u32 => {
+                ::buffa::encoding::check_wire_type(
+                    tag,
+                    ::buffa::encoding::WireType::Varint,
+                )?;
+                self.presentation = ::buffa::EnumValue::from(
+                    ::buffa::types::decode_int32(buf)?,
+                );
+            }
+            6u32 => {
+                ::buffa::encoding::check_wire_type(
+                    tag,
+                    ::buffa::encoding::WireType::LengthDelimited,
+                )?;
+                ::buffa::types::merge_string(&mut self.route_base, buf)?;
+            }
+            7u32 => {
+                ::buffa::encoding::check_wire_type(
+                    tag,
+                    ::buffa::encoding::WireType::LengthDelimited,
+                )?;
+                ::buffa::types::merge_string(&mut self.entrypoint, buf)?;
+            }
+            8u32 => {
+                ::buffa::encoding::check_wire_type(
+                    tag,
+                    ::buffa::encoding::WireType::Varint,
+                )?;
+                self.ui_kit_version = ::buffa::types::decode_uint32(buf)?;
+            }
+            9u32 => {
+                ::buffa::encoding::check_wire_type(
+                    tag,
+                    ::buffa::encoding::WireType::Varint,
+                )?;
+                self.cache = ::buffa::EnumValue::from(
+                    ::buffa::types::decode_int32(buf)?,
+                );
+            }
+            10u32 => {
+                ::buffa::encoding::check_wire_type(
+                    tag,
+                    ::buffa::encoding::WireType::LengthDelimited,
+                )?;
+                if let ::core::option::Option::Some(
+                    __buffa::oneof::release_ui_descriptor::Content::StaticContent(
+                        ref mut existing,
+                    ),
+                ) = self.content
+                {
+                    ::buffa::Message::merge_length_delimited(&mut **existing, buf, ctx)?;
+                } else {
+                    let mut val = ::core::default::Default::default();
+                    ::buffa::Message::merge_length_delimited(&mut val, buf, ctx)?;
+                    self.content = ::core::option::Option::Some(
+                        __buffa::oneof::release_ui_descriptor::Content::StaticContent(
+                            ::buffa::alloc::boxed::Box::new(val),
+                        ),
+                    );
+                }
+            }
+            11u32 => {
+                ::buffa::encoding::check_wire_type(
+                    tag,
+                    ::buffa::encoding::WireType::LengthDelimited,
+                )?;
+                if let ::core::option::Option::Some(
+                    __buffa::oneof::release_ui_descriptor::Content::ManagedService(
+                        ref mut existing,
+                    ),
+                ) = self.content
+                {
+                    ::buffa::Message::merge_length_delimited(&mut **existing, buf, ctx)?;
+                } else {
+                    let mut val = ::core::default::Default::default();
+                    ::buffa::Message::merge_length_delimited(&mut val, buf, ctx)?;
+                    self.content = ::core::option::Option::Some(
+                        __buffa::oneof::release_ui_descriptor::Content::ManagedService(
+                            ::buffa::alloc::boxed::Box::new(val),
+                        ),
+                    );
+                }
+            }
+            12u32 => {
+                ::buffa::encoding::check_wire_type(
+                    tag,
+                    ::buffa::encoding::WireType::LengthDelimited,
+                )?;
+                let mut elem = ::core::default::Default::default();
+                ::buffa::Message::merge_length_delimited(&mut elem, buf, ctx)?;
+                self.apis.push(elem);
+            }
+            _ => {
+                self.__buffa_unknown_fields
+                    .push(::buffa::encoding::decode_unknown_field(tag, buf, ctx)?);
+            }
+        }
+        ::core::result::Result::Ok(())
+    }
+    fn clear(&mut self) {
+        self.key.clear();
+        self.scope = ::buffa::EnumValue::from(0);
+        self.label.clear();
+        self.icon = ::buffa::EnumValue::from(0);
+        self.presentation = ::buffa::EnumValue::from(0);
+        self.route_base.clear();
+        self.entrypoint.clear();
+        self.ui_kit_version = 0u32;
+        self.cache = ::buffa::EnumValue::from(0);
+        self.content = ::core::option::Option::None;
+        self.apis.clear();
+        self.__buffa_unknown_fields.clear();
+    }
+}
+impl ::buffa::ExtensionSet for ReleaseUiDescriptor {
+    const PROTO_FQN: &'static str = "hephaestus.release.v1.ReleaseUiDescriptor";
+    fn unknown_fields(&self) -> &::buffa::UnknownFields {
+        &self.__buffa_unknown_fields
+    }
+    fn unknown_fields_mut(&mut self) -> &mut ::buffa::UnknownFields {
+        &mut self.__buffa_unknown_fields
+    }
+}
+impl<'de> serde::Deserialize<'de> for ReleaseUiDescriptor {
+    fn deserialize<D: serde::Deserializer<'de>>(
+        d: D,
+    ) -> ::core::result::Result<Self, D::Error> {
+        struct _V;
+        impl<'de> serde::de::Visitor<'de> for _V {
+            type Value = ReleaseUiDescriptor;
+            fn expecting(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+                f.write_str("struct ReleaseUiDescriptor")
+            }
+            #[allow(clippy::field_reassign_with_default)]
+            fn visit_map<A: serde::de::MapAccess<'de>>(
+                self,
+                mut map: A,
+            ) -> ::core::result::Result<ReleaseUiDescriptor, A::Error> {
+                let mut __f_key: ::core::option::Option<
+                    ::buffa::alloc::string::String,
+                > = None;
+                let mut __f_scope: ::core::option::Option<
+                    ::buffa::EnumValue<ReleaseUiScope>,
+                > = None;
+                let mut __f_label: ::core::option::Option<
+                    ::buffa::alloc::string::String,
+                > = None;
+                let mut __f_icon: ::core::option::Option<
+                    ::buffa::EnumValue<ReleaseUiIcon>,
+                > = None;
+                let mut __f_presentation: ::core::option::Option<
+                    ::buffa::EnumValue<ReleaseUiPresentation>,
+                > = None;
+                let mut __f_route_base: ::core::option::Option<
+                    ::buffa::alloc::string::String,
+                > = None;
+                let mut __f_entrypoint: ::core::option::Option<
+                    ::buffa::alloc::string::String,
+                > = None;
+                let mut __f_ui_kit_version: ::core::option::Option<u32> = None;
+                let mut __f_cache: ::core::option::Option<
+                    ::buffa::EnumValue<ReleaseUiCachePolicy>,
+                > = None;
+                let mut __f_apis: ::core::option::Option<
+                    ::buffa::alloc::vec::Vec<ReleaseUiApiBinding>,
+                > = None;
+                let mut __oneof_content: ::core::option::Option<
+                    __buffa::oneof::release_ui_descriptor::Content,
+                > = None;
+                while let Some(key) = map.next_key::<::buffa::alloc::string::String>()? {
+                    match key.as_str() {
+                        "key" => {
+                            __f_key = Some({
+                                struct _S;
+                                impl<'de> serde::de::DeserializeSeed<'de> for _S {
+                                    type Value = ::buffa::alloc::string::String;
+                                    fn deserialize<D: serde::Deserializer<'de>>(
+                                        self,
+                                        d: D,
+                                    ) -> ::core::result::Result<
+                                        ::buffa::alloc::string::String,
+                                        D::Error,
+                                    > {
+                                        ::buffa::json_helpers::proto_string::deserialize(d)
+                                    }
+                                }
+                                map.next_value_seed(_S)?
+                            });
+                        }
+                        "scope" => {
+                            __f_scope = Some({
+                                struct _S;
+                                impl<'de> serde::de::DeserializeSeed<'de> for _S {
+                                    type Value = ::buffa::EnumValue<ReleaseUiScope>;
+                                    fn deserialize<D: serde::Deserializer<'de>>(
+                                        self,
+                                        d: D,
+                                    ) -> ::core::result::Result<
+                                        ::buffa::EnumValue<ReleaseUiScope>,
+                                        D::Error,
+                                    > {
+                                        ::buffa::json_helpers::proto_enum::deserialize(d)
+                                    }
+                                }
+                                map.next_value_seed(_S)?
+                            });
+                        }
+                        "label" => {
+                            __f_label = Some({
+                                struct _S;
+                                impl<'de> serde::de::DeserializeSeed<'de> for _S {
+                                    type Value = ::buffa::alloc::string::String;
+                                    fn deserialize<D: serde::Deserializer<'de>>(
+                                        self,
+                                        d: D,
+                                    ) -> ::core::result::Result<
+                                        ::buffa::alloc::string::String,
+                                        D::Error,
+                                    > {
+                                        ::buffa::json_helpers::proto_string::deserialize(d)
+                                    }
+                                }
+                                map.next_value_seed(_S)?
+                            });
+                        }
+                        "icon" => {
+                            __f_icon = Some({
+                                struct _S;
+                                impl<'de> serde::de::DeserializeSeed<'de> for _S {
+                                    type Value = ::buffa::EnumValue<ReleaseUiIcon>;
+                                    fn deserialize<D: serde::Deserializer<'de>>(
+                                        self,
+                                        d: D,
+                                    ) -> ::core::result::Result<
+                                        ::buffa::EnumValue<ReleaseUiIcon>,
+                                        D::Error,
+                                    > {
+                                        ::buffa::json_helpers::proto_enum::deserialize(d)
+                                    }
+                                }
+                                map.next_value_seed(_S)?
+                            });
+                        }
+                        "presentation" => {
+                            __f_presentation = Some({
+                                struct _S;
+                                impl<'de> serde::de::DeserializeSeed<'de> for _S {
+                                    type Value = ::buffa::EnumValue<ReleaseUiPresentation>;
+                                    fn deserialize<D: serde::Deserializer<'de>>(
+                                        self,
+                                        d: D,
+                                    ) -> ::core::result::Result<
+                                        ::buffa::EnumValue<ReleaseUiPresentation>,
+                                        D::Error,
+                                    > {
+                                        ::buffa::json_helpers::proto_enum::deserialize(d)
+                                    }
+                                }
+                                map.next_value_seed(_S)?
+                            });
+                        }
+                        "routeBase" | "route_base" => {
+                            __f_route_base = Some({
+                                struct _S;
+                                impl<'de> serde::de::DeserializeSeed<'de> for _S {
+                                    type Value = ::buffa::alloc::string::String;
+                                    fn deserialize<D: serde::Deserializer<'de>>(
+                                        self,
+                                        d: D,
+                                    ) -> ::core::result::Result<
+                                        ::buffa::alloc::string::String,
+                                        D::Error,
+                                    > {
+                                        ::buffa::json_helpers::proto_string::deserialize(d)
+                                    }
+                                }
+                                map.next_value_seed(_S)?
+                            });
+                        }
+                        "entrypoint" => {
+                            __f_entrypoint = Some({
+                                struct _S;
+                                impl<'de> serde::de::DeserializeSeed<'de> for _S {
+                                    type Value = ::buffa::alloc::string::String;
+                                    fn deserialize<D: serde::Deserializer<'de>>(
+                                        self,
+                                        d: D,
+                                    ) -> ::core::result::Result<
+                                        ::buffa::alloc::string::String,
+                                        D::Error,
+                                    > {
+                                        ::buffa::json_helpers::proto_string::deserialize(d)
+                                    }
+                                }
+                                map.next_value_seed(_S)?
+                            });
+                        }
+                        "uiKitVersion" | "ui_kit_version" => {
+                            __f_ui_kit_version = Some({
+                                struct _S;
+                                impl<'de> serde::de::DeserializeSeed<'de> for _S {
+                                    type Value = u32;
+                                    fn deserialize<D: serde::Deserializer<'de>>(
+                                        self,
+                                        d: D,
+                                    ) -> ::core::result::Result<u32, D::Error> {
+                                        ::buffa::json_helpers::uint32::deserialize(d)
+                                    }
+                                }
+                                map.next_value_seed(_S)?
+                            });
+                        }
+                        "cache" => {
+                            __f_cache = Some({
+                                struct _S;
+                                impl<'de> serde::de::DeserializeSeed<'de> for _S {
+                                    type Value = ::buffa::EnumValue<ReleaseUiCachePolicy>;
+                                    fn deserialize<D: serde::Deserializer<'de>>(
+                                        self,
+                                        d: D,
+                                    ) -> ::core::result::Result<
+                                        ::buffa::EnumValue<ReleaseUiCachePolicy>,
+                                        D::Error,
+                                    > {
+                                        ::buffa::json_helpers::proto_enum::deserialize(d)
+                                    }
+                                }
+                                map.next_value_seed(_S)?
+                            });
+                        }
+                        "apis" => {
+                            __f_apis = Some({
+                                struct _S;
+                                impl<'de> serde::de::DeserializeSeed<'de> for _S {
+                                    type Value = ::buffa::alloc::vec::Vec<ReleaseUiApiBinding>;
+                                    fn deserialize<D: serde::Deserializer<'de>>(
+                                        self,
+                                        d: D,
+                                    ) -> ::core::result::Result<
+                                        ::buffa::alloc::vec::Vec<ReleaseUiApiBinding>,
+                                        D::Error,
+                                    > {
+                                        ::buffa::json_helpers::null_as_default(d)
+                                    }
+                                }
+                                map.next_value_seed(_S)?
+                            });
+                        }
+                        "staticContent" | "static_content" => {
+                            let v: ::core::option::Option<ReleaseUiStaticContent> = map
+                                .next_value_seed(
+                                    ::buffa::json_helpers::NullableDeserializeSeed(
+                                        ::buffa::json_helpers::DefaultDeserializeSeed::<
+                                            ReleaseUiStaticContent,
+                                        >::new(),
+                                    ),
+                                )?;
+                            if let Some(v) = v {
+                                if __oneof_content.is_some() {
+                                    return Err(
+                                        serde::de::Error::custom(
+                                            "multiple oneof fields set for 'content'",
+                                        ),
+                                    );
+                                }
+                                __oneof_content = Some(
+                                    __buffa::oneof::release_ui_descriptor::Content::StaticContent(
+                                        ::buffa::alloc::boxed::Box::new(v),
+                                    ),
+                                );
+                            }
+                        }
+                        "managedService" | "managed_service" => {
+                            let v: ::core::option::Option<ReleaseUiManagedService> = map
+                                .next_value_seed(
+                                    ::buffa::json_helpers::NullableDeserializeSeed(
+                                        ::buffa::json_helpers::DefaultDeserializeSeed::<
+                                            ReleaseUiManagedService,
+                                        >::new(),
+                                    ),
+                                )?;
+                            if let Some(v) = v {
+                                if __oneof_content.is_some() {
+                                    return Err(
+                                        serde::de::Error::custom(
+                                            "multiple oneof fields set for 'content'",
+                                        ),
+                                    );
+                                }
+                                __oneof_content = Some(
+                                    __buffa::oneof::release_ui_descriptor::Content::ManagedService(
+                                        ::buffa::alloc::boxed::Box::new(v),
+                                    ),
+                                );
+                            }
+                        }
+                        _ => {
+                            map.next_value::<serde::de::IgnoredAny>()?;
+                        }
+                    }
+                }
+                let mut __r = <ReleaseUiDescriptor as ::core::default::Default>::default();
+                if let ::core::option::Option::Some(v) = __f_key {
+                    __r.key = v;
+                }
+                if let ::core::option::Option::Some(v) = __f_scope {
+                    __r.scope = v;
+                }
+                if let ::core::option::Option::Some(v) = __f_label {
+                    __r.label = v;
+                }
+                if let ::core::option::Option::Some(v) = __f_icon {
+                    __r.icon = v;
+                }
+                if let ::core::option::Option::Some(v) = __f_presentation {
+                    __r.presentation = v;
+                }
+                if let ::core::option::Option::Some(v) = __f_route_base {
+                    __r.route_base = v;
+                }
+                if let ::core::option::Option::Some(v) = __f_entrypoint {
+                    __r.entrypoint = v;
+                }
+                if let ::core::option::Option::Some(v) = __f_ui_kit_version {
+                    __r.ui_kit_version = v;
+                }
+                if let ::core::option::Option::Some(v) = __f_cache {
+                    __r.cache = v;
+                }
+                if let ::core::option::Option::Some(v) = __f_apis {
+                    __r.apis = v;
+                }
+                __r.content = __oneof_content;
+                Ok(__r)
+            }
+        }
+        d.deserialize_map(_V)
+    }
+}
+impl ::buffa::json_helpers::ProtoElemJson for ReleaseUiDescriptor {
+    fn serialize_proto_json<S: ::serde::Serializer>(
+        v: &Self,
+        s: S,
+    ) -> ::core::result::Result<S::Ok, S::Error> {
+        ::serde::Serialize::serialize(v, s)
+    }
+    fn deserialize_proto_json<'de, D: ::serde::Deserializer<'de>>(
+        d: D,
+    ) -> ::core::result::Result<Self, D::Error> {
+        <Self as ::serde::Deserialize>::deserialize(d)
+    }
+}
+#[doc(hidden)]
+pub const __RELEASE_UI_DESCRIPTOR_JSON_ANY: ::buffa::type_registry::JsonAnyEntry = ::buffa::type_registry::JsonAnyEntry {
+    type_url: "type.googleapis.com/hephaestus.release.v1.ReleaseUiDescriptor",
+    to_json: ::buffa::type_registry::any_to_json::<ReleaseUiDescriptor>,
+    from_json: ::buffa::type_registry::any_from_json::<ReleaseUiDescriptor>,
+    is_wkt: false,
+};
+pub mod release_ui_descriptor {
+    #[allow(unused_imports)]
+    use super::*;
+    #[doc(inline)]
+    pub use super::__buffa::oneof::release_ui_descriptor::Content;
+    #[doc(inline)]
+    pub use super::__buffa::view::oneof::release_ui_descriptor::Content as ContentView;
+}
+#[derive(Clone, PartialEq, Default)]
+#[derive(::serde::Serialize, ::serde::Deserialize)]
+#[serde(default)]
+pub struct ReleaseUiStaticContent {
+    /// Field 1: `files`
+    #[serde(
+        rename = "files",
+        skip_serializing_if = "::buffa::json_helpers::skip_if::is_empty_vec",
+        deserialize_with = "::buffa::json_helpers::null_as_default"
+    )]
+    pub files: ::buffa::alloc::vec::Vec<ReleaseUiStaticFile>,
+    #[serde(skip)]
+    #[doc(hidden)]
+    pub __buffa_unknown_fields: ::buffa::UnknownFields,
+}
+impl ::core::fmt::Debug for ReleaseUiStaticContent {
+    fn fmt(&self, f: &mut ::core::fmt::Formatter<'_>) -> ::core::fmt::Result {
+        f.debug_struct("ReleaseUiStaticContent").field("files", &self.files).finish()
+    }
+}
+impl ReleaseUiStaticContent {
+    /// Protobuf type URL for this message, for use with `Any::pack` and
+    /// `Any::unpack_if`.
+    ///
+    /// Format: `type.googleapis.com/<fully.qualified.TypeName>`
+    pub const TYPE_URL: &'static str = "type.googleapis.com/hephaestus.release.v1.ReleaseUiStaticContent";
+}
+::buffa::impl_default_instance!(ReleaseUiStaticContent);
+impl ::buffa::MessageName for ReleaseUiStaticContent {
+    const PACKAGE: &'static str = "hephaestus.release.v1";
+    const NAME: &'static str = "ReleaseUiStaticContent";
+    const FULL_NAME: &'static str = "hephaestus.release.v1.ReleaseUiStaticContent";
+    const TYPE_URL: &'static str = "type.googleapis.com/hephaestus.release.v1.ReleaseUiStaticContent";
+}
+impl ::buffa::Message for ReleaseUiStaticContent {
+    /// Returns the total encoded size in bytes.
+    ///
+    /// The result is a `u32`; the protobuf specification requires all
+    /// messages to fit within 2 GiB (2,147,483,647 bytes), so a
+    /// compliant message will never overflow this type.
+    #[allow(clippy::let_and_return)]
+    fn compute_size(&self, __cache: &mut ::buffa::SizeCache) -> u32 {
+        #[allow(unused_imports)]
+        use ::buffa::Enumeration as _;
+        let mut size = 0u32;
+        for v in &self.files {
+            let __slot = __cache.reserve();
+            let inner_size = v.compute_size(__cache);
+            __cache.set(__slot, inner_size);
+            size
+                += 1u32 + ::buffa::encoding::varint_len(inner_size as u64) as u32
+                    + inner_size;
+        }
+        size += self.__buffa_unknown_fields.encoded_len() as u32;
+        size
+    }
+    fn write_to(
+        &self,
+        __cache: &mut ::buffa::SizeCache,
+        buf: &mut impl ::buffa::bytes::BufMut,
+    ) {
+        #[allow(unused_imports)]
+        use ::buffa::Enumeration as _;
+        for v in &self.files {
+            ::buffa::types::put_len_delimited_header(1u32, __cache.consume_next(), buf);
+            v.write_to(__cache, buf);
+        }
+        self.__buffa_unknown_fields.write_to(buf);
+    }
+    fn merge_field(
+        &mut self,
+        tag: ::buffa::encoding::Tag,
+        buf: &mut impl ::buffa::bytes::Buf,
+        ctx: ::buffa::DecodeContext<'_>,
+    ) -> ::core::result::Result<(), ::buffa::DecodeError> {
+        #[allow(unused_imports)]
+        use ::buffa::bytes::Buf as _;
+        #[allow(unused_imports)]
+        use ::buffa::Enumeration as _;
+        match tag.field_number() {
+            1u32 => {
+                ::buffa::encoding::check_wire_type(
+                    tag,
+                    ::buffa::encoding::WireType::LengthDelimited,
+                )?;
+                let mut elem = ::core::default::Default::default();
+                ::buffa::Message::merge_length_delimited(&mut elem, buf, ctx)?;
+                self.files.push(elem);
+            }
+            _ => {
+                self.__buffa_unknown_fields
+                    .push(::buffa::encoding::decode_unknown_field(tag, buf, ctx)?);
+            }
+        }
+        ::core::result::Result::Ok(())
+    }
+    fn clear(&mut self) {
+        self.files.clear();
+        self.__buffa_unknown_fields.clear();
+    }
+}
+impl ::buffa::ExtensionSet for ReleaseUiStaticContent {
+    const PROTO_FQN: &'static str = "hephaestus.release.v1.ReleaseUiStaticContent";
+    fn unknown_fields(&self) -> &::buffa::UnknownFields {
+        &self.__buffa_unknown_fields
+    }
+    fn unknown_fields_mut(&mut self) -> &mut ::buffa::UnknownFields {
+        &mut self.__buffa_unknown_fields
+    }
+}
+impl ::buffa::json_helpers::ProtoElemJson for ReleaseUiStaticContent {
+    fn serialize_proto_json<S: ::serde::Serializer>(
+        v: &Self,
+        s: S,
+    ) -> ::core::result::Result<S::Ok, S::Error> {
+        ::serde::Serialize::serialize(v, s)
+    }
+    fn deserialize_proto_json<'de, D: ::serde::Deserializer<'de>>(
+        d: D,
+    ) -> ::core::result::Result<Self, D::Error> {
+        <Self as ::serde::Deserialize>::deserialize(d)
+    }
+}
+#[doc(hidden)]
+pub const __RELEASE_UI_STATIC_CONTENT_JSON_ANY: ::buffa::type_registry::JsonAnyEntry = ::buffa::type_registry::JsonAnyEntry {
+    type_url: "type.googleapis.com/hephaestus.release.v1.ReleaseUiStaticContent",
+    to_json: ::buffa::type_registry::any_to_json::<ReleaseUiStaticContent>,
+    from_json: ::buffa::type_registry::any_from_json::<ReleaseUiStaticContent>,
+    is_wkt: false,
+};
+#[derive(Clone, PartialEq, Default)]
+#[derive(::serde::Serialize, ::serde::Deserialize)]
+#[serde(default)]
+pub struct ReleaseUiStaticFile {
+    /// Validated UI-relative route metadata; this is not a browser URL.
+    ///
+    /// Field 1: `route`
+    #[serde(
+        rename = "route",
+        with = "::buffa::json_helpers::proto_string",
+        skip_serializing_if = "::buffa::json_helpers::skip_if::is_empty_str"
+    )]
+    pub route: ::buffa::alloc::string::String,
+    /// Field 2: `artifact_id`
+    #[serde(
+        rename = "artifactId",
+        alias = "artifact_id",
+        skip_serializing_if = "::buffa::json_helpers::skip_if::is_unset_message_field"
+    )]
+    pub artifact_id: ::buffa::MessageField<super::super::common::v1::OpaqueId>,
+    /// Field 3: `media_type`
+    #[serde(
+        rename = "mediaType",
+        alias = "media_type",
+        with = "::buffa::json_helpers::proto_string",
+        skip_serializing_if = "::buffa::json_helpers::skip_if::is_empty_str"
+    )]
+    pub media_type: ::buffa::alloc::string::String,
+    #[serde(skip)]
+    #[doc(hidden)]
+    pub __buffa_unknown_fields: ::buffa::UnknownFields,
+}
+impl ::core::fmt::Debug for ReleaseUiStaticFile {
+    fn fmt(&self, f: &mut ::core::fmt::Formatter<'_>) -> ::core::fmt::Result {
+        f.debug_struct("ReleaseUiStaticFile")
+            .field("route", &self.route)
+            .field("artifact_id", &self.artifact_id)
+            .field("media_type", &self.media_type)
+            .finish()
+    }
+}
+impl ReleaseUiStaticFile {
+    /// Protobuf type URL for this message, for use with `Any::pack` and
+    /// `Any::unpack_if`.
+    ///
+    /// Format: `type.googleapis.com/<fully.qualified.TypeName>`
+    pub const TYPE_URL: &'static str = "type.googleapis.com/hephaestus.release.v1.ReleaseUiStaticFile";
+}
+::buffa::impl_default_instance!(ReleaseUiStaticFile);
+impl ::buffa::MessageName for ReleaseUiStaticFile {
+    const PACKAGE: &'static str = "hephaestus.release.v1";
+    const NAME: &'static str = "ReleaseUiStaticFile";
+    const FULL_NAME: &'static str = "hephaestus.release.v1.ReleaseUiStaticFile";
+    const TYPE_URL: &'static str = "type.googleapis.com/hephaestus.release.v1.ReleaseUiStaticFile";
+}
+impl ::buffa::Message for ReleaseUiStaticFile {
+    /// Returns the total encoded size in bytes.
+    ///
+    /// The result is a `u32`; the protobuf specification requires all
+    /// messages to fit within 2 GiB (2,147,483,647 bytes), so a
+    /// compliant message will never overflow this type.
+    #[allow(clippy::let_and_return)]
+    fn compute_size(&self, __cache: &mut ::buffa::SizeCache) -> u32 {
+        #[allow(unused_imports)]
+        use ::buffa::Enumeration as _;
+        let mut size = 0u32;
+        if !self.route.is_empty() {
+            size += 1u32 + ::buffa::types::string_encoded_len(&self.route) as u32;
+        }
+        if self.artifact_id.is_set() {
+            let __slot = __cache.reserve();
+            let inner_size = self.artifact_id.compute_size(__cache);
+            __cache.set(__slot, inner_size);
+            size
+                += 1u32 + ::buffa::encoding::varint_len(inner_size as u64) as u32
+                    + inner_size;
+        }
+        if !self.media_type.is_empty() {
+            size += 1u32 + ::buffa::types::string_encoded_len(&self.media_type) as u32;
+        }
+        size += self.__buffa_unknown_fields.encoded_len() as u32;
+        size
+    }
+    fn write_to(
+        &self,
+        __cache: &mut ::buffa::SizeCache,
+        buf: &mut impl ::buffa::bytes::BufMut,
+    ) {
+        #[allow(unused_imports)]
+        use ::buffa::Enumeration as _;
+        if !self.route.is_empty() {
+            ::buffa::types::put_string_field(1u32, &self.route, buf);
+        }
+        if self.artifact_id.is_set() {
+            ::buffa::types::put_len_delimited_header(2u32, __cache.consume_next(), buf);
+            self.artifact_id.write_to(__cache, buf);
+        }
+        if !self.media_type.is_empty() {
+            ::buffa::types::put_string_field(3u32, &self.media_type, buf);
+        }
+        self.__buffa_unknown_fields.write_to(buf);
+    }
+    fn merge_field(
+        &mut self,
+        tag: ::buffa::encoding::Tag,
+        buf: &mut impl ::buffa::bytes::Buf,
+        ctx: ::buffa::DecodeContext<'_>,
+    ) -> ::core::result::Result<(), ::buffa::DecodeError> {
+        #[allow(unused_imports)]
+        use ::buffa::bytes::Buf as _;
+        #[allow(unused_imports)]
+        use ::buffa::Enumeration as _;
+        match tag.field_number() {
+            1u32 => {
+                ::buffa::encoding::check_wire_type(
+                    tag,
+                    ::buffa::encoding::WireType::LengthDelimited,
+                )?;
+                ::buffa::types::merge_string(&mut self.route, buf)?;
+            }
+            2u32 => {
+                ::buffa::encoding::check_wire_type(
+                    tag,
+                    ::buffa::encoding::WireType::LengthDelimited,
+                )?;
+                ::buffa::Message::merge_length_delimited(
+                    self.artifact_id.get_or_insert_default(),
+                    buf,
+                    ctx,
+                )?;
+            }
+            3u32 => {
+                ::buffa::encoding::check_wire_type(
+                    tag,
+                    ::buffa::encoding::WireType::LengthDelimited,
+                )?;
+                ::buffa::types::merge_string(&mut self.media_type, buf)?;
+            }
+            _ => {
+                self.__buffa_unknown_fields
+                    .push(::buffa::encoding::decode_unknown_field(tag, buf, ctx)?);
+            }
+        }
+        ::core::result::Result::Ok(())
+    }
+    fn clear(&mut self) {
+        self.route.clear();
+        self.artifact_id = ::buffa::MessageField::none();
+        self.media_type.clear();
+        self.__buffa_unknown_fields.clear();
+    }
+}
+impl ::buffa::ExtensionSet for ReleaseUiStaticFile {
+    const PROTO_FQN: &'static str = "hephaestus.release.v1.ReleaseUiStaticFile";
+    fn unknown_fields(&self) -> &::buffa::UnknownFields {
+        &self.__buffa_unknown_fields
+    }
+    fn unknown_fields_mut(&mut self) -> &mut ::buffa::UnknownFields {
+        &mut self.__buffa_unknown_fields
+    }
+}
+impl ::buffa::json_helpers::ProtoElemJson for ReleaseUiStaticFile {
+    fn serialize_proto_json<S: ::serde::Serializer>(
+        v: &Self,
+        s: S,
+    ) -> ::core::result::Result<S::Ok, S::Error> {
+        ::serde::Serialize::serialize(v, s)
+    }
+    fn deserialize_proto_json<'de, D: ::serde::Deserializer<'de>>(
+        d: D,
+    ) -> ::core::result::Result<Self, D::Error> {
+        <Self as ::serde::Deserialize>::deserialize(d)
+    }
+}
+#[doc(hidden)]
+pub const __RELEASE_UI_STATIC_FILE_JSON_ANY: ::buffa::type_registry::JsonAnyEntry = ::buffa::type_registry::JsonAnyEntry {
+    type_url: "type.googleapis.com/hephaestus.release.v1.ReleaseUiStaticFile",
+    to_json: ::buffa::type_registry::any_to_json::<ReleaseUiStaticFile>,
+    from_json: ::buffa::type_registry::any_from_json::<ReleaseUiStaticFile>,
+    is_wkt: false,
+};
+#[derive(Clone, PartialEq, Default)]
+#[derive(::serde::Serialize, ::serde::Deserialize)]
+#[serde(default)]
+pub struct ReleaseUiManagedService {
+    /// Repository gateway declaration name, not an origin or browser URL.
+    ///
+    /// Field 1: `gateway_name`
+    #[serde(
+        rename = "gatewayName",
+        alias = "gateway_name",
+        with = "::buffa::json_helpers::proto_string",
+        skip_serializing_if = "::buffa::json_helpers::skip_if::is_empty_str"
+    )]
+    pub gateway_name: ::buffa::alloc::string::String,
+    /// Validated gateway route metadata; this is not an authorized browser URL.
+    ///
+    /// Field 2: `route`
+    #[serde(
+        rename = "route",
+        with = "::buffa::json_helpers::proto_string",
+        skip_serializing_if = "::buffa::json_helpers::skip_if::is_empty_str"
+    )]
+    pub route: ::buffa::alloc::string::String,
+    /// Field 3: `release_agent_id`
+    #[serde(
+        rename = "releaseAgentId",
+        alias = "release_agent_id",
+        skip_serializing_if = "::buffa::json_helpers::skip_if::is_unset_message_field"
+    )]
+    pub release_agent_id: ::buffa::MessageField<super::super::common::v1::OpaqueId>,
+    #[serde(skip)]
+    #[doc(hidden)]
+    pub __buffa_unknown_fields: ::buffa::UnknownFields,
+}
+impl ::core::fmt::Debug for ReleaseUiManagedService {
+    fn fmt(&self, f: &mut ::core::fmt::Formatter<'_>) -> ::core::fmt::Result {
+        f.debug_struct("ReleaseUiManagedService")
+            .field("gateway_name", &self.gateway_name)
+            .field("route", &self.route)
+            .field("release_agent_id", &self.release_agent_id)
+            .finish()
+    }
+}
+impl ReleaseUiManagedService {
+    /// Protobuf type URL for this message, for use with `Any::pack` and
+    /// `Any::unpack_if`.
+    ///
+    /// Format: `type.googleapis.com/<fully.qualified.TypeName>`
+    pub const TYPE_URL: &'static str = "type.googleapis.com/hephaestus.release.v1.ReleaseUiManagedService";
+}
+::buffa::impl_default_instance!(ReleaseUiManagedService);
+impl ::buffa::MessageName for ReleaseUiManagedService {
+    const PACKAGE: &'static str = "hephaestus.release.v1";
+    const NAME: &'static str = "ReleaseUiManagedService";
+    const FULL_NAME: &'static str = "hephaestus.release.v1.ReleaseUiManagedService";
+    const TYPE_URL: &'static str = "type.googleapis.com/hephaestus.release.v1.ReleaseUiManagedService";
+}
+impl ::buffa::Message for ReleaseUiManagedService {
+    /// Returns the total encoded size in bytes.
+    ///
+    /// The result is a `u32`; the protobuf specification requires all
+    /// messages to fit within 2 GiB (2,147,483,647 bytes), so a
+    /// compliant message will never overflow this type.
+    #[allow(clippy::let_and_return)]
+    fn compute_size(&self, __cache: &mut ::buffa::SizeCache) -> u32 {
+        #[allow(unused_imports)]
+        use ::buffa::Enumeration as _;
+        let mut size = 0u32;
+        if !self.gateway_name.is_empty() {
+            size += 1u32 + ::buffa::types::string_encoded_len(&self.gateway_name) as u32;
+        }
+        if !self.route.is_empty() {
+            size += 1u32 + ::buffa::types::string_encoded_len(&self.route) as u32;
+        }
+        if self.release_agent_id.is_set() {
+            let __slot = __cache.reserve();
+            let inner_size = self.release_agent_id.compute_size(__cache);
+            __cache.set(__slot, inner_size);
+            size
+                += 1u32 + ::buffa::encoding::varint_len(inner_size as u64) as u32
+                    + inner_size;
+        }
+        size += self.__buffa_unknown_fields.encoded_len() as u32;
+        size
+    }
+    fn write_to(
+        &self,
+        __cache: &mut ::buffa::SizeCache,
+        buf: &mut impl ::buffa::bytes::BufMut,
+    ) {
+        #[allow(unused_imports)]
+        use ::buffa::Enumeration as _;
+        if !self.gateway_name.is_empty() {
+            ::buffa::types::put_string_field(1u32, &self.gateway_name, buf);
+        }
+        if !self.route.is_empty() {
+            ::buffa::types::put_string_field(2u32, &self.route, buf);
+        }
+        if self.release_agent_id.is_set() {
+            ::buffa::types::put_len_delimited_header(3u32, __cache.consume_next(), buf);
+            self.release_agent_id.write_to(__cache, buf);
+        }
+        self.__buffa_unknown_fields.write_to(buf);
+    }
+    fn merge_field(
+        &mut self,
+        tag: ::buffa::encoding::Tag,
+        buf: &mut impl ::buffa::bytes::Buf,
+        ctx: ::buffa::DecodeContext<'_>,
+    ) -> ::core::result::Result<(), ::buffa::DecodeError> {
+        #[allow(unused_imports)]
+        use ::buffa::bytes::Buf as _;
+        #[allow(unused_imports)]
+        use ::buffa::Enumeration as _;
+        match tag.field_number() {
+            1u32 => {
+                ::buffa::encoding::check_wire_type(
+                    tag,
+                    ::buffa::encoding::WireType::LengthDelimited,
+                )?;
+                ::buffa::types::merge_string(&mut self.gateway_name, buf)?;
+            }
+            2u32 => {
+                ::buffa::encoding::check_wire_type(
+                    tag,
+                    ::buffa::encoding::WireType::LengthDelimited,
+                )?;
+                ::buffa::types::merge_string(&mut self.route, buf)?;
+            }
+            3u32 => {
+                ::buffa::encoding::check_wire_type(
+                    tag,
+                    ::buffa::encoding::WireType::LengthDelimited,
+                )?;
+                ::buffa::Message::merge_length_delimited(
+                    self.release_agent_id.get_or_insert_default(),
+                    buf,
+                    ctx,
+                )?;
+            }
+            _ => {
+                self.__buffa_unknown_fields
+                    .push(::buffa::encoding::decode_unknown_field(tag, buf, ctx)?);
+            }
+        }
+        ::core::result::Result::Ok(())
+    }
+    fn clear(&mut self) {
+        self.gateway_name.clear();
+        self.route.clear();
+        self.release_agent_id = ::buffa::MessageField::none();
+        self.__buffa_unknown_fields.clear();
+    }
+}
+impl ::buffa::ExtensionSet for ReleaseUiManagedService {
+    const PROTO_FQN: &'static str = "hephaestus.release.v1.ReleaseUiManagedService";
+    fn unknown_fields(&self) -> &::buffa::UnknownFields {
+        &self.__buffa_unknown_fields
+    }
+    fn unknown_fields_mut(&mut self) -> &mut ::buffa::UnknownFields {
+        &mut self.__buffa_unknown_fields
+    }
+}
+impl ::buffa::json_helpers::ProtoElemJson for ReleaseUiManagedService {
+    fn serialize_proto_json<S: ::serde::Serializer>(
+        v: &Self,
+        s: S,
+    ) -> ::core::result::Result<S::Ok, S::Error> {
+        ::serde::Serialize::serialize(v, s)
+    }
+    fn deserialize_proto_json<'de, D: ::serde::Deserializer<'de>>(
+        d: D,
+    ) -> ::core::result::Result<Self, D::Error> {
+        <Self as ::serde::Deserialize>::deserialize(d)
+    }
+}
+#[doc(hidden)]
+pub const __RELEASE_UI_MANAGED_SERVICE_JSON_ANY: ::buffa::type_registry::JsonAnyEntry = ::buffa::type_registry::JsonAnyEntry {
+    type_url: "type.googleapis.com/hephaestus.release.v1.ReleaseUiManagedService",
+    to_json: ::buffa::type_registry::any_to_json::<ReleaseUiManagedService>,
+    from_json: ::buffa::type_registry::any_from_json::<ReleaseUiManagedService>,
+    is_wkt: false,
+};
+#[derive(Clone, PartialEq, Default)]
+#[derive(::serde::Serialize, ::serde::Deserialize)]
+#[serde(default)]
+pub struct ReleaseUiApiBinding {
+    /// Field 1: `key`
+    #[serde(
+        rename = "key",
+        with = "::buffa::json_helpers::proto_string",
+        skip_serializing_if = "::buffa::json_helpers::skip_if::is_empty_str"
+    )]
+    pub key: ::buffa::alloc::string::String,
+    /// Repository gateway declaration name, not an origin or browser URL.
+    ///
+    /// Field 2: `gateway_name`
+    #[serde(
+        rename = "gatewayName",
+        alias = "gateway_name",
+        with = "::buffa::json_helpers::proto_string",
+        skip_serializing_if = "::buffa::json_helpers::skip_if::is_empty_str"
+    )]
+    pub gateway_name: ::buffa::alloc::string::String,
+    /// Field 3: `method`
+    #[serde(
+        rename = "method",
+        with = "::buffa::json_helpers::proto_string",
+        skip_serializing_if = "::buffa::json_helpers::skip_if::is_empty_str"
+    )]
+    pub method: ::buffa::alloc::string::String,
+    /// Validated gateway route metadata; this is not an authorized browser URL.
+    ///
+    /// Field 4: `route`
+    #[serde(
+        rename = "route",
+        with = "::buffa::json_helpers::proto_string",
+        skip_serializing_if = "::buffa::json_helpers::skip_if::is_empty_str"
+    )]
+    pub route: ::buffa::alloc::string::String,
+    /// Field 5: `release_agent_id`
+    #[serde(
+        rename = "releaseAgentId",
+        alias = "release_agent_id",
+        skip_serializing_if = "::buffa::json_helpers::skip_if::is_unset_message_field"
+    )]
+    pub release_agent_id: ::buffa::MessageField<super::super::common::v1::OpaqueId>,
+    #[serde(skip)]
+    #[doc(hidden)]
+    pub __buffa_unknown_fields: ::buffa::UnknownFields,
+}
+impl ::core::fmt::Debug for ReleaseUiApiBinding {
+    fn fmt(&self, f: &mut ::core::fmt::Formatter<'_>) -> ::core::fmt::Result {
+        f.debug_struct("ReleaseUiApiBinding")
+            .field("key", &self.key)
+            .field("gateway_name", &self.gateway_name)
+            .field("method", &self.method)
+            .field("route", &self.route)
+            .field("release_agent_id", &self.release_agent_id)
+            .finish()
+    }
+}
+impl ReleaseUiApiBinding {
+    /// Protobuf type URL for this message, for use with `Any::pack` and
+    /// `Any::unpack_if`.
+    ///
+    /// Format: `type.googleapis.com/<fully.qualified.TypeName>`
+    pub const TYPE_URL: &'static str = "type.googleapis.com/hephaestus.release.v1.ReleaseUiApiBinding";
+}
+::buffa::impl_default_instance!(ReleaseUiApiBinding);
+impl ::buffa::MessageName for ReleaseUiApiBinding {
+    const PACKAGE: &'static str = "hephaestus.release.v1";
+    const NAME: &'static str = "ReleaseUiApiBinding";
+    const FULL_NAME: &'static str = "hephaestus.release.v1.ReleaseUiApiBinding";
+    const TYPE_URL: &'static str = "type.googleapis.com/hephaestus.release.v1.ReleaseUiApiBinding";
+}
+impl ::buffa::Message for ReleaseUiApiBinding {
+    /// Returns the total encoded size in bytes.
+    ///
+    /// The result is a `u32`; the protobuf specification requires all
+    /// messages to fit within 2 GiB (2,147,483,647 bytes), so a
+    /// compliant message will never overflow this type.
+    #[allow(clippy::let_and_return)]
+    fn compute_size(&self, __cache: &mut ::buffa::SizeCache) -> u32 {
+        #[allow(unused_imports)]
+        use ::buffa::Enumeration as _;
+        let mut size = 0u32;
+        if !self.key.is_empty() {
+            size += 1u32 + ::buffa::types::string_encoded_len(&self.key) as u32;
+        }
+        if !self.gateway_name.is_empty() {
+            size += 1u32 + ::buffa::types::string_encoded_len(&self.gateway_name) as u32;
+        }
+        if !self.method.is_empty() {
+            size += 1u32 + ::buffa::types::string_encoded_len(&self.method) as u32;
+        }
+        if !self.route.is_empty() {
+            size += 1u32 + ::buffa::types::string_encoded_len(&self.route) as u32;
+        }
+        if self.release_agent_id.is_set() {
+            let __slot = __cache.reserve();
+            let inner_size = self.release_agent_id.compute_size(__cache);
+            __cache.set(__slot, inner_size);
+            size
+                += 1u32 + ::buffa::encoding::varint_len(inner_size as u64) as u32
+                    + inner_size;
+        }
+        size += self.__buffa_unknown_fields.encoded_len() as u32;
+        size
+    }
+    fn write_to(
+        &self,
+        __cache: &mut ::buffa::SizeCache,
+        buf: &mut impl ::buffa::bytes::BufMut,
+    ) {
+        #[allow(unused_imports)]
+        use ::buffa::Enumeration as _;
+        if !self.key.is_empty() {
+            ::buffa::types::put_string_field(1u32, &self.key, buf);
+        }
+        if !self.gateway_name.is_empty() {
+            ::buffa::types::put_string_field(2u32, &self.gateway_name, buf);
+        }
+        if !self.method.is_empty() {
+            ::buffa::types::put_string_field(3u32, &self.method, buf);
+        }
+        if !self.route.is_empty() {
+            ::buffa::types::put_string_field(4u32, &self.route, buf);
+        }
+        if self.release_agent_id.is_set() {
+            ::buffa::types::put_len_delimited_header(5u32, __cache.consume_next(), buf);
+            self.release_agent_id.write_to(__cache, buf);
+        }
+        self.__buffa_unknown_fields.write_to(buf);
+    }
+    fn merge_field(
+        &mut self,
+        tag: ::buffa::encoding::Tag,
+        buf: &mut impl ::buffa::bytes::Buf,
+        ctx: ::buffa::DecodeContext<'_>,
+    ) -> ::core::result::Result<(), ::buffa::DecodeError> {
+        #[allow(unused_imports)]
+        use ::buffa::bytes::Buf as _;
+        #[allow(unused_imports)]
+        use ::buffa::Enumeration as _;
+        match tag.field_number() {
+            1u32 => {
+                ::buffa::encoding::check_wire_type(
+                    tag,
+                    ::buffa::encoding::WireType::LengthDelimited,
+                )?;
+                ::buffa::types::merge_string(&mut self.key, buf)?;
+            }
+            2u32 => {
+                ::buffa::encoding::check_wire_type(
+                    tag,
+                    ::buffa::encoding::WireType::LengthDelimited,
+                )?;
+                ::buffa::types::merge_string(&mut self.gateway_name, buf)?;
+            }
+            3u32 => {
+                ::buffa::encoding::check_wire_type(
+                    tag,
+                    ::buffa::encoding::WireType::LengthDelimited,
+                )?;
+                ::buffa::types::merge_string(&mut self.method, buf)?;
+            }
+            4u32 => {
+                ::buffa::encoding::check_wire_type(
+                    tag,
+                    ::buffa::encoding::WireType::LengthDelimited,
+                )?;
+                ::buffa::types::merge_string(&mut self.route, buf)?;
+            }
+            5u32 => {
+                ::buffa::encoding::check_wire_type(
+                    tag,
+                    ::buffa::encoding::WireType::LengthDelimited,
+                )?;
+                ::buffa::Message::merge_length_delimited(
+                    self.release_agent_id.get_or_insert_default(),
+                    buf,
+                    ctx,
+                )?;
+            }
+            _ => {
+                self.__buffa_unknown_fields
+                    .push(::buffa::encoding::decode_unknown_field(tag, buf, ctx)?);
+            }
+        }
+        ::core::result::Result::Ok(())
+    }
+    fn clear(&mut self) {
+        self.key.clear();
+        self.gateway_name.clear();
+        self.method.clear();
+        self.route.clear();
+        self.release_agent_id = ::buffa::MessageField::none();
+        self.__buffa_unknown_fields.clear();
+    }
+}
+impl ::buffa::ExtensionSet for ReleaseUiApiBinding {
+    const PROTO_FQN: &'static str = "hephaestus.release.v1.ReleaseUiApiBinding";
+    fn unknown_fields(&self) -> &::buffa::UnknownFields {
+        &self.__buffa_unknown_fields
+    }
+    fn unknown_fields_mut(&mut self) -> &mut ::buffa::UnknownFields {
+        &mut self.__buffa_unknown_fields
+    }
+}
+impl ::buffa::json_helpers::ProtoElemJson for ReleaseUiApiBinding {
+    fn serialize_proto_json<S: ::serde::Serializer>(
+        v: &Self,
+        s: S,
+    ) -> ::core::result::Result<S::Ok, S::Error> {
+        ::serde::Serialize::serialize(v, s)
+    }
+    fn deserialize_proto_json<'de, D: ::serde::Deserializer<'de>>(
+        d: D,
+    ) -> ::core::result::Result<Self, D::Error> {
+        <Self as ::serde::Deserialize>::deserialize(d)
+    }
+}
+#[doc(hidden)]
+pub const __RELEASE_UI_API_BINDING_JSON_ANY: ::buffa::type_registry::JsonAnyEntry = ::buffa::type_registry::JsonAnyEntry {
+    type_url: "type.googleapis.com/hephaestus.release.v1.ReleaseUiApiBinding",
+    to_json: ::buffa::type_registry::any_to_json::<ReleaseUiApiBinding>,
+    from_json: ::buffa::type_registry::any_from_json::<ReleaseUiApiBinding>,
+    is_wkt: false,
+};
+/// Exact owner scope supplied by the caller. The organization is always
+/// explicit at the RPC boundary, including for the global target; adapters
+/// pass the expected organization into the owner-locked application command,
+/// which rejects mismatches before replay or mutation.
+#[derive(Clone, PartialEq, Default)]
+#[derive(::serde::Serialize)]
+#[serde(default)]
+pub struct UiInstallationTarget {
+    #[serde(flatten)]
+    pub target: ::core::option::Option<__buffa::oneof::ui_installation_target::Target>,
+    #[serde(skip)]
+    #[doc(hidden)]
+    pub __buffa_unknown_fields: ::buffa::UnknownFields,
+}
+impl ::core::fmt::Debug for UiInstallationTarget {
+    fn fmt(&self, f: &mut ::core::fmt::Formatter<'_>) -> ::core::fmt::Result {
+        f.debug_struct("UiInstallationTarget").field("target", &self.target).finish()
+    }
+}
+impl UiInstallationTarget {
+    /// Protobuf type URL for this message, for use with `Any::pack` and
+    /// `Any::unpack_if`.
+    ///
+    /// Format: `type.googleapis.com/<fully.qualified.TypeName>`
+    pub const TYPE_URL: &'static str = "type.googleapis.com/hephaestus.release.v1.UiInstallationTarget";
+}
+::buffa::impl_default_instance!(UiInstallationTarget);
+impl ::buffa::MessageName for UiInstallationTarget {
+    const PACKAGE: &'static str = "hephaestus.release.v1";
+    const NAME: &'static str = "UiInstallationTarget";
+    const FULL_NAME: &'static str = "hephaestus.release.v1.UiInstallationTarget";
+    const TYPE_URL: &'static str = "type.googleapis.com/hephaestus.release.v1.UiInstallationTarget";
+}
+impl ::buffa::Message for UiInstallationTarget {
+    /// Returns the total encoded size in bytes.
+    ///
+    /// The result is a `u32`; the protobuf specification requires all
+    /// messages to fit within 2 GiB (2,147,483,647 bytes), so a
+    /// compliant message will never overflow this type.
+    #[allow(clippy::let_and_return)]
+    fn compute_size(&self, __cache: &mut ::buffa::SizeCache) -> u32 {
+        #[allow(unused_imports)]
+        use ::buffa::Enumeration as _;
+        let mut size = 0u32;
+        if let ::core::option::Option::Some(ref v) = self.target {
+            match v {
+                __buffa::oneof::ui_installation_target::Target::Global(x) => {
+                    let __slot = __cache.reserve();
+                    let inner = x.compute_size(__cache);
+                    __cache.set(__slot, inner);
+                    size
+                        += 1u32 + ::buffa::encoding::varint_len(inner as u64) as u32
+                            + inner;
+                }
+                __buffa::oneof::ui_installation_target::Target::ProjectId(x) => {
+                    let __slot = __cache.reserve();
+                    let inner = x.compute_size(__cache);
+                    __cache.set(__slot, inner);
+                    size
+                        += 1u32 + ::buffa::encoding::varint_len(inner as u64) as u32
+                            + inner;
+                }
+                __buffa::oneof::ui_installation_target::Target::RepositoryId(x) => {
+                    let __slot = __cache.reserve();
+                    let inner = x.compute_size(__cache);
+                    __cache.set(__slot, inner);
+                    size
+                        += 1u32 + ::buffa::encoding::varint_len(inner as u64) as u32
+                            + inner;
+                }
+            }
+        }
+        size += self.__buffa_unknown_fields.encoded_len() as u32;
+        size
+    }
+    fn write_to(
+        &self,
+        __cache: &mut ::buffa::SizeCache,
+        buf: &mut impl ::buffa::bytes::BufMut,
+    ) {
+        #[allow(unused_imports)]
+        use ::buffa::Enumeration as _;
+        if let ::core::option::Option::Some(ref v) = self.target {
+            match v {
+                __buffa::oneof::ui_installation_target::Target::Global(x) => {
+                    ::buffa::types::put_len_delimited_header(
+                        1u32,
+                        __cache.consume_next(),
+                        buf,
+                    );
+                    x.write_to(__cache, buf);
+                }
+                __buffa::oneof::ui_installation_target::Target::ProjectId(x) => {
+                    ::buffa::types::put_len_delimited_header(
+                        2u32,
+                        __cache.consume_next(),
+                        buf,
+                    );
+                    x.write_to(__cache, buf);
+                }
+                __buffa::oneof::ui_installation_target::Target::RepositoryId(x) => {
+                    ::buffa::types::put_len_delimited_header(
+                        3u32,
+                        __cache.consume_next(),
+                        buf,
+                    );
+                    x.write_to(__cache, buf);
+                }
+            }
+        }
+        self.__buffa_unknown_fields.write_to(buf);
+    }
+    fn merge_field(
+        &mut self,
+        tag: ::buffa::encoding::Tag,
+        buf: &mut impl ::buffa::bytes::Buf,
+        ctx: ::buffa::DecodeContext<'_>,
+    ) -> ::core::result::Result<(), ::buffa::DecodeError> {
+        #[allow(unused_imports)]
+        use ::buffa::bytes::Buf as _;
+        #[allow(unused_imports)]
+        use ::buffa::Enumeration as _;
+        match tag.field_number() {
+            1u32 => {
+                ::buffa::encoding::check_wire_type(
+                    tag,
+                    ::buffa::encoding::WireType::LengthDelimited,
+                )?;
+                if let ::core::option::Option::Some(
+                    __buffa::oneof::ui_installation_target::Target::Global(
+                        ref mut existing,
+                    ),
+                ) = self.target
+                {
+                    ::buffa::Message::merge_length_delimited(&mut **existing, buf, ctx)?;
+                } else {
+                    let mut val = ::core::default::Default::default();
+                    ::buffa::Message::merge_length_delimited(&mut val, buf, ctx)?;
+                    self.target = ::core::option::Option::Some(
+                        __buffa::oneof::ui_installation_target::Target::Global(
+                            ::buffa::alloc::boxed::Box::new(val),
+                        ),
+                    );
+                }
+            }
+            2u32 => {
+                ::buffa::encoding::check_wire_type(
+                    tag,
+                    ::buffa::encoding::WireType::LengthDelimited,
+                )?;
+                if let ::core::option::Option::Some(
+                    __buffa::oneof::ui_installation_target::Target::ProjectId(
+                        ref mut existing,
+                    ),
+                ) = self.target
+                {
+                    ::buffa::Message::merge_length_delimited(&mut **existing, buf, ctx)?;
+                } else {
+                    let mut val = ::core::default::Default::default();
+                    ::buffa::Message::merge_length_delimited(&mut val, buf, ctx)?;
+                    self.target = ::core::option::Option::Some(
+                        __buffa::oneof::ui_installation_target::Target::ProjectId(
+                            ::buffa::alloc::boxed::Box::new(val),
+                        ),
+                    );
+                }
+            }
+            3u32 => {
+                ::buffa::encoding::check_wire_type(
+                    tag,
+                    ::buffa::encoding::WireType::LengthDelimited,
+                )?;
+                if let ::core::option::Option::Some(
+                    __buffa::oneof::ui_installation_target::Target::RepositoryId(
+                        ref mut existing,
+                    ),
+                ) = self.target
+                {
+                    ::buffa::Message::merge_length_delimited(&mut **existing, buf, ctx)?;
+                } else {
+                    let mut val = ::core::default::Default::default();
+                    ::buffa::Message::merge_length_delimited(&mut val, buf, ctx)?;
+                    self.target = ::core::option::Option::Some(
+                        __buffa::oneof::ui_installation_target::Target::RepositoryId(
+                            ::buffa::alloc::boxed::Box::new(val),
+                        ),
+                    );
+                }
+            }
+            _ => {
+                self.__buffa_unknown_fields
+                    .push(::buffa::encoding::decode_unknown_field(tag, buf, ctx)?);
+            }
+        }
+        ::core::result::Result::Ok(())
+    }
+    fn clear(&mut self) {
+        self.target = ::core::option::Option::None;
+        self.__buffa_unknown_fields.clear();
+    }
+}
+impl ::buffa::ExtensionSet for UiInstallationTarget {
+    const PROTO_FQN: &'static str = "hephaestus.release.v1.UiInstallationTarget";
+    fn unknown_fields(&self) -> &::buffa::UnknownFields {
+        &self.__buffa_unknown_fields
+    }
+    fn unknown_fields_mut(&mut self) -> &mut ::buffa::UnknownFields {
+        &mut self.__buffa_unknown_fields
+    }
+}
+impl<'de> serde::Deserialize<'de> for UiInstallationTarget {
+    fn deserialize<D: serde::Deserializer<'de>>(
+        d: D,
+    ) -> ::core::result::Result<Self, D::Error> {
+        struct _V;
+        impl<'de> serde::de::Visitor<'de> for _V {
+            type Value = UiInstallationTarget;
+            fn expecting(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+                f.write_str("struct UiInstallationTarget")
+            }
+            #[allow(clippy::field_reassign_with_default)]
+            fn visit_map<A: serde::de::MapAccess<'de>>(
+                self,
+                mut map: A,
+            ) -> ::core::result::Result<UiInstallationTarget, A::Error> {
+                let mut __oneof_target: ::core::option::Option<
+                    __buffa::oneof::ui_installation_target::Target,
+                > = None;
+                while let Some(key) = map.next_key::<::buffa::alloc::string::String>()? {
+                    match key.as_str() {
+                        "global" => {
+                            let v: ::core::option::Option<GlobalUiInstallationTarget> = map
+                                .next_value_seed(
+                                    ::buffa::json_helpers::NullableDeserializeSeed(
+                                        ::buffa::json_helpers::DefaultDeserializeSeed::<
+                                            GlobalUiInstallationTarget,
+                                        >::new(),
+                                    ),
+                                )?;
+                            if let Some(v) = v {
+                                if __oneof_target.is_some() {
+                                    return Err(
+                                        serde::de::Error::custom(
+                                            "multiple oneof fields set for 'target'",
+                                        ),
+                                    );
+                                }
+                                __oneof_target = Some(
+                                    __buffa::oneof::ui_installation_target::Target::Global(
+                                        ::buffa::alloc::boxed::Box::new(v),
+                                    ),
+                                );
+                            }
+                        }
+                        "projectId" | "project_id" => {
+                            let v: ::core::option::Option<
+                                super::super::common::v1::OpaqueId,
+                            > = map
+                                .next_value_seed(
+                                    ::buffa::json_helpers::NullableDeserializeSeed(
+                                        ::buffa::json_helpers::DefaultDeserializeSeed::<
+                                            super::super::common::v1::OpaqueId,
+                                        >::new(),
+                                    ),
+                                )?;
+                            if let Some(v) = v {
+                                if __oneof_target.is_some() {
+                                    return Err(
+                                        serde::de::Error::custom(
+                                            "multiple oneof fields set for 'target'",
+                                        ),
+                                    );
+                                }
+                                __oneof_target = Some(
+                                    __buffa::oneof::ui_installation_target::Target::ProjectId(
+                                        ::buffa::alloc::boxed::Box::new(v),
+                                    ),
+                                );
+                            }
+                        }
+                        "repositoryId" | "repository_id" => {
+                            let v: ::core::option::Option<
+                                super::super::common::v1::OpaqueId,
+                            > = map
+                                .next_value_seed(
+                                    ::buffa::json_helpers::NullableDeserializeSeed(
+                                        ::buffa::json_helpers::DefaultDeserializeSeed::<
+                                            super::super::common::v1::OpaqueId,
+                                        >::new(),
+                                    ),
+                                )?;
+                            if let Some(v) = v {
+                                if __oneof_target.is_some() {
+                                    return Err(
+                                        serde::de::Error::custom(
+                                            "multiple oneof fields set for 'target'",
+                                        ),
+                                    );
+                                }
+                                __oneof_target = Some(
+                                    __buffa::oneof::ui_installation_target::Target::RepositoryId(
+                                        ::buffa::alloc::boxed::Box::new(v),
+                                    ),
+                                );
+                            }
+                        }
+                        _ => {
+                            map.next_value::<serde::de::IgnoredAny>()?;
+                        }
+                    }
+                }
+                let mut __r = <UiInstallationTarget as ::core::default::Default>::default();
+                __r.target = __oneof_target;
+                Ok(__r)
+            }
+        }
+        d.deserialize_map(_V)
+    }
+}
+impl ::buffa::json_helpers::ProtoElemJson for UiInstallationTarget {
+    fn serialize_proto_json<S: ::serde::Serializer>(
+        v: &Self,
+        s: S,
+    ) -> ::core::result::Result<S::Ok, S::Error> {
+        ::serde::Serialize::serialize(v, s)
+    }
+    fn deserialize_proto_json<'de, D: ::serde::Deserializer<'de>>(
+        d: D,
+    ) -> ::core::result::Result<Self, D::Error> {
+        <Self as ::serde::Deserialize>::deserialize(d)
+    }
+}
+#[doc(hidden)]
+pub const __UI_INSTALLATION_TARGET_JSON_ANY: ::buffa::type_registry::JsonAnyEntry = ::buffa::type_registry::JsonAnyEntry {
+    type_url: "type.googleapis.com/hephaestus.release.v1.UiInstallationTarget",
+    to_json: ::buffa::type_registry::any_to_json::<UiInstallationTarget>,
+    from_json: ::buffa::type_registry::any_from_json::<UiInstallationTarget>,
+    is_wkt: false,
+};
+pub mod ui_installation_target {
+    #[allow(unused_imports)]
+    use super::*;
+    #[doc(inline)]
+    pub use super::__buffa::oneof::ui_installation_target::Target;
+    #[doc(inline)]
+    pub use super::__buffa::view::oneof::ui_installation_target::Target as TargetView;
+}
+#[derive(Clone, PartialEq, Default)]
+#[derive(::serde::Serialize, ::serde::Deserialize)]
+#[serde(default)]
+pub struct GlobalUiInstallationTarget {
+    #[serde(skip)]
+    #[doc(hidden)]
+    pub __buffa_unknown_fields: ::buffa::UnknownFields,
+}
+impl ::core::fmt::Debug for GlobalUiInstallationTarget {
+    fn fmt(&self, f: &mut ::core::fmt::Formatter<'_>) -> ::core::fmt::Result {
+        f.debug_struct("GlobalUiInstallationTarget").finish()
+    }
+}
+impl GlobalUiInstallationTarget {
+    /// Protobuf type URL for this message, for use with `Any::pack` and
+    /// `Any::unpack_if`.
+    ///
+    /// Format: `type.googleapis.com/<fully.qualified.TypeName>`
+    pub const TYPE_URL: &'static str = "type.googleapis.com/hephaestus.release.v1.GlobalUiInstallationTarget";
+}
+::buffa::impl_default_instance!(GlobalUiInstallationTarget);
+impl ::buffa::MessageName for GlobalUiInstallationTarget {
+    const PACKAGE: &'static str = "hephaestus.release.v1";
+    const NAME: &'static str = "GlobalUiInstallationTarget";
+    const FULL_NAME: &'static str = "hephaestus.release.v1.GlobalUiInstallationTarget";
+    const TYPE_URL: &'static str = "type.googleapis.com/hephaestus.release.v1.GlobalUiInstallationTarget";
+}
+impl ::buffa::Message for GlobalUiInstallationTarget {
+    /// Returns the total encoded size in bytes.
+    ///
+    /// The result is a `u32`; the protobuf specification requires all
+    /// messages to fit within 2 GiB (2,147,483,647 bytes), so a
+    /// compliant message will never overflow this type.
+    #[allow(clippy::let_and_return)]
+    fn compute_size(&self, _cache: &mut ::buffa::SizeCache) -> u32 {
+        #[allow(unused_imports)]
+        use ::buffa::Enumeration as _;
+        let mut size = 0u32;
+        size += self.__buffa_unknown_fields.encoded_len() as u32;
+        size
+    }
+    fn write_to(
+        &self,
+        _cache: &mut ::buffa::SizeCache,
+        buf: &mut impl ::buffa::bytes::BufMut,
+    ) {
+        #[allow(unused_imports)]
+        use ::buffa::Enumeration as _;
+        self.__buffa_unknown_fields.write_to(buf);
+    }
+    fn merge_field(
+        &mut self,
+        tag: ::buffa::encoding::Tag,
+        buf: &mut impl ::buffa::bytes::Buf,
+        ctx: ::buffa::DecodeContext<'_>,
+    ) -> ::core::result::Result<(), ::buffa::DecodeError> {
+        #[allow(unused_imports)]
+        use ::buffa::bytes::Buf as _;
+        #[allow(unused_imports)]
+        use ::buffa::Enumeration as _;
+        match tag.field_number() {
+            _ => {
+                self.__buffa_unknown_fields
+                    .push(::buffa::encoding::decode_unknown_field(tag, buf, ctx)?);
+            }
+        }
+        ::core::result::Result::Ok(())
+    }
+    fn clear(&mut self) {
+        self.__buffa_unknown_fields.clear();
+    }
+}
+impl ::buffa::ExtensionSet for GlobalUiInstallationTarget {
+    const PROTO_FQN: &'static str = "hephaestus.release.v1.GlobalUiInstallationTarget";
+    fn unknown_fields(&self) -> &::buffa::UnknownFields {
+        &self.__buffa_unknown_fields
+    }
+    fn unknown_fields_mut(&mut self) -> &mut ::buffa::UnknownFields {
+        &mut self.__buffa_unknown_fields
+    }
+}
+impl ::buffa::json_helpers::ProtoElemJson for GlobalUiInstallationTarget {
+    fn serialize_proto_json<S: ::serde::Serializer>(
+        v: &Self,
+        s: S,
+    ) -> ::core::result::Result<S::Ok, S::Error> {
+        ::serde::Serialize::serialize(v, s)
+    }
+    fn deserialize_proto_json<'de, D: ::serde::Deserializer<'de>>(
+        d: D,
+    ) -> ::core::result::Result<Self, D::Error> {
+        <Self as ::serde::Deserialize>::deserialize(d)
+    }
+}
+#[doc(hidden)]
+pub const __GLOBAL_UI_INSTALLATION_TARGET_JSON_ANY: ::buffa::type_registry::JsonAnyEntry = ::buffa::type_registry::JsonAnyEntry {
+    type_url: "type.googleapis.com/hephaestus.release.v1.GlobalUiInstallationTarget",
+    to_json: ::buffa::type_registry::any_to_json::<GlobalUiInstallationTarget>,
+    from_json: ::buffa::type_registry::any_from_json::<GlobalUiInstallationTarget>,
+    is_wkt: false,
+};
+#[derive(Clone, PartialEq, Default)]
+#[derive(::serde::Serialize, ::serde::Deserialize)]
+#[serde(default)]
+pub struct InstallUiRequest {
+    /// Field 1: `context`
+    #[serde(
+        rename = "context",
+        skip_serializing_if = "::buffa::json_helpers::skip_if::is_unset_message_field"
+    )]
+    pub context: ::buffa::MessageField<super::super::common::v1::RequestContext>,
+    /// Mandatory tenant boundary. The adapter derives and checks the target owner.
+    ///
+    /// Field 2: `organization_id`
+    #[serde(
+        rename = "organizationId",
+        alias = "organization_id",
+        skip_serializing_if = "::buffa::json_helpers::skip_if::is_unset_message_field"
+    )]
+    pub organization_id: ::buffa::MessageField<super::super::common::v1::OpaqueId>,
+    /// Field 3: `target`
+    #[serde(
+        rename = "target",
+        skip_serializing_if = "::buffa::json_helpers::skip_if::is_unset_message_field"
+    )]
+    pub target: ::buffa::MessageField<UiInstallationTarget>,
+    /// Field 4: `release_id`
+    #[serde(
+        rename = "releaseId",
+        alias = "release_id",
+        skip_serializing_if = "::buffa::json_helpers::skip_if::is_unset_message_field"
+    )]
+    pub release_id: ::buffa::MessageField<super::super::common::v1::OpaqueId>,
+    /// Exact published descriptor key within release_id.
+    ///
+    /// Field 5: `ui_key`
+    #[serde(
+        rename = "uiKey",
+        alias = "ui_key",
+        with = "::buffa::json_helpers::proto_string",
+        skip_serializing_if = "::buffa::json_helpers::skip_if::is_empty_str"
+    )]
+    pub ui_key: ::buffa::alloc::string::String,
+    #[serde(skip)]
+    #[doc(hidden)]
+    pub __buffa_unknown_fields: ::buffa::UnknownFields,
+}
+impl ::core::fmt::Debug for InstallUiRequest {
+    fn fmt(&self, f: &mut ::core::fmt::Formatter<'_>) -> ::core::fmt::Result {
+        f.debug_struct("InstallUiRequest")
+            .field("context", &self.context)
+            .field("organization_id", &self.organization_id)
+            .field("target", &self.target)
+            .field("release_id", &self.release_id)
+            .field("ui_key", &self.ui_key)
+            .finish()
+    }
+}
+impl InstallUiRequest {
+    /// Protobuf type URL for this message, for use with `Any::pack` and
+    /// `Any::unpack_if`.
+    ///
+    /// Format: `type.googleapis.com/<fully.qualified.TypeName>`
+    pub const TYPE_URL: &'static str = "type.googleapis.com/hephaestus.release.v1.InstallUiRequest";
+}
+::buffa::impl_default_instance!(InstallUiRequest);
+impl ::buffa::MessageName for InstallUiRequest {
+    const PACKAGE: &'static str = "hephaestus.release.v1";
+    const NAME: &'static str = "InstallUiRequest";
+    const FULL_NAME: &'static str = "hephaestus.release.v1.InstallUiRequest";
+    const TYPE_URL: &'static str = "type.googleapis.com/hephaestus.release.v1.InstallUiRequest";
+}
+impl ::buffa::Message for InstallUiRequest {
+    /// Returns the total encoded size in bytes.
+    ///
+    /// The result is a `u32`; the protobuf specification requires all
+    /// messages to fit within 2 GiB (2,147,483,647 bytes), so a
+    /// compliant message will never overflow this type.
+    #[allow(clippy::let_and_return)]
+    fn compute_size(&self, __cache: &mut ::buffa::SizeCache) -> u32 {
+        #[allow(unused_imports)]
+        use ::buffa::Enumeration as _;
+        let mut size = 0u32;
+        if self.context.is_set() {
+            let __slot = __cache.reserve();
+            let inner_size = self.context.compute_size(__cache);
+            __cache.set(__slot, inner_size);
+            size
+                += 1u32 + ::buffa::encoding::varint_len(inner_size as u64) as u32
+                    + inner_size;
+        }
+        if self.organization_id.is_set() {
+            let __slot = __cache.reserve();
+            let inner_size = self.organization_id.compute_size(__cache);
+            __cache.set(__slot, inner_size);
+            size
+                += 1u32 + ::buffa::encoding::varint_len(inner_size as u64) as u32
+                    + inner_size;
+        }
+        if self.target.is_set() {
+            let __slot = __cache.reserve();
+            let inner_size = self.target.compute_size(__cache);
+            __cache.set(__slot, inner_size);
+            size
+                += 1u32 + ::buffa::encoding::varint_len(inner_size as u64) as u32
+                    + inner_size;
+        }
+        if self.release_id.is_set() {
+            let __slot = __cache.reserve();
+            let inner_size = self.release_id.compute_size(__cache);
+            __cache.set(__slot, inner_size);
+            size
+                += 1u32 + ::buffa::encoding::varint_len(inner_size as u64) as u32
+                    + inner_size;
+        }
+        if !self.ui_key.is_empty() {
+            size += 1u32 + ::buffa::types::string_encoded_len(&self.ui_key) as u32;
+        }
+        size += self.__buffa_unknown_fields.encoded_len() as u32;
+        size
+    }
+    fn write_to(
+        &self,
+        __cache: &mut ::buffa::SizeCache,
+        buf: &mut impl ::buffa::bytes::BufMut,
+    ) {
+        #[allow(unused_imports)]
+        use ::buffa::Enumeration as _;
+        if self.context.is_set() {
+            ::buffa::types::put_len_delimited_header(1u32, __cache.consume_next(), buf);
+            self.context.write_to(__cache, buf);
+        }
+        if self.organization_id.is_set() {
+            ::buffa::types::put_len_delimited_header(2u32, __cache.consume_next(), buf);
+            self.organization_id.write_to(__cache, buf);
+        }
+        if self.target.is_set() {
+            ::buffa::types::put_len_delimited_header(3u32, __cache.consume_next(), buf);
+            self.target.write_to(__cache, buf);
+        }
+        if self.release_id.is_set() {
+            ::buffa::types::put_len_delimited_header(4u32, __cache.consume_next(), buf);
+            self.release_id.write_to(__cache, buf);
+        }
+        if !self.ui_key.is_empty() {
+            ::buffa::types::put_string_field(5u32, &self.ui_key, buf);
+        }
+        self.__buffa_unknown_fields.write_to(buf);
+    }
+    fn merge_field(
+        &mut self,
+        tag: ::buffa::encoding::Tag,
+        buf: &mut impl ::buffa::bytes::Buf,
+        ctx: ::buffa::DecodeContext<'_>,
+    ) -> ::core::result::Result<(), ::buffa::DecodeError> {
+        #[allow(unused_imports)]
+        use ::buffa::bytes::Buf as _;
+        #[allow(unused_imports)]
+        use ::buffa::Enumeration as _;
+        match tag.field_number() {
+            1u32 => {
+                ::buffa::encoding::check_wire_type(
+                    tag,
+                    ::buffa::encoding::WireType::LengthDelimited,
+                )?;
+                ::buffa::Message::merge_length_delimited(
+                    self.context.get_or_insert_default(),
+                    buf,
+                    ctx,
+                )?;
+            }
+            2u32 => {
+                ::buffa::encoding::check_wire_type(
+                    tag,
+                    ::buffa::encoding::WireType::LengthDelimited,
+                )?;
+                ::buffa::Message::merge_length_delimited(
+                    self.organization_id.get_or_insert_default(),
+                    buf,
+                    ctx,
+                )?;
+            }
+            3u32 => {
+                ::buffa::encoding::check_wire_type(
+                    tag,
+                    ::buffa::encoding::WireType::LengthDelimited,
+                )?;
+                ::buffa::Message::merge_length_delimited(
+                    self.target.get_or_insert_default(),
+                    buf,
+                    ctx,
+                )?;
+            }
+            4u32 => {
+                ::buffa::encoding::check_wire_type(
+                    tag,
+                    ::buffa::encoding::WireType::LengthDelimited,
+                )?;
+                ::buffa::Message::merge_length_delimited(
+                    self.release_id.get_or_insert_default(),
+                    buf,
+                    ctx,
+                )?;
+            }
+            5u32 => {
+                ::buffa::encoding::check_wire_type(
+                    tag,
+                    ::buffa::encoding::WireType::LengthDelimited,
+                )?;
+                ::buffa::types::merge_string(&mut self.ui_key, buf)?;
+            }
+            _ => {
+                self.__buffa_unknown_fields
+                    .push(::buffa::encoding::decode_unknown_field(tag, buf, ctx)?);
+            }
+        }
+        ::core::result::Result::Ok(())
+    }
+    fn clear(&mut self) {
+        self.context = ::buffa::MessageField::none();
+        self.organization_id = ::buffa::MessageField::none();
+        self.target = ::buffa::MessageField::none();
+        self.release_id = ::buffa::MessageField::none();
+        self.ui_key.clear();
+        self.__buffa_unknown_fields.clear();
+    }
+}
+impl ::buffa::ExtensionSet for InstallUiRequest {
+    const PROTO_FQN: &'static str = "hephaestus.release.v1.InstallUiRequest";
+    fn unknown_fields(&self) -> &::buffa::UnknownFields {
+        &self.__buffa_unknown_fields
+    }
+    fn unknown_fields_mut(&mut self) -> &mut ::buffa::UnknownFields {
+        &mut self.__buffa_unknown_fields
+    }
+}
+impl ::buffa::json_helpers::ProtoElemJson for InstallUiRequest {
+    fn serialize_proto_json<S: ::serde::Serializer>(
+        v: &Self,
+        s: S,
+    ) -> ::core::result::Result<S::Ok, S::Error> {
+        ::serde::Serialize::serialize(v, s)
+    }
+    fn deserialize_proto_json<'de, D: ::serde::Deserializer<'de>>(
+        d: D,
+    ) -> ::core::result::Result<Self, D::Error> {
+        <Self as ::serde::Deserialize>::deserialize(d)
+    }
+}
+#[doc(hidden)]
+pub const __INSTALL_UI_REQUEST_JSON_ANY: ::buffa::type_registry::JsonAnyEntry = ::buffa::type_registry::JsonAnyEntry {
+    type_url: "type.googleapis.com/hephaestus.release.v1.InstallUiRequest",
+    to_json: ::buffa::type_registry::any_to_json::<InstallUiRequest>,
+    from_json: ::buffa::type_registry::any_from_json::<InstallUiRequest>,
+    is_wkt: false,
+};
+#[derive(Clone, PartialEq, Default)]
+#[derive(::serde::Serialize, ::serde::Deserialize)]
+#[serde(default)]
+pub struct InstallUiResponse {
+    /// Field 1: `installation_id`
+    #[serde(
+        rename = "installationId",
+        alias = "installation_id",
+        skip_serializing_if = "::buffa::json_helpers::skip_if::is_unset_message_field"
+    )]
+    pub installation_id: ::buffa::MessageField<super::super::common::v1::OpaqueId>,
+    /// Field 2: `generation_id`
+    #[serde(
+        rename = "generationId",
+        alias = "generation_id",
+        skip_serializing_if = "::buffa::json_helpers::skip_if::is_unset_message_field"
+    )]
+    pub generation_id: ::buffa::MessageField<super::super::common::v1::OpaqueId>,
+    /// Field 3: `lifecycle`
+    #[serde(
+        rename = "lifecycle",
+        with = "::buffa::json_helpers::proto_enum",
+        skip_serializing_if = "::buffa::json_helpers::skip_if::is_default_enum_value"
+    )]
+    pub lifecycle: ::buffa::EnumValue<UiInstallationLifecycle>,
+    /// Field 4: `receipt`
+    #[serde(
+        rename = "receipt",
+        skip_serializing_if = "::buffa::json_helpers::skip_if::is_unset_message_field"
+    )]
+    pub receipt: ::buffa::MessageField<super::super::common::v1::MutationReceipt>,
+    #[serde(skip)]
+    #[doc(hidden)]
+    pub __buffa_unknown_fields: ::buffa::UnknownFields,
+}
+impl ::core::fmt::Debug for InstallUiResponse {
+    fn fmt(&self, f: &mut ::core::fmt::Formatter<'_>) -> ::core::fmt::Result {
+        f.debug_struct("InstallUiResponse")
+            .field("installation_id", &self.installation_id)
+            .field("generation_id", &self.generation_id)
+            .field("lifecycle", &self.lifecycle)
+            .field("receipt", &self.receipt)
+            .finish()
+    }
+}
+impl InstallUiResponse {
+    /// Protobuf type URL for this message, for use with `Any::pack` and
+    /// `Any::unpack_if`.
+    ///
+    /// Format: `type.googleapis.com/<fully.qualified.TypeName>`
+    pub const TYPE_URL: &'static str = "type.googleapis.com/hephaestus.release.v1.InstallUiResponse";
+}
+::buffa::impl_default_instance!(InstallUiResponse);
+impl ::buffa::MessageName for InstallUiResponse {
+    const PACKAGE: &'static str = "hephaestus.release.v1";
+    const NAME: &'static str = "InstallUiResponse";
+    const FULL_NAME: &'static str = "hephaestus.release.v1.InstallUiResponse";
+    const TYPE_URL: &'static str = "type.googleapis.com/hephaestus.release.v1.InstallUiResponse";
+}
+impl ::buffa::Message for InstallUiResponse {
+    /// Returns the total encoded size in bytes.
+    ///
+    /// The result is a `u32`; the protobuf specification requires all
+    /// messages to fit within 2 GiB (2,147,483,647 bytes), so a
+    /// compliant message will never overflow this type.
+    #[allow(clippy::let_and_return)]
+    fn compute_size(&self, __cache: &mut ::buffa::SizeCache) -> u32 {
+        #[allow(unused_imports)]
+        use ::buffa::Enumeration as _;
+        let mut size = 0u32;
+        if self.installation_id.is_set() {
+            let __slot = __cache.reserve();
+            let inner_size = self.installation_id.compute_size(__cache);
+            __cache.set(__slot, inner_size);
+            size
+                += 1u32 + ::buffa::encoding::varint_len(inner_size as u64) as u32
+                    + inner_size;
+        }
+        if self.generation_id.is_set() {
+            let __slot = __cache.reserve();
+            let inner_size = self.generation_id.compute_size(__cache);
+            __cache.set(__slot, inner_size);
+            size
+                += 1u32 + ::buffa::encoding::varint_len(inner_size as u64) as u32
+                    + inner_size;
+        }
+        {
+            let val = self.lifecycle.to_i32();
+            if val != 0 {
+                size += 1u32 + ::buffa::types::int32_encoded_len(val) as u32;
+            }
+        }
+        if self.receipt.is_set() {
+            let __slot = __cache.reserve();
+            let inner_size = self.receipt.compute_size(__cache);
+            __cache.set(__slot, inner_size);
+            size
+                += 1u32 + ::buffa::encoding::varint_len(inner_size as u64) as u32
+                    + inner_size;
+        }
+        size += self.__buffa_unknown_fields.encoded_len() as u32;
+        size
+    }
+    fn write_to(
+        &self,
+        __cache: &mut ::buffa::SizeCache,
+        buf: &mut impl ::buffa::bytes::BufMut,
+    ) {
+        #[allow(unused_imports)]
+        use ::buffa::Enumeration as _;
+        if self.installation_id.is_set() {
+            ::buffa::types::put_len_delimited_header(1u32, __cache.consume_next(), buf);
+            self.installation_id.write_to(__cache, buf);
+        }
+        if self.generation_id.is_set() {
+            ::buffa::types::put_len_delimited_header(2u32, __cache.consume_next(), buf);
+            self.generation_id.write_to(__cache, buf);
+        }
+        {
+            let val = self.lifecycle.to_i32();
+            if val != 0 {
+                ::buffa::types::put_int32_field(3u32, val, buf);
+            }
+        }
+        if self.receipt.is_set() {
+            ::buffa::types::put_len_delimited_header(4u32, __cache.consume_next(), buf);
+            self.receipt.write_to(__cache, buf);
+        }
+        self.__buffa_unknown_fields.write_to(buf);
+    }
+    fn merge_field(
+        &mut self,
+        tag: ::buffa::encoding::Tag,
+        buf: &mut impl ::buffa::bytes::Buf,
+        ctx: ::buffa::DecodeContext<'_>,
+    ) -> ::core::result::Result<(), ::buffa::DecodeError> {
+        #[allow(unused_imports)]
+        use ::buffa::bytes::Buf as _;
+        #[allow(unused_imports)]
+        use ::buffa::Enumeration as _;
+        match tag.field_number() {
+            1u32 => {
+                ::buffa::encoding::check_wire_type(
+                    tag,
+                    ::buffa::encoding::WireType::LengthDelimited,
+                )?;
+                ::buffa::Message::merge_length_delimited(
+                    self.installation_id.get_or_insert_default(),
+                    buf,
+                    ctx,
+                )?;
+            }
+            2u32 => {
+                ::buffa::encoding::check_wire_type(
+                    tag,
+                    ::buffa::encoding::WireType::LengthDelimited,
+                )?;
+                ::buffa::Message::merge_length_delimited(
+                    self.generation_id.get_or_insert_default(),
+                    buf,
+                    ctx,
+                )?;
+            }
+            3u32 => {
+                ::buffa::encoding::check_wire_type(
+                    tag,
+                    ::buffa::encoding::WireType::Varint,
+                )?;
+                self.lifecycle = ::buffa::EnumValue::from(
+                    ::buffa::types::decode_int32(buf)?,
+                );
+            }
+            4u32 => {
+                ::buffa::encoding::check_wire_type(
+                    tag,
+                    ::buffa::encoding::WireType::LengthDelimited,
+                )?;
+                ::buffa::Message::merge_length_delimited(
+                    self.receipt.get_or_insert_default(),
+                    buf,
+                    ctx,
+                )?;
+            }
+            _ => {
+                self.__buffa_unknown_fields
+                    .push(::buffa::encoding::decode_unknown_field(tag, buf, ctx)?);
+            }
+        }
+        ::core::result::Result::Ok(())
+    }
+    fn clear(&mut self) {
+        self.installation_id = ::buffa::MessageField::none();
+        self.generation_id = ::buffa::MessageField::none();
+        self.lifecycle = ::buffa::EnumValue::from(0);
+        self.receipt = ::buffa::MessageField::none();
+        self.__buffa_unknown_fields.clear();
+    }
+}
+impl ::buffa::ExtensionSet for InstallUiResponse {
+    const PROTO_FQN: &'static str = "hephaestus.release.v1.InstallUiResponse";
+    fn unknown_fields(&self) -> &::buffa::UnknownFields {
+        &self.__buffa_unknown_fields
+    }
+    fn unknown_fields_mut(&mut self) -> &mut ::buffa::UnknownFields {
+        &mut self.__buffa_unknown_fields
+    }
+}
+impl ::buffa::json_helpers::ProtoElemJson for InstallUiResponse {
+    fn serialize_proto_json<S: ::serde::Serializer>(
+        v: &Self,
+        s: S,
+    ) -> ::core::result::Result<S::Ok, S::Error> {
+        ::serde::Serialize::serialize(v, s)
+    }
+    fn deserialize_proto_json<'de, D: ::serde::Deserializer<'de>>(
+        d: D,
+    ) -> ::core::result::Result<Self, D::Error> {
+        <Self as ::serde::Deserialize>::deserialize(d)
+    }
+}
+#[doc(hidden)]
+pub const __INSTALL_UI_RESPONSE_JSON_ANY: ::buffa::type_registry::JsonAnyEntry = ::buffa::type_registry::JsonAnyEntry {
+    type_url: "type.googleapis.com/hephaestus.release.v1.InstallUiResponse",
+    to_json: ::buffa::type_registry::any_to_json::<InstallUiResponse>,
+    from_json: ::buffa::type_registry::any_from_json::<InstallUiResponse>,
+    is_wkt: false,
+};
+#[derive(Clone, PartialEq, Default)]
+#[derive(::serde::Serialize, ::serde::Deserialize)]
+#[serde(default)]
+pub struct ActivateUiRequest {
+    /// Field 1: `context`
+    #[serde(
+        rename = "context",
+        skip_serializing_if = "::buffa::json_helpers::skip_if::is_unset_message_field"
+    )]
+    pub context: ::buffa::MessageField<super::super::common::v1::RequestContext>,
+    /// Field 2: `installation_id`
+    #[serde(
+        rename = "installationId",
+        alias = "installation_id",
+        skip_serializing_if = "::buffa::json_helpers::skip_if::is_unset_message_field"
+    )]
+    pub installation_id: ::buffa::MessageField<super::super::common::v1::OpaqueId>,
+    /// Required at this external boundary; stale values fail the operation precondition.
+    ///
+    /// Field 3: `expected_generation_id`
+    #[serde(
+        rename = "expectedGenerationId",
+        alias = "expected_generation_id",
+        skip_serializing_if = "::buffa::json_helpers::skip_if::is_unset_message_field"
+    )]
+    pub expected_generation_id: ::buffa::MessageField<
+        super::super::common::v1::OpaqueId,
+    >,
+    /// Field 4: `release_id`
+    #[serde(
+        rename = "releaseId",
+        alias = "release_id",
+        skip_serializing_if = "::buffa::json_helpers::skip_if::is_unset_message_field"
+    )]
+    pub release_id: ::buffa::MessageField<super::super::common::v1::OpaqueId>,
+    /// Field 5: `ui_key`
+    #[serde(
+        rename = "uiKey",
+        alias = "ui_key",
+        with = "::buffa::json_helpers::proto_string",
+        skip_serializing_if = "::buffa::json_helpers::skip_if::is_empty_str"
+    )]
+    pub ui_key: ::buffa::alloc::string::String,
+    #[serde(skip)]
+    #[doc(hidden)]
+    pub __buffa_unknown_fields: ::buffa::UnknownFields,
+}
+impl ::core::fmt::Debug for ActivateUiRequest {
+    fn fmt(&self, f: &mut ::core::fmt::Formatter<'_>) -> ::core::fmt::Result {
+        f.debug_struct("ActivateUiRequest")
+            .field("context", &self.context)
+            .field("installation_id", &self.installation_id)
+            .field("expected_generation_id", &self.expected_generation_id)
+            .field("release_id", &self.release_id)
+            .field("ui_key", &self.ui_key)
+            .finish()
+    }
+}
+impl ActivateUiRequest {
+    /// Protobuf type URL for this message, for use with `Any::pack` and
+    /// `Any::unpack_if`.
+    ///
+    /// Format: `type.googleapis.com/<fully.qualified.TypeName>`
+    pub const TYPE_URL: &'static str = "type.googleapis.com/hephaestus.release.v1.ActivateUiRequest";
+}
+::buffa::impl_default_instance!(ActivateUiRequest);
+impl ::buffa::MessageName for ActivateUiRequest {
+    const PACKAGE: &'static str = "hephaestus.release.v1";
+    const NAME: &'static str = "ActivateUiRequest";
+    const FULL_NAME: &'static str = "hephaestus.release.v1.ActivateUiRequest";
+    const TYPE_URL: &'static str = "type.googleapis.com/hephaestus.release.v1.ActivateUiRequest";
+}
+impl ::buffa::Message for ActivateUiRequest {
+    /// Returns the total encoded size in bytes.
+    ///
+    /// The result is a `u32`; the protobuf specification requires all
+    /// messages to fit within 2 GiB (2,147,483,647 bytes), so a
+    /// compliant message will never overflow this type.
+    #[allow(clippy::let_and_return)]
+    fn compute_size(&self, __cache: &mut ::buffa::SizeCache) -> u32 {
+        #[allow(unused_imports)]
+        use ::buffa::Enumeration as _;
+        let mut size = 0u32;
+        if self.context.is_set() {
+            let __slot = __cache.reserve();
+            let inner_size = self.context.compute_size(__cache);
+            __cache.set(__slot, inner_size);
+            size
+                += 1u32 + ::buffa::encoding::varint_len(inner_size as u64) as u32
+                    + inner_size;
+        }
+        if self.installation_id.is_set() {
+            let __slot = __cache.reserve();
+            let inner_size = self.installation_id.compute_size(__cache);
+            __cache.set(__slot, inner_size);
+            size
+                += 1u32 + ::buffa::encoding::varint_len(inner_size as u64) as u32
+                    + inner_size;
+        }
+        if self.expected_generation_id.is_set() {
+            let __slot = __cache.reserve();
+            let inner_size = self.expected_generation_id.compute_size(__cache);
+            __cache.set(__slot, inner_size);
+            size
+                += 1u32 + ::buffa::encoding::varint_len(inner_size as u64) as u32
+                    + inner_size;
+        }
+        if self.release_id.is_set() {
+            let __slot = __cache.reserve();
+            let inner_size = self.release_id.compute_size(__cache);
+            __cache.set(__slot, inner_size);
+            size
+                += 1u32 + ::buffa::encoding::varint_len(inner_size as u64) as u32
+                    + inner_size;
+        }
+        if !self.ui_key.is_empty() {
+            size += 1u32 + ::buffa::types::string_encoded_len(&self.ui_key) as u32;
+        }
+        size += self.__buffa_unknown_fields.encoded_len() as u32;
+        size
+    }
+    fn write_to(
+        &self,
+        __cache: &mut ::buffa::SizeCache,
+        buf: &mut impl ::buffa::bytes::BufMut,
+    ) {
+        #[allow(unused_imports)]
+        use ::buffa::Enumeration as _;
+        if self.context.is_set() {
+            ::buffa::types::put_len_delimited_header(1u32, __cache.consume_next(), buf);
+            self.context.write_to(__cache, buf);
+        }
+        if self.installation_id.is_set() {
+            ::buffa::types::put_len_delimited_header(2u32, __cache.consume_next(), buf);
+            self.installation_id.write_to(__cache, buf);
+        }
+        if self.expected_generation_id.is_set() {
+            ::buffa::types::put_len_delimited_header(3u32, __cache.consume_next(), buf);
+            self.expected_generation_id.write_to(__cache, buf);
+        }
+        if self.release_id.is_set() {
+            ::buffa::types::put_len_delimited_header(4u32, __cache.consume_next(), buf);
+            self.release_id.write_to(__cache, buf);
+        }
+        if !self.ui_key.is_empty() {
+            ::buffa::types::put_string_field(5u32, &self.ui_key, buf);
+        }
+        self.__buffa_unknown_fields.write_to(buf);
+    }
+    fn merge_field(
+        &mut self,
+        tag: ::buffa::encoding::Tag,
+        buf: &mut impl ::buffa::bytes::Buf,
+        ctx: ::buffa::DecodeContext<'_>,
+    ) -> ::core::result::Result<(), ::buffa::DecodeError> {
+        #[allow(unused_imports)]
+        use ::buffa::bytes::Buf as _;
+        #[allow(unused_imports)]
+        use ::buffa::Enumeration as _;
+        match tag.field_number() {
+            1u32 => {
+                ::buffa::encoding::check_wire_type(
+                    tag,
+                    ::buffa::encoding::WireType::LengthDelimited,
+                )?;
+                ::buffa::Message::merge_length_delimited(
+                    self.context.get_or_insert_default(),
+                    buf,
+                    ctx,
+                )?;
+            }
+            2u32 => {
+                ::buffa::encoding::check_wire_type(
+                    tag,
+                    ::buffa::encoding::WireType::LengthDelimited,
+                )?;
+                ::buffa::Message::merge_length_delimited(
+                    self.installation_id.get_or_insert_default(),
+                    buf,
+                    ctx,
+                )?;
+            }
+            3u32 => {
+                ::buffa::encoding::check_wire_type(
+                    tag,
+                    ::buffa::encoding::WireType::LengthDelimited,
+                )?;
+                ::buffa::Message::merge_length_delimited(
+                    self.expected_generation_id.get_or_insert_default(),
+                    buf,
+                    ctx,
+                )?;
+            }
+            4u32 => {
+                ::buffa::encoding::check_wire_type(
+                    tag,
+                    ::buffa::encoding::WireType::LengthDelimited,
+                )?;
+                ::buffa::Message::merge_length_delimited(
+                    self.release_id.get_or_insert_default(),
+                    buf,
+                    ctx,
+                )?;
+            }
+            5u32 => {
+                ::buffa::encoding::check_wire_type(
+                    tag,
+                    ::buffa::encoding::WireType::LengthDelimited,
+                )?;
+                ::buffa::types::merge_string(&mut self.ui_key, buf)?;
+            }
+            _ => {
+                self.__buffa_unknown_fields
+                    .push(::buffa::encoding::decode_unknown_field(tag, buf, ctx)?);
+            }
+        }
+        ::core::result::Result::Ok(())
+    }
+    fn clear(&mut self) {
+        self.context = ::buffa::MessageField::none();
+        self.installation_id = ::buffa::MessageField::none();
+        self.expected_generation_id = ::buffa::MessageField::none();
+        self.release_id = ::buffa::MessageField::none();
+        self.ui_key.clear();
+        self.__buffa_unknown_fields.clear();
+    }
+}
+impl ::buffa::ExtensionSet for ActivateUiRequest {
+    const PROTO_FQN: &'static str = "hephaestus.release.v1.ActivateUiRequest";
+    fn unknown_fields(&self) -> &::buffa::UnknownFields {
+        &self.__buffa_unknown_fields
+    }
+    fn unknown_fields_mut(&mut self) -> &mut ::buffa::UnknownFields {
+        &mut self.__buffa_unknown_fields
+    }
+}
+impl ::buffa::json_helpers::ProtoElemJson for ActivateUiRequest {
+    fn serialize_proto_json<S: ::serde::Serializer>(
+        v: &Self,
+        s: S,
+    ) -> ::core::result::Result<S::Ok, S::Error> {
+        ::serde::Serialize::serialize(v, s)
+    }
+    fn deserialize_proto_json<'de, D: ::serde::Deserializer<'de>>(
+        d: D,
+    ) -> ::core::result::Result<Self, D::Error> {
+        <Self as ::serde::Deserialize>::deserialize(d)
+    }
+}
+#[doc(hidden)]
+pub const __ACTIVATE_UI_REQUEST_JSON_ANY: ::buffa::type_registry::JsonAnyEntry = ::buffa::type_registry::JsonAnyEntry {
+    type_url: "type.googleapis.com/hephaestus.release.v1.ActivateUiRequest",
+    to_json: ::buffa::type_registry::any_to_json::<ActivateUiRequest>,
+    from_json: ::buffa::type_registry::any_from_json::<ActivateUiRequest>,
+    is_wkt: false,
+};
+#[derive(Clone, PartialEq, Default)]
+#[derive(::serde::Serialize, ::serde::Deserialize)]
+#[serde(default)]
+pub struct ActivateUiResponse {
+    /// Field 1: `installation_id`
+    #[serde(
+        rename = "installationId",
+        alias = "installation_id",
+        skip_serializing_if = "::buffa::json_helpers::skip_if::is_unset_message_field"
+    )]
+    pub installation_id: ::buffa::MessageField<super::super::common::v1::OpaqueId>,
+    /// Field 2: `generation_id`
+    #[serde(
+        rename = "generationId",
+        alias = "generation_id",
+        skip_serializing_if = "::buffa::json_helpers::skip_if::is_unset_message_field"
+    )]
+    pub generation_id: ::buffa::MessageField<super::super::common::v1::OpaqueId>,
+    /// Field 3: `lifecycle`
+    #[serde(
+        rename = "lifecycle",
+        with = "::buffa::json_helpers::proto_enum",
+        skip_serializing_if = "::buffa::json_helpers::skip_if::is_default_enum_value"
+    )]
+    pub lifecycle: ::buffa::EnumValue<UiInstallationLifecycle>,
+    /// Field 4: `receipt`
+    #[serde(
+        rename = "receipt",
+        skip_serializing_if = "::buffa::json_helpers::skip_if::is_unset_message_field"
+    )]
+    pub receipt: ::buffa::MessageField<super::super::common::v1::MutationReceipt>,
+    #[serde(skip)]
+    #[doc(hidden)]
+    pub __buffa_unknown_fields: ::buffa::UnknownFields,
+}
+impl ::core::fmt::Debug for ActivateUiResponse {
+    fn fmt(&self, f: &mut ::core::fmt::Formatter<'_>) -> ::core::fmt::Result {
+        f.debug_struct("ActivateUiResponse")
+            .field("installation_id", &self.installation_id)
+            .field("generation_id", &self.generation_id)
+            .field("lifecycle", &self.lifecycle)
+            .field("receipt", &self.receipt)
+            .finish()
+    }
+}
+impl ActivateUiResponse {
+    /// Protobuf type URL for this message, for use with `Any::pack` and
+    /// `Any::unpack_if`.
+    ///
+    /// Format: `type.googleapis.com/<fully.qualified.TypeName>`
+    pub const TYPE_URL: &'static str = "type.googleapis.com/hephaestus.release.v1.ActivateUiResponse";
+}
+::buffa::impl_default_instance!(ActivateUiResponse);
+impl ::buffa::MessageName for ActivateUiResponse {
+    const PACKAGE: &'static str = "hephaestus.release.v1";
+    const NAME: &'static str = "ActivateUiResponse";
+    const FULL_NAME: &'static str = "hephaestus.release.v1.ActivateUiResponse";
+    const TYPE_URL: &'static str = "type.googleapis.com/hephaestus.release.v1.ActivateUiResponse";
+}
+impl ::buffa::Message for ActivateUiResponse {
+    /// Returns the total encoded size in bytes.
+    ///
+    /// The result is a `u32`; the protobuf specification requires all
+    /// messages to fit within 2 GiB (2,147,483,647 bytes), so a
+    /// compliant message will never overflow this type.
+    #[allow(clippy::let_and_return)]
+    fn compute_size(&self, __cache: &mut ::buffa::SizeCache) -> u32 {
+        #[allow(unused_imports)]
+        use ::buffa::Enumeration as _;
+        let mut size = 0u32;
+        if self.installation_id.is_set() {
+            let __slot = __cache.reserve();
+            let inner_size = self.installation_id.compute_size(__cache);
+            __cache.set(__slot, inner_size);
+            size
+                += 1u32 + ::buffa::encoding::varint_len(inner_size as u64) as u32
+                    + inner_size;
+        }
+        if self.generation_id.is_set() {
+            let __slot = __cache.reserve();
+            let inner_size = self.generation_id.compute_size(__cache);
+            __cache.set(__slot, inner_size);
+            size
+                += 1u32 + ::buffa::encoding::varint_len(inner_size as u64) as u32
+                    + inner_size;
+        }
+        {
+            let val = self.lifecycle.to_i32();
+            if val != 0 {
+                size += 1u32 + ::buffa::types::int32_encoded_len(val) as u32;
+            }
+        }
+        if self.receipt.is_set() {
+            let __slot = __cache.reserve();
+            let inner_size = self.receipt.compute_size(__cache);
+            __cache.set(__slot, inner_size);
+            size
+                += 1u32 + ::buffa::encoding::varint_len(inner_size as u64) as u32
+                    + inner_size;
+        }
+        size += self.__buffa_unknown_fields.encoded_len() as u32;
+        size
+    }
+    fn write_to(
+        &self,
+        __cache: &mut ::buffa::SizeCache,
+        buf: &mut impl ::buffa::bytes::BufMut,
+    ) {
+        #[allow(unused_imports)]
+        use ::buffa::Enumeration as _;
+        if self.installation_id.is_set() {
+            ::buffa::types::put_len_delimited_header(1u32, __cache.consume_next(), buf);
+            self.installation_id.write_to(__cache, buf);
+        }
+        if self.generation_id.is_set() {
+            ::buffa::types::put_len_delimited_header(2u32, __cache.consume_next(), buf);
+            self.generation_id.write_to(__cache, buf);
+        }
+        {
+            let val = self.lifecycle.to_i32();
+            if val != 0 {
+                ::buffa::types::put_int32_field(3u32, val, buf);
+            }
+        }
+        if self.receipt.is_set() {
+            ::buffa::types::put_len_delimited_header(4u32, __cache.consume_next(), buf);
+            self.receipt.write_to(__cache, buf);
+        }
+        self.__buffa_unknown_fields.write_to(buf);
+    }
+    fn merge_field(
+        &mut self,
+        tag: ::buffa::encoding::Tag,
+        buf: &mut impl ::buffa::bytes::Buf,
+        ctx: ::buffa::DecodeContext<'_>,
+    ) -> ::core::result::Result<(), ::buffa::DecodeError> {
+        #[allow(unused_imports)]
+        use ::buffa::bytes::Buf as _;
+        #[allow(unused_imports)]
+        use ::buffa::Enumeration as _;
+        match tag.field_number() {
+            1u32 => {
+                ::buffa::encoding::check_wire_type(
+                    tag,
+                    ::buffa::encoding::WireType::LengthDelimited,
+                )?;
+                ::buffa::Message::merge_length_delimited(
+                    self.installation_id.get_or_insert_default(),
+                    buf,
+                    ctx,
+                )?;
+            }
+            2u32 => {
+                ::buffa::encoding::check_wire_type(
+                    tag,
+                    ::buffa::encoding::WireType::LengthDelimited,
+                )?;
+                ::buffa::Message::merge_length_delimited(
+                    self.generation_id.get_or_insert_default(),
+                    buf,
+                    ctx,
+                )?;
+            }
+            3u32 => {
+                ::buffa::encoding::check_wire_type(
+                    tag,
+                    ::buffa::encoding::WireType::Varint,
+                )?;
+                self.lifecycle = ::buffa::EnumValue::from(
+                    ::buffa::types::decode_int32(buf)?,
+                );
+            }
+            4u32 => {
+                ::buffa::encoding::check_wire_type(
+                    tag,
+                    ::buffa::encoding::WireType::LengthDelimited,
+                )?;
+                ::buffa::Message::merge_length_delimited(
+                    self.receipt.get_or_insert_default(),
+                    buf,
+                    ctx,
+                )?;
+            }
+            _ => {
+                self.__buffa_unknown_fields
+                    .push(::buffa::encoding::decode_unknown_field(tag, buf, ctx)?);
+            }
+        }
+        ::core::result::Result::Ok(())
+    }
+    fn clear(&mut self) {
+        self.installation_id = ::buffa::MessageField::none();
+        self.generation_id = ::buffa::MessageField::none();
+        self.lifecycle = ::buffa::EnumValue::from(0);
+        self.receipt = ::buffa::MessageField::none();
+        self.__buffa_unknown_fields.clear();
+    }
+}
+impl ::buffa::ExtensionSet for ActivateUiResponse {
+    const PROTO_FQN: &'static str = "hephaestus.release.v1.ActivateUiResponse";
+    fn unknown_fields(&self) -> &::buffa::UnknownFields {
+        &self.__buffa_unknown_fields
+    }
+    fn unknown_fields_mut(&mut self) -> &mut ::buffa::UnknownFields {
+        &mut self.__buffa_unknown_fields
+    }
+}
+impl ::buffa::json_helpers::ProtoElemJson for ActivateUiResponse {
+    fn serialize_proto_json<S: ::serde::Serializer>(
+        v: &Self,
+        s: S,
+    ) -> ::core::result::Result<S::Ok, S::Error> {
+        ::serde::Serialize::serialize(v, s)
+    }
+    fn deserialize_proto_json<'de, D: ::serde::Deserializer<'de>>(
+        d: D,
+    ) -> ::core::result::Result<Self, D::Error> {
+        <Self as ::serde::Deserialize>::deserialize(d)
+    }
+}
+#[doc(hidden)]
+pub const __ACTIVATE_UI_RESPONSE_JSON_ANY: ::buffa::type_registry::JsonAnyEntry = ::buffa::type_registry::JsonAnyEntry {
+    type_url: "type.googleapis.com/hephaestus.release.v1.ActivateUiResponse",
+    to_json: ::buffa::type_registry::any_to_json::<ActivateUiResponse>,
+    from_json: ::buffa::type_registry::any_from_json::<ActivateUiResponse>,
+    is_wkt: false,
+};
+#[derive(Clone, PartialEq, Default)]
+#[derive(::serde::Serialize, ::serde::Deserialize)]
+#[serde(default)]
+pub struct RollbackUiRequest {
+    /// Field 1: `context`
+    #[serde(
+        rename = "context",
+        skip_serializing_if = "::buffa::json_helpers::skip_if::is_unset_message_field"
+    )]
+    pub context: ::buffa::MessageField<super::super::common::v1::RequestContext>,
+    /// Field 2: `installation_id`
+    #[serde(
+        rename = "installationId",
+        alias = "installation_id",
+        skip_serializing_if = "::buffa::json_helpers::skip_if::is_unset_message_field"
+    )]
+    pub installation_id: ::buffa::MessageField<super::super::common::v1::OpaqueId>,
+    /// Required at this external boundary; stale values fail the operation precondition.
+    ///
+    /// Field 3: `expected_generation_id`
+    #[serde(
+        rename = "expectedGenerationId",
+        alias = "expected_generation_id",
+        skip_serializing_if = "::buffa::json_helpers::skip_if::is_unset_message_field"
+    )]
+    pub expected_generation_id: ::buffa::MessageField<
+        super::super::common::v1::OpaqueId,
+    >,
+    /// Field 4: `release_id`
+    #[serde(
+        rename = "releaseId",
+        alias = "release_id",
+        skip_serializing_if = "::buffa::json_helpers::skip_if::is_unset_message_field"
+    )]
+    pub release_id: ::buffa::MessageField<super::super::common::v1::OpaqueId>,
+    /// Field 5: `ui_key`
+    #[serde(
+        rename = "uiKey",
+        alias = "ui_key",
+        with = "::buffa::json_helpers::proto_string",
+        skip_serializing_if = "::buffa::json_helpers::skip_if::is_empty_str"
+    )]
+    pub ui_key: ::buffa::alloc::string::String,
+    #[serde(skip)]
+    #[doc(hidden)]
+    pub __buffa_unknown_fields: ::buffa::UnknownFields,
+}
+impl ::core::fmt::Debug for RollbackUiRequest {
+    fn fmt(&self, f: &mut ::core::fmt::Formatter<'_>) -> ::core::fmt::Result {
+        f.debug_struct("RollbackUiRequest")
+            .field("context", &self.context)
+            .field("installation_id", &self.installation_id)
+            .field("expected_generation_id", &self.expected_generation_id)
+            .field("release_id", &self.release_id)
+            .field("ui_key", &self.ui_key)
+            .finish()
+    }
+}
+impl RollbackUiRequest {
+    /// Protobuf type URL for this message, for use with `Any::pack` and
+    /// `Any::unpack_if`.
+    ///
+    /// Format: `type.googleapis.com/<fully.qualified.TypeName>`
+    pub const TYPE_URL: &'static str = "type.googleapis.com/hephaestus.release.v1.RollbackUiRequest";
+}
+::buffa::impl_default_instance!(RollbackUiRequest);
+impl ::buffa::MessageName for RollbackUiRequest {
+    const PACKAGE: &'static str = "hephaestus.release.v1";
+    const NAME: &'static str = "RollbackUiRequest";
+    const FULL_NAME: &'static str = "hephaestus.release.v1.RollbackUiRequest";
+    const TYPE_URL: &'static str = "type.googleapis.com/hephaestus.release.v1.RollbackUiRequest";
+}
+impl ::buffa::Message for RollbackUiRequest {
+    /// Returns the total encoded size in bytes.
+    ///
+    /// The result is a `u32`; the protobuf specification requires all
+    /// messages to fit within 2 GiB (2,147,483,647 bytes), so a
+    /// compliant message will never overflow this type.
+    #[allow(clippy::let_and_return)]
+    fn compute_size(&self, __cache: &mut ::buffa::SizeCache) -> u32 {
+        #[allow(unused_imports)]
+        use ::buffa::Enumeration as _;
+        let mut size = 0u32;
+        if self.context.is_set() {
+            let __slot = __cache.reserve();
+            let inner_size = self.context.compute_size(__cache);
+            __cache.set(__slot, inner_size);
+            size
+                += 1u32 + ::buffa::encoding::varint_len(inner_size as u64) as u32
+                    + inner_size;
+        }
+        if self.installation_id.is_set() {
+            let __slot = __cache.reserve();
+            let inner_size = self.installation_id.compute_size(__cache);
+            __cache.set(__slot, inner_size);
+            size
+                += 1u32 + ::buffa::encoding::varint_len(inner_size as u64) as u32
+                    + inner_size;
+        }
+        if self.expected_generation_id.is_set() {
+            let __slot = __cache.reserve();
+            let inner_size = self.expected_generation_id.compute_size(__cache);
+            __cache.set(__slot, inner_size);
+            size
+                += 1u32 + ::buffa::encoding::varint_len(inner_size as u64) as u32
+                    + inner_size;
+        }
+        if self.release_id.is_set() {
+            let __slot = __cache.reserve();
+            let inner_size = self.release_id.compute_size(__cache);
+            __cache.set(__slot, inner_size);
+            size
+                += 1u32 + ::buffa::encoding::varint_len(inner_size as u64) as u32
+                    + inner_size;
+        }
+        if !self.ui_key.is_empty() {
+            size += 1u32 + ::buffa::types::string_encoded_len(&self.ui_key) as u32;
+        }
+        size += self.__buffa_unknown_fields.encoded_len() as u32;
+        size
+    }
+    fn write_to(
+        &self,
+        __cache: &mut ::buffa::SizeCache,
+        buf: &mut impl ::buffa::bytes::BufMut,
+    ) {
+        #[allow(unused_imports)]
+        use ::buffa::Enumeration as _;
+        if self.context.is_set() {
+            ::buffa::types::put_len_delimited_header(1u32, __cache.consume_next(), buf);
+            self.context.write_to(__cache, buf);
+        }
+        if self.installation_id.is_set() {
+            ::buffa::types::put_len_delimited_header(2u32, __cache.consume_next(), buf);
+            self.installation_id.write_to(__cache, buf);
+        }
+        if self.expected_generation_id.is_set() {
+            ::buffa::types::put_len_delimited_header(3u32, __cache.consume_next(), buf);
+            self.expected_generation_id.write_to(__cache, buf);
+        }
+        if self.release_id.is_set() {
+            ::buffa::types::put_len_delimited_header(4u32, __cache.consume_next(), buf);
+            self.release_id.write_to(__cache, buf);
+        }
+        if !self.ui_key.is_empty() {
+            ::buffa::types::put_string_field(5u32, &self.ui_key, buf);
+        }
+        self.__buffa_unknown_fields.write_to(buf);
+    }
+    fn merge_field(
+        &mut self,
+        tag: ::buffa::encoding::Tag,
+        buf: &mut impl ::buffa::bytes::Buf,
+        ctx: ::buffa::DecodeContext<'_>,
+    ) -> ::core::result::Result<(), ::buffa::DecodeError> {
+        #[allow(unused_imports)]
+        use ::buffa::bytes::Buf as _;
+        #[allow(unused_imports)]
+        use ::buffa::Enumeration as _;
+        match tag.field_number() {
+            1u32 => {
+                ::buffa::encoding::check_wire_type(
+                    tag,
+                    ::buffa::encoding::WireType::LengthDelimited,
+                )?;
+                ::buffa::Message::merge_length_delimited(
+                    self.context.get_or_insert_default(),
+                    buf,
+                    ctx,
+                )?;
+            }
+            2u32 => {
+                ::buffa::encoding::check_wire_type(
+                    tag,
+                    ::buffa::encoding::WireType::LengthDelimited,
+                )?;
+                ::buffa::Message::merge_length_delimited(
+                    self.installation_id.get_or_insert_default(),
+                    buf,
+                    ctx,
+                )?;
+            }
+            3u32 => {
+                ::buffa::encoding::check_wire_type(
+                    tag,
+                    ::buffa::encoding::WireType::LengthDelimited,
+                )?;
+                ::buffa::Message::merge_length_delimited(
+                    self.expected_generation_id.get_or_insert_default(),
+                    buf,
+                    ctx,
+                )?;
+            }
+            4u32 => {
+                ::buffa::encoding::check_wire_type(
+                    tag,
+                    ::buffa::encoding::WireType::LengthDelimited,
+                )?;
+                ::buffa::Message::merge_length_delimited(
+                    self.release_id.get_or_insert_default(),
+                    buf,
+                    ctx,
+                )?;
+            }
+            5u32 => {
+                ::buffa::encoding::check_wire_type(
+                    tag,
+                    ::buffa::encoding::WireType::LengthDelimited,
+                )?;
+                ::buffa::types::merge_string(&mut self.ui_key, buf)?;
+            }
+            _ => {
+                self.__buffa_unknown_fields
+                    .push(::buffa::encoding::decode_unknown_field(tag, buf, ctx)?);
+            }
+        }
+        ::core::result::Result::Ok(())
+    }
+    fn clear(&mut self) {
+        self.context = ::buffa::MessageField::none();
+        self.installation_id = ::buffa::MessageField::none();
+        self.expected_generation_id = ::buffa::MessageField::none();
+        self.release_id = ::buffa::MessageField::none();
+        self.ui_key.clear();
+        self.__buffa_unknown_fields.clear();
+    }
+}
+impl ::buffa::ExtensionSet for RollbackUiRequest {
+    const PROTO_FQN: &'static str = "hephaestus.release.v1.RollbackUiRequest";
+    fn unknown_fields(&self) -> &::buffa::UnknownFields {
+        &self.__buffa_unknown_fields
+    }
+    fn unknown_fields_mut(&mut self) -> &mut ::buffa::UnknownFields {
+        &mut self.__buffa_unknown_fields
+    }
+}
+impl ::buffa::json_helpers::ProtoElemJson for RollbackUiRequest {
+    fn serialize_proto_json<S: ::serde::Serializer>(
+        v: &Self,
+        s: S,
+    ) -> ::core::result::Result<S::Ok, S::Error> {
+        ::serde::Serialize::serialize(v, s)
+    }
+    fn deserialize_proto_json<'de, D: ::serde::Deserializer<'de>>(
+        d: D,
+    ) -> ::core::result::Result<Self, D::Error> {
+        <Self as ::serde::Deserialize>::deserialize(d)
+    }
+}
+#[doc(hidden)]
+pub const __ROLLBACK_UI_REQUEST_JSON_ANY: ::buffa::type_registry::JsonAnyEntry = ::buffa::type_registry::JsonAnyEntry {
+    type_url: "type.googleapis.com/hephaestus.release.v1.RollbackUiRequest",
+    to_json: ::buffa::type_registry::any_to_json::<RollbackUiRequest>,
+    from_json: ::buffa::type_registry::any_from_json::<RollbackUiRequest>,
+    is_wkt: false,
+};
+#[derive(Clone, PartialEq, Default)]
+#[derive(::serde::Serialize, ::serde::Deserialize)]
+#[serde(default)]
+pub struct RollbackUiResponse {
+    /// Field 1: `installation_id`
+    #[serde(
+        rename = "installationId",
+        alias = "installation_id",
+        skip_serializing_if = "::buffa::json_helpers::skip_if::is_unset_message_field"
+    )]
+    pub installation_id: ::buffa::MessageField<super::super::common::v1::OpaqueId>,
+    /// Field 2: `generation_id`
+    #[serde(
+        rename = "generationId",
+        alias = "generation_id",
+        skip_serializing_if = "::buffa::json_helpers::skip_if::is_unset_message_field"
+    )]
+    pub generation_id: ::buffa::MessageField<super::super::common::v1::OpaqueId>,
+    /// Field 3: `lifecycle`
+    #[serde(
+        rename = "lifecycle",
+        with = "::buffa::json_helpers::proto_enum",
+        skip_serializing_if = "::buffa::json_helpers::skip_if::is_default_enum_value"
+    )]
+    pub lifecycle: ::buffa::EnumValue<UiInstallationLifecycle>,
+    /// Field 4: `receipt`
+    #[serde(
+        rename = "receipt",
+        skip_serializing_if = "::buffa::json_helpers::skip_if::is_unset_message_field"
+    )]
+    pub receipt: ::buffa::MessageField<super::super::common::v1::MutationReceipt>,
+    #[serde(skip)]
+    #[doc(hidden)]
+    pub __buffa_unknown_fields: ::buffa::UnknownFields,
+}
+impl ::core::fmt::Debug for RollbackUiResponse {
+    fn fmt(&self, f: &mut ::core::fmt::Formatter<'_>) -> ::core::fmt::Result {
+        f.debug_struct("RollbackUiResponse")
+            .field("installation_id", &self.installation_id)
+            .field("generation_id", &self.generation_id)
+            .field("lifecycle", &self.lifecycle)
+            .field("receipt", &self.receipt)
+            .finish()
+    }
+}
+impl RollbackUiResponse {
+    /// Protobuf type URL for this message, for use with `Any::pack` and
+    /// `Any::unpack_if`.
+    ///
+    /// Format: `type.googleapis.com/<fully.qualified.TypeName>`
+    pub const TYPE_URL: &'static str = "type.googleapis.com/hephaestus.release.v1.RollbackUiResponse";
+}
+::buffa::impl_default_instance!(RollbackUiResponse);
+impl ::buffa::MessageName for RollbackUiResponse {
+    const PACKAGE: &'static str = "hephaestus.release.v1";
+    const NAME: &'static str = "RollbackUiResponse";
+    const FULL_NAME: &'static str = "hephaestus.release.v1.RollbackUiResponse";
+    const TYPE_URL: &'static str = "type.googleapis.com/hephaestus.release.v1.RollbackUiResponse";
+}
+impl ::buffa::Message for RollbackUiResponse {
+    /// Returns the total encoded size in bytes.
+    ///
+    /// The result is a `u32`; the protobuf specification requires all
+    /// messages to fit within 2 GiB (2,147,483,647 bytes), so a
+    /// compliant message will never overflow this type.
+    #[allow(clippy::let_and_return)]
+    fn compute_size(&self, __cache: &mut ::buffa::SizeCache) -> u32 {
+        #[allow(unused_imports)]
+        use ::buffa::Enumeration as _;
+        let mut size = 0u32;
+        if self.installation_id.is_set() {
+            let __slot = __cache.reserve();
+            let inner_size = self.installation_id.compute_size(__cache);
+            __cache.set(__slot, inner_size);
+            size
+                += 1u32 + ::buffa::encoding::varint_len(inner_size as u64) as u32
+                    + inner_size;
+        }
+        if self.generation_id.is_set() {
+            let __slot = __cache.reserve();
+            let inner_size = self.generation_id.compute_size(__cache);
+            __cache.set(__slot, inner_size);
+            size
+                += 1u32 + ::buffa::encoding::varint_len(inner_size as u64) as u32
+                    + inner_size;
+        }
+        {
+            let val = self.lifecycle.to_i32();
+            if val != 0 {
+                size += 1u32 + ::buffa::types::int32_encoded_len(val) as u32;
+            }
+        }
+        if self.receipt.is_set() {
+            let __slot = __cache.reserve();
+            let inner_size = self.receipt.compute_size(__cache);
+            __cache.set(__slot, inner_size);
+            size
+                += 1u32 + ::buffa::encoding::varint_len(inner_size as u64) as u32
+                    + inner_size;
+        }
+        size += self.__buffa_unknown_fields.encoded_len() as u32;
+        size
+    }
+    fn write_to(
+        &self,
+        __cache: &mut ::buffa::SizeCache,
+        buf: &mut impl ::buffa::bytes::BufMut,
+    ) {
+        #[allow(unused_imports)]
+        use ::buffa::Enumeration as _;
+        if self.installation_id.is_set() {
+            ::buffa::types::put_len_delimited_header(1u32, __cache.consume_next(), buf);
+            self.installation_id.write_to(__cache, buf);
+        }
+        if self.generation_id.is_set() {
+            ::buffa::types::put_len_delimited_header(2u32, __cache.consume_next(), buf);
+            self.generation_id.write_to(__cache, buf);
+        }
+        {
+            let val = self.lifecycle.to_i32();
+            if val != 0 {
+                ::buffa::types::put_int32_field(3u32, val, buf);
+            }
+        }
+        if self.receipt.is_set() {
+            ::buffa::types::put_len_delimited_header(4u32, __cache.consume_next(), buf);
+            self.receipt.write_to(__cache, buf);
+        }
+        self.__buffa_unknown_fields.write_to(buf);
+    }
+    fn merge_field(
+        &mut self,
+        tag: ::buffa::encoding::Tag,
+        buf: &mut impl ::buffa::bytes::Buf,
+        ctx: ::buffa::DecodeContext<'_>,
+    ) -> ::core::result::Result<(), ::buffa::DecodeError> {
+        #[allow(unused_imports)]
+        use ::buffa::bytes::Buf as _;
+        #[allow(unused_imports)]
+        use ::buffa::Enumeration as _;
+        match tag.field_number() {
+            1u32 => {
+                ::buffa::encoding::check_wire_type(
+                    tag,
+                    ::buffa::encoding::WireType::LengthDelimited,
+                )?;
+                ::buffa::Message::merge_length_delimited(
+                    self.installation_id.get_or_insert_default(),
+                    buf,
+                    ctx,
+                )?;
+            }
+            2u32 => {
+                ::buffa::encoding::check_wire_type(
+                    tag,
+                    ::buffa::encoding::WireType::LengthDelimited,
+                )?;
+                ::buffa::Message::merge_length_delimited(
+                    self.generation_id.get_or_insert_default(),
+                    buf,
+                    ctx,
+                )?;
+            }
+            3u32 => {
+                ::buffa::encoding::check_wire_type(
+                    tag,
+                    ::buffa::encoding::WireType::Varint,
+                )?;
+                self.lifecycle = ::buffa::EnumValue::from(
+                    ::buffa::types::decode_int32(buf)?,
+                );
+            }
+            4u32 => {
+                ::buffa::encoding::check_wire_type(
+                    tag,
+                    ::buffa::encoding::WireType::LengthDelimited,
+                )?;
+                ::buffa::Message::merge_length_delimited(
+                    self.receipt.get_or_insert_default(),
+                    buf,
+                    ctx,
+                )?;
+            }
+            _ => {
+                self.__buffa_unknown_fields
+                    .push(::buffa::encoding::decode_unknown_field(tag, buf, ctx)?);
+            }
+        }
+        ::core::result::Result::Ok(())
+    }
+    fn clear(&mut self) {
+        self.installation_id = ::buffa::MessageField::none();
+        self.generation_id = ::buffa::MessageField::none();
+        self.lifecycle = ::buffa::EnumValue::from(0);
+        self.receipt = ::buffa::MessageField::none();
+        self.__buffa_unknown_fields.clear();
+    }
+}
+impl ::buffa::ExtensionSet for RollbackUiResponse {
+    const PROTO_FQN: &'static str = "hephaestus.release.v1.RollbackUiResponse";
+    fn unknown_fields(&self) -> &::buffa::UnknownFields {
+        &self.__buffa_unknown_fields
+    }
+    fn unknown_fields_mut(&mut self) -> &mut ::buffa::UnknownFields {
+        &mut self.__buffa_unknown_fields
+    }
+}
+impl ::buffa::json_helpers::ProtoElemJson for RollbackUiResponse {
+    fn serialize_proto_json<S: ::serde::Serializer>(
+        v: &Self,
+        s: S,
+    ) -> ::core::result::Result<S::Ok, S::Error> {
+        ::serde::Serialize::serialize(v, s)
+    }
+    fn deserialize_proto_json<'de, D: ::serde::Deserializer<'de>>(
+        d: D,
+    ) -> ::core::result::Result<Self, D::Error> {
+        <Self as ::serde::Deserialize>::deserialize(d)
+    }
+}
+#[doc(hidden)]
+pub const __ROLLBACK_UI_RESPONSE_JSON_ANY: ::buffa::type_registry::JsonAnyEntry = ::buffa::type_registry::JsonAnyEntry {
+    type_url: "type.googleapis.com/hephaestus.release.v1.RollbackUiResponse",
+    to_json: ::buffa::type_registry::any_to_json::<RollbackUiResponse>,
+    from_json: ::buffa::type_registry::any_from_json::<RollbackUiResponse>,
+    is_wkt: false,
+};
+#[derive(Clone, PartialEq, Default)]
+#[derive(::serde::Serialize, ::serde::Deserialize)]
+#[serde(default)]
+pub struct DisableUiRequest {
+    /// Field 1: `context`
+    #[serde(
+        rename = "context",
+        skip_serializing_if = "::buffa::json_helpers::skip_if::is_unset_message_field"
+    )]
+    pub context: ::buffa::MessageField<super::super::common::v1::RequestContext>,
+    /// Field 2: `installation_id`
+    #[serde(
+        rename = "installationId",
+        alias = "installation_id",
+        skip_serializing_if = "::buffa::json_helpers::skip_if::is_unset_message_field"
+    )]
+    pub installation_id: ::buffa::MessageField<super::super::common::v1::OpaqueId>,
+    /// Required at this external boundary; stale values fail the operation precondition.
+    ///
+    /// Field 3: `expected_generation_id`
+    #[serde(
+        rename = "expectedGenerationId",
+        alias = "expected_generation_id",
+        skip_serializing_if = "::buffa::json_helpers::skip_if::is_unset_message_field"
+    )]
+    pub expected_generation_id: ::buffa::MessageField<
+        super::super::common::v1::OpaqueId,
+    >,
+    #[serde(skip)]
+    #[doc(hidden)]
+    pub __buffa_unknown_fields: ::buffa::UnknownFields,
+}
+impl ::core::fmt::Debug for DisableUiRequest {
+    fn fmt(&self, f: &mut ::core::fmt::Formatter<'_>) -> ::core::fmt::Result {
+        f.debug_struct("DisableUiRequest")
+            .field("context", &self.context)
+            .field("installation_id", &self.installation_id)
+            .field("expected_generation_id", &self.expected_generation_id)
+            .finish()
+    }
+}
+impl DisableUiRequest {
+    /// Protobuf type URL for this message, for use with `Any::pack` and
+    /// `Any::unpack_if`.
+    ///
+    /// Format: `type.googleapis.com/<fully.qualified.TypeName>`
+    pub const TYPE_URL: &'static str = "type.googleapis.com/hephaestus.release.v1.DisableUiRequest";
+}
+::buffa::impl_default_instance!(DisableUiRequest);
+impl ::buffa::MessageName for DisableUiRequest {
+    const PACKAGE: &'static str = "hephaestus.release.v1";
+    const NAME: &'static str = "DisableUiRequest";
+    const FULL_NAME: &'static str = "hephaestus.release.v1.DisableUiRequest";
+    const TYPE_URL: &'static str = "type.googleapis.com/hephaestus.release.v1.DisableUiRequest";
+}
+impl ::buffa::Message for DisableUiRequest {
+    /// Returns the total encoded size in bytes.
+    ///
+    /// The result is a `u32`; the protobuf specification requires all
+    /// messages to fit within 2 GiB (2,147,483,647 bytes), so a
+    /// compliant message will never overflow this type.
+    #[allow(clippy::let_and_return)]
+    fn compute_size(&self, __cache: &mut ::buffa::SizeCache) -> u32 {
+        #[allow(unused_imports)]
+        use ::buffa::Enumeration as _;
+        let mut size = 0u32;
+        if self.context.is_set() {
+            let __slot = __cache.reserve();
+            let inner_size = self.context.compute_size(__cache);
+            __cache.set(__slot, inner_size);
+            size
+                += 1u32 + ::buffa::encoding::varint_len(inner_size as u64) as u32
+                    + inner_size;
+        }
+        if self.installation_id.is_set() {
+            let __slot = __cache.reserve();
+            let inner_size = self.installation_id.compute_size(__cache);
+            __cache.set(__slot, inner_size);
+            size
+                += 1u32 + ::buffa::encoding::varint_len(inner_size as u64) as u32
+                    + inner_size;
+        }
+        if self.expected_generation_id.is_set() {
+            let __slot = __cache.reserve();
+            let inner_size = self.expected_generation_id.compute_size(__cache);
+            __cache.set(__slot, inner_size);
+            size
+                += 1u32 + ::buffa::encoding::varint_len(inner_size as u64) as u32
+                    + inner_size;
+        }
+        size += self.__buffa_unknown_fields.encoded_len() as u32;
+        size
+    }
+    fn write_to(
+        &self,
+        __cache: &mut ::buffa::SizeCache,
+        buf: &mut impl ::buffa::bytes::BufMut,
+    ) {
+        #[allow(unused_imports)]
+        use ::buffa::Enumeration as _;
+        if self.context.is_set() {
+            ::buffa::types::put_len_delimited_header(1u32, __cache.consume_next(), buf);
+            self.context.write_to(__cache, buf);
+        }
+        if self.installation_id.is_set() {
+            ::buffa::types::put_len_delimited_header(2u32, __cache.consume_next(), buf);
+            self.installation_id.write_to(__cache, buf);
+        }
+        if self.expected_generation_id.is_set() {
+            ::buffa::types::put_len_delimited_header(3u32, __cache.consume_next(), buf);
+            self.expected_generation_id.write_to(__cache, buf);
+        }
+        self.__buffa_unknown_fields.write_to(buf);
+    }
+    fn merge_field(
+        &mut self,
+        tag: ::buffa::encoding::Tag,
+        buf: &mut impl ::buffa::bytes::Buf,
+        ctx: ::buffa::DecodeContext<'_>,
+    ) -> ::core::result::Result<(), ::buffa::DecodeError> {
+        #[allow(unused_imports)]
+        use ::buffa::bytes::Buf as _;
+        #[allow(unused_imports)]
+        use ::buffa::Enumeration as _;
+        match tag.field_number() {
+            1u32 => {
+                ::buffa::encoding::check_wire_type(
+                    tag,
+                    ::buffa::encoding::WireType::LengthDelimited,
+                )?;
+                ::buffa::Message::merge_length_delimited(
+                    self.context.get_or_insert_default(),
+                    buf,
+                    ctx,
+                )?;
+            }
+            2u32 => {
+                ::buffa::encoding::check_wire_type(
+                    tag,
+                    ::buffa::encoding::WireType::LengthDelimited,
+                )?;
+                ::buffa::Message::merge_length_delimited(
+                    self.installation_id.get_or_insert_default(),
+                    buf,
+                    ctx,
+                )?;
+            }
+            3u32 => {
+                ::buffa::encoding::check_wire_type(
+                    tag,
+                    ::buffa::encoding::WireType::LengthDelimited,
+                )?;
+                ::buffa::Message::merge_length_delimited(
+                    self.expected_generation_id.get_or_insert_default(),
+                    buf,
+                    ctx,
+                )?;
+            }
+            _ => {
+                self.__buffa_unknown_fields
+                    .push(::buffa::encoding::decode_unknown_field(tag, buf, ctx)?);
+            }
+        }
+        ::core::result::Result::Ok(())
+    }
+    fn clear(&mut self) {
+        self.context = ::buffa::MessageField::none();
+        self.installation_id = ::buffa::MessageField::none();
+        self.expected_generation_id = ::buffa::MessageField::none();
+        self.__buffa_unknown_fields.clear();
+    }
+}
+impl ::buffa::ExtensionSet for DisableUiRequest {
+    const PROTO_FQN: &'static str = "hephaestus.release.v1.DisableUiRequest";
+    fn unknown_fields(&self) -> &::buffa::UnknownFields {
+        &self.__buffa_unknown_fields
+    }
+    fn unknown_fields_mut(&mut self) -> &mut ::buffa::UnknownFields {
+        &mut self.__buffa_unknown_fields
+    }
+}
+impl ::buffa::json_helpers::ProtoElemJson for DisableUiRequest {
+    fn serialize_proto_json<S: ::serde::Serializer>(
+        v: &Self,
+        s: S,
+    ) -> ::core::result::Result<S::Ok, S::Error> {
+        ::serde::Serialize::serialize(v, s)
+    }
+    fn deserialize_proto_json<'de, D: ::serde::Deserializer<'de>>(
+        d: D,
+    ) -> ::core::result::Result<Self, D::Error> {
+        <Self as ::serde::Deserialize>::deserialize(d)
+    }
+}
+#[doc(hidden)]
+pub const __DISABLE_UI_REQUEST_JSON_ANY: ::buffa::type_registry::JsonAnyEntry = ::buffa::type_registry::JsonAnyEntry {
+    type_url: "type.googleapis.com/hephaestus.release.v1.DisableUiRequest",
+    to_json: ::buffa::type_registry::any_to_json::<DisableUiRequest>,
+    from_json: ::buffa::type_registry::any_from_json::<DisableUiRequest>,
+    is_wkt: false,
+};
+#[derive(Clone, PartialEq, Default)]
+#[derive(::serde::Serialize, ::serde::Deserialize)]
+#[serde(default)]
+pub struct DisableUiResponse {
+    /// Field 1: `installation_id`
+    #[serde(
+        rename = "installationId",
+        alias = "installation_id",
+        skip_serializing_if = "::buffa::json_helpers::skip_if::is_unset_message_field"
+    )]
+    pub installation_id: ::buffa::MessageField<super::super::common::v1::OpaqueId>,
+    /// Field 2: `generation_id`
+    #[serde(
+        rename = "generationId",
+        alias = "generation_id",
+        skip_serializing_if = "::buffa::json_helpers::skip_if::is_unset_message_field"
+    )]
+    pub generation_id: ::buffa::MessageField<super::super::common::v1::OpaqueId>,
+    /// Field 3: `lifecycle`
+    #[serde(
+        rename = "lifecycle",
+        with = "::buffa::json_helpers::proto_enum",
+        skip_serializing_if = "::buffa::json_helpers::skip_if::is_default_enum_value"
+    )]
+    pub lifecycle: ::buffa::EnumValue<UiInstallationLifecycle>,
+    /// Field 4: `receipt`
+    #[serde(
+        rename = "receipt",
+        skip_serializing_if = "::buffa::json_helpers::skip_if::is_unset_message_field"
+    )]
+    pub receipt: ::buffa::MessageField<super::super::common::v1::MutationReceipt>,
+    #[serde(skip)]
+    #[doc(hidden)]
+    pub __buffa_unknown_fields: ::buffa::UnknownFields,
+}
+impl ::core::fmt::Debug for DisableUiResponse {
+    fn fmt(&self, f: &mut ::core::fmt::Formatter<'_>) -> ::core::fmt::Result {
+        f.debug_struct("DisableUiResponse")
+            .field("installation_id", &self.installation_id)
+            .field("generation_id", &self.generation_id)
+            .field("lifecycle", &self.lifecycle)
+            .field("receipt", &self.receipt)
+            .finish()
+    }
+}
+impl DisableUiResponse {
+    /// Protobuf type URL for this message, for use with `Any::pack` and
+    /// `Any::unpack_if`.
+    ///
+    /// Format: `type.googleapis.com/<fully.qualified.TypeName>`
+    pub const TYPE_URL: &'static str = "type.googleapis.com/hephaestus.release.v1.DisableUiResponse";
+}
+::buffa::impl_default_instance!(DisableUiResponse);
+impl ::buffa::MessageName for DisableUiResponse {
+    const PACKAGE: &'static str = "hephaestus.release.v1";
+    const NAME: &'static str = "DisableUiResponse";
+    const FULL_NAME: &'static str = "hephaestus.release.v1.DisableUiResponse";
+    const TYPE_URL: &'static str = "type.googleapis.com/hephaestus.release.v1.DisableUiResponse";
+}
+impl ::buffa::Message for DisableUiResponse {
+    /// Returns the total encoded size in bytes.
+    ///
+    /// The result is a `u32`; the protobuf specification requires all
+    /// messages to fit within 2 GiB (2,147,483,647 bytes), so a
+    /// compliant message will never overflow this type.
+    #[allow(clippy::let_and_return)]
+    fn compute_size(&self, __cache: &mut ::buffa::SizeCache) -> u32 {
+        #[allow(unused_imports)]
+        use ::buffa::Enumeration as _;
+        let mut size = 0u32;
+        if self.installation_id.is_set() {
+            let __slot = __cache.reserve();
+            let inner_size = self.installation_id.compute_size(__cache);
+            __cache.set(__slot, inner_size);
+            size
+                += 1u32 + ::buffa::encoding::varint_len(inner_size as u64) as u32
+                    + inner_size;
+        }
+        if self.generation_id.is_set() {
+            let __slot = __cache.reserve();
+            let inner_size = self.generation_id.compute_size(__cache);
+            __cache.set(__slot, inner_size);
+            size
+                += 1u32 + ::buffa::encoding::varint_len(inner_size as u64) as u32
+                    + inner_size;
+        }
+        {
+            let val = self.lifecycle.to_i32();
+            if val != 0 {
+                size += 1u32 + ::buffa::types::int32_encoded_len(val) as u32;
+            }
+        }
+        if self.receipt.is_set() {
+            let __slot = __cache.reserve();
+            let inner_size = self.receipt.compute_size(__cache);
+            __cache.set(__slot, inner_size);
+            size
+                += 1u32 + ::buffa::encoding::varint_len(inner_size as u64) as u32
+                    + inner_size;
+        }
+        size += self.__buffa_unknown_fields.encoded_len() as u32;
+        size
+    }
+    fn write_to(
+        &self,
+        __cache: &mut ::buffa::SizeCache,
+        buf: &mut impl ::buffa::bytes::BufMut,
+    ) {
+        #[allow(unused_imports)]
+        use ::buffa::Enumeration as _;
+        if self.installation_id.is_set() {
+            ::buffa::types::put_len_delimited_header(1u32, __cache.consume_next(), buf);
+            self.installation_id.write_to(__cache, buf);
+        }
+        if self.generation_id.is_set() {
+            ::buffa::types::put_len_delimited_header(2u32, __cache.consume_next(), buf);
+            self.generation_id.write_to(__cache, buf);
+        }
+        {
+            let val = self.lifecycle.to_i32();
+            if val != 0 {
+                ::buffa::types::put_int32_field(3u32, val, buf);
+            }
+        }
+        if self.receipt.is_set() {
+            ::buffa::types::put_len_delimited_header(4u32, __cache.consume_next(), buf);
+            self.receipt.write_to(__cache, buf);
+        }
+        self.__buffa_unknown_fields.write_to(buf);
+    }
+    fn merge_field(
+        &mut self,
+        tag: ::buffa::encoding::Tag,
+        buf: &mut impl ::buffa::bytes::Buf,
+        ctx: ::buffa::DecodeContext<'_>,
+    ) -> ::core::result::Result<(), ::buffa::DecodeError> {
+        #[allow(unused_imports)]
+        use ::buffa::bytes::Buf as _;
+        #[allow(unused_imports)]
+        use ::buffa::Enumeration as _;
+        match tag.field_number() {
+            1u32 => {
+                ::buffa::encoding::check_wire_type(
+                    tag,
+                    ::buffa::encoding::WireType::LengthDelimited,
+                )?;
+                ::buffa::Message::merge_length_delimited(
+                    self.installation_id.get_or_insert_default(),
+                    buf,
+                    ctx,
+                )?;
+            }
+            2u32 => {
+                ::buffa::encoding::check_wire_type(
+                    tag,
+                    ::buffa::encoding::WireType::LengthDelimited,
+                )?;
+                ::buffa::Message::merge_length_delimited(
+                    self.generation_id.get_or_insert_default(),
+                    buf,
+                    ctx,
+                )?;
+            }
+            3u32 => {
+                ::buffa::encoding::check_wire_type(
+                    tag,
+                    ::buffa::encoding::WireType::Varint,
+                )?;
+                self.lifecycle = ::buffa::EnumValue::from(
+                    ::buffa::types::decode_int32(buf)?,
+                );
+            }
+            4u32 => {
+                ::buffa::encoding::check_wire_type(
+                    tag,
+                    ::buffa::encoding::WireType::LengthDelimited,
+                )?;
+                ::buffa::Message::merge_length_delimited(
+                    self.receipt.get_or_insert_default(),
+                    buf,
+                    ctx,
+                )?;
+            }
+            _ => {
+                self.__buffa_unknown_fields
+                    .push(::buffa::encoding::decode_unknown_field(tag, buf, ctx)?);
+            }
+        }
+        ::core::result::Result::Ok(())
+    }
+    fn clear(&mut self) {
+        self.installation_id = ::buffa::MessageField::none();
+        self.generation_id = ::buffa::MessageField::none();
+        self.lifecycle = ::buffa::EnumValue::from(0);
+        self.receipt = ::buffa::MessageField::none();
+        self.__buffa_unknown_fields.clear();
+    }
+}
+impl ::buffa::ExtensionSet for DisableUiResponse {
+    const PROTO_FQN: &'static str = "hephaestus.release.v1.DisableUiResponse";
+    fn unknown_fields(&self) -> &::buffa::UnknownFields {
+        &self.__buffa_unknown_fields
+    }
+    fn unknown_fields_mut(&mut self) -> &mut ::buffa::UnknownFields {
+        &mut self.__buffa_unknown_fields
+    }
+}
+impl ::buffa::json_helpers::ProtoElemJson for DisableUiResponse {
+    fn serialize_proto_json<S: ::serde::Serializer>(
+        v: &Self,
+        s: S,
+    ) -> ::core::result::Result<S::Ok, S::Error> {
+        ::serde::Serialize::serialize(v, s)
+    }
+    fn deserialize_proto_json<'de, D: ::serde::Deserializer<'de>>(
+        d: D,
+    ) -> ::core::result::Result<Self, D::Error> {
+        <Self as ::serde::Deserialize>::deserialize(d)
+    }
+}
+#[doc(hidden)]
+pub const __DISABLE_UI_RESPONSE_JSON_ANY: ::buffa::type_registry::JsonAnyEntry = ::buffa::type_registry::JsonAnyEntry {
+    type_url: "type.googleapis.com/hephaestus.release.v1.DisableUiResponse",
+    to_json: ::buffa::type_registry::any_to_json::<DisableUiResponse>,
+    from_json: ::buffa::type_registry::any_from_json::<DisableUiResponse>,
+    is_wkt: false,
+};
+#[derive(Clone, PartialEq, Default)]
+#[derive(::serde::Serialize, ::serde::Deserialize)]
+#[serde(default)]
+pub struct RemoveUiRequest {
+    /// Field 1: `context`
+    #[serde(
+        rename = "context",
+        skip_serializing_if = "::buffa::json_helpers::skip_if::is_unset_message_field"
+    )]
+    pub context: ::buffa::MessageField<super::super::common::v1::RequestContext>,
+    /// Field 2: `installation_id`
+    #[serde(
+        rename = "installationId",
+        alias = "installation_id",
+        skip_serializing_if = "::buffa::json_helpers::skip_if::is_unset_message_field"
+    )]
+    pub installation_id: ::buffa::MessageField<super::super::common::v1::OpaqueId>,
+    /// Required at this external boundary; stale values fail the operation precondition.
+    ///
+    /// Field 3: `expected_generation_id`
+    #[serde(
+        rename = "expectedGenerationId",
+        alias = "expected_generation_id",
+        skip_serializing_if = "::buffa::json_helpers::skip_if::is_unset_message_field"
+    )]
+    pub expected_generation_id: ::buffa::MessageField<
+        super::super::common::v1::OpaqueId,
+    >,
+    #[serde(skip)]
+    #[doc(hidden)]
+    pub __buffa_unknown_fields: ::buffa::UnknownFields,
+}
+impl ::core::fmt::Debug for RemoveUiRequest {
+    fn fmt(&self, f: &mut ::core::fmt::Formatter<'_>) -> ::core::fmt::Result {
+        f.debug_struct("RemoveUiRequest")
+            .field("context", &self.context)
+            .field("installation_id", &self.installation_id)
+            .field("expected_generation_id", &self.expected_generation_id)
+            .finish()
+    }
+}
+impl RemoveUiRequest {
+    /// Protobuf type URL for this message, for use with `Any::pack` and
+    /// `Any::unpack_if`.
+    ///
+    /// Format: `type.googleapis.com/<fully.qualified.TypeName>`
+    pub const TYPE_URL: &'static str = "type.googleapis.com/hephaestus.release.v1.RemoveUiRequest";
+}
+::buffa::impl_default_instance!(RemoveUiRequest);
+impl ::buffa::MessageName for RemoveUiRequest {
+    const PACKAGE: &'static str = "hephaestus.release.v1";
+    const NAME: &'static str = "RemoveUiRequest";
+    const FULL_NAME: &'static str = "hephaestus.release.v1.RemoveUiRequest";
+    const TYPE_URL: &'static str = "type.googleapis.com/hephaestus.release.v1.RemoveUiRequest";
+}
+impl ::buffa::Message for RemoveUiRequest {
+    /// Returns the total encoded size in bytes.
+    ///
+    /// The result is a `u32`; the protobuf specification requires all
+    /// messages to fit within 2 GiB (2,147,483,647 bytes), so a
+    /// compliant message will never overflow this type.
+    #[allow(clippy::let_and_return)]
+    fn compute_size(&self, __cache: &mut ::buffa::SizeCache) -> u32 {
+        #[allow(unused_imports)]
+        use ::buffa::Enumeration as _;
+        let mut size = 0u32;
+        if self.context.is_set() {
+            let __slot = __cache.reserve();
+            let inner_size = self.context.compute_size(__cache);
+            __cache.set(__slot, inner_size);
+            size
+                += 1u32 + ::buffa::encoding::varint_len(inner_size as u64) as u32
+                    + inner_size;
+        }
+        if self.installation_id.is_set() {
+            let __slot = __cache.reserve();
+            let inner_size = self.installation_id.compute_size(__cache);
+            __cache.set(__slot, inner_size);
+            size
+                += 1u32 + ::buffa::encoding::varint_len(inner_size as u64) as u32
+                    + inner_size;
+        }
+        if self.expected_generation_id.is_set() {
+            let __slot = __cache.reserve();
+            let inner_size = self.expected_generation_id.compute_size(__cache);
+            __cache.set(__slot, inner_size);
+            size
+                += 1u32 + ::buffa::encoding::varint_len(inner_size as u64) as u32
+                    + inner_size;
+        }
+        size += self.__buffa_unknown_fields.encoded_len() as u32;
+        size
+    }
+    fn write_to(
+        &self,
+        __cache: &mut ::buffa::SizeCache,
+        buf: &mut impl ::buffa::bytes::BufMut,
+    ) {
+        #[allow(unused_imports)]
+        use ::buffa::Enumeration as _;
+        if self.context.is_set() {
+            ::buffa::types::put_len_delimited_header(1u32, __cache.consume_next(), buf);
+            self.context.write_to(__cache, buf);
+        }
+        if self.installation_id.is_set() {
+            ::buffa::types::put_len_delimited_header(2u32, __cache.consume_next(), buf);
+            self.installation_id.write_to(__cache, buf);
+        }
+        if self.expected_generation_id.is_set() {
+            ::buffa::types::put_len_delimited_header(3u32, __cache.consume_next(), buf);
+            self.expected_generation_id.write_to(__cache, buf);
+        }
+        self.__buffa_unknown_fields.write_to(buf);
+    }
+    fn merge_field(
+        &mut self,
+        tag: ::buffa::encoding::Tag,
+        buf: &mut impl ::buffa::bytes::Buf,
+        ctx: ::buffa::DecodeContext<'_>,
+    ) -> ::core::result::Result<(), ::buffa::DecodeError> {
+        #[allow(unused_imports)]
+        use ::buffa::bytes::Buf as _;
+        #[allow(unused_imports)]
+        use ::buffa::Enumeration as _;
+        match tag.field_number() {
+            1u32 => {
+                ::buffa::encoding::check_wire_type(
+                    tag,
+                    ::buffa::encoding::WireType::LengthDelimited,
+                )?;
+                ::buffa::Message::merge_length_delimited(
+                    self.context.get_or_insert_default(),
+                    buf,
+                    ctx,
+                )?;
+            }
+            2u32 => {
+                ::buffa::encoding::check_wire_type(
+                    tag,
+                    ::buffa::encoding::WireType::LengthDelimited,
+                )?;
+                ::buffa::Message::merge_length_delimited(
+                    self.installation_id.get_or_insert_default(),
+                    buf,
+                    ctx,
+                )?;
+            }
+            3u32 => {
+                ::buffa::encoding::check_wire_type(
+                    tag,
+                    ::buffa::encoding::WireType::LengthDelimited,
+                )?;
+                ::buffa::Message::merge_length_delimited(
+                    self.expected_generation_id.get_or_insert_default(),
+                    buf,
+                    ctx,
+                )?;
+            }
+            _ => {
+                self.__buffa_unknown_fields
+                    .push(::buffa::encoding::decode_unknown_field(tag, buf, ctx)?);
+            }
+        }
+        ::core::result::Result::Ok(())
+    }
+    fn clear(&mut self) {
+        self.context = ::buffa::MessageField::none();
+        self.installation_id = ::buffa::MessageField::none();
+        self.expected_generation_id = ::buffa::MessageField::none();
+        self.__buffa_unknown_fields.clear();
+    }
+}
+impl ::buffa::ExtensionSet for RemoveUiRequest {
+    const PROTO_FQN: &'static str = "hephaestus.release.v1.RemoveUiRequest";
+    fn unknown_fields(&self) -> &::buffa::UnknownFields {
+        &self.__buffa_unknown_fields
+    }
+    fn unknown_fields_mut(&mut self) -> &mut ::buffa::UnknownFields {
+        &mut self.__buffa_unknown_fields
+    }
+}
+impl ::buffa::json_helpers::ProtoElemJson for RemoveUiRequest {
+    fn serialize_proto_json<S: ::serde::Serializer>(
+        v: &Self,
+        s: S,
+    ) -> ::core::result::Result<S::Ok, S::Error> {
+        ::serde::Serialize::serialize(v, s)
+    }
+    fn deserialize_proto_json<'de, D: ::serde::Deserializer<'de>>(
+        d: D,
+    ) -> ::core::result::Result<Self, D::Error> {
+        <Self as ::serde::Deserialize>::deserialize(d)
+    }
+}
+#[doc(hidden)]
+pub const __REMOVE_UI_REQUEST_JSON_ANY: ::buffa::type_registry::JsonAnyEntry = ::buffa::type_registry::JsonAnyEntry {
+    type_url: "type.googleapis.com/hephaestus.release.v1.RemoveUiRequest",
+    to_json: ::buffa::type_registry::any_to_json::<RemoveUiRequest>,
+    from_json: ::buffa::type_registry::any_from_json::<RemoveUiRequest>,
+    is_wkt: false,
+};
+#[derive(Clone, PartialEq, Default)]
+#[derive(::serde::Serialize, ::serde::Deserialize)]
+#[serde(default)]
+pub struct RemoveUiResponse {
+    /// Field 1: `installation_id`
+    #[serde(
+        rename = "installationId",
+        alias = "installation_id",
+        skip_serializing_if = "::buffa::json_helpers::skip_if::is_unset_message_field"
+    )]
+    pub installation_id: ::buffa::MessageField<super::super::common::v1::OpaqueId>,
+    /// Field 2: `generation_id`
+    #[serde(
+        rename = "generationId",
+        alias = "generation_id",
+        skip_serializing_if = "::buffa::json_helpers::skip_if::is_unset_message_field"
+    )]
+    pub generation_id: ::buffa::MessageField<super::super::common::v1::OpaqueId>,
+    /// Field 3: `lifecycle`
+    #[serde(
+        rename = "lifecycle",
+        with = "::buffa::json_helpers::proto_enum",
+        skip_serializing_if = "::buffa::json_helpers::skip_if::is_default_enum_value"
+    )]
+    pub lifecycle: ::buffa::EnumValue<UiInstallationLifecycle>,
+    /// Field 4: `receipt`
+    #[serde(
+        rename = "receipt",
+        skip_serializing_if = "::buffa::json_helpers::skip_if::is_unset_message_field"
+    )]
+    pub receipt: ::buffa::MessageField<super::super::common::v1::MutationReceipt>,
+    #[serde(skip)]
+    #[doc(hidden)]
+    pub __buffa_unknown_fields: ::buffa::UnknownFields,
+}
+impl ::core::fmt::Debug for RemoveUiResponse {
+    fn fmt(&self, f: &mut ::core::fmt::Formatter<'_>) -> ::core::fmt::Result {
+        f.debug_struct("RemoveUiResponse")
+            .field("installation_id", &self.installation_id)
+            .field("generation_id", &self.generation_id)
+            .field("lifecycle", &self.lifecycle)
+            .field("receipt", &self.receipt)
+            .finish()
+    }
+}
+impl RemoveUiResponse {
+    /// Protobuf type URL for this message, for use with `Any::pack` and
+    /// `Any::unpack_if`.
+    ///
+    /// Format: `type.googleapis.com/<fully.qualified.TypeName>`
+    pub const TYPE_URL: &'static str = "type.googleapis.com/hephaestus.release.v1.RemoveUiResponse";
+}
+::buffa::impl_default_instance!(RemoveUiResponse);
+impl ::buffa::MessageName for RemoveUiResponse {
+    const PACKAGE: &'static str = "hephaestus.release.v1";
+    const NAME: &'static str = "RemoveUiResponse";
+    const FULL_NAME: &'static str = "hephaestus.release.v1.RemoveUiResponse";
+    const TYPE_URL: &'static str = "type.googleapis.com/hephaestus.release.v1.RemoveUiResponse";
+}
+impl ::buffa::Message for RemoveUiResponse {
+    /// Returns the total encoded size in bytes.
+    ///
+    /// The result is a `u32`; the protobuf specification requires all
+    /// messages to fit within 2 GiB (2,147,483,647 bytes), so a
+    /// compliant message will never overflow this type.
+    #[allow(clippy::let_and_return)]
+    fn compute_size(&self, __cache: &mut ::buffa::SizeCache) -> u32 {
+        #[allow(unused_imports)]
+        use ::buffa::Enumeration as _;
+        let mut size = 0u32;
+        if self.installation_id.is_set() {
+            let __slot = __cache.reserve();
+            let inner_size = self.installation_id.compute_size(__cache);
+            __cache.set(__slot, inner_size);
+            size
+                += 1u32 + ::buffa::encoding::varint_len(inner_size as u64) as u32
+                    + inner_size;
+        }
+        if self.generation_id.is_set() {
+            let __slot = __cache.reserve();
+            let inner_size = self.generation_id.compute_size(__cache);
+            __cache.set(__slot, inner_size);
+            size
+                += 1u32 + ::buffa::encoding::varint_len(inner_size as u64) as u32
+                    + inner_size;
+        }
+        {
+            let val = self.lifecycle.to_i32();
+            if val != 0 {
+                size += 1u32 + ::buffa::types::int32_encoded_len(val) as u32;
+            }
+        }
+        if self.receipt.is_set() {
+            let __slot = __cache.reserve();
+            let inner_size = self.receipt.compute_size(__cache);
+            __cache.set(__slot, inner_size);
+            size
+                += 1u32 + ::buffa::encoding::varint_len(inner_size as u64) as u32
+                    + inner_size;
+        }
+        size += self.__buffa_unknown_fields.encoded_len() as u32;
+        size
+    }
+    fn write_to(
+        &self,
+        __cache: &mut ::buffa::SizeCache,
+        buf: &mut impl ::buffa::bytes::BufMut,
+    ) {
+        #[allow(unused_imports)]
+        use ::buffa::Enumeration as _;
+        if self.installation_id.is_set() {
+            ::buffa::types::put_len_delimited_header(1u32, __cache.consume_next(), buf);
+            self.installation_id.write_to(__cache, buf);
+        }
+        if self.generation_id.is_set() {
+            ::buffa::types::put_len_delimited_header(2u32, __cache.consume_next(), buf);
+            self.generation_id.write_to(__cache, buf);
+        }
+        {
+            let val = self.lifecycle.to_i32();
+            if val != 0 {
+                ::buffa::types::put_int32_field(3u32, val, buf);
+            }
+        }
+        if self.receipt.is_set() {
+            ::buffa::types::put_len_delimited_header(4u32, __cache.consume_next(), buf);
+            self.receipt.write_to(__cache, buf);
+        }
+        self.__buffa_unknown_fields.write_to(buf);
+    }
+    fn merge_field(
+        &mut self,
+        tag: ::buffa::encoding::Tag,
+        buf: &mut impl ::buffa::bytes::Buf,
+        ctx: ::buffa::DecodeContext<'_>,
+    ) -> ::core::result::Result<(), ::buffa::DecodeError> {
+        #[allow(unused_imports)]
+        use ::buffa::bytes::Buf as _;
+        #[allow(unused_imports)]
+        use ::buffa::Enumeration as _;
+        match tag.field_number() {
+            1u32 => {
+                ::buffa::encoding::check_wire_type(
+                    tag,
+                    ::buffa::encoding::WireType::LengthDelimited,
+                )?;
+                ::buffa::Message::merge_length_delimited(
+                    self.installation_id.get_or_insert_default(),
+                    buf,
+                    ctx,
+                )?;
+            }
+            2u32 => {
+                ::buffa::encoding::check_wire_type(
+                    tag,
+                    ::buffa::encoding::WireType::LengthDelimited,
+                )?;
+                ::buffa::Message::merge_length_delimited(
+                    self.generation_id.get_or_insert_default(),
+                    buf,
+                    ctx,
+                )?;
+            }
+            3u32 => {
+                ::buffa::encoding::check_wire_type(
+                    tag,
+                    ::buffa::encoding::WireType::Varint,
+                )?;
+                self.lifecycle = ::buffa::EnumValue::from(
+                    ::buffa::types::decode_int32(buf)?,
+                );
+            }
+            4u32 => {
+                ::buffa::encoding::check_wire_type(
+                    tag,
+                    ::buffa::encoding::WireType::LengthDelimited,
+                )?;
+                ::buffa::Message::merge_length_delimited(
+                    self.receipt.get_or_insert_default(),
+                    buf,
+                    ctx,
+                )?;
+            }
+            _ => {
+                self.__buffa_unknown_fields
+                    .push(::buffa::encoding::decode_unknown_field(tag, buf, ctx)?);
+            }
+        }
+        ::core::result::Result::Ok(())
+    }
+    fn clear(&mut self) {
+        self.installation_id = ::buffa::MessageField::none();
+        self.generation_id = ::buffa::MessageField::none();
+        self.lifecycle = ::buffa::EnumValue::from(0);
+        self.receipt = ::buffa::MessageField::none();
+        self.__buffa_unknown_fields.clear();
+    }
+}
+impl ::buffa::ExtensionSet for RemoveUiResponse {
+    const PROTO_FQN: &'static str = "hephaestus.release.v1.RemoveUiResponse";
+    fn unknown_fields(&self) -> &::buffa::UnknownFields {
+        &self.__buffa_unknown_fields
+    }
+    fn unknown_fields_mut(&mut self) -> &mut ::buffa::UnknownFields {
+        &mut self.__buffa_unknown_fields
+    }
+}
+impl ::buffa::json_helpers::ProtoElemJson for RemoveUiResponse {
+    fn serialize_proto_json<S: ::serde::Serializer>(
+        v: &Self,
+        s: S,
+    ) -> ::core::result::Result<S::Ok, S::Error> {
+        ::serde::Serialize::serialize(v, s)
+    }
+    fn deserialize_proto_json<'de, D: ::serde::Deserializer<'de>>(
+        d: D,
+    ) -> ::core::result::Result<Self, D::Error> {
+        <Self as ::serde::Deserialize>::deserialize(d)
+    }
+}
+#[doc(hidden)]
+pub const __REMOVE_UI_RESPONSE_JSON_ANY: ::buffa::type_registry::JsonAnyEntry = ::buffa::type_registry::JsonAnyEntry {
+    type_url: "type.googleapis.com/hephaestus.release.v1.RemoveUiResponse",
+    to_json: ::buffa::type_registry::any_to_json::<RemoveUiResponse>,
+    from_json: ::buffa::type_registry::any_from_json::<RemoveUiResponse>,
+    is_wkt: false,
+};
+#[derive(Clone, PartialEq, Default)]
+#[derive(::serde::Serialize, ::serde::Deserialize)]
+#[serde(default)]
+pub struct ListUiInstallationsRequest {
+    /// Mandatory explicit tenant boundary; target is also mandatory.
+    ///
+    /// Field 1: `organization_id`
+    #[serde(
+        rename = "organizationId",
+        alias = "organization_id",
+        skip_serializing_if = "::buffa::json_helpers::skip_if::is_unset_message_field"
+    )]
+    pub organization_id: ::buffa::MessageField<super::super::common::v1::OpaqueId>,
+    /// Field 2: `target`
+    #[serde(
+        rename = "target",
+        skip_serializing_if = "::buffa::json_helpers::skip_if::is_unset_message_field"
+    )]
+    pub target: ::buffa::MessageField<UiInstallationTarget>,
+    /// Field 3: `page`
+    #[serde(
+        rename = "page",
+        skip_serializing_if = "::buffa::json_helpers::skip_if::is_unset_message_field"
+    )]
+    pub page: ::buffa::MessageField<super::super::common::v1::PageRequest>,
+    #[serde(skip)]
+    #[doc(hidden)]
+    pub __buffa_unknown_fields: ::buffa::UnknownFields,
+}
+impl ::core::fmt::Debug for ListUiInstallationsRequest {
+    fn fmt(&self, f: &mut ::core::fmt::Formatter<'_>) -> ::core::fmt::Result {
+        f.debug_struct("ListUiInstallationsRequest")
+            .field("organization_id", &self.organization_id)
+            .field("target", &self.target)
+            .field("page", &self.page)
+            .finish()
+    }
+}
+impl ListUiInstallationsRequest {
+    /// Protobuf type URL for this message, for use with `Any::pack` and
+    /// `Any::unpack_if`.
+    ///
+    /// Format: `type.googleapis.com/<fully.qualified.TypeName>`
+    pub const TYPE_URL: &'static str = "type.googleapis.com/hephaestus.release.v1.ListUiInstallationsRequest";
+}
+::buffa::impl_default_instance!(ListUiInstallationsRequest);
+impl ::buffa::MessageName for ListUiInstallationsRequest {
+    const PACKAGE: &'static str = "hephaestus.release.v1";
+    const NAME: &'static str = "ListUiInstallationsRequest";
+    const FULL_NAME: &'static str = "hephaestus.release.v1.ListUiInstallationsRequest";
+    const TYPE_URL: &'static str = "type.googleapis.com/hephaestus.release.v1.ListUiInstallationsRequest";
+}
+impl ::buffa::Message for ListUiInstallationsRequest {
+    /// Returns the total encoded size in bytes.
+    ///
+    /// The result is a `u32`; the protobuf specification requires all
+    /// messages to fit within 2 GiB (2,147,483,647 bytes), so a
+    /// compliant message will never overflow this type.
+    #[allow(clippy::let_and_return)]
+    fn compute_size(&self, __cache: &mut ::buffa::SizeCache) -> u32 {
+        #[allow(unused_imports)]
+        use ::buffa::Enumeration as _;
+        let mut size = 0u32;
+        if self.organization_id.is_set() {
+            let __slot = __cache.reserve();
+            let inner_size = self.organization_id.compute_size(__cache);
+            __cache.set(__slot, inner_size);
+            size
+                += 1u32 + ::buffa::encoding::varint_len(inner_size as u64) as u32
+                    + inner_size;
+        }
+        if self.target.is_set() {
+            let __slot = __cache.reserve();
+            let inner_size = self.target.compute_size(__cache);
+            __cache.set(__slot, inner_size);
+            size
+                += 1u32 + ::buffa::encoding::varint_len(inner_size as u64) as u32
+                    + inner_size;
+        }
+        if self.page.is_set() {
+            let __slot = __cache.reserve();
+            let inner_size = self.page.compute_size(__cache);
+            __cache.set(__slot, inner_size);
+            size
+                += 1u32 + ::buffa::encoding::varint_len(inner_size as u64) as u32
+                    + inner_size;
+        }
+        size += self.__buffa_unknown_fields.encoded_len() as u32;
+        size
+    }
+    fn write_to(
+        &self,
+        __cache: &mut ::buffa::SizeCache,
+        buf: &mut impl ::buffa::bytes::BufMut,
+    ) {
+        #[allow(unused_imports)]
+        use ::buffa::Enumeration as _;
+        if self.organization_id.is_set() {
+            ::buffa::types::put_len_delimited_header(1u32, __cache.consume_next(), buf);
+            self.organization_id.write_to(__cache, buf);
+        }
+        if self.target.is_set() {
+            ::buffa::types::put_len_delimited_header(2u32, __cache.consume_next(), buf);
+            self.target.write_to(__cache, buf);
+        }
+        if self.page.is_set() {
+            ::buffa::types::put_len_delimited_header(3u32, __cache.consume_next(), buf);
+            self.page.write_to(__cache, buf);
+        }
+        self.__buffa_unknown_fields.write_to(buf);
+    }
+    fn merge_field(
+        &mut self,
+        tag: ::buffa::encoding::Tag,
+        buf: &mut impl ::buffa::bytes::Buf,
+        ctx: ::buffa::DecodeContext<'_>,
+    ) -> ::core::result::Result<(), ::buffa::DecodeError> {
+        #[allow(unused_imports)]
+        use ::buffa::bytes::Buf as _;
+        #[allow(unused_imports)]
+        use ::buffa::Enumeration as _;
+        match tag.field_number() {
+            1u32 => {
+                ::buffa::encoding::check_wire_type(
+                    tag,
+                    ::buffa::encoding::WireType::LengthDelimited,
+                )?;
+                ::buffa::Message::merge_length_delimited(
+                    self.organization_id.get_or_insert_default(),
+                    buf,
+                    ctx,
+                )?;
+            }
+            2u32 => {
+                ::buffa::encoding::check_wire_type(
+                    tag,
+                    ::buffa::encoding::WireType::LengthDelimited,
+                )?;
+                ::buffa::Message::merge_length_delimited(
+                    self.target.get_or_insert_default(),
+                    buf,
+                    ctx,
+                )?;
+            }
+            3u32 => {
+                ::buffa::encoding::check_wire_type(
+                    tag,
+                    ::buffa::encoding::WireType::LengthDelimited,
+                )?;
+                ::buffa::Message::merge_length_delimited(
+                    self.page.get_or_insert_default(),
+                    buf,
+                    ctx,
+                )?;
+            }
+            _ => {
+                self.__buffa_unknown_fields
+                    .push(::buffa::encoding::decode_unknown_field(tag, buf, ctx)?);
+            }
+        }
+        ::core::result::Result::Ok(())
+    }
+    fn clear(&mut self) {
+        self.organization_id = ::buffa::MessageField::none();
+        self.target = ::buffa::MessageField::none();
+        self.page = ::buffa::MessageField::none();
+        self.__buffa_unknown_fields.clear();
+    }
+}
+impl ::buffa::ExtensionSet for ListUiInstallationsRequest {
+    const PROTO_FQN: &'static str = "hephaestus.release.v1.ListUiInstallationsRequest";
+    fn unknown_fields(&self) -> &::buffa::UnknownFields {
+        &self.__buffa_unknown_fields
+    }
+    fn unknown_fields_mut(&mut self) -> &mut ::buffa::UnknownFields {
+        &mut self.__buffa_unknown_fields
+    }
+}
+impl ::buffa::json_helpers::ProtoElemJson for ListUiInstallationsRequest {
+    fn serialize_proto_json<S: ::serde::Serializer>(
+        v: &Self,
+        s: S,
+    ) -> ::core::result::Result<S::Ok, S::Error> {
+        ::serde::Serialize::serialize(v, s)
+    }
+    fn deserialize_proto_json<'de, D: ::serde::Deserializer<'de>>(
+        d: D,
+    ) -> ::core::result::Result<Self, D::Error> {
+        <Self as ::serde::Deserialize>::deserialize(d)
+    }
+}
+#[doc(hidden)]
+pub const __LIST_UI_INSTALLATIONS_REQUEST_JSON_ANY: ::buffa::type_registry::JsonAnyEntry = ::buffa::type_registry::JsonAnyEntry {
+    type_url: "type.googleapis.com/hephaestus.release.v1.ListUiInstallationsRequest",
+    to_json: ::buffa::type_registry::any_to_json::<ListUiInstallationsRequest>,
+    from_json: ::buffa::type_registry::any_from_json::<ListUiInstallationsRequest>,
+    is_wkt: false,
+};
+#[derive(Clone, PartialEq, Default)]
+#[derive(::serde::Serialize, ::serde::Deserialize)]
+#[serde(default)]
+pub struct ListUiInstallationsResponse {
+    /// Field 1: `installations`
+    #[serde(
+        rename = "installations",
+        skip_serializing_if = "::buffa::json_helpers::skip_if::is_empty_vec",
+        deserialize_with = "::buffa::json_helpers::null_as_default"
+    )]
+    pub installations: ::buffa::alloc::vec::Vec<UiInstallationNavigation>,
+    /// Field 2: `page`
+    #[serde(
+        rename = "page",
+        skip_serializing_if = "::buffa::json_helpers::skip_if::is_unset_message_field"
+    )]
+    pub page: ::buffa::MessageField<super::super::common::v1::PageResponse>,
+    #[serde(skip)]
+    #[doc(hidden)]
+    pub __buffa_unknown_fields: ::buffa::UnknownFields,
+}
+impl ::core::fmt::Debug for ListUiInstallationsResponse {
+    fn fmt(&self, f: &mut ::core::fmt::Formatter<'_>) -> ::core::fmt::Result {
+        f.debug_struct("ListUiInstallationsResponse")
+            .field("installations", &self.installations)
+            .field("page", &self.page)
+            .finish()
+    }
+}
+impl ListUiInstallationsResponse {
+    /// Protobuf type URL for this message, for use with `Any::pack` and
+    /// `Any::unpack_if`.
+    ///
+    /// Format: `type.googleapis.com/<fully.qualified.TypeName>`
+    pub const TYPE_URL: &'static str = "type.googleapis.com/hephaestus.release.v1.ListUiInstallationsResponse";
+}
+::buffa::impl_default_instance!(ListUiInstallationsResponse);
+impl ::buffa::MessageName for ListUiInstallationsResponse {
+    const PACKAGE: &'static str = "hephaestus.release.v1";
+    const NAME: &'static str = "ListUiInstallationsResponse";
+    const FULL_NAME: &'static str = "hephaestus.release.v1.ListUiInstallationsResponse";
+    const TYPE_URL: &'static str = "type.googleapis.com/hephaestus.release.v1.ListUiInstallationsResponse";
+}
+impl ::buffa::Message for ListUiInstallationsResponse {
+    /// Returns the total encoded size in bytes.
+    ///
+    /// The result is a `u32`; the protobuf specification requires all
+    /// messages to fit within 2 GiB (2,147,483,647 bytes), so a
+    /// compliant message will never overflow this type.
+    #[allow(clippy::let_and_return)]
+    fn compute_size(&self, __cache: &mut ::buffa::SizeCache) -> u32 {
+        #[allow(unused_imports)]
+        use ::buffa::Enumeration as _;
+        let mut size = 0u32;
+        for v in &self.installations {
+            let __slot = __cache.reserve();
+            let inner_size = v.compute_size(__cache);
+            __cache.set(__slot, inner_size);
+            size
+                += 1u32 + ::buffa::encoding::varint_len(inner_size as u64) as u32
+                    + inner_size;
+        }
+        if self.page.is_set() {
+            let __slot = __cache.reserve();
+            let inner_size = self.page.compute_size(__cache);
+            __cache.set(__slot, inner_size);
+            size
+                += 1u32 + ::buffa::encoding::varint_len(inner_size as u64) as u32
+                    + inner_size;
+        }
+        size += self.__buffa_unknown_fields.encoded_len() as u32;
+        size
+    }
+    fn write_to(
+        &self,
+        __cache: &mut ::buffa::SizeCache,
+        buf: &mut impl ::buffa::bytes::BufMut,
+    ) {
+        #[allow(unused_imports)]
+        use ::buffa::Enumeration as _;
+        for v in &self.installations {
+            ::buffa::types::put_len_delimited_header(1u32, __cache.consume_next(), buf);
+            v.write_to(__cache, buf);
+        }
+        if self.page.is_set() {
+            ::buffa::types::put_len_delimited_header(2u32, __cache.consume_next(), buf);
+            self.page.write_to(__cache, buf);
+        }
+        self.__buffa_unknown_fields.write_to(buf);
+    }
+    fn merge_field(
+        &mut self,
+        tag: ::buffa::encoding::Tag,
+        buf: &mut impl ::buffa::bytes::Buf,
+        ctx: ::buffa::DecodeContext<'_>,
+    ) -> ::core::result::Result<(), ::buffa::DecodeError> {
+        #[allow(unused_imports)]
+        use ::buffa::bytes::Buf as _;
+        #[allow(unused_imports)]
+        use ::buffa::Enumeration as _;
+        match tag.field_number() {
+            1u32 => {
+                ::buffa::encoding::check_wire_type(
+                    tag,
+                    ::buffa::encoding::WireType::LengthDelimited,
+                )?;
+                let mut elem = ::core::default::Default::default();
+                ::buffa::Message::merge_length_delimited(&mut elem, buf, ctx)?;
+                self.installations.push(elem);
+            }
+            2u32 => {
+                ::buffa::encoding::check_wire_type(
+                    tag,
+                    ::buffa::encoding::WireType::LengthDelimited,
+                )?;
+                ::buffa::Message::merge_length_delimited(
+                    self.page.get_or_insert_default(),
+                    buf,
+                    ctx,
+                )?;
+            }
+            _ => {
+                self.__buffa_unknown_fields
+                    .push(::buffa::encoding::decode_unknown_field(tag, buf, ctx)?);
+            }
+        }
+        ::core::result::Result::Ok(())
+    }
+    fn clear(&mut self) {
+        self.installations.clear();
+        self.page = ::buffa::MessageField::none();
+        self.__buffa_unknown_fields.clear();
+    }
+}
+impl ::buffa::ExtensionSet for ListUiInstallationsResponse {
+    const PROTO_FQN: &'static str = "hephaestus.release.v1.ListUiInstallationsResponse";
+    fn unknown_fields(&self) -> &::buffa::UnknownFields {
+        &self.__buffa_unknown_fields
+    }
+    fn unknown_fields_mut(&mut self) -> &mut ::buffa::UnknownFields {
+        &mut self.__buffa_unknown_fields
+    }
+}
+impl ::buffa::json_helpers::ProtoElemJson for ListUiInstallationsResponse {
+    fn serialize_proto_json<S: ::serde::Serializer>(
+        v: &Self,
+        s: S,
+    ) -> ::core::result::Result<S::Ok, S::Error> {
+        ::serde::Serialize::serialize(v, s)
+    }
+    fn deserialize_proto_json<'de, D: ::serde::Deserializer<'de>>(
+        d: D,
+    ) -> ::core::result::Result<Self, D::Error> {
+        <Self as ::serde::Deserialize>::deserialize(d)
+    }
+}
+#[doc(hidden)]
+pub const __LIST_UI_INSTALLATIONS_RESPONSE_JSON_ANY: ::buffa::type_registry::JsonAnyEntry = ::buffa::type_registry::JsonAnyEntry {
+    type_url: "type.googleapis.com/hephaestus.release.v1.ListUiInstallationsResponse",
+    to_json: ::buffa::type_registry::any_to_json::<ListUiInstallationsResponse>,
+    from_json: ::buffa::type_registry::any_from_json::<ListUiInstallationsResponse>,
+    is_wkt: false,
+};
+#[derive(Clone, PartialEq, Default)]
+#[derive(::serde::Serialize, ::serde::Deserialize)]
+#[serde(default)]
+pub struct UiInstallationNavigation {
+    /// Field 1: `installation_id`
+    #[serde(
+        rename = "installationId",
+        alias = "installation_id",
+        skip_serializing_if = "::buffa::json_helpers::skip_if::is_unset_message_field"
+    )]
+    pub installation_id: ::buffa::MessageField<super::super::common::v1::OpaqueId>,
+    /// Field 2: `generation_id`
+    #[serde(
+        rename = "generationId",
+        alias = "generation_id",
+        skip_serializing_if = "::buffa::json_helpers::skip_if::is_unset_message_field"
+    )]
+    pub generation_id: ::buffa::MessageField<super::super::common::v1::OpaqueId>,
+    /// Field 3: `organization_id`
+    #[serde(
+        rename = "organizationId",
+        alias = "organization_id",
+        skip_serializing_if = "::buffa::json_helpers::skip_if::is_unset_message_field"
+    )]
+    pub organization_id: ::buffa::MessageField<super::super::common::v1::OpaqueId>,
+    /// Field 4: `target`
+    #[serde(
+        rename = "target",
+        skip_serializing_if = "::buffa::json_helpers::skip_if::is_unset_message_field"
+    )]
+    pub target: ::buffa::MessageField<UiInstallationTarget>,
+    /// Field 5: `lifecycle`
+    #[serde(
+        rename = "lifecycle",
+        with = "::buffa::json_helpers::proto_enum",
+        skip_serializing_if = "::buffa::json_helpers::skip_if::is_default_enum_value"
+    )]
+    pub lifecycle: ::buffa::EnumValue<UiInstallationLifecycle>,
+    /// Field 6: `release_id`
+    #[serde(
+        rename = "releaseId",
+        alias = "release_id",
+        skip_serializing_if = "::buffa::json_helpers::skip_if::is_unset_message_field"
+    )]
+    pub release_id: ::buffa::MessageField<super::super::common::v1::OpaqueId>,
+    /// Field 7: `ui_key`
+    #[serde(
+        rename = "uiKey",
+        alias = "ui_key",
+        with = "::buffa::json_helpers::proto_string",
+        skip_serializing_if = "::buffa::json_helpers::skip_if::is_empty_str"
+    )]
+    pub ui_key: ::buffa::alloc::string::String,
+    /// Field 8: `label`
+    #[serde(
+        rename = "label",
+        with = "::buffa::json_helpers::proto_string",
+        skip_serializing_if = "::buffa::json_helpers::skip_if::is_empty_str"
+    )]
+    pub label: ::buffa::alloc::string::String,
+    /// Field 9: `icon`
+    #[serde(
+        rename = "icon",
+        with = "::buffa::json_helpers::proto_enum",
+        skip_serializing_if = "::buffa::json_helpers::skip_if::is_default_enum_value"
+    )]
+    pub icon: ::buffa::EnumValue<ReleaseUiIcon>,
+    /// Field 10: `presentation`
+    #[serde(
+        rename = "presentation",
+        with = "::buffa::json_helpers::proto_enum",
+        skip_serializing_if = "::buffa::json_helpers::skip_if::is_default_enum_value"
+    )]
+    pub presentation: ::buffa::EnumValue<ReleaseUiPresentation>,
+    /// Platform-relative declaration metadata, never a runtime URL.
+    ///
+    /// Field 11: `route_base`
+    #[serde(
+        rename = "routeBase",
+        alias = "route_base",
+        with = "::buffa::json_helpers::proto_string",
+        skip_serializing_if = "::buffa::json_helpers::skip_if::is_empty_str"
+    )]
+    pub route_base: ::buffa::alloc::string::String,
+    /// Field 12: `content_kind`
+    #[serde(
+        rename = "contentKind",
+        alias = "content_kind",
+        with = "::buffa::json_helpers::proto_enum",
+        skip_serializing_if = "::buffa::json_helpers::skip_if::is_default_enum_value"
+    )]
+    pub content_kind: ::buffa::EnumValue<UiInstallationContentKind>,
+    /// False when current source CanUse or a bound permission is unavailable.
+    ///
+    /// Field 13: `launchable`
+    #[serde(
+        rename = "launchable",
+        with = "::buffa::json_helpers::proto_bool",
+        skip_serializing_if = "::buffa::json_helpers::skip_if::is_false"
+    )]
+    pub launchable: bool,
+    #[serde(skip)]
+    #[doc(hidden)]
+    pub __buffa_unknown_fields: ::buffa::UnknownFields,
+}
+impl ::core::fmt::Debug for UiInstallationNavigation {
+    fn fmt(&self, f: &mut ::core::fmt::Formatter<'_>) -> ::core::fmt::Result {
+        f.debug_struct("UiInstallationNavigation")
+            .field("installation_id", &self.installation_id)
+            .field("generation_id", &self.generation_id)
+            .field("organization_id", &self.organization_id)
+            .field("target", &self.target)
+            .field("lifecycle", &self.lifecycle)
+            .field("release_id", &self.release_id)
+            .field("ui_key", &self.ui_key)
+            .field("label", &self.label)
+            .field("icon", &self.icon)
+            .field("presentation", &self.presentation)
+            .field("route_base", &self.route_base)
+            .field("content_kind", &self.content_kind)
+            .field("launchable", &self.launchable)
+            .finish()
+    }
+}
+impl UiInstallationNavigation {
+    /// Protobuf type URL for this message, for use with `Any::pack` and
+    /// `Any::unpack_if`.
+    ///
+    /// Format: `type.googleapis.com/<fully.qualified.TypeName>`
+    pub const TYPE_URL: &'static str = "type.googleapis.com/hephaestus.release.v1.UiInstallationNavigation";
+}
+::buffa::impl_default_instance!(UiInstallationNavigation);
+impl ::buffa::MessageName for UiInstallationNavigation {
+    const PACKAGE: &'static str = "hephaestus.release.v1";
+    const NAME: &'static str = "UiInstallationNavigation";
+    const FULL_NAME: &'static str = "hephaestus.release.v1.UiInstallationNavigation";
+    const TYPE_URL: &'static str = "type.googleapis.com/hephaestus.release.v1.UiInstallationNavigation";
+}
+impl ::buffa::Message for UiInstallationNavigation {
+    /// Returns the total encoded size in bytes.
+    ///
+    /// The result is a `u32`; the protobuf specification requires all
+    /// messages to fit within 2 GiB (2,147,483,647 bytes), so a
+    /// compliant message will never overflow this type.
+    #[allow(clippy::let_and_return)]
+    fn compute_size(&self, __cache: &mut ::buffa::SizeCache) -> u32 {
+        #[allow(unused_imports)]
+        use ::buffa::Enumeration as _;
+        let mut size = 0u32;
+        if self.installation_id.is_set() {
+            let __slot = __cache.reserve();
+            let inner_size = self.installation_id.compute_size(__cache);
+            __cache.set(__slot, inner_size);
+            size
+                += 1u32 + ::buffa::encoding::varint_len(inner_size as u64) as u32
+                    + inner_size;
+        }
+        if self.generation_id.is_set() {
+            let __slot = __cache.reserve();
+            let inner_size = self.generation_id.compute_size(__cache);
+            __cache.set(__slot, inner_size);
+            size
+                += 1u32 + ::buffa::encoding::varint_len(inner_size as u64) as u32
+                    + inner_size;
+        }
+        if self.organization_id.is_set() {
+            let __slot = __cache.reserve();
+            let inner_size = self.organization_id.compute_size(__cache);
+            __cache.set(__slot, inner_size);
+            size
+                += 1u32 + ::buffa::encoding::varint_len(inner_size as u64) as u32
+                    + inner_size;
+        }
+        if self.target.is_set() {
+            let __slot = __cache.reserve();
+            let inner_size = self.target.compute_size(__cache);
+            __cache.set(__slot, inner_size);
+            size
+                += 1u32 + ::buffa::encoding::varint_len(inner_size as u64) as u32
+                    + inner_size;
+        }
+        {
+            let val = self.lifecycle.to_i32();
+            if val != 0 {
+                size += 1u32 + ::buffa::types::int32_encoded_len(val) as u32;
+            }
+        }
+        if self.release_id.is_set() {
+            let __slot = __cache.reserve();
+            let inner_size = self.release_id.compute_size(__cache);
+            __cache.set(__slot, inner_size);
+            size
+                += 1u32 + ::buffa::encoding::varint_len(inner_size as u64) as u32
+                    + inner_size;
+        }
+        if !self.ui_key.is_empty() {
+            size += 1u32 + ::buffa::types::string_encoded_len(&self.ui_key) as u32;
+        }
+        if !self.label.is_empty() {
+            size += 1u32 + ::buffa::types::string_encoded_len(&self.label) as u32;
+        }
+        {
+            let val = self.icon.to_i32();
+            if val != 0 {
+                size += 1u32 + ::buffa::types::int32_encoded_len(val) as u32;
+            }
+        }
+        {
+            let val = self.presentation.to_i32();
+            if val != 0 {
+                size += 1u32 + ::buffa::types::int32_encoded_len(val) as u32;
+            }
+        }
+        if !self.route_base.is_empty() {
+            size += 1u32 + ::buffa::types::string_encoded_len(&self.route_base) as u32;
+        }
+        {
+            let val = self.content_kind.to_i32();
+            if val != 0 {
+                size += 1u32 + ::buffa::types::int32_encoded_len(val) as u32;
+            }
+        }
+        if self.launchable {
+            size += 1u32 + ::buffa::types::BOOL_ENCODED_LEN as u32;
+        }
+        size += self.__buffa_unknown_fields.encoded_len() as u32;
+        size
+    }
+    fn write_to(
+        &self,
+        __cache: &mut ::buffa::SizeCache,
+        buf: &mut impl ::buffa::bytes::BufMut,
+    ) {
+        #[allow(unused_imports)]
+        use ::buffa::Enumeration as _;
+        if self.installation_id.is_set() {
+            ::buffa::types::put_len_delimited_header(1u32, __cache.consume_next(), buf);
+            self.installation_id.write_to(__cache, buf);
+        }
+        if self.generation_id.is_set() {
+            ::buffa::types::put_len_delimited_header(2u32, __cache.consume_next(), buf);
+            self.generation_id.write_to(__cache, buf);
+        }
+        if self.organization_id.is_set() {
+            ::buffa::types::put_len_delimited_header(3u32, __cache.consume_next(), buf);
+            self.organization_id.write_to(__cache, buf);
+        }
+        if self.target.is_set() {
+            ::buffa::types::put_len_delimited_header(4u32, __cache.consume_next(), buf);
+            self.target.write_to(__cache, buf);
+        }
+        {
+            let val = self.lifecycle.to_i32();
+            if val != 0 {
+                ::buffa::types::put_int32_field(5u32, val, buf);
+            }
+        }
+        if self.release_id.is_set() {
+            ::buffa::types::put_len_delimited_header(6u32, __cache.consume_next(), buf);
+            self.release_id.write_to(__cache, buf);
+        }
+        if !self.ui_key.is_empty() {
+            ::buffa::types::put_string_field(7u32, &self.ui_key, buf);
+        }
+        if !self.label.is_empty() {
+            ::buffa::types::put_string_field(8u32, &self.label, buf);
+        }
+        {
+            let val = self.icon.to_i32();
+            if val != 0 {
+                ::buffa::types::put_int32_field(9u32, val, buf);
+            }
+        }
+        {
+            let val = self.presentation.to_i32();
+            if val != 0 {
+                ::buffa::types::put_int32_field(10u32, val, buf);
+            }
+        }
+        if !self.route_base.is_empty() {
+            ::buffa::types::put_string_field(11u32, &self.route_base, buf);
+        }
+        {
+            let val = self.content_kind.to_i32();
+            if val != 0 {
+                ::buffa::types::put_int32_field(12u32, val, buf);
+            }
+        }
+        if self.launchable {
+            ::buffa::types::put_bool_field(13u32, self.launchable, buf);
+        }
+        self.__buffa_unknown_fields.write_to(buf);
+    }
+    fn merge_field(
+        &mut self,
+        tag: ::buffa::encoding::Tag,
+        buf: &mut impl ::buffa::bytes::Buf,
+        ctx: ::buffa::DecodeContext<'_>,
+    ) -> ::core::result::Result<(), ::buffa::DecodeError> {
+        #[allow(unused_imports)]
+        use ::buffa::bytes::Buf as _;
+        #[allow(unused_imports)]
+        use ::buffa::Enumeration as _;
+        match tag.field_number() {
+            1u32 => {
+                ::buffa::encoding::check_wire_type(
+                    tag,
+                    ::buffa::encoding::WireType::LengthDelimited,
+                )?;
+                ::buffa::Message::merge_length_delimited(
+                    self.installation_id.get_or_insert_default(),
+                    buf,
+                    ctx,
+                )?;
+            }
+            2u32 => {
+                ::buffa::encoding::check_wire_type(
+                    tag,
+                    ::buffa::encoding::WireType::LengthDelimited,
+                )?;
+                ::buffa::Message::merge_length_delimited(
+                    self.generation_id.get_or_insert_default(),
+                    buf,
+                    ctx,
+                )?;
+            }
+            3u32 => {
+                ::buffa::encoding::check_wire_type(
+                    tag,
+                    ::buffa::encoding::WireType::LengthDelimited,
+                )?;
+                ::buffa::Message::merge_length_delimited(
+                    self.organization_id.get_or_insert_default(),
+                    buf,
+                    ctx,
+                )?;
+            }
+            4u32 => {
+                ::buffa::encoding::check_wire_type(
+                    tag,
+                    ::buffa::encoding::WireType::LengthDelimited,
+                )?;
+                ::buffa::Message::merge_length_delimited(
+                    self.target.get_or_insert_default(),
+                    buf,
+                    ctx,
+                )?;
+            }
+            5u32 => {
+                ::buffa::encoding::check_wire_type(
+                    tag,
+                    ::buffa::encoding::WireType::Varint,
+                )?;
+                self.lifecycle = ::buffa::EnumValue::from(
+                    ::buffa::types::decode_int32(buf)?,
+                );
+            }
+            6u32 => {
+                ::buffa::encoding::check_wire_type(
+                    tag,
+                    ::buffa::encoding::WireType::LengthDelimited,
+                )?;
+                ::buffa::Message::merge_length_delimited(
+                    self.release_id.get_or_insert_default(),
+                    buf,
+                    ctx,
+                )?;
+            }
+            7u32 => {
+                ::buffa::encoding::check_wire_type(
+                    tag,
+                    ::buffa::encoding::WireType::LengthDelimited,
+                )?;
+                ::buffa::types::merge_string(&mut self.ui_key, buf)?;
+            }
+            8u32 => {
+                ::buffa::encoding::check_wire_type(
+                    tag,
+                    ::buffa::encoding::WireType::LengthDelimited,
+                )?;
+                ::buffa::types::merge_string(&mut self.label, buf)?;
+            }
+            9u32 => {
+                ::buffa::encoding::check_wire_type(
+                    tag,
+                    ::buffa::encoding::WireType::Varint,
+                )?;
+                self.icon = ::buffa::EnumValue::from(::buffa::types::decode_int32(buf)?);
+            }
+            10u32 => {
+                ::buffa::encoding::check_wire_type(
+                    tag,
+                    ::buffa::encoding::WireType::Varint,
+                )?;
+                self.presentation = ::buffa::EnumValue::from(
+                    ::buffa::types::decode_int32(buf)?,
+                );
+            }
+            11u32 => {
+                ::buffa::encoding::check_wire_type(
+                    tag,
+                    ::buffa::encoding::WireType::LengthDelimited,
+                )?;
+                ::buffa::types::merge_string(&mut self.route_base, buf)?;
+            }
+            12u32 => {
+                ::buffa::encoding::check_wire_type(
+                    tag,
+                    ::buffa::encoding::WireType::Varint,
+                )?;
+                self.content_kind = ::buffa::EnumValue::from(
+                    ::buffa::types::decode_int32(buf)?,
+                );
+            }
+            13u32 => {
+                ::buffa::encoding::check_wire_type(
+                    tag,
+                    ::buffa::encoding::WireType::Varint,
+                )?;
+                self.launchable = ::buffa::types::decode_bool(buf)?;
+            }
+            _ => {
+                self.__buffa_unknown_fields
+                    .push(::buffa::encoding::decode_unknown_field(tag, buf, ctx)?);
+            }
+        }
+        ::core::result::Result::Ok(())
+    }
+    fn clear(&mut self) {
+        self.installation_id = ::buffa::MessageField::none();
+        self.generation_id = ::buffa::MessageField::none();
+        self.organization_id = ::buffa::MessageField::none();
+        self.target = ::buffa::MessageField::none();
+        self.lifecycle = ::buffa::EnumValue::from(0);
+        self.release_id = ::buffa::MessageField::none();
+        self.ui_key.clear();
+        self.label.clear();
+        self.icon = ::buffa::EnumValue::from(0);
+        self.presentation = ::buffa::EnumValue::from(0);
+        self.route_base.clear();
+        self.content_kind = ::buffa::EnumValue::from(0);
+        self.launchable = false;
+        self.__buffa_unknown_fields.clear();
+    }
+}
+impl ::buffa::ExtensionSet for UiInstallationNavigation {
+    const PROTO_FQN: &'static str = "hephaestus.release.v1.UiInstallationNavigation";
+    fn unknown_fields(&self) -> &::buffa::UnknownFields {
+        &self.__buffa_unknown_fields
+    }
+    fn unknown_fields_mut(&mut self) -> &mut ::buffa::UnknownFields {
+        &mut self.__buffa_unknown_fields
+    }
+}
+impl ::buffa::json_helpers::ProtoElemJson for UiInstallationNavigation {
+    fn serialize_proto_json<S: ::serde::Serializer>(
+        v: &Self,
+        s: S,
+    ) -> ::core::result::Result<S::Ok, S::Error> {
+        ::serde::Serialize::serialize(v, s)
+    }
+    fn deserialize_proto_json<'de, D: ::serde::Deserializer<'de>>(
+        d: D,
+    ) -> ::core::result::Result<Self, D::Error> {
+        <Self as ::serde::Deserialize>::deserialize(d)
+    }
+}
+#[doc(hidden)]
+pub const __UI_INSTALLATION_NAVIGATION_JSON_ANY: ::buffa::type_registry::JsonAnyEntry = ::buffa::type_registry::JsonAnyEntry {
+    type_url: "type.googleapis.com/hephaestus.release.v1.UiInstallationNavigation",
+    to_json: ::buffa::type_registry::any_to_json::<UiInstallationNavigation>,
+    from_json: ::buffa::type_registry::any_from_json::<UiInstallationNavigation>,
+    is_wkt: false,
+};
+#[derive(Clone, PartialEq, Default)]
+#[derive(::serde::Serialize, ::serde::Deserialize)]
+#[serde(default)]
+pub struct CreateUiBrowserHandoffRequest {
+    /// Correlation only for this non-replayable handoff issue; idempotency_key must be empty.
+    ///
+    /// Field 1: `context`
+    #[serde(
+        rename = "context",
+        skip_serializing_if = "::buffa::json_helpers::skip_if::is_unset_message_field"
+    )]
+    pub context: ::buffa::MessageField<super::super::common::v1::RequestContext>,
+    /// Field 2: `installation_id`
+    #[serde(
+        rename = "installationId",
+        alias = "installation_id",
+        skip_serializing_if = "::buffa::json_helpers::skip_if::is_unset_message_field"
+    )]
+    pub installation_id: ::buffa::MessageField<super::super::common::v1::OpaqueId>,
+    /// Field 3: `generation_id`
+    #[serde(
+        rename = "generationId",
+        alias = "generation_id",
+        skip_serializing_if = "::buffa::json_helpers::skip_if::is_unset_message_field"
+    )]
+    pub generation_id: ::buffa::MessageField<super::super::common::v1::OpaqueId>,
+    /// Validated platform-relative initial route, never a URL or origin.
+    ///
+    /// Field 4: `route`
+    #[serde(
+        rename = "route",
+        with = "::buffa::json_helpers::proto_string",
+        skip_serializing_if = "::buffa::json_helpers::skip_if::is_empty_str"
+    )]
+    pub route: ::buffa::alloc::string::String,
+    /// Exactly 32 bytes generated by Phoenix. Request-only and redacted by RPC logging.
+    ///
+    /// Field 5: `handoff_secret`
+    #[serde(
+        rename = "handoffSecret",
+        alias = "handoff_secret",
+        with = "::buffa::json_helpers::bytes",
+        skip_serializing_if = "::buffa::json_helpers::skip_if::is_empty_bytes"
+    )]
+    pub handoff_secret: ::buffa::alloc::vec::Vec<u8>,
+    #[serde(skip)]
+    #[doc(hidden)]
+    pub __buffa_unknown_fields: ::buffa::UnknownFields,
+}
+impl ::core::fmt::Debug for CreateUiBrowserHandoffRequest {
+    fn fmt(&self, f: &mut ::core::fmt::Formatter<'_>) -> ::core::fmt::Result {
+        f.debug_struct("CreateUiBrowserHandoffRequest")
+            .field("context", &self.context)
+            .field("installation_id", &self.installation_id)
+            .field("generation_id", &self.generation_id)
+            .field("route", &self.route)
+            .field("handoff_secret", &self.handoff_secret)
+            .finish()
+    }
+}
+impl CreateUiBrowserHandoffRequest {
+    /// Protobuf type URL for this message, for use with `Any::pack` and
+    /// `Any::unpack_if`.
+    ///
+    /// Format: `type.googleapis.com/<fully.qualified.TypeName>`
+    pub const TYPE_URL: &'static str = "type.googleapis.com/hephaestus.release.v1.CreateUiBrowserHandoffRequest";
+}
+::buffa::impl_default_instance!(CreateUiBrowserHandoffRequest);
+impl ::buffa::MessageName for CreateUiBrowserHandoffRequest {
+    const PACKAGE: &'static str = "hephaestus.release.v1";
+    const NAME: &'static str = "CreateUiBrowserHandoffRequest";
+    const FULL_NAME: &'static str = "hephaestus.release.v1.CreateUiBrowserHandoffRequest";
+    const TYPE_URL: &'static str = "type.googleapis.com/hephaestus.release.v1.CreateUiBrowserHandoffRequest";
+}
+impl ::buffa::Message for CreateUiBrowserHandoffRequest {
+    /// Returns the total encoded size in bytes.
+    ///
+    /// The result is a `u32`; the protobuf specification requires all
+    /// messages to fit within 2 GiB (2,147,483,647 bytes), so a
+    /// compliant message will never overflow this type.
+    #[allow(clippy::let_and_return)]
+    fn compute_size(&self, __cache: &mut ::buffa::SizeCache) -> u32 {
+        #[allow(unused_imports)]
+        use ::buffa::Enumeration as _;
+        let mut size = 0u32;
+        if self.context.is_set() {
+            let __slot = __cache.reserve();
+            let inner_size = self.context.compute_size(__cache);
+            __cache.set(__slot, inner_size);
+            size
+                += 1u32 + ::buffa::encoding::varint_len(inner_size as u64) as u32
+                    + inner_size;
+        }
+        if self.installation_id.is_set() {
+            let __slot = __cache.reserve();
+            let inner_size = self.installation_id.compute_size(__cache);
+            __cache.set(__slot, inner_size);
+            size
+                += 1u32 + ::buffa::encoding::varint_len(inner_size as u64) as u32
+                    + inner_size;
+        }
+        if self.generation_id.is_set() {
+            let __slot = __cache.reserve();
+            let inner_size = self.generation_id.compute_size(__cache);
+            __cache.set(__slot, inner_size);
+            size
+                += 1u32 + ::buffa::encoding::varint_len(inner_size as u64) as u32
+                    + inner_size;
+        }
+        if !self.route.is_empty() {
+            size += 1u32 + ::buffa::types::string_encoded_len(&self.route) as u32;
+        }
+        if !self.handoff_secret.is_empty() {
+            size
+                += 1u32 + ::buffa::types::bytes_encoded_len(&self.handoff_secret) as u32;
+        }
+        size += self.__buffa_unknown_fields.encoded_len() as u32;
+        size
+    }
+    fn write_to(
+        &self,
+        __cache: &mut ::buffa::SizeCache,
+        buf: &mut impl ::buffa::bytes::BufMut,
+    ) {
+        #[allow(unused_imports)]
+        use ::buffa::Enumeration as _;
+        if self.context.is_set() {
+            ::buffa::types::put_len_delimited_header(1u32, __cache.consume_next(), buf);
+            self.context.write_to(__cache, buf);
+        }
+        if self.installation_id.is_set() {
+            ::buffa::types::put_len_delimited_header(2u32, __cache.consume_next(), buf);
+            self.installation_id.write_to(__cache, buf);
+        }
+        if self.generation_id.is_set() {
+            ::buffa::types::put_len_delimited_header(3u32, __cache.consume_next(), buf);
+            self.generation_id.write_to(__cache, buf);
+        }
+        if !self.route.is_empty() {
+            ::buffa::types::put_string_field(4u32, &self.route, buf);
+        }
+        if !self.handoff_secret.is_empty() {
+            ::buffa::types::put_bytes_field(5u32, &self.handoff_secret, buf);
+        }
+        self.__buffa_unknown_fields.write_to(buf);
+    }
+    fn merge_field(
+        &mut self,
+        tag: ::buffa::encoding::Tag,
+        buf: &mut impl ::buffa::bytes::Buf,
+        ctx: ::buffa::DecodeContext<'_>,
+    ) -> ::core::result::Result<(), ::buffa::DecodeError> {
+        #[allow(unused_imports)]
+        use ::buffa::bytes::Buf as _;
+        #[allow(unused_imports)]
+        use ::buffa::Enumeration as _;
+        match tag.field_number() {
+            1u32 => {
+                ::buffa::encoding::check_wire_type(
+                    tag,
+                    ::buffa::encoding::WireType::LengthDelimited,
+                )?;
+                ::buffa::Message::merge_length_delimited(
+                    self.context.get_or_insert_default(),
+                    buf,
+                    ctx,
+                )?;
+            }
+            2u32 => {
+                ::buffa::encoding::check_wire_type(
+                    tag,
+                    ::buffa::encoding::WireType::LengthDelimited,
+                )?;
+                ::buffa::Message::merge_length_delimited(
+                    self.installation_id.get_or_insert_default(),
+                    buf,
+                    ctx,
+                )?;
+            }
+            3u32 => {
+                ::buffa::encoding::check_wire_type(
+                    tag,
+                    ::buffa::encoding::WireType::LengthDelimited,
+                )?;
+                ::buffa::Message::merge_length_delimited(
+                    self.generation_id.get_or_insert_default(),
+                    buf,
+                    ctx,
+                )?;
+            }
+            4u32 => {
+                ::buffa::encoding::check_wire_type(
+                    tag,
+                    ::buffa::encoding::WireType::LengthDelimited,
+                )?;
+                ::buffa::types::merge_string(&mut self.route, buf)?;
+            }
+            5u32 => {
+                ::buffa::encoding::check_wire_type(
+                    tag,
+                    ::buffa::encoding::WireType::LengthDelimited,
+                )?;
+                ::buffa::types::merge_bytes(&mut self.handoff_secret, buf)?;
+            }
+            _ => {
+                self.__buffa_unknown_fields
+                    .push(::buffa::encoding::decode_unknown_field(tag, buf, ctx)?);
+            }
+        }
+        ::core::result::Result::Ok(())
+    }
+    fn clear(&mut self) {
+        self.context = ::buffa::MessageField::none();
+        self.installation_id = ::buffa::MessageField::none();
+        self.generation_id = ::buffa::MessageField::none();
+        self.route.clear();
+        self.handoff_secret.clear();
+        self.__buffa_unknown_fields.clear();
+    }
+}
+impl ::buffa::ExtensionSet for CreateUiBrowserHandoffRequest {
+    const PROTO_FQN: &'static str = "hephaestus.release.v1.CreateUiBrowserHandoffRequest";
+    fn unknown_fields(&self) -> &::buffa::UnknownFields {
+        &self.__buffa_unknown_fields
+    }
+    fn unknown_fields_mut(&mut self) -> &mut ::buffa::UnknownFields {
+        &mut self.__buffa_unknown_fields
+    }
+}
+impl ::buffa::json_helpers::ProtoElemJson for CreateUiBrowserHandoffRequest {
+    fn serialize_proto_json<S: ::serde::Serializer>(
+        v: &Self,
+        s: S,
+    ) -> ::core::result::Result<S::Ok, S::Error> {
+        ::serde::Serialize::serialize(v, s)
+    }
+    fn deserialize_proto_json<'de, D: ::serde::Deserializer<'de>>(
+        d: D,
+    ) -> ::core::result::Result<Self, D::Error> {
+        <Self as ::serde::Deserialize>::deserialize(d)
+    }
+}
+#[doc(hidden)]
+pub const __CREATE_UI_BROWSER_HANDOFF_REQUEST_JSON_ANY: ::buffa::type_registry::JsonAnyEntry = ::buffa::type_registry::JsonAnyEntry {
+    type_url: "type.googleapis.com/hephaestus.release.v1.CreateUiBrowserHandoffRequest",
+    to_json: ::buffa::type_registry::any_to_json::<CreateUiBrowserHandoffRequest>,
+    from_json: ::buffa::type_registry::any_from_json::<CreateUiBrowserHandoffRequest>,
+    is_wkt: false,
+};
+#[derive(Clone, PartialEq, Default)]
+#[derive(::serde::Serialize, ::serde::Deserialize)]
+#[serde(default)]
+pub struct CreateUiBrowserHandoffResponse {
+    /// Field 1: `handoff_id`
+    #[serde(
+        rename = "handoffId",
+        alias = "handoff_id",
+        skip_serializing_if = "::buffa::json_helpers::skip_if::is_unset_message_field"
+    )]
+    pub handoff_id: ::buffa::MessageField<super::super::common::v1::OpaqueId>,
+    /// Field 2: `installation_id`
+    #[serde(
+        rename = "installationId",
+        alias = "installation_id",
+        skip_serializing_if = "::buffa::json_helpers::skip_if::is_unset_message_field"
+    )]
+    pub installation_id: ::buffa::MessageField<super::super::common::v1::OpaqueId>,
+    /// Field 3: `generation_id`
+    #[serde(
+        rename = "generationId",
+        alias = "generation_id",
+        skip_serializing_if = "::buffa::json_helpers::skip_if::is_unset_message_field"
+    )]
+    pub generation_id: ::buffa::MessageField<super::super::common::v1::OpaqueId>,
+    /// Field 4: `route`
+    #[serde(
+        rename = "route",
+        with = "::buffa::json_helpers::proto_string",
+        skip_serializing_if = "::buffa::json_helpers::skip_if::is_empty_str"
+    )]
+    pub route: ::buffa::alloc::string::String,
+    /// Field 5: `expires_at`
+    #[serde(
+        rename = "expiresAt",
+        alias = "expires_at",
+        skip_serializing_if = "::buffa::json_helpers::skip_if::is_unset_message_field"
+    )]
+    pub expires_at: ::buffa::MessageField<::buffa_types::google::protobuf::Timestamp>,
+    #[serde(skip)]
+    #[doc(hidden)]
+    pub __buffa_unknown_fields: ::buffa::UnknownFields,
+}
+impl ::core::fmt::Debug for CreateUiBrowserHandoffResponse {
+    fn fmt(&self, f: &mut ::core::fmt::Formatter<'_>) -> ::core::fmt::Result {
+        f.debug_struct("CreateUiBrowserHandoffResponse")
+            .field("handoff_id", &self.handoff_id)
+            .field("installation_id", &self.installation_id)
+            .field("generation_id", &self.generation_id)
+            .field("route", &self.route)
+            .field("expires_at", &self.expires_at)
+            .finish()
+    }
+}
+impl CreateUiBrowserHandoffResponse {
+    /// Protobuf type URL for this message, for use with `Any::pack` and
+    /// `Any::unpack_if`.
+    ///
+    /// Format: `type.googleapis.com/<fully.qualified.TypeName>`
+    pub const TYPE_URL: &'static str = "type.googleapis.com/hephaestus.release.v1.CreateUiBrowserHandoffResponse";
+}
+::buffa::impl_default_instance!(CreateUiBrowserHandoffResponse);
+impl ::buffa::MessageName for CreateUiBrowserHandoffResponse {
+    const PACKAGE: &'static str = "hephaestus.release.v1";
+    const NAME: &'static str = "CreateUiBrowserHandoffResponse";
+    const FULL_NAME: &'static str = "hephaestus.release.v1.CreateUiBrowserHandoffResponse";
+    const TYPE_URL: &'static str = "type.googleapis.com/hephaestus.release.v1.CreateUiBrowserHandoffResponse";
+}
+impl ::buffa::Message for CreateUiBrowserHandoffResponse {
+    /// Returns the total encoded size in bytes.
+    ///
+    /// The result is a `u32`; the protobuf specification requires all
+    /// messages to fit within 2 GiB (2,147,483,647 bytes), so a
+    /// compliant message will never overflow this type.
+    #[allow(clippy::let_and_return)]
+    fn compute_size(&self, __cache: &mut ::buffa::SizeCache) -> u32 {
+        #[allow(unused_imports)]
+        use ::buffa::Enumeration as _;
+        let mut size = 0u32;
+        if self.handoff_id.is_set() {
+            let __slot = __cache.reserve();
+            let inner_size = self.handoff_id.compute_size(__cache);
+            __cache.set(__slot, inner_size);
+            size
+                += 1u32 + ::buffa::encoding::varint_len(inner_size as u64) as u32
+                    + inner_size;
+        }
+        if self.installation_id.is_set() {
+            let __slot = __cache.reserve();
+            let inner_size = self.installation_id.compute_size(__cache);
+            __cache.set(__slot, inner_size);
+            size
+                += 1u32 + ::buffa::encoding::varint_len(inner_size as u64) as u32
+                    + inner_size;
+        }
+        if self.generation_id.is_set() {
+            let __slot = __cache.reserve();
+            let inner_size = self.generation_id.compute_size(__cache);
+            __cache.set(__slot, inner_size);
+            size
+                += 1u32 + ::buffa::encoding::varint_len(inner_size as u64) as u32
+                    + inner_size;
+        }
+        if !self.route.is_empty() {
+            size += 1u32 + ::buffa::types::string_encoded_len(&self.route) as u32;
+        }
+        if self.expires_at.is_set() {
+            let __slot = __cache.reserve();
+            let inner_size = self.expires_at.compute_size(__cache);
+            __cache.set(__slot, inner_size);
+            size
+                += 1u32 + ::buffa::encoding::varint_len(inner_size as u64) as u32
+                    + inner_size;
+        }
+        size += self.__buffa_unknown_fields.encoded_len() as u32;
+        size
+    }
+    fn write_to(
+        &self,
+        __cache: &mut ::buffa::SizeCache,
+        buf: &mut impl ::buffa::bytes::BufMut,
+    ) {
+        #[allow(unused_imports)]
+        use ::buffa::Enumeration as _;
+        if self.handoff_id.is_set() {
+            ::buffa::types::put_len_delimited_header(1u32, __cache.consume_next(), buf);
+            self.handoff_id.write_to(__cache, buf);
+        }
+        if self.installation_id.is_set() {
+            ::buffa::types::put_len_delimited_header(2u32, __cache.consume_next(), buf);
+            self.installation_id.write_to(__cache, buf);
+        }
+        if self.generation_id.is_set() {
+            ::buffa::types::put_len_delimited_header(3u32, __cache.consume_next(), buf);
+            self.generation_id.write_to(__cache, buf);
+        }
+        if !self.route.is_empty() {
+            ::buffa::types::put_string_field(4u32, &self.route, buf);
+        }
+        if self.expires_at.is_set() {
+            ::buffa::types::put_len_delimited_header(5u32, __cache.consume_next(), buf);
+            self.expires_at.write_to(__cache, buf);
+        }
+        self.__buffa_unknown_fields.write_to(buf);
+    }
+    fn merge_field(
+        &mut self,
+        tag: ::buffa::encoding::Tag,
+        buf: &mut impl ::buffa::bytes::Buf,
+        ctx: ::buffa::DecodeContext<'_>,
+    ) -> ::core::result::Result<(), ::buffa::DecodeError> {
+        #[allow(unused_imports)]
+        use ::buffa::bytes::Buf as _;
+        #[allow(unused_imports)]
+        use ::buffa::Enumeration as _;
+        match tag.field_number() {
+            1u32 => {
+                ::buffa::encoding::check_wire_type(
+                    tag,
+                    ::buffa::encoding::WireType::LengthDelimited,
+                )?;
+                ::buffa::Message::merge_length_delimited(
+                    self.handoff_id.get_or_insert_default(),
+                    buf,
+                    ctx,
+                )?;
+            }
+            2u32 => {
+                ::buffa::encoding::check_wire_type(
+                    tag,
+                    ::buffa::encoding::WireType::LengthDelimited,
+                )?;
+                ::buffa::Message::merge_length_delimited(
+                    self.installation_id.get_or_insert_default(),
+                    buf,
+                    ctx,
+                )?;
+            }
+            3u32 => {
+                ::buffa::encoding::check_wire_type(
+                    tag,
+                    ::buffa::encoding::WireType::LengthDelimited,
+                )?;
+                ::buffa::Message::merge_length_delimited(
+                    self.generation_id.get_or_insert_default(),
+                    buf,
+                    ctx,
+                )?;
+            }
+            4u32 => {
+                ::buffa::encoding::check_wire_type(
+                    tag,
+                    ::buffa::encoding::WireType::LengthDelimited,
+                )?;
+                ::buffa::types::merge_string(&mut self.route, buf)?;
+            }
+            5u32 => {
+                ::buffa::encoding::check_wire_type(
+                    tag,
+                    ::buffa::encoding::WireType::LengthDelimited,
+                )?;
+                ::buffa::Message::merge_length_delimited(
+                    self.expires_at.get_or_insert_default(),
+                    buf,
+                    ctx,
+                )?;
+            }
+            _ => {
+                self.__buffa_unknown_fields
+                    .push(::buffa::encoding::decode_unknown_field(tag, buf, ctx)?);
+            }
+        }
+        ::core::result::Result::Ok(())
+    }
+    fn clear(&mut self) {
+        self.handoff_id = ::buffa::MessageField::none();
+        self.installation_id = ::buffa::MessageField::none();
+        self.generation_id = ::buffa::MessageField::none();
+        self.route.clear();
+        self.expires_at = ::buffa::MessageField::none();
+        self.__buffa_unknown_fields.clear();
+    }
+}
+impl ::buffa::ExtensionSet for CreateUiBrowserHandoffResponse {
+    const PROTO_FQN: &'static str = "hephaestus.release.v1.CreateUiBrowserHandoffResponse";
+    fn unknown_fields(&self) -> &::buffa::UnknownFields {
+        &self.__buffa_unknown_fields
+    }
+    fn unknown_fields_mut(&mut self) -> &mut ::buffa::UnknownFields {
+        &mut self.__buffa_unknown_fields
+    }
+}
+impl ::buffa::json_helpers::ProtoElemJson for CreateUiBrowserHandoffResponse {
+    fn serialize_proto_json<S: ::serde::Serializer>(
+        v: &Self,
+        s: S,
+    ) -> ::core::result::Result<S::Ok, S::Error> {
+        ::serde::Serialize::serialize(v, s)
+    }
+    fn deserialize_proto_json<'de, D: ::serde::Deserializer<'de>>(
+        d: D,
+    ) -> ::core::result::Result<Self, D::Error> {
+        <Self as ::serde::Deserialize>::deserialize(d)
+    }
+}
+#[doc(hidden)]
+pub const __CREATE_UI_BROWSER_HANDOFF_RESPONSE_JSON_ANY: ::buffa::type_registry::JsonAnyEntry = ::buffa::type_registry::JsonAnyEntry {
+    type_url: "type.googleapis.com/hephaestus.release.v1.CreateUiBrowserHandoffResponse",
+    to_json: ::buffa::type_registry::any_to_json::<CreateUiBrowserHandoffResponse>,
+    from_json: ::buffa::type_registry::any_from_json::<CreateUiBrowserHandoffResponse>,
     is_wkt: false,
 };
 #[derive(Clone, PartialEq, Default)]

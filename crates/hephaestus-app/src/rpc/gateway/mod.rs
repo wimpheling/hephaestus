@@ -2,6 +2,9 @@
 
 mod configure_gateway;
 mod install_release_gateways;
+mod project_metadata;
+mod service_log_cursor;
+mod service_logs;
 
 use super::{
     MediatorAuthenticator, MutationReceipts, RpcError, into_connect_error, mutation_receipt,
@@ -12,6 +15,7 @@ use connectrpc::{RequestContext, Response, Router, ServiceRequest, ServiceResult
 use control_plane_postgres::ControlPlanePool as PgPool;
 use gateway_postgres::{
     GatewayManagementError, GatewayPage, PostgresGatewayInstaller, PostgresGatewayManagement,
+    PostgresGatewayServiceLogReader,
 };
 use rpc_proto::{
     connect::hephaestus::gateway::v1::{GatewayService, GatewayServiceExt},
@@ -21,8 +25,11 @@ use rpc_proto::{
             ConfigureGatewayRequest, ConfigureGatewayResponse, CreateMailboxBindingRequest,
             CreateMailboxBindingResponse, GatewayIngress, GatewayIngressOutcome, GatewayLifecycle,
             GatewayMailboxBinding, GatewayMailboxPublication, GatewayRevision, GatewayRoute,
-            GatewaySummary, GetGatewayRequest, GetGatewayResponse, InstallReleaseGatewaysRequest,
+            GatewayServiceDeclaration, GatewayServiceLogCaptureMode, GatewaySummary,
+            GetGatewayRequest, GetGatewayResponse, GetProjectServiceLogMetadataRequest,
+            GetProjectServiceLogMetadataResponse, InstallReleaseGatewaysRequest,
             InstallReleaseGatewaysResponse, ListGatewayIngressRequest, ListGatewayIngressResponse,
+            ListGatewayServiceLogsRequest, ListGatewayServiceLogsResponse,
             ListMailboxBindingsRequest, ListMailboxBindingsResponse,
             ListMailboxPublicationsRequest, ListMailboxPublicationsResponse,
             ListProjectGatewaysRequest, ListProjectGatewaysResponse,
@@ -44,14 +51,18 @@ pub struct GatewayRpc {
     installer_application: GatewayInstallApplication,
     authenticator: MediatorAuthenticator,
     receipts: MutationReceipts,
+    service_logs: PostgresGatewayServiceLogReader,
+    service_log_cursor: service_log_cursor::ServiceLogCursorCodec,
 }
 
 impl GatewayRpc {
     fn new(
         pool: &PgPool,
+        application_pool: &PgPool,
         storage: Arc<forge_service::GitStorage>,
         authenticator: MediatorAuthenticator,
         receipts: MutationReceipts,
+        cursor_key: [u8; 32],
     ) -> Self {
         let authorizer = Arc::new(authz_postgres::PostgresMelangeAuthorizer);
         let installer = PostgresGatewayInstaller::new(pool.clone(), Arc::clone(&authorizer));
@@ -60,6 +71,11 @@ impl GatewayRpc {
             installer_application: GatewayInstallApplication::new(installer, storage),
             authenticator,
             receipts,
+            service_logs: PostgresGatewayServiceLogReader::new(
+                application_pool.clone(),
+                Arc::clone(&authorizer),
+            ),
+            service_log_cursor: service_log_cursor::ServiceLogCursorCodec::new(cursor_key),
         }
     }
 }
@@ -68,12 +84,21 @@ impl GatewayRpc {
 pub fn register(
     router: Router,
     pool: &PgPool,
+    application_pool: &PgPool,
     storage: Arc<forge_service::GitStorage>,
     authenticator: MediatorAuthenticator,
     receipts: MutationReceipts,
+    cursor_key: [u8; 32],
 ) -> Router {
     GatewayServiceExt::register(
-        Arc::new(GatewayRpc::new(pool, storage, authenticator, receipts)),
+        Arc::new(GatewayRpc::new(
+            pool,
+            application_pool,
+            storage,
+            authenticator,
+            receipts,
+            cursor_key,
+        )),
         router,
     )
 }
@@ -131,6 +156,22 @@ impl GatewayService for GatewayRpc {
             .into(),
             ..Default::default()
         })
+    }
+
+    async fn list_gateway_service_logs(
+        &self,
+        ctx: RequestContext,
+        message: ServiceRequest<'_, ListGatewayServiceLogsRequest>,
+    ) -> ServiceResult<ListGatewayServiceLogsResponse> {
+        service_logs::handle(self, ctx, message).await
+    }
+
+    async fn get_project_service_log_metadata(
+        &self,
+        ctx: RequestContext,
+        message: ServiceRequest<'_, GetProjectServiceLogMetadataRequest>,
+    ) -> ServiceResult<GetProjectServiceLogMetadataResponse> {
+        project_metadata::handle(self, ctx, message).await
     }
 
     async fn install_release_gateways(
@@ -351,7 +392,7 @@ impl GatewayService for GatewayRpc {
     }
 }
 
-fn query(
+pub(super) fn query(
     ctx: &RequestContext,
     authenticator: &MediatorAuthenticator,
     method: &str,
@@ -363,7 +404,7 @@ fn query(
     )
     .map_err(into_connect_error)
 }
-fn id(value: Option<&OpaqueId>) -> Result<Uuid, connectrpc::ConnectError> {
+pub(super) fn id(value: Option<&OpaqueId>) -> Result<Uuid, connectrpc::ConnectError> {
     value
         .ok_or_else(|| into_connect_error(RpcError::InvalidArgument))
         .and_then(|value| {
@@ -436,7 +477,7 @@ fn opaque(value: Uuid) -> OpaqueId {
         ..Default::default()
     }
 }
-fn timestamp(value: OffsetDateTime) -> buffa_types::google::protobuf::Timestamp {
+pub(super) fn timestamp(value: OffsetDateTime) -> buffa_types::google::protobuf::Timestamp {
     buffa_types::google::protobuf::Timestamp {
         seconds: value.unix_timestamp(),
         nanos: value.nanosecond().cast_signed(),
@@ -451,6 +492,7 @@ fn summary(value: gateway_postgres::GatewayManagementSummary) -> GatewaySummary 
         name: value.name,
         lifecycle: lifecycle_proto(&value.lifecycle).into(),
         active_revision_id: value.active_revision_id.map(opaque).into(),
+        desired_service_revision_id: value.desired_service_revision_id.map(opaque).into(),
         updated_at: timestamp(value.updated_at).into(),
         ..Default::default()
     }
@@ -464,9 +506,27 @@ fn revision(value: gateway_postgres::GatewayManagementRevision) -> GatewayRevisi
         exposure: value.exposure,
         secret_slots: value.secret_slots,
         mailbox_slots: value.mailbox_slots,
+        service: value
+            .service
+            .map(|service| GatewayServiceDeclaration {
+                loopback_port: u32::from(service.loopback_port),
+                readiness_path: service.readiness_path.as_str().to_owned(),
+                health_path: service.health_path.as_str().to_owned(),
+                log_capture_mode: service_log_capture_mode(service.log_capture_mode.as_str())
+                    .into(),
+                ..Default::default()
+            })
+            .into(),
         created_at: timestamp(value.created_at).into(),
         routes: value.routes.into_iter().map(route).collect(),
         ..Default::default()
+    }
+}
+fn service_log_capture_mode(value: &str) -> GatewayServiceLogCaptureMode {
+    match value {
+        "disabled" => GatewayServiceLogCaptureMode::GATEWAY_SERVICE_LOG_CAPTURE_MODE_DISABLED,
+        "application" => GatewayServiceLogCaptureMode::GATEWAY_SERVICE_LOG_CAPTURE_MODE_APPLICATION,
+        _ => GatewayServiceLogCaptureMode::GATEWAY_SERVICE_LOG_CAPTURE_MODE_UNSPECIFIED,
     }
 }
 fn route(value: gateway_postgres::GatewayManagementRoute) -> GatewayRoute {
@@ -560,5 +620,92 @@ fn ingress_outcome(value: &str) -> GatewayIngressOutcome {
         "timed_out" => GatewayIngressOutcome::TimedOut,
         "rejected" => GatewayIngressOutcome::Rejected,
         _ => GatewayIngressOutcome::Unspecified,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use buffa::Message as _;
+    use gateway_domain::{
+        GatewayServiceConfig, HTTP_HANDLER_CONTRACT_V1, HTTP_SERVICE_HANDLER_CONTRACT_V1,
+        ServiceLogCaptureMode, ServiceProbePath,
+    };
+
+    fn service_config(mode: ServiceLogCaptureMode) -> GatewayServiceConfig {
+        GatewayServiceConfig::new(
+            8080,
+            ServiceProbePath::parse("/readyz").expect("valid readiness path"),
+            ServiceProbePath::parse("/healthz").expect("valid health path"),
+        )
+        .expect("valid service config")
+        .with_log_capture_mode(mode)
+    }
+
+    fn management_revision(service: Option<GatewayServiceConfig>) -> GatewayRevision {
+        revision(gateway_postgres::GatewayManagementRevision {
+            id: Uuid::nil(),
+            release_id: None,
+            release_agent_id: None,
+            handler_contract: if service.is_some() {
+                HTTP_SERVICE_HANDLER_CONTRACT_V1
+            } else {
+                HTTP_HANDLER_CONTRACT_V1
+            }
+            .to_owned(),
+            service,
+            exposure: "private".to_owned(),
+            secret_slots: Vec::new(),
+            mailbox_slots: Vec::new(),
+            created_at: OffsetDateTime::UNIX_EPOCH,
+            routes: Vec::new(),
+        })
+    }
+
+    #[test]
+    fn revision_preserves_service_declaration_and_log_modes() {
+        for (mode, expected_mode) in [
+            (
+                ServiceLogCaptureMode::Disabled,
+                GatewayServiceLogCaptureMode::Disabled,
+            ),
+            (
+                ServiceLogCaptureMode::Application,
+                GatewayServiceLogCaptureMode::Application,
+            ),
+        ] {
+            let service = management_revision(Some(service_config(mode)))
+                .service
+                .into_option()
+                .expect("service revision must expose its declaration");
+            assert_eq!(service.loopback_port, 8080);
+            assert_eq!(service.readiness_path, "/readyz");
+            assert_eq!(service.health_path, "/healthz");
+            assert_eq!(service.log_capture_mode, expected_mode);
+        }
+    }
+
+    #[test]
+    fn service_declaration_survives_protobuf_roundtrip() {
+        let encoded = management_revision(Some(service_config(ServiceLogCaptureMode::Application)))
+            .encode_to_vec();
+        let decoded = GatewayRevision::decode_from_slice(&encoded)
+            .expect("generated protobuf must decode its own service declaration");
+        let service = decoded
+            .service
+            .into_option()
+            .expect("roundtrip must preserve service presence");
+        assert_eq!(service.loopback_port, 8080);
+        assert_eq!(service.readiness_path, "/readyz");
+        assert_eq!(service.health_path, "/healthz");
+        assert_eq!(
+            service.log_capture_mode,
+            GatewayServiceLogCaptureMode::Application
+        );
+    }
+
+    #[test]
+    fn stateless_revision_omits_service_declaration() {
+        assert!(management_revision(None).service.is_unset());
     }
 }

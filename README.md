@@ -21,6 +21,9 @@ is built.
 - [Reusable releases and project agent instances](docs/releases-and-instances.md)
 - [Secret delegation and runtime delivery](docs/secrets.md)
 - [VM runtime](docs/vm-runtime.md)
+- [Persistent gateway services](docs/persistent-gateway-services.md): native
+  cooking-service smoke tests, managed publish/install flow, probes, and
+  debugging boundaries.
 - [Repository-owned OCI image builds](docs/repository-image-builds.md)
 - [Product roadmap](tasks/roadmap.md)
 - [Own-the-loop product definition](tasks/todo/define-own-the-loop-agent-platform.md)
@@ -135,6 +138,9 @@ implementations:
 
 - [VM runtime contract](docs/vm-runtime.md): lifecycle, guest bootstrap,
   parent/worker IPC, networking, image, disk, and mount contracts.
+- [Persistent gateway services](docs/persistent-gateway-services.md): the
+  fixed-port native fixture workflow and the published service path through
+  Connect, including the current acceptance boundary.
 - [libkrun backend](docs/vm-libkrun.md): Fedora host contract, configuration,
   process isolation, cleanup, and integration-test requirements.
 - [VM testing](docs/vm-testing.md): reusable provider conformance tests,
@@ -197,6 +203,13 @@ runs deterministic generated-code and Buf checks, architecture rules, Rust
 formatting/Clippy/tests/docs, Phoenix checks, UI checks, and their focused
 integration tests. Individual `cargo dev check <family>` commands remain useful
 for fast iteration.
+
+The UI family (`cargo dev check ui`, and therefore `cargo dev quality`) also
+runs `npm test` in the [release UI kit](web/assets/release_ui_kit/README.md)
+using Node and npm. The kit has no npm dependencies and the gate does not run
+an install; CI provisions Node 24 for this check. Its Node checks cover
+deterministic package output and source constraints. Browser rendering,
+accessibility, and visual regression remain separate checks.
 
 State selectors cover PostgreSQL, NATS, repositories, artifacts, agent
 volumes, workspaces, secret keys, rootfs, fixtures, runtime files, and logs.

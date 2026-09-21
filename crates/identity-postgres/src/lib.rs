@@ -1,5 +1,9 @@
 //! `PostgreSQL` implementations of identity application ports.
 
+mod session;
+
+pub use session::PostgresBrowserSessionStore;
+
 use async_trait::async_trait;
 use identity_application::{
     BootstrapIdentity, BootstrapIdentityError, IdempotentIdentityResolver, IdentityBootstrapper,

@@ -11,11 +11,16 @@ use async_trait::async_trait;
 use authz_domain::{AuthorizationDecision, ObjectRef, ObjectType, Permission, Subject};
 use authz_postgres::{PostgresMelangeAuthorizer, audit_decision, begin_actor_transaction};
 use forge_domain::{ProjectId, RepositoryId};
-use gateway_domain::{Exposure, GatewayDeclaration, GatewayId, GatewayRevisionId, HttpMethod};
+use gateway_domain::{
+    Exposure, GatewayDeclaration, GatewayId, GatewayRevisionId, GatewayServiceConfig, HttpMethod,
+    ServiceLogCaptureMode, ServiceProbePath,
+};
 use gateway_edge::{
     GatewayConfigRevision, GatewayDesiredConfiguration, GatewayEdgeError, GatewayInvocationOutcome,
     GatewayInvocationRecorder, GatewayLimits, GatewayMailboxPublisher, GatewayReleaseResolver,
-    GatewayRouteBinding, GatewayRouteResolver,
+    GatewayRouteBinding, GatewayRouteResolver, GatewayServiceArtifact, GatewayServiceArtifactKind,
+    GatewayServiceIdentity, GatewayServiceLaunch, GatewayServiceLaunchRequest,
+    GatewayServiceLaunchResolver, GatewayServiceMaterializer, service_transport_spec,
 };
 use http::Method;
 use identity_domain::AuthenticatedIdentity;
@@ -33,7 +38,7 @@ use runtime_authority::{
 };
 use serde::Deserialize;
 use sha2::{Digest, Sha256};
-use sqlx::{PgPool, Postgres, Transaction};
+use sqlx::{PgPool, Postgres, Transaction, pool::PoolConnection};
 use std::{
     collections::{BTreeMap, BTreeSet},
     path::PathBuf,
@@ -46,6 +51,23 @@ use vm_trait::{
     GuestCommand, NetworkMode, PrivateMailboxPublication, RootFilesystem,
     RuntimeAuthorityBootstrap, VmId, VmMount, VmResources, VmSpec,
 };
+
+mod service_execution;
+mod service_failure;
+mod service_log_reader;
+mod service_logs;
+pub(crate) mod service_ownership;
+mod service_targets;
+pub(crate) mod ui_browser;
+
+pub use service_execution::PostgresGatewayExecutionTargetResolver;
+pub use service_failure::PostgresGatewayServiceFailureStore;
+pub use service_log_reader::{GatewayServiceLogReaderError, PostgresGatewayServiceLogReader};
+pub use service_logs::PostgresGatewayServiceLogStore;
+pub use service_ownership::PostgresGatewayServiceOwnership;
+pub use service_targets::PostgresGatewayServiceTargets;
+
+const SERVICE_RECOVERY_BATCH_SIZE: i64 = 128;
 
 /// Host-only request to publish one generic event through an exact gateway
 /// mailbox slot.  The caller never chooses the mailbox or producer identity.
@@ -475,6 +497,46 @@ pub struct PostgresGatewayEdgeAuthority {
     session_ttl: Duration,
 }
 
+/// Owns an adapter read connection until a successful query has completed.
+///
+/// `SQLx` 0.8.6 returns a checked-out pool connection from `Drop` through a
+/// spawned task. If the query future is cancelled while `PostgreSQL` is still
+/// executing it, that return task can leave the backend alive during pool
+/// shutdown. Marking only the unsuccessful path for close-on-drop makes the
+/// cancellation/error path deterministic while successful reads still return
+/// their connection to the pool.
+struct ActiveRoutesConnection {
+    connection: Option<PoolConnection<Postgres>>,
+}
+
+impl ActiveRoutesConnection {
+    const fn new(connection: PoolConnection<Postgres>) -> Self {
+        Self {
+            connection: Some(connection),
+        }
+    }
+
+    const fn connection_mut(&mut self) -> &mut PoolConnection<Postgres> {
+        self.connection
+            .as_mut()
+            .expect("active route connection remains owned")
+    }
+
+    fn take(mut self) -> PoolConnection<Postgres> {
+        self.connection
+            .take()
+            .expect("successful active route query takes its connection")
+    }
+}
+
+impl Drop for ActiveRoutesConnection {
+    fn drop(&mut self) {
+        if let Some(connection) = self.connection.as_mut() {
+            connection.close_on_drop();
+        }
+    }
+}
+
 impl PostgresGatewayEdgeAuthority {
     /// Creates the worker-side route and invocation adapter with explicit
     /// bounded HTTP limits.
@@ -527,23 +589,449 @@ impl PostgresGatewayEdgeAuthority {
         })
     }
 
+    async fn reject_invocation(&self, invocation_id: Uuid) -> Result<(), GatewayEdgeError> {
+        let _: bool = sqlx::query_scalar("SELECT gateway_invocation_complete($1, 'rejected')")
+            .bind(invocation_id)
+            .fetch_one(&self.pool)
+            .await
+            .map_err(|_| GatewayEdgeError::Unavailable)?;
+        Ok(())
+    }
+
+    async fn create_gateway_secret_leases(
+        &self,
+        invocation_id: Uuid,
+        runtime_session_id: Uuid,
+    ) -> Result<(), GatewayEdgeError> {
+        let mut transaction = self
+            .pool
+            .begin()
+            .await
+            .map_err(|_| GatewayEdgeError::Unavailable)?;
+        let invocation: Option<(Uuid, Uuid, Uuid, String)> = sqlx::query_as(
+            "SELECT gateway_id, gateway_revision_id, gateway_route_id, outcome
+               FROM gateway_invocations
+              WHERE id = $1
+              FOR UPDATE",
+        )
+        .bind(invocation_id)
+        .fetch_optional(&mut *transaction)
+        .await
+        .map_err(|_| GatewayEdgeError::Unavailable)?;
+        let Some((gateway_id, revision_id, route_id, outcome)) = invocation else {
+            return Err(GatewayEdgeError::Unavailable);
+        };
+        if outcome != "accepted" {
+            return Err(GatewayEdgeError::Unavailable);
+        }
+        let session: Option<(Uuid, Uuid, Uuid, String, OffsetDateTime)> = sqlx::query_as(
+            "SELECT id, invocation_id, gateway_revision_id, status, expires_at
+               FROM gateway_runtime_authority_sessions
+              WHERE id = $1
+                AND invocation_id = $2
+                AND gateway_id = $3
+                AND gateway_revision_id = $4
+                AND status IN ('pending_handoff', 'active')
+                AND expires_at > now()
+              FOR UPDATE",
+        )
+        .bind(runtime_session_id)
+        .bind(invocation_id)
+        .bind(gateway_id)
+        .bind(revision_id)
+        .fetch_optional(&mut *transaction)
+        .await
+        .map_err(|_| GatewayEdgeError::Unavailable)?;
+        let Some((session_id, session_invocation_id, session_revision_id, _status, expires_at)) =
+            session
+        else {
+            return Err(GatewayEdgeError::Unavailable);
+        };
+        // The invocation row is locked before the session row, matching
+        // terminal completion and repository lifecycle cleanup.
+        sqlx::query(
+            "INSERT INTO gateway_secret_leases
+                 (id, runtime_session_id, invocation_id, binding_id,
+                  secret_version_id, rule_id, status, expires_at)
+             SELECT gen_random_uuid(), $1, $2, binding.id,
+                    binding.secret_version_id, rule.id, 'active', $3
+             FROM gateway_brokered_secret_rules AS rule
+             JOIN gateway_secret_bindings AS binding
+               ON binding.id = rule.binding_id
+              AND binding.gateway_revision_id = $5
+             WHERE rule.gateway_revision_id = $5
+               AND rule.gateway_route_id = $4
+               AND binding.status = 'active'
+             ON CONFLICT (invocation_id, rule_id) DO NOTHING",
+        )
+        .bind(session_id)
+        .bind(session_invocation_id)
+        .bind(expires_at)
+        .bind(route_id)
+        .bind(session_revision_id)
+        .execute(&mut *transaction)
+        .await
+        .map_err(|_| GatewayEdgeError::Unavailable)?;
+        transaction
+            .commit()
+            .await
+            .map_err(|_| GatewayEdgeError::Unavailable)
+    }
+
+    async fn service_admission_binding(
+        &self,
+        transaction: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+        accepted: &AcceptedInvocationRow,
+    ) -> Result<(Uuid, i64), GatewayEdgeError> {
+        let instance = sqlx::query_as::<_, ServiceAdmissionRow>(
+            "SELECT instance.id, instance.fencing_token,
+                    instance.lease_expires_at
+               FROM gateway_service_instances AS instance
+              WHERE instance.gateway_id = $1
+                AND instance.revision_id = $2
+                AND instance.state = 'ready'
+              FOR UPDATE",
+        )
+        .bind(accepted.gateway_id)
+        .bind(accepted.gateway_revision_id)
+        .fetch_optional(&mut **transaction)
+        .await
+        .map_err(|_| GatewayEdgeError::Unavailable)?
+        .ok_or(GatewayEdgeError::Unavailable)?;
+
+        let publication_eligible: bool = sqlx::query_scalar(
+            "SELECT EXISTS(
+                 SELECT 1
+                   FROM gateway_revisions AS revision
+                   JOIN releases AS release
+                     ON release.id = revision.release_id
+                    AND release.repository_id = revision.repository_id
+                  WHERE revision.id = $1
+                    AND revision.gateway_id = $2
+                    AND revision.handler_contract = 'http.service.v1'
+                    AND release.state = 'published'
+                  FOR UPDATE OF release
+             )",
+        )
+        .bind(accepted.gateway_revision_id)
+        .bind(accepted.gateway_id)
+        .fetch_one(&mut **transaction)
+        .await
+        .map_err(|_| GatewayEdgeError::Unavailable)?;
+        if !publication_eligible {
+            return Err(GatewayEdgeError::Unavailable);
+        }
+
+        // The instance lock may have waited behind a lifecycle update and the
+        // publication lock may have waited behind revocation. Check the lease
+        // against a fresh database clock immediately before insertion.
+        let database_now: OffsetDateTime = sqlx::query_scalar("SELECT clock_timestamp()")
+            .fetch_one(&mut **transaction)
+            .await
+            .map_err(|_| GatewayEdgeError::Unavailable)?;
+        if instance.lease_expires_at <= database_now {
+            return Err(GatewayEdgeError::Unavailable);
+        }
+        Ok((instance.id, instance.fencing_token))
+    }
+
+    async fn lock_authoritative_route(
+        &self,
+        transaction: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+        route: &GatewayRouteBinding,
+    ) -> Result<AcceptedInvocationRow, GatewayEdgeError> {
+        // Resolve the aggregate owner before taking its lock. All promotion,
+        // lease, and acceptance paths lock gateway before its service
+        // instance, so a promotion cannot commit between this lock and the
+        // authoritative route check below.
+        let gateway_id: Option<Uuid> = sqlx::query_scalar(
+            "SELECT gateway_id
+               FROM gateway_routes
+              WHERE id = $1 AND gateway_revision_id = $2",
+        )
+        .bind(route.route_id)
+        .bind(route.gateway_revision_id)
+        .fetch_optional(&mut **transaction)
+        .await
+        .map_err(|_| GatewayEdgeError::Unavailable)?;
+        let Some(gateway_id) = gateway_id else {
+            return Err(GatewayEdgeError::Unavailable);
+        };
+        let gateway_exists: Option<Uuid> =
+            sqlx::query_scalar("SELECT id FROM gateways WHERE id = $1 FOR UPDATE")
+                .bind(gateway_id)
+                .fetch_optional(&mut **transaction)
+                .await
+                .map_err(|_| GatewayEdgeError::Unavailable)?;
+        if gateway_exists.is_none() {
+            return Err(GatewayEdgeError::Unavailable);
+        }
+
+        sqlx::query_as::<_, AcceptedInvocationRow>(
+            "SELECT route.gateway_id, route.gateway_revision_id,
+                    revision.handler_contract
+               FROM gateway_routes AS route
+               JOIN gateways AS gateway
+                 ON gateway.id = route.gateway_id
+               JOIN gateway_revisions AS revision
+                 ON revision.id = route.gateway_revision_id
+                AND revision.gateway_id = route.gateway_id
+              WHERE route.id = $1
+                AND route.gateway_revision_id = $2
+                AND route.enabled
+                AND gateway.lifecycle = 'enabled'
+                AND gateway.active_revision_id = route.gateway_revision_id
+                AND revision.exposure = 'public'",
+        )
+        .bind(route.route_id)
+        .bind(route.gateway_revision_id)
+        .fetch_optional(&mut **transaction)
+        .await
+        .map_err(|_| GatewayEdgeError::Unavailable)?
+        .ok_or(GatewayEdgeError::Unavailable)
+    }
+
     async fn active_routes(&self) -> Result<Vec<GatewayRouteBinding>, GatewayEdgeError> {
+        let mut connection = ActiveRoutesConnection::new(
+            self.pool
+                .acquire()
+                .await
+                .map_err(|_| GatewayEdgeError::Unavailable)?,
+        );
         let rows = sqlx::query_as::<_, ActiveRouteRow>(
-            "SELECT route.id AS route_id, route.gateway_revision_id, route.path, route.methods
+            "SELECT route.id AS route_id, route.gateway_revision_id, route.path, route.methods,
+                    revision.exposure
              FROM gateway_routes AS route
              JOIN gateways AS gateway ON gateway.id = route.gateway_id
+             JOIN gateway_revisions AS revision
+               ON revision.id = route.gateway_revision_id
+              AND revision.gateway_id = route.gateway_id
              WHERE gateway.lifecycle = 'enabled'
                AND gateway.active_revision_id = route.gateway_revision_id
                AND route.enabled
+               AND revision.exposure = 'public'
              ORDER BY route.path, route.id",
         )
-        .fetch_all(&self.pool)
+        .fetch_all(&mut **connection.connection_mut())
         .await
         .map_err(|_| GatewayEdgeError::Unavailable)?;
+        // SQLx 0.8.6 normally returns `PoolConnection` from `Drop` through a
+        // detached task. Await the successful path so a later pool close
+        // cannot race this adapter's connection return; the cancellation and
+        // error path still uses `close_on_drop` from `ActiveRoutesConnection`.
+        let mut connection = connection.take();
+        connection.return_to_pool().await;
         rows.into_iter()
             .map(|row| active_route(row, self.limits))
             .collect()
     }
+
+    /// Terminalizes one bounded batch of abandoned host-mediated service
+    /// invocations. The caller owns scheduling repeated batches.
+    ///
+    /// # Errors
+    ///
+    /// Returns an unavailable error when the authoritative recovery query or
+    /// terminal transition cannot be completed.
+    pub async fn recover_abandoned_service_invocations(
+        &self,
+        now: OffsetDateTime,
+    ) -> Result<u64, GatewayEdgeError> {
+        let Ok(ttl) = time::Duration::try_from(self.session_ttl) else {
+            return Err(GatewayEdgeError::Unavailable);
+        };
+        let Some(cutoff) = now.checked_sub(ttl) else {
+            return Ok(0);
+        };
+        let mut transaction = self
+            .pool
+            .begin()
+            .await
+            .map_err(|_| GatewayEdgeError::Unavailable)?;
+        let candidates = recovery_candidates(&mut transaction, cutoff, now).await?;
+        let mut processed = 0;
+        for invocation_id in candidates {
+            let eligible =
+                recovery_candidate_is_eligible(&mut transaction, invocation_id, now, cutoff)
+                    .await?;
+            if !eligible {
+                continue;
+            }
+            let changed: bool =
+                sqlx::query_scalar("SELECT gateway_invocation_complete($1, 'timed_out')")
+                    .bind(invocation_id)
+                    .fetch_one(&mut *transaction)
+                    .await
+                    .map_err(|_| GatewayEdgeError::Unavailable)?;
+            if changed {
+                processed += 1;
+            }
+        }
+        transaction
+            .commit()
+            .await
+            .map_err(|_| GatewayEdgeError::Unavailable)?;
+        Ok(processed)
+    }
+    async fn finish_accepted_invocation(
+        &self,
+        invocation_id: Uuid,
+        request_id: Uuid,
+        accepted: AcceptedInvocationRow,
+    ) -> Result<Uuid, GatewayEdgeError> {
+        let Some(issuer) = &self.runtime_authority else {
+            if accepted.handler_contract == "http.service.v1" {
+                warn_post_admission_setup(request_id, invocation_id, "runtime_authority_missing");
+                self.reject_invocation(invocation_id).await?;
+                return Err(GatewayEdgeError::Unavailable);
+            }
+            return Ok(invocation_id);
+        };
+        let issued_at = OffsetDateTime::now_utc();
+        let Ok(ttl) = time::Duration::try_from(self.session_ttl) else {
+            self.reject_invocation(invocation_id).await?;
+            return Err(GatewayEdgeError::Unavailable);
+        };
+        let Some(expires_at) = issued_at.checked_add(ttl) else {
+            self.reject_invocation(invocation_id).await?;
+            return Err(GatewayEdgeError::Unavailable);
+        };
+        let request = GatewayRuntimeSessionRequest {
+            invocation_id: capability_domain::GatewayInvocationId::from_uuid(invocation_id),
+            gateway_id: accepted.gateway_id,
+            gateway_revision_id: accepted.gateway_revision_id,
+            issued_at,
+            expires_at,
+        };
+        let issued_result = if accepted.handler_contract == "http.service.v1" {
+            issuer.issue_gateway_service(request).await
+        } else {
+            issuer.issue_gateway(request).await
+        };
+        let Ok(issued_session) = issued_result else {
+            warn_post_admission_setup(
+                request_id,
+                invocation_id,
+                "runtime_authority_issuance_failed",
+            );
+            self.reject_invocation(invocation_id).await?;
+            return Err(GatewayEdgeError::Unavailable);
+        };
+        if let Err(error) = self
+            .create_gateway_secret_leases(invocation_id, issued_session.id.as_uuid())
+            .await
+        {
+            warn_post_admission_setup(request_id, invocation_id, "secret_lease_setup_failed");
+            let _ = self
+                .completed(invocation_id, GatewayInvocationOutcome::Rejected)
+                .await;
+            return Err(error);
+        }
+        Ok(invocation_id)
+    }
+}
+
+fn warn_post_admission_setup(request_id: Uuid, invocation_id: Uuid, category: &'static str) {
+    tracing::warn!(
+        target: "gateway_postgres::ui_post_admission",
+        request_id = %request_id,
+        invocation_id = %invocation_id,
+        category,
+        "gateway post-admission setup failed"
+    );
+}
+
+async fn recovery_candidates(
+    transaction: &mut Transaction<'_, Postgres>,
+    cutoff: OffsetDateTime,
+    now: OffsetDateTime,
+) -> Result<Vec<Uuid>, GatewayEdgeError> {
+    sqlx::query_scalar(
+        "SELECT invocation.id
+           FROM gateway_invocations AS invocation
+           JOIN gateway_revisions AS revision
+             ON revision.id = invocation.gateway_revision_id
+            AND revision.gateway_id = invocation.gateway_id
+           LEFT JOIN gateway_runtime_authority_sessions AS session
+             ON session.invocation_id = invocation.id
+            AND session.admission_mode = 'host_mediated'
+           LEFT JOIN gateway_service_instances AS instance
+             ON instance.id = invocation.service_instance_id
+            AND instance.gateway_id = invocation.gateway_id
+            AND instance.revision_id = invocation.gateway_revision_id
+           CROSS JOIN LATERAL (
+                SELECT clock_timestamp() AS database_now
+           ) AS clock
+          WHERE invocation.outcome = 'accepted'
+            AND revision.handler_contract = 'http.service.v1'
+            AND (
+                instance.id IS NULL
+                OR instance.fencing_token IS DISTINCT FROM
+                   invocation.service_instance_fencing_token
+                OR instance.state NOT IN ('ready', 'draining')
+                OR instance.lease_expires_at <= clock.database_now
+                OR
+                session.status IN ('expired', 'revoked')
+                OR (session.status = 'active' AND session.expires_at <= $2)
+                OR (session.id IS NULL AND invocation.accepted_at <= $1)
+            )
+          ORDER BY invocation.id
+          LIMIT $3
+          FOR UPDATE OF invocation SKIP LOCKED",
+    )
+    .bind(cutoff)
+    .bind(now)
+    .bind(SERVICE_RECOVERY_BATCH_SIZE)
+    .fetch_all(&mut **transaction)
+    .await
+    .map_err(|_| GatewayEdgeError::Unavailable)
+}
+
+async fn recovery_candidate_is_eligible(
+    transaction: &mut Transaction<'_, Postgres>,
+    invocation_id: Uuid,
+    now: OffsetDateTime,
+    cutoff: OffsetDateTime,
+) -> Result<bool, GatewayEdgeError> {
+    sqlx::query_scalar(
+        "SELECT EXISTS(
+            SELECT 1
+              FROM gateway_invocations AS invocation
+              JOIN gateway_revisions AS revision
+                ON revision.id = invocation.gateway_revision_id
+               AND revision.gateway_id = invocation.gateway_id
+              LEFT JOIN gateway_runtime_authority_sessions AS session
+                ON session.invocation_id = invocation.id
+               AND session.admission_mode = 'host_mediated'
+              LEFT JOIN gateway_service_instances AS instance
+                ON instance.id = invocation.service_instance_id
+               AND instance.gateway_id = invocation.gateway_id
+               AND instance.revision_id = invocation.gateway_revision_id
+              CROSS JOIN LATERAL (
+                   SELECT clock_timestamp() AS database_now
+              ) AS clock
+             WHERE invocation.id = $1
+               AND invocation.outcome = 'accepted'
+               AND revision.handler_contract = 'http.service.v1'
+               AND (
+                   instance.id IS NULL
+                   OR instance.fencing_token IS DISTINCT FROM
+                      invocation.service_instance_fencing_token
+                   OR instance.state NOT IN ('ready', 'draining')
+                   OR instance.lease_expires_at <= clock.database_now
+                   OR
+                   session.status IN ('expired', 'revoked')
+                   OR (session.status = 'active' AND session.expires_at <= $2)
+                   OR (session.id IS NULL AND invocation.accepted_at <= $3)
+               )
+        )",
+    )
+    .bind(invocation_id)
+    .bind(now)
+    .bind(cutoff)
+    .fetch_one(&mut **transaction)
+    .await
+    .map_err(|_| GatewayEdgeError::Unavailable)
 }
 
 fn desired_configuration_revision(routes: &[GatewayRouteBinding]) -> GatewayConfigRevision {
@@ -601,84 +1089,70 @@ impl GatewayInvocationRecorder for PostgresGatewayEdgeAuthority {
         request_id: Uuid,
     ) -> Result<Uuid, GatewayEdgeError> {
         let invocation_id = Uuid::new_v4();
-        let accepted = sqlx::query_as::<_, AcceptedInvocationRow>(
+        let mut transaction = self
+            .pool
+            .begin()
+            .await
+            .map_err(|_| GatewayEdgeError::Unavailable)?;
+
+        let accepted = self
+            .lock_authoritative_route(&mut transaction, route)
+            .await?;
+        if accepted.handler_contract != "http.v1" && accepted.handler_contract != "http.service.v1"
+        {
+            tracing::warn!(
+                invocation_id = %invocation_id,
+                handler_contract = %accepted.handler_contract,
+                "gateway invocation has unsupported handler contract"
+            );
+            return Err(GatewayEdgeError::Unavailable);
+        }
+
+        let service_binding = if accepted.handler_contract == "http.service.v1" {
+            Some(
+                self.service_admission_binding(&mut transaction, &accepted)
+                    .await?,
+            )
+        } else {
+            None
+        };
+
+        sqlx::query(
             "INSERT INTO gateway_invocations
-                 (id, gateway_id, gateway_revision_id, gateway_route_id, project_id, request_id, outcome)
-             SELECT $1, route.gateway_id, route.gateway_revision_id, route.id, route.project_id, $2, 'accepted'
-             FROM gateway_routes AS route
-             JOIN gateways AS gateway ON gateway.id = route.gateway_id
-             WHERE route.id = $3
-               AND route.gateway_revision_id = $4
-               AND route.enabled
-               AND gateway.lifecycle = 'enabled'
-               AND gateway.active_revision_id = route.gateway_revision_id
-             RETURNING gateway_id, gateway_revision_id",
+                 (id, gateway_id, gateway_revision_id, gateway_route_id,
+                  project_id, request_id, outcome,
+                  service_instance_id, service_instance_fencing_token)
+             SELECT $1, route.gateway_id, route.gateway_revision_id, route.id,
+                    route.project_id, $2, 'accepted', $5, $6
+               FROM gateway_routes AS route
+              WHERE route.id = $3
+                AND route.gateway_revision_id = $4",
         )
         .bind(invocation_id)
         .bind(request_id)
         .bind(route.route_id)
         .bind(route.gateway_revision_id)
-        .fetch_optional(&self.pool)
+        .bind(service_binding.as_ref().map(|binding| binding.0))
+        .bind(service_binding.as_ref().map(|binding| binding.1))
+        .execute(&mut *transaction)
         .await
         .map_err(|_| GatewayEdgeError::Unavailable)?;
-        let Some(accepted) = accepted else {
-            return Err(GatewayEdgeError::Unavailable);
-        };
-        if let Some(issuer) = &self.runtime_authority {
-            let issued_at = OffsetDateTime::now_utc();
-            let issued = issuer
-                .issue_gateway(GatewayRuntimeSessionRequest {
-                    invocation_id: capability_domain::GatewayInvocationId::from_uuid(invocation_id),
-                    gateway_id: accepted.gateway_id,
-                    gateway_revision_id: accepted.gateway_revision_id,
-                    issued_at,
-                    expires_at: issued_at
-                        + time::Duration::try_from(self.session_ttl)
-                            .map_err(|_| GatewayEdgeError::Unavailable)?,
-                })
-                .await;
-            let Ok(issued) = issued else {
-                if let Err(error) = issued {
-                    tracing::warn!(%error, invocation_id = %invocation_id, "gateway runtime authority issuance failed");
-                }
-                let _: bool =
-                    sqlx::query_scalar("SELECT gateway_invocation_complete($1, 'rejected')")
-                        .bind(invocation_id)
-                        .fetch_one(&self.pool)
-                        .await
-                        .map_err(|_| GatewayEdgeError::Unavailable)?;
-                return Err(GatewayEdgeError::Unavailable);
-            };
-            // Leases are derived only after the exact gateway runtime session
-            // exists. Their trigger rechecks invocation, revision, route,
-            // import, selected version, and active lifecycle ceilings.
-            sqlx::query(
-                "INSERT INTO gateway_secret_leases
-                     (id, runtime_session_id, invocation_id, binding_id,
-                      secret_version_id, rule_id, status, expires_at)
-                 SELECT gen_random_uuid(), $1, $2, binding.id,
-                        binding.secret_version_id, rule.id, 'active', session.expires_at
-                 FROM gateway_runtime_authority_sessions AS session
-                 JOIN gateway_invocations AS invocation ON invocation.id = session.invocation_id
-                 JOIN gateway_brokered_secret_rules AS rule
-                   ON rule.gateway_revision_id = invocation.gateway_revision_id
-                  AND rule.gateway_route_id = invocation.gateway_route_id
-                 JOIN gateway_secret_bindings AS binding
-                   ON binding.id = rule.binding_id
-                  AND binding.gateway_revision_id = invocation.gateway_revision_id
-                 WHERE session.id = $1 AND session.invocation_id = $2
-                   AND session.status IN ('pending_handoff', 'active')
-                   AND session.expires_at > now()
-                   AND binding.status = 'active'
-                 ON CONFLICT (invocation_id, rule_id) DO NOTHING",
-            )
-            .bind(issued.id.as_uuid())
-            .bind(invocation_id)
-            .execute(&self.pool)
+        transaction
+            .commit()
             .await
             .map_err(|_| GatewayEdgeError::Unavailable)?;
-        }
-        Ok(invocation_id)
+
+        self.finish_accepted_invocation(invocation_id, request_id, accepted)
+            .await
+    }
+
+    async fn accepted_ui(
+        &self,
+        route: &GatewayRouteBinding,
+        authority: &gateway_edge::UiGatewayAuthority,
+        request_id: Uuid,
+    ) -> Result<Uuid, GatewayEdgeError> {
+        ui_browser::accept_ui_invocation(self, route, authority, request_id).await
     }
 
     async fn completed(
@@ -709,6 +1183,169 @@ pub struct PostgresGatewayReleaseResolver {
     root_images: BTreeMap<String, RootFilesystem>,
     handoff: Arc<dyn RuntimeHandoffStore>,
     release_materializer: Option<Arc<dyn GatewayReleaseMaterializer>>,
+}
+
+/// Production resolver for one immutable published long-lived gateway service.
+///
+/// Unlike the stateless resolver, this port takes only the host-owned launch
+/// identity. It does not require or create an invocation, runtime session, or
+/// request bearer.
+pub struct PostgresGatewayServiceLaunchResolver {
+    pool: PgPool,
+    root_images: BTreeMap<String, RootFilesystem>,
+    service_materializer: Option<Arc<dyn GatewayServiceMaterializer>>,
+}
+
+impl PostgresGatewayServiceLaunchResolver {
+    /// Creates a service resolver over the immutable gateway database and root
+    /// image catalog.
+    #[must_use]
+    pub fn new(pool: PgPool, root_images: BTreeMap<String, RootFilesystem>) -> Self {
+        Self {
+            pool,
+            root_images,
+            service_materializer: None,
+        }
+    }
+
+    /// Attaches the host-owned persistent-service materializer.
+    #[must_use]
+    pub fn with_service_materializer(
+        mut self,
+        service_materializer: Arc<dyn GatewayServiceMaterializer>,
+    ) -> Self {
+        self.service_materializer = Some(service_materializer);
+        self
+    }
+}
+
+#[async_trait]
+impl GatewayServiceLaunchResolver for PostgresGatewayServiceLaunchResolver {
+    // Keep the exact query, validation, materialization, and postcondition
+    // cleanup together as one auditable immutable launch boundary.
+    #[allow(clippy::too_many_lines)]
+    async fn resolve_service_launch(
+        &self,
+        request: GatewayServiceLaunchRequest,
+    ) -> Result<GatewayServiceLaunch, GatewayEdgeError> {
+        let identity = request.identity;
+        if identity.instance_id.is_nil()
+            || identity.gateway_id.is_nil()
+            || identity.revision_id.is_nil()
+        {
+            return Err(GatewayEdgeError::HandlerUnavailable);
+        }
+        let row = sqlx::query_as::<_, GatewayServiceLaunchRow>(
+            "SELECT revision.gateway_id, revision.id AS revision_id,
+                    revision.release_id, revision.handler_contract,
+                    revision.service_loopback_port,
+                    revision.service_readiness_path, revision.service_health_path,
+                    revision.service_log_capture_mode,
+                    revision.parameters, agent.runtime_contract
+               FROM gateway_revisions AS revision
+               JOIN release_agents AS agent
+                 ON agent.id = revision.release_agent_id
+                AND agent.release_id = revision.release_id
+                AND agent.agent_key = revision.release_agent_key
+               JOIN releases AS release
+                 ON release.id = revision.release_id
+                AND release.repository_id = revision.repository_id
+              WHERE revision.gateway_id = $1
+                AND revision.id = $2
+                AND revision.handler_contract = 'http.service.v1'
+                AND release.state = 'published'",
+        )
+        .bind(identity.gateway_id)
+        .bind(identity.revision_id)
+        .fetch_optional(&self.pool)
+        .await
+        .map_err(|_| GatewayEdgeError::Unavailable)?
+        .ok_or(GatewayEdgeError::HandlerUnavailable)?;
+
+        let release_id = row.release_id.ok_or(GatewayEdgeError::HandlerUnavailable)?;
+        if row.gateway_id != identity.gateway_id || row.revision_id != identity.revision_id {
+            return Err(GatewayEdgeError::HandlerUnavailable);
+        }
+        if row.handler_contract != "http.service.v1" {
+            return Err(GatewayEdgeError::HandlerUnavailable);
+        }
+        let loopback_port = row
+            .service_loopback_port
+            .and_then(|value| u16::try_from(value).ok())
+            .ok_or(GatewayEdgeError::HandlerUnavailable)?;
+        let readiness_path = ServiceProbePath::parse(
+            row.service_readiness_path
+                .ok_or(GatewayEdgeError::HandlerUnavailable)?,
+        )
+        .map_err(|_| GatewayEdgeError::HandlerUnavailable)?;
+        let health_path = ServiceProbePath::parse(
+            row.service_health_path
+                .ok_or(GatewayEdgeError::HandlerUnavailable)?,
+        )
+        .map_err(|_| GatewayEdgeError::HandlerUnavailable)?;
+        let log_capture_mode = ServiceLogCaptureMode::from_name(&row.service_log_capture_mode)
+            .ok_or(GatewayEdgeError::HandlerUnavailable)?;
+        let service = GatewayServiceConfig::new(loopback_port, readiness_path, health_path)
+            .map_err(|_| GatewayEdgeError::HandlerUnavailable)?
+            .with_log_capture_mode(log_capture_mode);
+        let contract: GatewayRuntimeContract = serde_json::from_value(row.runtime_contract)
+            .map_err(|_| GatewayEdgeError::HandlerUnavailable)?;
+        if contract.requires_state
+            || !matches!(contract.policy_ceiling.network, GatewayNetwork::Disabled)
+        {
+            return Err(GatewayEdgeError::HandlerUnavailable);
+        }
+        let root = self
+            .root_images
+            .get(&contract.image_reference)
+            .cloned()
+            .ok_or(GatewayEdgeError::HandlerUnavailable)?;
+        let materializer = self
+            .service_materializer
+            .as_ref()
+            .ok_or(GatewayEdgeError::HandlerUnavailable)?;
+        let artifacts = gateway_release_artifacts(&self.pool, release_id)
+            .await?
+            .into_iter()
+            .map(|artifact| GatewayServiceArtifact {
+                path: artifact.path,
+                kind: match artifact.kind {
+                    GatewayReleaseArtifactKind::Executable => {
+                        GatewayServiceArtifactKind::Executable
+                    }
+                    GatewayReleaseArtifactKind::File => GatewayServiceArtifactKind::File,
+                    GatewayReleaseArtifactKind::Manifest => GatewayServiceArtifactKind::Manifest,
+                },
+                mode: artifact.mode,
+                content_hash: artifact.content_hash,
+                size_bytes: artifact.size_bytes,
+                storage_key: artifact.storage_key,
+            })
+            .collect::<Vec<_>>();
+        let mounts = materializer.prepare_service(identity, &artifacts, &row.parameters)?;
+        let spec = match service_vm_spec(identity, &service, contract, root, mounts) {
+            Ok(spec) => spec,
+            Err(error) => {
+                let _ = materializer.destroy_service(identity);
+                return Err(error);
+            }
+        };
+        Ok(GatewayServiceLaunch {
+            identity,
+            service,
+            spec,
+        })
+    }
+
+    async fn cleanup_service_launch(
+        &self,
+        identity: GatewayServiceIdentity,
+    ) -> Result<(), GatewayEdgeError> {
+        self.service_materializer
+            .as_ref()
+            .ok_or(GatewayEdgeError::HandlerUnavailable)?
+            .destroy_service(identity)
+    }
 }
 
 /// Verified artifact metadata selected for one immutable gateway release.
@@ -844,6 +1481,7 @@ impl GatewayReleaseResolver for PostgresGatewayReleaseResolver {
                AND invocation.outcome = 'accepted'
                AND revision.handler_contract = 'http.v1'
                AND release.state = 'published'
+               AND session.admission_mode = 'guest_handoff'
                AND session.status = 'pending_handoff'
                AND session.expires_at > now()",
         )
@@ -908,6 +1546,7 @@ impl GatewayReleaseResolver for PostgresGatewayReleaseResolver {
                 generation.get(),
                 *credential.expose(),
             )),
+            private_http_service: None,
             labels: BTreeMap::from([
                 (String::from("hephaestus.kind"), String::from("gateway")),
                 (
@@ -972,6 +1611,86 @@ struct GatewayLaunchRow {
     issuance_generation: i64,
     release_id: Uuid,
     parameters: serde_json::Value,
+}
+
+#[derive(sqlx::FromRow)]
+struct GatewayServiceLaunchRow {
+    gateway_id: Uuid,
+    revision_id: Uuid,
+    release_id: Option<Uuid>,
+    handler_contract: String,
+    service_loopback_port: Option<i32>,
+    service_readiness_path: Option<String>,
+    service_health_path: Option<String>,
+    service_log_capture_mode: String,
+    parameters: serde_json::Value,
+    runtime_contract: serde_json::Value,
+}
+
+fn service_vm_spec(
+    identity: GatewayServiceIdentity,
+    service: &GatewayServiceConfig,
+    contract: GatewayRuntimeContract,
+    root: RootFilesystem,
+    mounts: Vec<VmMount>,
+) -> Result<VmSpec, GatewayEdgeError> {
+    let has_release_mount = mounts
+        .iter()
+        .filter(|mount| mount.guest_path == PathBuf::from("/release"))
+        .count()
+        == 1;
+    let has_control_mount = mounts
+        .iter()
+        .filter(|mount| mount.guest_path == PathBuf::from("/run/hephaestus"))
+        .count()
+        == 1;
+    if mounts.len() != 2
+        || mounts.iter().any(|mount| !mount.read_only)
+        || !has_release_mount
+        || !has_control_mount
+    {
+        return Err(GatewayEdgeError::HandlerUnavailable);
+    }
+    Ok(VmSpec {
+        id: VmId(format!("gateway-service-{}", identity.instance_id)),
+        root,
+        disks: Vec::new(),
+        mounts,
+        resources: VmResources {
+            vcpus: contract.policy_ceiling.vcpus,
+            memory_mib: contract.policy_ceiling.memory_mib,
+        },
+        network: NetworkMode::Disabled,
+        private_http_service: Some(service_transport_spec(service)),
+        command: GuestCommand {
+            program: format!("/release/{}", contract.command),
+            args: contract.arguments,
+            env: BTreeMap::new(),
+            working_dir: Some(PathBuf::from(format!(
+                "/release/{}",
+                contract.working_directory
+            ))),
+        },
+        runtime_authority: None,
+        labels: BTreeMap::from([
+            (
+                String::from("hephaestus.kind"),
+                String::from("gateway-service"),
+            ),
+            (
+                String::from("hephaestus.gateway"),
+                identity.gateway_id.to_string(),
+            ),
+            (
+                String::from("hephaestus.gateway-revision"),
+                identity.revision_id.to_string(),
+            ),
+            (
+                String::from("hephaestus.gateway-instance"),
+                identity.instance_id.to_string(),
+            ),
+        ]),
+    })
 }
 
 #[derive(sqlx::FromRow)]
@@ -1058,12 +1777,21 @@ struct ActiveRouteRow {
     gateway_revision_id: Uuid,
     path: String,
     methods: Vec<String>,
+    exposure: String,
 }
 
 #[derive(sqlx::FromRow)]
 struct AcceptedInvocationRow {
     gateway_id: Uuid,
     gateway_revision_id: Uuid,
+    handler_contract: String,
+}
+
+#[derive(sqlx::FromRow)]
+struct ServiceAdmissionRow {
+    id: Uuid,
+    fencing_token: i64,
+    lease_expires_at: OffsetDateTime,
 }
 
 fn active_route(
@@ -1083,6 +1811,11 @@ fn active_route(
     let binding = GatewayRouteBinding {
         route_id: row.route_id,
         gateway_revision_id: row.gateway_revision_id,
+        exposure: match row.exposure.as_str() {
+            "public" => Exposure::Public,
+            "heph_authenticated" => Exposure::HephAuthenticated,
+            _ => return Err(GatewayEdgeError::Unavailable),
+        },
         path_prefix,
         methods,
         limits,
@@ -1155,6 +1888,9 @@ pub struct GatewayManagementSummary {
     pub lifecycle: String,
     /// Exact current immutable revision, when installed.
     pub active_revision_id: Option<Uuid>,
+    /// Latest declared HTTP service revision, which may still be pending
+    /// readiness and therefore differ from the serving revision.
+    pub desired_service_revision_id: Option<Uuid>,
     /// Latest lifecycle/configuration change time.
     pub updated_at: OffsetDateTime,
 }
@@ -1170,6 +1906,8 @@ pub struct GatewayManagementRevision {
     pub release_agent_id: Option<Uuid>,
     /// Supported handler contract.
     pub handler_contract: String,
+    /// Typed loopback service declaration, when this is a persistent service.
+    pub service: Option<GatewayServiceConfig>,
     /// Declared exposure policy.
     pub exposure: String,
     /// Symbolic declared secret slot names only.
@@ -1310,9 +2048,11 @@ pub struct GatewaySecretSelection {
 /// Runtime values and secret selections for one immutable gateway revision.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ConfigureGatewayRequest {
-    /// Gateway whose active revision is being configured.
+    /// Gateway whose declared revision is being configured.
     pub gateway_id: Uuid,
-    /// Active revision expected by the caller.
+    /// Stateless gateways compare this with the active revision. Service
+    /// gateways compare it with the latest desired revision, falling back to
+    /// the active revision only when no desired candidate exists.
     pub expected_revision_id: Uuid,
     /// Typed values validated against the published agent schema.
     pub parameters: BTreeMap<ParameterName, ParameterValue>,
@@ -1323,7 +2063,7 @@ pub struct ConfigureGatewayRequest {
 /// Result of configuring one immutable gateway revision.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ConfigureGatewayResult {
-    /// New active immutable revision, or the original result on replay.
+    /// New immutable candidate revision, or the original result on replay.
     pub revision_id: Uuid,
 }
 
@@ -1377,7 +2117,8 @@ impl PostgresGatewayManagement {
         )
         .await?;
         let rows = sqlx::query_as::<_, GatewaySummaryRow>(
-            "SELECT id, project_id, repository_id, name, lifecycle, active_revision_id, updated_at
+            "SELECT id, project_id, repository_id, name, lifecycle, active_revision_id,
+                    desired_service_revision_id, updated_at
              FROM gateways
              WHERE project_id = $1 AND ($2::uuid IS NULL OR id > $2)
              ORDER BY id LIMIT $3",
@@ -1413,7 +2154,8 @@ impl PostgresGatewayManagement {
         )
         .await?;
         let summary = sqlx::query_as::<_, GatewaySummaryRow>(
-            "SELECT id, project_id, repository_id, name, lifecycle, active_revision_id, updated_at
+            "SELECT id, project_id, repository_id, name, lifecycle, active_revision_id,
+                    desired_service_revision_id, updated_at
              FROM gateways WHERE id = $1",
         )
         .bind(gateway_id)
@@ -1421,7 +2163,10 @@ impl PostgresGatewayManagement {
         .await?
         .ok_or(GatewayManagementError::NotFound)?;
         let revisions = sqlx::query_as::<_, GatewayRevisionRow>(
-            "SELECT id, release_id, release_agent_id, handler_contract, exposure, secret_slots, mailbox_slots, created_at
+            "SELECT id, release_id, release_agent_id, handler_contract,
+                    service_loopback_port, service_readiness_path, service_health_path,
+                    service_log_capture_mode,
+                    exposure, secret_slots, mailbox_slots, created_at
              FROM gateway_revisions WHERE gateway_id = $1 ORDER BY created_at DESC, id DESC",
         )
         .bind(gateway_id)
@@ -1429,6 +2174,7 @@ impl PostgresGatewayManagement {
         .await?;
         let mut result = Vec::with_capacity(revisions.len());
         for revision in revisions {
+            let service = revision.service_config()?;
             let routes = sqlx::query_as::<_, GatewayRouteRow>(
                 "SELECT id, path, methods, enabled FROM gateway_routes
                  WHERE gateway_revision_id = $1 ORDER BY path, id",
@@ -1441,6 +2187,7 @@ impl PostgresGatewayManagement {
                 release_id: revision.release_id,
                 release_agent_id: revision.release_agent_id,
                 handler_contract: revision.handler_contract,
+                service,
                 exposure: revision.exposure,
                 secret_slots: revision.secret_slots,
                 mailbox_slots: revision.mailbox_slots,
@@ -1701,9 +2448,12 @@ impl PostgresGatewayManagement {
         })?;
         let current = sqlx::query_as::<_, ConfigureRevisionRow>(
             "SELECT gateway.project_id, gateway.repository_id, gateway.active_revision_id,
-                    gateway.lifecycle,
+                    gateway.desired_service_revision_id, gateway.lifecycle,
                     revision.release_id, revision.release_agent_id, revision.release_agent_key,
-                    revision.handler_contract, revision.exposure, revision.secret_slots,
+                    revision.handler_contract,
+                    revision.service_loopback_port, revision.service_readiness_path,
+                    revision.service_health_path, revision.service_log_capture_mode,
+                    revision.exposure, revision.secret_slots,
                     revision.mailbox_slots,
                     agent.parameter_schema, release.state AS release_state
              FROM gateways AS gateway
@@ -1718,6 +2468,10 @@ impl PostgresGatewayManagement {
         .fetch_optional(&mut *tx)
         .await?
         .ok_or(GatewayConfigureError::NotFound)?;
+        let service_revision = current.handler_contract == "http.service.v1";
+        let expected_declared_revision = current
+            .desired_service_revision_id
+            .or(current.active_revision_id);
         // The durable command ledger is consulted before the active-revision
         // CAS check. A successful retry must replay after another revision
         // becomes active without reactivating its original result.
@@ -1852,10 +2606,10 @@ impl PostgresGatewayManagement {
             tx.commit().await?;
             return Ok(ConfigureGatewayResult { revision_id });
         }
-        if current.lifecycle != "enabled"
-            || current.active_revision_id != Some(command.expected_revision_id)
-            || current.release_state.as_deref() != Some("published")
-        {
+        if expected_declared_revision != Some(command.expected_revision_id) {
+            return Err(GatewayConfigureError::Stale);
+        }
+        if current.lifecycle != "enabled" || current.release_state.as_deref() != Some("published") {
             return Err(GatewayConfigureError::Stale);
         }
         sqlx::query("SET LOCAL ROLE hephaestus_worker")
@@ -1864,8 +2618,9 @@ impl PostgresGatewayManagement {
         // Serialize competing fresh keys on the aggregate before creating a
         // revision. The first winner changes the active revision; followers
         // then observe a clean stale result instead of a uniqueness error.
-        let still_active: bool = sqlx::query_scalar(
-            "SELECT lifecycle = 'enabled' AND active_revision_id = $2
+        let still_declared: bool = sqlx::query_scalar(
+            "SELECT lifecycle = 'enabled'
+                    AND COALESCE(desired_service_revision_id, active_revision_id) = $2
              FROM gateways WHERE id = $1 FOR UPDATE",
         )
         .bind(command.gateway_id)
@@ -1873,7 +2628,7 @@ impl PostgresGatewayManagement {
         .fetch_optional(&mut *tx)
         .await?
         .unwrap_or(false);
-        if !still_active {
+        if !still_declared {
             return Err(GatewayConfigureError::Stale);
         }
         // Reinstalling a declaration may select a previously configured
@@ -1890,8 +2645,9 @@ impl PostgresGatewayManagement {
             "INSERT INTO gateway_revisions
                (id, gateway_id, project_id, repository_id, release_id, release_agent_id,
                 release_agent_key, handler_contract, exposure, parameters, secret_slots,
-                mailbox_slots, normalized_hash, created_by)
-             VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14)",
+                mailbox_slots, service_loopback_port, service_readiness_path,
+                service_health_path, service_log_capture_mode, normalized_hash, created_by)
+             VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18)",
         )
         .bind(revision_id)
         .bind(command.gateway_id)
@@ -1908,6 +2664,10 @@ impl PostgresGatewayManagement {
         )
         .bind(&current.secret_slots)
         .bind(&current.mailbox_slots)
+        .bind(current.service_loopback_port)
+        .bind(&current.service_readiness_path)
+        .bind(&current.service_health_path)
+        .bind(&current.service_log_capture_mode)
         .bind(revision_hash.as_slice())
         .bind(identity.user_id.as_uuid())
         .execute(&mut *tx)
@@ -1961,15 +2721,29 @@ impl PostgresGatewayManagement {
             .execute(&mut *tx)
             .await?;
         }
-        let changed = sqlx::query(
-            "UPDATE gateways SET active_revision_id = $2, updated_at = now()
-             WHERE id = $1 AND active_revision_id = $3",
-        )
-        .bind(command.gateway_id)
-        .bind(revision_id)
-        .bind(command.expected_revision_id)
-        .execute(&mut *tx)
-        .await?;
+        let changed = if service_revision {
+            sqlx::query(
+                "UPDATE gateways SET desired_service_revision_id = $2, updated_at = now()
+                 WHERE id = $1
+                   AND COALESCE(desired_service_revision_id, active_revision_id) = $3",
+            )
+            .bind(command.gateway_id)
+            .bind(revision_id)
+            .bind(command.expected_revision_id)
+            .execute(&mut *tx)
+            .await?
+        } else {
+            sqlx::query(
+                "UPDATE gateways SET active_revision_id = $2,
+                        desired_service_revision_id = NULL, updated_at = now()
+                 WHERE id = $1 AND active_revision_id = $3",
+            )
+            .bind(command.gateway_id)
+            .bind(revision_id)
+            .bind(command.expected_revision_id)
+            .execute(&mut *tx)
+            .await?
+        };
         if changed.rows_affected() != 1 {
             return Err(GatewayConfigureError::Stale);
         }
@@ -2264,11 +3038,16 @@ struct ConfigureRevisionRow {
     project_id: Uuid,
     repository_id: Uuid,
     active_revision_id: Option<Uuid>,
+    desired_service_revision_id: Option<Uuid>,
     lifecycle: String,
     release_id: Option<Uuid>,
     release_agent_id: Option<Uuid>,
     release_agent_key: Option<String>,
     handler_contract: String,
+    service_loopback_port: Option<i32>,
+    service_readiness_path: Option<String>,
+    service_health_path: Option<String>,
+    service_log_capture_mode: String,
     exposure: String,
     secret_slots: Vec<String>,
     mailbox_slots: Vec<String>,
@@ -2365,6 +3144,7 @@ struct GatewaySummaryRow {
     name: String,
     lifecycle: String,
     active_revision_id: Option<Uuid>,
+    desired_service_revision_id: Option<Uuid>,
     updated_at: OffsetDateTime,
 }
 impl From<GatewaySummaryRow> for GatewayManagementSummary {
@@ -2376,6 +3156,7 @@ impl From<GatewaySummaryRow> for GatewayManagementSummary {
             name: row.name,
             lifecycle: row.lifecycle,
             active_revision_id: row.active_revision_id,
+            desired_service_revision_id: row.desired_service_revision_id,
             updated_at: row.updated_at,
         }
     }
@@ -2386,10 +3167,50 @@ struct GatewayRevisionRow {
     release_id: Option<Uuid>,
     release_agent_id: Option<Uuid>,
     handler_contract: String,
+    service_loopback_port: Option<i32>,
+    service_readiness_path: Option<String>,
+    service_health_path: Option<String>,
+    service_log_capture_mode: String,
     exposure: String,
     secret_slots: Vec<String>,
     mailbox_slots: Vec<String>,
     created_at: OffsetDateTime,
+}
+
+impl GatewayRevisionRow {
+    fn service_config(&self) -> Result<Option<GatewayServiceConfig>, GatewayManagementError> {
+        service_config_from_columns(
+            self.service_loopback_port,
+            self.service_readiness_path.clone(),
+            self.service_health_path.clone(),
+            &self.service_log_capture_mode,
+        )
+    }
+}
+
+fn service_config_from_columns(
+    loopback_port: Option<i32>,
+    readiness_path: Option<String>,
+    health_path: Option<String>,
+    log_capture_mode: &str,
+) -> Result<Option<GatewayServiceConfig>, GatewayManagementError> {
+    let log_capture_mode = ServiceLogCaptureMode::from_name(log_capture_mode)
+        .ok_or(GatewayManagementError::Unavailable)?;
+    match (loopback_port, readiness_path, health_path) {
+        (None, None, None) if log_capture_mode.is_disabled() => Ok(None),
+        (Some(port), Some(readiness), Some(health)) => {
+            let port = u16::try_from(port).map_err(|_| GatewayManagementError::Unavailable)?;
+            let readiness = ServiceProbePath::parse(readiness)
+                .map_err(|_| GatewayManagementError::Unavailable)?;
+            let health =
+                ServiceProbePath::parse(health).map_err(|_| GatewayManagementError::Unavailable)?;
+            GatewayServiceConfig::new(port, readiness, health)
+                .map(|service| service.with_log_capture_mode(log_capture_mode))
+                .map(Some)
+                .map_err(|_| GatewayManagementError::Unavailable)
+        }
+        _ => Err(GatewayManagementError::Unavailable),
+    }
 }
 #[derive(sqlx::FromRow)]
 struct GatewayRouteRow {
@@ -3017,7 +3838,9 @@ async fn require_repository_boundary(
     Ok(())
 }
 
-#[allow(clippy::too_many_arguments)]
+// Keep the declaration, route, and authority materialization in one atomic
+// transaction despite the bounded number of immutable row fields.
+#[allow(clippy::too_many_arguments, clippy::too_many_lines)]
 async fn install_declaration(
     tx: &mut Transaction<'_, Postgres>,
     identity: &AuthenticatedIdentity,
@@ -3050,8 +3873,9 @@ async fn install_declaration(
         "INSERT INTO gateway_revisions
             (id, gateway_id, project_id, repository_id, release_id, release_agent_id,
              release_agent_key, handler_contract, exposure, parameters, secret_slots,
-             mailbox_slots, normalized_hash, created_by)
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)
+             mailbox_slots, service_loopback_port, service_readiness_path,
+             service_health_path, service_log_capture_mode, normalized_hash, created_by)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18)
          ON CONFLICT (gateway_id, normalized_hash) DO NOTHING
          RETURNING id",
     )
@@ -3072,6 +3896,33 @@ async fn install_declaration(
             .iter()
             .map(|slot| slot.key.as_str())
             .collect::<Vec<_>>(),
+    )
+    .bind(
+        declaration
+            .service
+            .as_ref()
+            .map(|service| i32::from(service.loopback_port)),
+    )
+    .bind(
+        declaration
+            .service
+            .as_ref()
+            .map(|service| service.readiness_path.as_str()),
+    )
+    .bind(
+        declaration
+            .service
+            .as_ref()
+            .map(|service| service.health_path.as_str()),
+    )
+    .bind(
+        declaration
+            .service
+            .as_ref()
+            .map_or(ServiceLogCaptureMode::Disabled, |service| {
+                service.log_capture_mode
+            })
+            .as_str(),
     )
     .bind(normalized_hash.as_slice())
     .bind(identity.user_id.as_uuid())
@@ -3111,11 +3962,30 @@ async fn install_declaration(
             .fetch_one(&mut **tx)
             .await?,
         });
-    sqlx::query("UPDATE gateways SET active_revision_id = $2, updated_at = now() WHERE id = $1")
+    if declaration.handler_contract == "http.service.v1" {
+        // A service declaration is durable desired state. It becomes
+        // publicly serving only after a later readiness-gated activation.
+        sqlx::query(
+            "UPDATE gateways SET desired_service_revision_id = $2, updated_at = now()
+             WHERE id = $1",
+        )
         .bind(gateway_id.as_uuid())
         .bind(revision_id.as_uuid())
         .execute(&mut **tx)
         .await?;
+    } else {
+        // Stateless gateways retain their existing atomic immediate-activation
+        // behavior and supersede any pending service declaration.
+        sqlx::query(
+            "UPDATE gateways SET active_revision_id = $2,
+                    desired_service_revision_id = NULL, updated_at = now()
+             WHERE id = $1",
+        )
+        .bind(gateway_id.as_uuid())
+        .bind(revision_id.as_uuid())
+        .execute(&mut **tx)
+        .await?;
+    }
     Ok(InstalledGateway {
         gateway_id,
         revision_id,
@@ -3290,6 +4160,7 @@ methods = ["POST"]
     fn edge_resolution_selects_the_longest_exact_path_segment() {
         let short = GatewayRouteBinding {
             route_id: Uuid::new_v4(),
+            exposure: gateway_domain::Exposure::Public,
             gateway_revision_id: Uuid::new_v4(),
             path_prefix: String::from("telegram"),
             methods: BTreeSet::from([Method::POST]),
@@ -3297,6 +4168,7 @@ methods = ["POST"]
         };
         let nested = GatewayRouteBinding {
             route_id: Uuid::new_v4(),
+            exposure: gateway_domain::Exposure::Public,
             gateway_revision_id: Uuid::new_v4(),
             path_prefix: String::from("telegram/updates"),
             methods: BTreeSet::from([Method::POST]),
@@ -3318,6 +4190,7 @@ methods = ["POST"]
             gateway_revision_id: Uuid::new_v4(),
             path: String::from("/telegram"),
             methods: vec![String::from("CONNECT")],
+            exposure: String::from("public"),
         };
         assert!(active_route(row, edge_limits()).is_err());
     }
@@ -3326,6 +4199,7 @@ methods = ["POST"]
     fn desired_configuration_revision_is_order_independent_and_tracks_cutover() {
         let first = GatewayRouteBinding {
             route_id: Uuid::new_v4(),
+            exposure: gateway_domain::Exposure::Public,
             gateway_revision_id: Uuid::new_v4(),
             path_prefix: String::from("first"),
             methods: BTreeSet::from([Method::POST]),
@@ -3333,6 +4207,7 @@ methods = ["POST"]
         };
         let second = GatewayRouteBinding {
             route_id: Uuid::new_v4(),
+            exposure: gateway_domain::Exposure::Public,
             gateway_revision_id: Uuid::new_v4(),
             path_prefix: String::from("second"),
             methods: BTreeSet::from([Method::GET]),

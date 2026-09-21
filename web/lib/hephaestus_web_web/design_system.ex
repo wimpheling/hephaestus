@@ -16,6 +16,7 @@ defmodule HephaestusWebWeb.DesignSystem do
   alias HephaestusWebWeb.DesignSystem.Composites.BuildStatus
   alias HephaestusWebWeb.DesignSystem.Composites.ConfirmationFlow
   alias HephaestusWebWeb.DesignSystem.Composites.InstanceSummary
+  alias HephaestusWebWeb.DesignSystem.Composites.InstalledUiNavigation
   alias HephaestusWebWeb.DesignSystem.Composites.OrganizationHeader
   alias HephaestusWebWeb.DesignSystem.Composites.PageHeading
   alias HephaestusWebWeb.DesignSystem.Composites.PageState
@@ -43,6 +44,7 @@ defmodule HephaestusWebWeb.DesignSystem do
   defdelegate icon(assigns), to: Core
   defdelegate input(assigns), to: Core
   defdelegate instance_summary(assigns), to: InstanceSummary
+  defdelegate installed_ui_navigation(assigns), to: InstalledUiNavigation
   defdelegate list(assigns), to: Core
   defdelegate organization_header(assigns), to: OrganizationHeader
   defdelegate page_heading(assigns), to: PageHeading
@@ -88,6 +90,7 @@ defmodule HephaestusWebWeb.DesignSystem do
           :aria_label,
           :disabled,
           :current,
+          :data_ui_close,
           :interaction,
           :variant
         ],
@@ -182,6 +185,20 @@ defmodule HephaestusWebWeb.DesignSystem do
           :phx_update,
           :tabindex,
           :open,
+          :phx_hook,
+          :src,
+          :title,
+          :sandbox,
+          :referrerpolicy,
+          :data_ui_frame_src,
+          :data_ui_port,
+          :data_ui_namespace,
+          :data_ui_platform_origin,
+          :data_ui_installation,
+          :data_ui_frame,
+          :data_ui_status,
+          :data_ui_close,
+          :data_ui_terminal_status,
           :test_id
         ],
         slots: [:inner_block],
@@ -259,6 +276,25 @@ defmodule HephaestusWebWeb.DesignSystem do
         slots: [],
         showcase_id: :input,
         a11y_test_id: :input
+      },
+      %{
+        name: :installed_ui_navigation,
+        tier: :composite,
+        module: InstalledUiNavigation,
+        function: :installed_ui_navigation,
+        attrs: [
+          :scope,
+          :state,
+          :installations,
+          :error,
+          :event,
+          :has_more,
+          :loading_more,
+          :load_event
+        ],
+        slots: [],
+        showcase_id: :installed_ui_navigation,
+        a11y_test_id: :installed_ui_navigation
       },
       %{
         name: :list,
