@@ -321,6 +321,25 @@ journey. Runtime preparation must follow immutable authority snapshot creation;
 the guest needs an exact token-free remote and cleanup after VM termination.
 Those lifecycle integration changes and their verification are still pending.
 
+### Runtime worktree lifecycle integration (2026-09-21)
+
+Commit `66d7747` connects runtime Git workspace preparation to run orchestration
+after immutable authority creation. The guest receives the exact target commit,
+complete reachable history, its symbolic branch, `/workspace/git`, and a
+token-free `origin` through the internal bridge. Cleanup follows VM destruction;
+recovery follows stale guest cleanup. Runtime cleanup requires its durable
+classification, protecting ordinary proposal workspaces. Git's ownership
+exception is restricted to the managed guest path.
+
+Focused formatting and Clippy passed, as did 13 orchestrator tests, one
+workspace-domain test, four workspace-local tests, two VM credential tests,
+18 heph-init tests, and two tests against fresh disposable PostgreSQL 17.
+These checks cover lifecycle ordering, mount/remote construction, scoped
+materialization and persistence; they do not prove the composed guest journey.
+Review identified a remaining runtime-context dependency: the guest's
+repository/ref/commit fields must describe the authorized target rather than
+inherit the trigger repository's context. That correction is in progress.
+
 The completed task records the released protocol version and source revision;
 browser and real-Git evidence for session creation, turns, restart, and fork;
 the reference agent's allowed session-repository push and denied cross-repository
