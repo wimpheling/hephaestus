@@ -386,8 +386,24 @@ production release build/publish helper, instance import, capability revision,
 attachment, secret service and authenticated Git input. Its first real libkrun
 attempt reached application startup and failed on the fixture's stale expected
 migration version (94 versus applied 97). This is a fixture configuration
-failure, not evidence of a successful chat turn. Correcting the expectation and
-executing the full deterministic model/VM/Git path remain in progress.
+failure, not evidence of a successful chat turn. The expectation was corrected
+in `02450f4`; the full deterministic model/VM/Git path remains unverified.
+
+### Installed UI repository context (2026-09-21)
+
+Commit `1568ce4` adds `GET /_heph/ui-context`. The production route derives the
+repository target from the live child session and repository-scoped installation,
+checks the active generation and origin, and records the verified audit context.
+It returns only the repository ID. Migration 0098 supplies the bounded
+application-role projection; the application schema expectation is now 98.
+
+The focused PostgreSQL resource suite passed two tests, including repository
+projection and global-installation denial. Two context route tests passed. The
+live PostgreSQL-backed UI Git test passed with an actual TCP context request,
+Git fetch/push, human receive attribution and audit. Focused application and
+release-service/release-postgres Clippy checks passed. These checks do not prove
+the packaged browser's Git implementation or the complete model/VM journey;
+production-browser acceptance remains open.
 
 The completed task records the released protocol version and source revision;
 browser and real-Git evidence for session creation, turns, restart, and fork;
