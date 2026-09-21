@@ -357,7 +357,7 @@ class BrowserSummaryTests(unittest.TestCase):
             self.assertEqual(missing.returncode, 2)
             self.assertEqual(json.loads(missing_output.read_text())["report_state"], "partial")
 
-    def test_session_chat_requires_initial_and_recovery_journeys(self):
+    def test_session_chat_requires_initial_recovery_and_concurrency_journeys(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             initial = root / "browser.initial"
@@ -373,7 +373,7 @@ class BrowserSummaryTests(unittest.TestCase):
                 encoding="utf-8",
             )
             summary = PROJECTOR.project(root, "session-chat")
-            self.assertEqual(summary["status"], "passed")
+            self.assertEqual(summary["status"], "unknown")
             self.assertEqual(summary["result_origin"], "playwright-report")
             self.assertEqual(summary["observed_phases"], ["initial", "recovery"])
             self.assertEqual(summary["passed_phases"], ["initial", "recovery"])
@@ -392,9 +392,43 @@ class BrowserSummaryTests(unittest.TestCase):
                 ],
                 check=False,
             )
+            self.assertEqual(complete.returncode, 2)
+            projected = json.loads(output.read_text())
+            self.assertEqual(projected["status"], "unknown")
+            self.assertEqual(projected["report_state"], "partial")
+
+            concurrency = root / "browser.concurrency"
+            concurrency.mkdir()
+            (concurrency / "playwright.log").write_text(
+                safe_session_report(
+                    test_id=PROJECTOR.SESSION_CHAT_CONCURRENT_TEST_ID,
+                    stages=PROJECTOR.SESSION_CHAT_CONCURRENT_STAGES,
+                ),
+                encoding="utf-8",
+            )
+            summary = PROJECTOR.project(root, "session-chat")
+            self.assertEqual(summary["status"], "passed")
+            self.assertEqual(summary["report_state"], "complete")
+            self.assertEqual(summary["observed_phases"], ["initial", "recovery", "concurrency"])
+            self.assertEqual(summary["passed_phases"], ["initial", "recovery", "concurrency"])
+            self.assertEqual(summary["counts"], {"passed": 3, "failed": 0, "skipped": 0, "timed_out": 0})
+
+            complete = subprocess.run(
+                [
+                    sys.executable,
+                    str(ROOT / "project-playwright-browser-summary.py"),
+                    str(root),
+                    str(output),
+                    "--scenario",
+                    "session-chat",
+                    "--require-complete-journey",
+                ],
+                check=False,
+            )
             self.assertEqual(complete.returncode, 0)
             projected = json.loads(output.read_text())
             self.assertEqual(projected["status"], "passed")
+            self.assertEqual(projected["observed_phases"], ["initial", "recovery", "concurrency"])
             bundle = root / "bundle"
             self.assertEqual(
                 COLLECTOR.collect(bundle, [f"browser-summary={output}"], None, None, None),
@@ -403,7 +437,7 @@ class BrowserSummaryTests(unittest.TestCase):
             retained_path = bundle / "sources/browser-summary"
             self.assertEqual(stat.S_IMODE(retained_path.stat().st_mode), 0o600)
             retained = json.loads(retained_path.read_text(encoding="utf-8"))
-            self.assertEqual(retained["observed_phases"], ["initial", "recovery"])
+            self.assertEqual(retained["observed_phases"], ["initial", "recovery", "concurrency"])
 
             invalid = root / "invalid-summary.json"
             projected["observed_phases"] = ["initial", "recovery", "unknown"]
@@ -553,6 +587,32 @@ class BrowserSummaryTests(unittest.TestCase):
             incomplete = PROJECTOR.project(root, "session-chat")
             self.assertEqual(incomplete["status"], "unknown")
             self.assertEqual(incomplete["report_state"], "partial")
+
+    def test_session_chat_failed_concurrency_remains_typed(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            for phase, test_id, stages in (
+                ("initial", PROJECTOR.SESSION_CHAT_TEST_ID, PROJECTOR.SESSION_CHAT_STAGES),
+                ("recovery", PROJECTOR.SESSION_CHAT_RECOVERY_TEST_ID, PROJECTOR.SESSION_CHAT_RECOVERY_STAGES),
+                ("concurrency", PROJECTOR.SESSION_CHAT_CONCURRENT_TEST_ID, PROJECTOR.SESSION_CHAT_CONCURRENT_STAGES),
+            ):
+                browser = root / f"browser.{phase}"
+                browser.mkdir()
+                (browser / "playwright.log").write_text(
+                    safe_session_report(
+                        test_id=test_id,
+                        stages=stages,
+                        test_status="failed" if phase == "concurrency" else "passed",
+                        failed_stage="session_chat_concurrent_stale_retry" if phase == "concurrency" else None,
+                    ),
+                    encoding="utf-8",
+                )
+            summary = PROJECTOR.project(root, "session-chat")
+            self.assertEqual(summary["status"], "failed")
+            self.assertEqual(summary["report_state"], "complete")
+            self.assertEqual(summary["observed_phases"], ["initial", "recovery", "concurrency"])
+            self.assertEqual(summary["passed_phases"], ["initial", "recovery"])
+            self.assertEqual(summary["counts"], {"passed": 2, "failed": 1, "skipped": 0, "timed_out": 0})
 
     def test_collector_accepts_typed_projection_and_rejects_untrusted_metadata(self):
         with tempfile.TemporaryDirectory() as directory:

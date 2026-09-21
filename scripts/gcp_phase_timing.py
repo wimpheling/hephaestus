@@ -72,6 +72,7 @@ PHASE_ORDER = (
     "database-tests",
     "browser-initial",
     "browser-recovery",
+    "browser-concurrency",
     "browser-post-operation",
     "evidence-scan",
     "archive",
@@ -147,6 +148,7 @@ WORKLOAD_PHASE_DOMAINS = {
     "database-tests": {"workload-libkrun"},
     "browser-initial": {"workload-libkrun"},
     "browser-recovery": {"workload-libkrun"},
+    "browser-concurrency": {"workload-libkrun"},
     "browser-post-operation": {"workload-libkrun"},
 }
 OUTCOMES = {"passed", "failed", "timed-out", "cancelled", "skipped", "unknown"}

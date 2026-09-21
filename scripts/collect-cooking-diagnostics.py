@@ -281,7 +281,7 @@ PHASE_TIMING_PHASE_ORDER = (
     "project-build", "production-project-build", "runtime-guest-build", "runtime-worker-build", "runtime-smoke",
     "gateway-edge-ready", "gateway-services-ready", "gateway-readiness", "oci-image-materialization",
     "oci-builder", "oci-verifier", "golden-tests", "database-tests", "browser-initial",
-    "browser-recovery", "browser-post-operation", "evidence-scan", "archive", "upload", "vm-delete",
+    "browser-recovery", "browser-concurrency", "browser-post-operation", "evidence-scan", "archive", "upload", "vm-delete",
     "post-delete-download", "cleanup-verification",
 )
 PHASE_TIMING_PHASES = frozenset(PHASE_TIMING_PHASE_ORDER)
@@ -397,7 +397,7 @@ BROWSER_REPORT_STATES = frozenset(
     {"complete", "missing", "partial", "malformed", "truncated", "report-error"}
 )
 BROWSER_COUNT_FIELDS = frozenset({"passed", "failed", "skipped", "timed_out"})
-BROWSER_PHASE_VALUES = frozenset({"initial", "post-operation", "recovery"})
+BROWSER_PHASE_VALUES = frozenset({"initial", "post-operation", "recovery", "concurrency"})
 BROWSER_FAILURE_FIELDS = frozenset(
     {
         "test_id", "phase", "status", "error_class", "matcher", "source_file",
@@ -405,7 +405,8 @@ BROWSER_FAILURE_FIELDS = frozenset(
     }
 )
 BROWSER_TEST_IDS = frozenset({"cooking-live-review", "cooking-post-operation"})
-BROWSER_PHASES = frozenset({"initial", "post-operation", "recovery"})
+BROWSER_PHASES = frozenset({"initial", "post-operation", "recovery", "concurrency"})
+BROWSER_PHASE_ORDER = ("initial", "post-operation", "recovery", "concurrency")
 BROWSER_FAILURE_STATUSES = frozenset({"failed", "timed_out"})
 BROWSER_ERROR_CLASSES = frozenset({"assertion", "timeout", "hook", "runtime", "unknown"})
 BROWSER_MATCHERS = frozenset(
@@ -1081,8 +1082,8 @@ def _project_browser_summary(source: Path, destination: Path) -> tuple[int, str]
         elif field == "observed_phases":
             if (
                 not isinstance(item, list)
-                or len(item) > 2
-                or item != sorted(item)
+                or len(item) > 3
+                or item != [phase for phase in BROWSER_PHASE_ORDER if phase in item]
                 or any(phase not in BROWSER_PHASE_VALUES for phase in item)
                 or len(set(item)) != len(item)
             ):
@@ -1092,8 +1093,8 @@ def _project_browser_summary(source: Path, destination: Path) -> tuple[int, str]
         elif field == "passed_phases":
             if (
                 not isinstance(item, list)
-                or len(item) > 2
-                or item != sorted(item)
+                or len(item) > 3
+                or item != [phase for phase in BROWSER_PHASE_ORDER if phase in item]
                 or any(phase not in BROWSER_PHASE_VALUES for phase in item)
                 or len(set(item)) != len(item)
             ):
