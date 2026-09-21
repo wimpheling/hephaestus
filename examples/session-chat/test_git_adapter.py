@@ -12,7 +12,9 @@ sys.path.insert(0, str(Path(__file__).parent))
 
 from git_adapter import LocalGitSession  # noqa: E402
 from protocol import (  # noqa: E402
+    ContextEntry,
     NewRunRequired,
+    ProtocolError,
     Record,
     StaleAgentParent,
     TextContent,
@@ -132,6 +134,34 @@ class LocalGitAdapterTests(unittest.TestCase):
         self.assertEqual(len([record for record in forked.history() if record.kind == "session_manifest"]), 2)
         self.assertEqual(forked._remote_head("origin"), None)
         self.assertEqual(forked.visible_transcript()[-1], incoming)
+
+    def test_context_reload_rebuilds_and_rejects_history_deletion(self) -> None:
+        checkout = self.clone("context")
+        incoming = user_message("bbbbbbbb-1111-4111-8111-bbbbbbbbbbbb", USER_A, "context")
+        checkout.append_human(incoming, checkout.head)
+        checkout.push()
+        response = assistant_message("cccccccc-1111-4111-8111-cccccccccccc", incoming.record_id)
+        entry = ContextEntry(AGENT, "summary", "bounded", utc_now())
+        checkout.publish_agent_responses(
+            (response,),
+            checkout.head,
+            "dddddddd-1111-4111-8111-dddddddddddd",
+            context_entries=(entry,),
+        )
+        checkout._context[(AGENT, "ghost")] = entry
+        checkout._load()
+        self.assertEqual(tuple(item.key for item in checkout.model_context()), ("summary",))
+
+        path = ".heph/session/v1/context/agent%3Areference-chat/summary.json"
+        subprocess.run(["git", "-C", str(checkout.path), "rm", path], check=True, capture_output=True, text=True)
+        subprocess.run(
+            ["git", "-C", str(checkout.path), "commit", "-m", "malformed context deletion"],
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+        with self.assertRaises(ProtocolError):
+            LocalGitSession.open(checkout.path)
 
 
 if __name__ == "__main__":

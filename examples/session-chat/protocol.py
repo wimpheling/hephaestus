@@ -392,6 +392,31 @@ class ContextEntry:
             raise MalformedRecord("context key is not a safe path component")
         _timestamp(self.updated_at)
 
+    def to_dict(self) -> dict[str, str]:
+        return {
+            "agent_id": self.agent_id,
+            "key": self.key,
+            "value": self.value,
+            "updated_at": self.updated_at,
+        }
+
+    def canonical_json(self) -> str:
+        return json.dumps(self.to_dict(), sort_keys=True, separators=(",", ":"), ensure_ascii=False)
+
+    @classmethod
+    def from_dict(cls, value: Any) -> "ContextEntry":
+        if not isinstance(value, dict) or set(value) != {"agent_id", "key", "value", "updated_at"}:
+            raise MalformedRecord("context entry has the wrong fields")
+        return cls(value["agent_id"], value["key"], value["value"], value["updated_at"])
+
+    @classmethod
+    def from_json(cls, value: str) -> "ContextEntry":
+        try:
+            decoded = json.loads(value)
+        except json.JSONDecodeError as exc:
+            raise MalformedRecord("context entry is not valid JSON") from exc
+        return cls.from_dict(decoded)
+
 
 def _commit_id(parents: Iterable[str], records: Iterable[Record], message: str) -> str:
     payload = json.dumps(

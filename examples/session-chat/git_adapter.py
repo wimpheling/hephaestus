@@ -15,6 +15,7 @@ from uuid import UUID, uuid4
 
 from protocol import (
     Conflict,
+    ContextEntry,
     MAIN_REF,
     MalformedRecord,
     NewRunRequired,
@@ -23,6 +24,7 @@ from protocol import (
     SessionRepo,
     StaleAgentParent,
     StaleParent,
+    path_for_context,
     path_for_record,
     utc_now,
 )
@@ -63,6 +65,7 @@ class LocalGitSession:
         self._session_id = ""
         self._release_id = ""
         self._agent_id = ""
+        self._context: dict[tuple[str, str], ContextEntry] = {}
 
     @classmethod
     def initialize(
@@ -130,9 +133,34 @@ class LocalGitSession:
             if record.kind in {"user_message", "assistant_message"} and record.record_id not in tombstoned
         )
 
+    def pending_human_messages(self) -> tuple[Record, ...]:
+        """Return visible human messages without an assistant response."""
+
+        answered = {
+            record.in_reply_to
+            for record in self._records
+            if record.kind == "assistant_message" and record.in_reply_to is not None
+        }
+        return tuple(
+            record
+            for record in self.visible_transcript()
+            if record.kind == "user_message" and record.record_id not in answered
+        )
+
+    def model_context(self, agent_id: str | None = None) -> tuple[ContextEntry, ...]:
+        """Return internal context entries without exposing them as transcript."""
+
+        owner = agent_id or self._agent_id
+        return tuple(
+            value
+            for (entry_owner, _), value in sorted(self._context.items())
+            if entry_owner == owner
+        )
+
     def _load(self) -> None:
         if _git(self.path, "symbolic-ref", "-q", "HEAD") != MAIN_REF:
             raise ProtocolError("session checkout must have refs/heads/main checked out")
+        self._context = {}
         commit_ids = _git(self.path, "rev-list", "--first-parent", "--reverse", MAIN_REF).splitlines()
         if not commit_ids:
             raise ProtocolError("session repository has no main history")
@@ -145,9 +173,19 @@ class LocalGitSession:
             for path in paths:
                 if not path.startswith(".heph/session/v1/") or not path.endswith(".json"):
                     continue
-                value = _git(self.path, "show", f"{commit_id}:{path}")
-                if path.endswith("/context.json") or "/context/" in path or "/content/" in path:
+                if "/context/" in path:
+                    try:
+                        value = _git(self.path, "show", f"{commit_id}:{path}")
+                    except LocalGitError as exc:
+                        raise ProtocolError("history deletes an immutable context entry") from exc
+                    entry = ContextEntry.from_json(value)
+                    if path_for_context(entry.agent_id, entry.key) != path:
+                        raise MalformedRecord("context entry is stored at the wrong path")
+                    self._context[(entry.agent_id, entry.key)] = entry
                     continue
+                if path.endswith("/context.json") or "/content/" in path:
+                    continue
+                value = _git(self.path, "show", f"{commit_id}:{path}")
                 record = Record.from_json(value)
                 if path_for_record(record) != path:
                     raise MalformedRecord(f"record {record.record_id} is stored at the wrong path")
@@ -168,6 +206,9 @@ class LocalGitSession:
             self._by_id[record.record_id] = record
         participant_records = [record for record in self._records if record.kind == "participant"]
         self._participants = {record.participant_id: record.data["role"] for record in participant_records}
+        self._context = {
+            key: value for key, value in self._context.items() if value.agent_id in self._participants
+        }
         manifests = [record for record in self._records if record.kind == "session_manifest"]
         if not manifests:
             raise ProtocolError("session has no manifest")
@@ -185,13 +226,29 @@ class LocalGitSession:
                 if target is None or target.kind != "user_message":
                     raise ProtocolError("assistant response has no user-message target")
 
-    def _write_commit(self, records: Iterable[Record], message: str) -> str:
+    def _write_commit(
+        self,
+        records: Iterable[Record],
+        message: str,
+        context_entries: Iterable[ContextEntry] = (),
+    ) -> str:
         ordered = tuple(sorted(records, key=lambda record: path_for_record(record).encode("utf-8")))
-        paths: list[str] = []
+        ordered_context = tuple(
+            sorted(context_entries, key=lambda entry: path_for_context(entry.agent_id, entry.key).encode("utf-8"))
+        )
+        files: list[tuple[str, str]] = []
         for record in ordered:
             relative = path_for_record(record)
-            _write(self.path / relative, record.canonical_json())
-            paths.append(relative)
+            files.append((relative, record.canonical_json()))
+        for entry in ordered_context:
+            relative = path_for_context(entry.agent_id, entry.key)
+            files.append((relative, entry.canonical_json()))
+        files.sort(key=lambda item: item[0].encode("utf-8"))
+        paths = [relative for relative, _ in files]
+        if paths != sorted(set(paths)):
+            raise ProtocolError("commit paths must be unique and sorted")
+        for relative, value in files:
+            _write(self.path / relative, value)
         _git(self.path, "add", "--", *paths)
         _git(self.path, "commit", "--no-edit", "-m", message)
         changed = _git(self.path, "diff-tree", "--root", "--no-commit-id", "--name-only", "-r", self.head).splitlines()
@@ -228,6 +285,18 @@ class LocalGitSession:
         return self.head
 
     def publish_agent_response(self, record: Record, expected_parent: str, run_id: str, remote: str = "origin") -> str:
+        return self.publish_agent_responses((record,), expected_parent, run_id, remote=remote)
+
+    def publish_agent_responses(
+        self,
+        records: Iterable[Record],
+        expected_parent: str,
+        run_id: str,
+        context_entries: Iterable[ContextEntry] = (),
+        remote: str = "origin",
+    ) -> str:
+        """Commit one batch of responses and optional context, with one parent check."""
+
         try:
             canonical_run_id = str(UUID(run_id))
         except (ValueError, AttributeError) as exc:
@@ -236,26 +305,51 @@ class LocalGitSession:
             raise ProtocolError("run_id must use lowercase canonical UUID form")
         if run_id in self._stale_runs:
             raise NewRunRequired("stale runtime must retry with a new run")
-        if record.kind != "assistant_message" or record.actor_id != self._agent_id:
-            raise ProtocolError("agent publication must use this session's agent")
         remote_head = self._remote_head(remote)
         if self.head != expected_parent or (remote_head is not None and remote_head != expected_parent):
             self._stale_runs.add(run_id)
             raise StaleAgentParent("runtime expected parent is stale; start a new run")
-        if self._participants.get(record.actor_id) != "agent":
-            raise ProtocolError("agent actor is not registered")
-        target = self._by_id.get(record.in_reply_to or "")
-        if target is None or target.kind != "user_message":
-            raise ProtocolError("assistant response has no user-message target")
-        prior = next(
-            (value for value in self._records if value.kind == "assistant_message" and value.in_reply_to == record.in_reply_to),
-            None,
-        )
-        if prior is not None:
-            if prior.content is not None and record.content is not None and prior.content.to_dict() == record.content.to_dict():
-                return self._commit_for(prior.record_id)
-            raise Conflict("input already has a different assistant response")
-        commit = self._write_commit((record,), "assistant response")
+        pending: list[Record] = []
+        response_by_input: dict[str, Record] = {}
+        for record in records:
+            if record.kind != "assistant_message" or record.actor_id != self._agent_id:
+                raise ProtocolError("agent publication must use this session's agent")
+            if self._participants.get(record.actor_id) != "agent":
+                raise ProtocolError("agent actor is not registered")
+            target = self._by_id.get(record.in_reply_to or "")
+            if target is None or target.kind != "user_message":
+                raise ProtocolError("assistant response has no user-message target")
+            prior = next(
+                (
+                    value
+                    for value in self._records
+                    if value.kind == "assistant_message" and value.in_reply_to == record.in_reply_to
+                ),
+                None,
+            )
+            if prior is not None:
+                if prior.content is not None and record.content is not None and prior.content.to_dict() == record.content.to_dict():
+                    continue
+                raise Conflict("input already has a different assistant response")
+            prior_batch = response_by_input.get(record.in_reply_to or "")
+            if prior_batch is not None:
+                if prior_batch.content is not None and record.content is not None and prior_batch.content.to_dict() == record.content.to_dict():
+                    continue
+                raise Conflict("batch contains different responses for one input")
+            existing = self._by_id.get(record.record_id)
+            if existing is not None:
+                if existing.canonical_json() == record.canonical_json():
+                    continue
+                raise Conflict("record ID already exists with a different payload")
+            pending.append(record)
+            response_by_input[record.in_reply_to or ""] = record
+        context = tuple(context_entries)
+        for entry in context:
+            if entry.agent_id != self._agent_id:
+                raise ProtocolError("agent context belongs to another agent")
+        if not pending and not context:
+            return self.head
+        commit = self._write_commit(pending, "assistant responses", context)
         self._load()
         return commit
 

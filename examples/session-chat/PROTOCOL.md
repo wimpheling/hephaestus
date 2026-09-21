@@ -169,4 +169,31 @@ tombstone semantics requires a new protocol version and an explicit migration
 or fork policy.
 
 The library and tests below model these rules in memory. They do not claim
-real Git, browser, VM, model, or Hephaestus integration acceptance.
+browser, VM, model, or Hephaestus integration acceptance.
+
+## Reference release agent
+
+`agent.toml` packages the ordinary `reference-session-chat` release. It uses
+`publication.mode = "runtime_git"` with one required symbolic `session`
+repository capability. The capability reads `refs/heads/main`, requires
+fast-forward `update_ref`, and permits writes only below the agent record and
+agent context namespaces. `exact_parent_required = true` keeps a runtime run
+from publishing against a ref that changed after its immutable snapshot. The
+guest has `broker_only` networking and no legacy workspace mount.
+
+`agent.py` reads the platform-provided run context and model rule parameter,
+opens the ordinary Git checkout through `git_adapter.py`, and resolves every
+pending human record visible at the expected parent. It sends each model
+request through the existing framed brokered-egress ABI on vsock port 19001,
+using the non-secret placeholder `heph-placeholder:v1:<rule-id>` in the
+request body. It has no direct HTTPS fallback and never prints the broker
+credential. Responses and the latest bounded internal model context are
+committed together once and pushed once. A stale expected parent fails before
+the commit; a fresh runtime run must reread the history and retry.
+
+The manifest and agent are ordinary release packaging examples. The focused
+tests exercise the real local Git adapter, batching, private broker wire and
+sanitized response envelope, stale-parent rejection, and
+no-fabricated-response behavior. The broker test uses a local stream and does
+not contact a model provider; the composed production VM, model, browser, or
+GCP journey remains unclaimed.

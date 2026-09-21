@@ -1,0 +1,82 @@
+version = 2
+
+[agent]
+name = "Reference session chat agent"
+key = "reference-session-chat"
+
+[build]
+command = "/bin/sh"
+arguments = ["build.sh"]
+working_directory = "/workspace/source"
+image = { key = "python-ubuntu" }
+triggers = ["refs/heads/main"]
+
+[build.resources]
+vcpus = 1
+memory_mib = 256
+
+[build.network]
+profile = "disabled"
+
+[[build.artifacts]]
+path = "bin/session-chat"
+kind = "directory"
+
+[guest]
+image = { key = "python-ubuntu" }
+command = "bin/session-chat/session-chat-agent"
+working_directory = "bin/session-chat"
+
+[resources]
+vcpus = 1
+memory_mib = 256
+
+[workspace]
+mount = false
+path = "/workspace/git"
+read_only = true
+
+[state_volume]
+enabled = false
+
+[network]
+profile = "broker_only"
+
+[publication]
+mode = "runtime_git"
+repository_slot = "session"
+
+[[capability_slots]]
+key = "session"
+purpose = "Read and publish this session's transcript and private model context"
+resource_kind = "repository"
+required_operations = ["git_read", "update_ref"]
+required = true
+
+[capability_slots.git]
+ref_globs = ["refs/heads/main"]
+changed_path_globs = [
+  ".heph/session/v1/records/agent/agent%3Areference-chat/**",
+  ".heph/session/v1/context/agent%3Areference-chat/**",
+]
+transfer = { request_bytes = 1048576, pack_bytes = 8388608, object_count = 10000, ref_updates = 8 }
+exact_parent_required = true
+
+[[parameters]]
+name = "model_rule_id"
+type = "string"
+minimum_length = 36
+maximum_length = 36
+required = true
+
+[[secret_slots]]
+key = "model"
+purpose = "Generate bounded session-chat responses"
+required = true
+delivery_modes = ["brokered"]
+phases = ["normal"]
+destinations = ["api.model.example"]
+
+[triggers]
+push = false
+refs = []
