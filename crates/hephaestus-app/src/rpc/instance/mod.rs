@@ -566,8 +566,8 @@ impl AgentInstanceService for InstanceRpc {
             &self.receipts,
             identity.idempotency_id,
             identity.user_id,
-            "brokered_secret_rule",
             "agent_secret_binding",
+            "agent_instance",
         )
         .await?;
         Response::ok(DeclareBrokeredHttpsRuleResponse {

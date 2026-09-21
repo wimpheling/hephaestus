@@ -58,6 +58,21 @@ type CarriedTypedGitAuthority = (
     bool,
     Vec<u8>,
 );
+type BrokeredRuleReceipt = (
+    Uuid,
+    Uuid,
+    Uuid,
+    Uuid,
+    String,
+    Option<String>,
+    String,
+    String,
+    String,
+    String,
+    i64,
+    Uuid,
+    Uuid,
+);
 
 struct Fixture {
     owner: UserId,
@@ -896,10 +911,45 @@ async fn encrypted_rotation_delegation_revocation_and_purge_are_atomic() {
     .fetch_one(&pool)
     .await
     .expect("exact active brokered binding");
+    let previous_binding_event_version: i64 = sqlx::query_scalar(
+        "SELECT COALESCE(max(aggregate_version), 0)
+           FROM application_events
+          WHERE aggregate_type = 'agent_secret_binding'
+            AND aggregate_id = $1
+            AND scope_kind = 'agent_instance'
+            AND scope_id = $2",
+    )
+    .bind(brokered_binding_id)
+    .bind(instance_id.as_uuid())
+    .fetch_one(&pool)
+    .await
+    .expect("read binding event version before rule declaration");
+    let previous_binding_occurrence_id: Uuid = sqlx::query_scalar(
+        "SELECT occurrence_id
+           FROM application_events
+          WHERE aggregate_type = 'agent_secret_binding'
+            AND aggregate_id = $1
+            AND scope_kind = 'agent_instance'
+            AND scope_id = $2
+          ORDER BY cursor DESC
+          LIMIT 1",
+    )
+    .bind(brokered_binding_id)
+    .bind(instance_id.as_uuid())
+    .fetch_one(&pool)
+    .await
+    .expect("read binding occurrence before rule declaration");
+    let rule_identity = ordinary_member
+        .clone()
+        .with_idempotency_id(RequestId::new());
+    assert_ne!(
+        rule_identity.idempotency_id.as_uuid(),
+        previous_binding_occurrence_id
+    );
     let brokered_rule_id = Uuid::new_v4();
     service
         .declare_brokered_https_rule(
-            &ordinary_member,
+            &rule_identity,
             DeclareBrokeredHttpsRule {
                 command_key: key("declare-brokered-rule", brokered_rule_id),
                 rule_id: brokered_rule_id,
@@ -911,9 +961,57 @@ async fn encrypted_rotation_delegation_revocation_and_purge_are_atomic() {
         )
         .await
         .expect("declare exact immutable brokered HTTPS rule");
+    let receipt: BrokeredRuleReceipt = sqlx::query_as(
+        "SELECT id, occurrence_id, actor_id, scope_id, actor_type, safe_state,
+                    aggregate_type, scope_kind, event_type, change_kind,
+                    aggregate_version, related_id_one, related_id_two
+               FROM application_events
+              WHERE occurrence_id = $1
+                AND actor_id = $2
+                AND aggregate_type = 'agent_secret_binding'
+                AND scope_kind = 'agent_instance'
+                AND scope_id = $4
+                AND aggregate_id = $3
+                AND actor_type = 'user'
+                AND safe_state = 'active'
+              ORDER BY cursor DESC
+              LIMIT 1",
+    )
+    .bind(rule_identity.idempotency_id.as_uuid())
+    .bind(rule_identity.user_id.as_uuid())
+    .bind(brokered_binding_id)
+    .bind(instance_id.as_uuid())
+    .fetch_one(&pool)
+    .await
+    .expect("load brokered rule mutation receipt event");
+    assert_eq!(receipt.1, rule_identity.idempotency_id.as_uuid());
+    assert_eq!(receipt.2, rule_identity.user_id.as_uuid());
+    assert_eq!(receipt.3, instance_id.as_uuid());
+    assert_eq!(receipt.4, "user");
+    assert_eq!(receipt.5.as_deref(), Some("active"));
+    assert_eq!(receipt.6, "agent_secret_binding");
+    assert_eq!(receipt.7, "agent_instance");
+    assert_eq!(receipt.8, "agent_secret_binding.changed");
+    assert_eq!(receipt.9, "updated");
+    assert_eq!(receipt.10, previous_binding_event_version + 1);
+    assert_eq!(receipt.11, instance_id.as_uuid());
+    let binding_import_id: Uuid =
+        sqlx::query_scalar("SELECT import_id FROM agent_secret_bindings WHERE id = $1")
+            .bind(brokered_binding_id)
+            .fetch_one(&pool)
+            .await
+            .expect("load brokered binding import relation");
+    assert_eq!(receipt.12, binding_import_id);
+    let outbox_count: i64 =
+        sqlx::query_scalar("SELECT count(*) FROM product_event_outbox WHERE event_id = $1")
+            .bind(receipt.0)
+            .fetch_one(&pool)
+            .await
+            .expect("load committed brokered rule event outbox row");
+    assert_eq!(outbox_count, 1);
     let replayed_rule = service
         .declare_brokered_https_rule(
-            &ordinary_member,
+            &rule_identity,
             DeclareBrokeredHttpsRule {
                 command_key: key("declare-brokered-rule", brokered_rule_id),
                 rule_id: Uuid::new_v4(),
@@ -926,6 +1024,30 @@ async fn encrypted_rotation_delegation_revocation_and_purge_are_atomic() {
         .await
         .expect("same command key should replay stored rule id");
     assert_eq!(replayed_rule, brokered_rule_id);
+    let replay_event: (Uuid, i64) = sqlx::query_as(
+        "SELECT id, count(*) OVER ()
+           FROM application_events
+          WHERE occurrence_id = $1
+            AND actor_id = $2
+            AND aggregate_type = 'agent_secret_binding'
+            AND scope_kind = 'agent_instance'
+            AND scope_id = $4
+            AND aggregate_id = $3
+            AND change_kind = 'updated'
+            AND actor_type = 'user'
+            AND safe_state = 'active'
+          ORDER BY cursor DESC
+          LIMIT 1",
+    )
+    .bind(rule_identity.idempotency_id.as_uuid())
+    .bind(rule_identity.user_id.as_uuid())
+    .bind(brokered_binding_id)
+    .bind(instance_id.as_uuid())
+    .fetch_one(&pool)
+    .await
+    .expect("load replayed brokered rule receipt event");
+    assert_eq!(replay_event.0, receipt.0);
+    assert_eq!(replay_event.1, 1);
     let collision = service
         .declare_brokered_https_rule(
             &ordinary_member,

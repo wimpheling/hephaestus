@@ -1354,6 +1354,21 @@ impl<K: KeyProvider + Send + Sync> SecretService<K> {
         .execute(&mut *tx)
         .await
         .map_err(|_| SecretServiceError::Persistence)?;
+        sqlx::query(
+            "SELECT event_id
+               FROM append_application_event(
+                    $1, 'agent_instance', $2, 'agent_secret_binding', $3,
+                    'agent_secret_binding.changed', 'updated', 'active', $2, $4
+               )",
+        )
+        .bind(identity.idempotency_id.as_uuid())
+        .bind(binding.instance_id)
+        .bind(command.binding_id.as_uuid())
+        .bind(binding.import_id)
+        .fetch_one(&mut *tx)
+        .await
+        .map(|_| ())
+        .map_err(|_| SecretServiceError::Persistence)?;
         record_command(
             &mut tx,
             command.command_key,
