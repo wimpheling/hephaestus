@@ -74,6 +74,7 @@ PHASE_ORDER = (
     "browser-recovery",
     "browser-concurrency",
     "browser-fork",
+    "guest-negative-capability",
     "browser-post-operation",
     "evidence-scan",
     "archive",
@@ -151,6 +152,7 @@ WORKLOAD_PHASE_DOMAINS = {
     "browser-recovery": {"workload-libkrun"},
     "browser-concurrency": {"workload-libkrun"},
     "browser-fork": {"workload-libkrun"},
+    "guest-negative-capability": {"workload-libkrun"},
     "browser-post-operation": {"workload-libkrun"},
 }
 OUTCOMES = {"passed", "failed", "timed-out", "cancelled", "skipped", "unknown"}

@@ -14,6 +14,7 @@ from pathlib import Path
 
 
 SCRIPT = Path(__file__).with_name("gcp_phase_timing.py")
+COLLECTOR_SCRIPT = Path(__file__).with_name("collect-cooking-diagnostics.py")
 SOURCE = "a" * 40
 IMAGE = "b" * 32
 CACHE = "c" * 64
@@ -22,6 +23,10 @@ HELPER_SPEC = importlib.util.spec_from_file_location("gcp_phase_timing_under_tes
 assert HELPER_SPEC is not None and HELPER_SPEC.loader is not None
 PHASE_TIMING = importlib.util.module_from_spec(HELPER_SPEC)
 HELPER_SPEC.loader.exec_module(PHASE_TIMING)
+COLLECTOR_SPEC = importlib.util.spec_from_file_location("collector_under_test", COLLECTOR_SCRIPT)
+assert COLLECTOR_SPEC is not None and COLLECTOR_SPEC.loader is not None
+COLLECTOR = importlib.util.module_from_spec(COLLECTOR_SPEC)
+COLLECTOR_SPEC.loader.exec_module(COLLECTOR)
 
 
 class CountingReader:
@@ -172,6 +177,20 @@ class PhaseTimingTests(unittest.TestCase):
             fork_projection = fork.with_name("browser-fork-projection.json")
             self.run_cli("project", "--path", str(fork), "--output", str(fork_projection))
             self.assertEqual(json.loads(fork_projection.read_text())["phases"][0]["phase"], "browser-fork")
+
+    def test_guest_negative_capability_phase_is_typed_as_workload_libkrun(self) -> None:
+        phase = "guest-negative-capability"
+        self.assertIn(phase, PHASE_TIMING.PHASES)
+        self.assertEqual(PHASE_TIMING.WORKLOAD_PHASE_DOMAINS[phase], {"workload-libkrun"})
+        self.assertIn(phase, COLLECTOR.PHASE_TIMING_PHASES)
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "negative.jsonl"
+            args = self.common(path, phase)
+            args[args.index("supervisor")] = "workload"
+            args[args.index("guest-runtime")] = "workload-libkrun"
+            self.run_cli("start", *args)
+            self.run_cli("end", *args, "--outcome", "passed")
+            self.run_cli("validate", "--path", str(path), "--require-phase", phase)
 
     def test_missing_and_duplicate_phases_fail_closed(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

@@ -910,6 +910,18 @@ if command -v rpm >/dev/null 2>&1; then
     rpm -q libkrun libkrunfw
 fi
 if [[ "${HEPHAESTUS_APP_LIBKRUN_E2E:-0}" == "1" ]]; then
+    if [[ "${HEPHAESTUS_APP_SESSION_CHAT_NEGATIVE_E2E:-0}" == "1" ]]; then
+        [[ "${HEPHAESTUS_APP_SESSION_CHAT_E2E:-0}" == "1" ]] ||
+            die "session-chat negative E2E requires the session-chat scenario"
+        for required_flag in \
+            HEPHAESTUS_APP_SESSION_CHAT_BROWSER_E2E \
+            HEPHAESTUS_APP_SESSION_CHAT_RESTART_E2E \
+            HEPHAESTUS_APP_SESSION_CHAT_CONCURRENT_E2E \
+            HEPHAESTUS_APP_SESSION_CHAT_FORK_E2E; do
+            [[ "${!required_flag:-0}" == "1" ]] ||
+                die "session-chat negative E2E requires ${required_flag}=1"
+        done
+    fi
     printf 'Running daemon golden E2E with pinned image %s\n' "${ubuntu_image}"
     phase_timing_start gateway-services-ready
     start_golden_services
@@ -973,6 +985,59 @@ if [[ "${HEPHAESTUS_APP_LIBKRUN_E2E:-0}" == "1" ]]; then
         "${golden_features[@]}" \
         -- --nocapture
     phase_timing_end golden-tests passed
+    if [[ "${HEPHAESTUS_APP_SESSION_CHAT_NEGATIVE_E2E:-0}" == "1" ]]; then
+        # Keep the negative proof in a fresh golden process. The canonical
+        # browser process owns a six-request broker fixture and its daemon
+        # lifecycle; a second process gets a fresh database, broker, and VM
+        # observer while reusing this disposable service/guest environment.
+        # Disable child timing so this outer phase is the sole owner of the
+        # negative-process outcome and cannot create duplicate phase records.
+        phase_timing_start guest-negative-capability
+        run_as_guest_owner env \
+            -u HEPHAESTUS_APP_SESSION_CHAT_BROWSER_E2E \
+            -u HEPHAESTUS_APP_SESSION_CHAT_RESTART_E2E \
+            -u HEPHAESTUS_APP_SESSION_CHAT_CONCURRENT_E2E \
+            -u HEPHAESTUS_APP_SESSION_CHAT_FORK_E2E \
+            -u HEPHAESTUS_COOKING_BROWSER_E2E \
+            -u HEPHAESTUS_COOKING_INSTALLED_UI_FIXTURE \
+            -u HEPH_GCP_PHASE_TIMING_PATH \
+            -u HEPH_GCP_PHASE_TIMING_SOURCE_SHA \
+            -u HEPH_GCP_PHASE_TIMING_RUN_ID \
+            -u HEPH_GCP_PHASE_TIMING_ATTEMPT \
+            -u HEPH_GCP_PHASE_TIMING_IMAGE_FINGERPRINT \
+            HEPHAESTUS_APP_LIBKRUN_E2E=1 \
+            HEPHAESTUS_APP_SESSION_CHAT_E2E=1 \
+            HEPHAESTUS_APP_SESSION_CHAT_DENIAL_PROBE_E2E=1 \
+            HEPHAESTUS_APP_SESSION_CHAT_NEGATIVE_E2E=1 \
+            HEPHAESTUS_APP_COOKING_BUILD_PROOF=1 \
+            HEPHAESTUS_POSTGRES_TEST_URL="${postgres_url}" \
+            HEPHAESTUS_NATS_TEST_URL="${nats_url}" \
+            HEPHAESTUS_LIBKRUN_RUNTIME_ROOT="${fixture_root}/runtime" \
+            HEPHAESTUS_LIBKRUN_IMAGE_ROOT="${fixture_root}" \
+            HEPHAESTUS_LIBKRUN_RUST_BUILDER_ROOT="${rust_builder_root}" \
+            HEPHAESTUS_LIBKRUN_ROOTFS="${fixture_root}/rootfs" \
+            HEPHAESTUS_LIBKRUN_DISK_ROOT="${fixture_root}/disks" \
+            HEPHAESTUS_LIBKRUN_MOUNT_ROOT="${fixture_root}/mounts" \
+            HEPHAESTUS_LIBKRUN_CGROUP_ROOT="${cgroup_root}" \
+            HEPHAESTUS_LIBKRUN_WORKER="${target_directory:-${cargo_target_dir}}/debug/hephaestus-vm-libkrun-worker" \
+            HEPHAESTUS_GUEST_INIT_BINARY="${cargo_target_dir}/${GUEST_TARGET}/release/heph-init" \
+            HEPHAESTUS_TEST_OCI_BUILDER_VM_IMAGE="${builder_vm_image}" \
+            HEPHAESTUS_TEST_OCI_VERIFIER_VM_IMAGE="${verifier_vm_image}" \
+            HEPHAESTUS_TEST_OCI_BASE_LAYOUT_MANIFEST="${base_layout_manifest}" \
+            HEPHAESTUS_TEST_OCI_BUILDER_LAYOUT="${builder_layout}" \
+            HEPHAESTUS_TEST_OCI_VERIFIER_LAYOUT="${verifier_layout}" \
+            HEPHAESTUS_TEST_OCI_BUILDER_ROOT="${builder_operation_root}" \
+            HEPHAESTUS_TEST_OCI_VERIFIER_ROOT="${verifier_operation_root}" \
+            HEPHAESTUS_TEST_OCI_ROOTFS_ROOT="${fixture_root}" \
+            cargo test \
+            --manifest-path "${repo_root}/Cargo.toml" \
+            --package hephaestus-app \
+            --test golden \
+            "${golden_features[@]}" \
+            bearer_push_starts_run_through_production_bootstrap \
+            -- --exact --nocapture
+        phase_timing_end guest-negative-capability passed
+    fi
     # Reuse the same disposable authority database and JetStream fixture for
     # the gateway publication persistence, RLS, and recovery proof. Keeping
     # it here makes the joined wrapper one complete operator command.
