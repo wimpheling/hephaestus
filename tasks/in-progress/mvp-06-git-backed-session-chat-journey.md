@@ -137,7 +137,7 @@ the review rather than assumed to be complete.
     agent response, subsequent turn, branch/fork, restart/recovery, concurrent
     release-defined writers, and visibility/history in browser and real-Git
     integration tests.
-  - [ ] Cover denied source/other-repository access, prohibited ref/path
+  - [x] Cover denied source/other-repository access, prohibited ref/path
     writes, delete/force-push attempts, expired/revoked Git capability, and
     recursive-trigger suppression.
   - [ ] Run deterministic fake-model coverage and a separate optional real
@@ -771,3 +771,20 @@ The broader GCP recovery contract suite passes all 78 tests after aligning the
 collector's timing vocabulary with `browser-recovery`. Evidence is retained in
 `/var/tmp/sessionchat-gcp-recovery-contracts2.log`. This is helper/contract
 validation, not cloud acceptance.
+
+### Local negative-capability acceptance audit (2026-09-21)
+
+The released-VM probe proves source/other-repository read and push denial,
+prohibited-path rejection, model destination/rule rejection, and a successful
+authorized control (`/var/tmp/sessionchat-denial-final7-run.log`). The real
+smart-HTTP PostgreSQL matrix proves ref, delete, force-push, expiry, revocation,
+and recursive-trigger denial at the production Git boundary.
+
+Review strengthened expiry/revocation cases to modify the permitted
+`runtime.txt` path and assert rejection directly at the production runtime
+authenticator, eliminating prohibited-path false positives. Deletion now
+requires the fixed guarded-hook denial marker. Both real PostgreSQL tests
+pass, with no skips, in `/var/tmp/sessionchat-smart-http-pg-denial-final4.log`;
+formatting and focused strict Clippy pass. This closes the listed local
+negative-capability item. A fresh GCP run must still retain the corresponding
+negative evidence; browser/lifecycle acceptance remains open.

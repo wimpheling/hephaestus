@@ -447,7 +447,7 @@ async fn clone_fetch_push_audit_and_run_request() {
     let runtime_router = GitHttpService::new(
         Arc::clone(&repository_service),
         Arc::clone(&storage),
-        runtime_authenticator,
+        runtime_authenticator.clone(),
         authorizer.clone(),
         backend,
         GitHttpLimits::default(),
@@ -559,6 +559,10 @@ async fn clone_fetch_push_audit_and_run_request() {
         !denied_delete.status.success(),
         "runtime branch deletion was accepted"
     );
+    assert!(
+        String::from_utf8_lossy(&denied_delete.stderr).contains("runtime receive denied"),
+        "delete denial was not reported by the receive hook"
+    );
     let baseline_tree = git_output(
         &source,
         &["rev-parse", &format!("{runtime_commit}^{{tree}}")],
@@ -593,9 +597,6 @@ async fn clone_fetch_push_audit_and_run_request() {
         "force-push denial was not reported by the receive hook"
     );
     tokio::time::sleep(std::time::Duration::from_secs(2)).await;
-    tokio::fs::create_dir_all(source.join("sessions"))
-        .await
-        .expect("expired runtime fixture directory");
     let expired_state: (String, bool) = sqlx::query_as(
         "SELECT status, expires_at < now()
            FROM runtime_authority_sessions WHERE id = $1",
@@ -605,12 +606,24 @@ async fn clone_fetch_push_audit_and_run_request() {
     .await
     .expect("inspect expired runtime Git session");
     assert_eq!(expired_state, (String::from("active"), true));
-    tokio::fs::write(source.join("sessions/expired.json"), "expired\n")
+    tokio::fs::write(source.join("runtime.txt"), "expired runtime\n")
         .await
         .expect("expired runtime change");
-    git(&source, &["add", "sessions/expired.json"]).await;
+    git(&source, &["add", "runtime.txt"]).await;
     git(&source, &["commit", "-m", "expired runtime session"]).await;
     let expired_header = credential_header(&expired_credential);
+    let expired_authentication = runtime_authenticator
+        .authenticate_git(
+            Some(&expired_header),
+            RequestId::new(),
+            repository.id,
+            GitOperation::Push,
+        )
+        .await;
+    assert!(
+        expired_authentication.is_err(),
+        "expired runtime credential was accepted by the production authenticator"
+    );
     let denied_expired = git_authenticated_result(
         &source,
         &["push", "runtime", "HEAD:refs/heads/main"],
@@ -622,13 +635,10 @@ async fn clone_fetch_push_audit_and_run_request() {
         "expired runtime session was accepted"
     );
     git(&source, &["reset", "--hard", &runtime_commit]).await;
-    tokio::fs::create_dir_all(source.join("sessions"))
-        .await
-        .expect("revoked runtime fixture directory");
-    tokio::fs::write(source.join("sessions/revoked.json"), "revoked\n")
+    tokio::fs::write(source.join("runtime.txt"), "revoked runtime\n")
         .await
         .expect("revoked runtime change");
-    git(&source, &["add", "sessions/revoked.json"]).await;
+    git(&source, &["add", "runtime.txt"]).await;
     git(&source, &["commit", "-m", "revoked runtime session"]).await;
     let revoked_header = credential_header(&revoked_credential);
     sqlx::query(
@@ -640,6 +650,18 @@ async fn clone_fetch_push_audit_and_run_request() {
     .execute(&pool)
     .await
     .expect("revoke runtime Git session");
+    let revoked_authentication = runtime_authenticator
+        .authenticate_git(
+            Some(&revoked_header),
+            RequestId::new(),
+            repository.id,
+            GitOperation::Push,
+        )
+        .await;
+    assert!(
+        revoked_authentication.is_err(),
+        "revoked runtime credential was accepted by the production authenticator"
+    );
     let denied_revoked = git_authenticated_result(
         &source,
         &["push", "runtime", "HEAD:refs/heads/main"],
