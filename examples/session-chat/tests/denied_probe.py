@@ -3,14 +3,16 @@
 
 This file is deliberately a test-only release entry point.  It exercises the
 same runtime Git credential helper and broker ABI as ``agent.py`` with one
-authorized control request followed by denied requests. The fixture supplies the authorized and comparison
-repository IDs; no authority is inferred from a user-provided value.
+authorized control request followed by denied requests. The fixture supplies
+the authorized target, source, and comparison repository IDs; no authority is
+inferred from a user-provided value.
 
-The fixture invokes this entry point with two distinct canonical UUID options:
+The fixture invokes this entry point with three distinct canonical UUID options:
 ``--target-repository-id`` is the authorized runtime Git target and
-``--other-repository-id`` is a different repository used for read and push
-denials. Runtime control and secret paths remain the fixed production guest
-paths, and ``HEPH_RUNTIME_GIT_HOST``/``HEPH_RUNTIME_GIT_PATH`` remain the
+``--source-repository-id`` is a distinct source repository used for read and
+push denials. ``--other-repository-id`` is another repository used for the
+same denials. Runtime control and secret paths remain the fixed production
+guest paths, and ``HEPH_RUNTIME_GIT_HOST``/``HEPH_RUNTIME_GIT_PATH`` remain the
 heph-init supplied credential-helper contract.
 """
 
@@ -34,6 +36,8 @@ from uuid import UUID, uuid4
 CHECKS = (
     "source_checkout_absent",
     "model_authorized_control",
+    "source_repository_read_denied",
+    "source_repository_push_denied",
     "other_repository_read_denied",
     "other_repository_push_denied",
     "prohibited_path_push_denied",
@@ -104,8 +108,8 @@ def _fixed_receive_denial(result: subprocess.CompletedProcess[str]) -> bool:
     return result.returncode != 0 and "runtime receive denied:" in result.stderr.casefold()
 
 
-def _other_repository_denied(workspace: Path, other_repository_id: str) -> tuple[bool, bool]:
-    remote = _remote(other_repository_id)
+def _repository_denied(workspace: Path, repository_id: str) -> tuple[bool, bool]:
+    remote = _remote(repository_id)
     read = _git(("ls-remote", "--heads", remote, "refs/heads/main"), cwd=workspace)
     push = _git(("push", remote, "HEAD:refs/heads/main"), cwd=workspace)
     return _fixed_git_denial(read), _fixed_git_denial(push)
@@ -238,14 +242,25 @@ def _broker_request_succeeds() -> bool:
     return response == MODEL_RESPONSE_TEXT
 
 
-def _run(target_repository_id: str, other_repository_id: str, workspace: Path) -> dict[str, bool]:
+def _run(
+    target_repository_id: str,
+    source_repository_id: str,
+    other_repository_id: str,
+    workspace: Path,
+) -> dict[str, bool]:
     checks: dict[str, bool] = {"source_checkout_absent": _source_absent()}
     try:
         checks["model_authorized_control"] = _broker_request_succeeds()
     except Exception:  # noqa: BLE001 - retain only fixed check status.
         checks["model_authorized_control"] = False
     try:
-        other_read, other_push = _other_repository_denied(workspace, other_repository_id)
+        source_read, source_push = _repository_denied(workspace, source_repository_id)
+    except Exception:  # noqa: BLE001 - retain only fixed check status.
+        source_read, source_push = False, False
+    checks["source_repository_read_denied"] = source_read
+    checks["source_repository_push_denied"] = source_push
+    try:
+        other_read, other_push = _repository_denied(workspace, other_repository_id)
     except Exception:  # noqa: BLE001 - retain only fixed check status.
         other_read, other_push = False, False
     checks["other_repository_read_denied"] = other_read
@@ -270,6 +285,7 @@ def main(argv: Sequence[str] | None = None) -> int:
 
     parser = QuietParser(add_help=False)
     parser.add_argument("--target-repository-id")
+    parser.add_argument("--source-repository-id")
     parser.add_argument("--other-repository-id")
     parser.add_argument("--workspace", default=str(WORKSPACE))
     try:
@@ -280,12 +296,13 @@ def main(argv: Sequence[str] | None = None) -> int:
             print(f"check={check} status=failed")
         return 2
     target = _uuid(args.target_repository_id or "")
+    source = _uuid(args.source_repository_id or "")
     other = _uuid(args.other_repository_id or "")
-    if unknown or target is None or other is None or target == other:
+    if unknown or target is None or source is None or other is None or len({target, source, other}) != 3:
         for check in CHECKS:
             print(f"check={check} status=failed")
         return 2
-    results = _run(target, other, Path(args.workspace))
+    results = _run(target, source, other, Path(args.workspace))
     for check in CHECKS:
         print(f"check={check} status={'passed' if results.get(check) is True else 'failed'}")
     return 0 if all(results.get(check) is True for check in CHECKS) else 1

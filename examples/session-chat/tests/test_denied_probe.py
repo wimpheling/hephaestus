@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import importlib.util
+import io
 import json
 from pathlib import Path
 import socket
@@ -11,6 +12,7 @@ import subprocess
 import tempfile
 import threading
 import unittest
+from contextlib import redirect_stdout
 from unittest.mock import patch
 
 
@@ -36,17 +38,109 @@ class DeniedProbeTests(unittest.TestCase):
         with (
             patch.object(PROBE, "_source_absent", return_value=True),
             patch.object(PROBE, "_broker_request_succeeds", return_value=False),
-            patch.object(PROBE, "_other_repository_denied", return_value=(True, True)),
+            patch.object(PROBE, "_repository_denied", return_value=(True, True)),
             patch.object(PROBE, "_prohibited_path_denied", return_value=True),
             patch.object(PROBE, "_broker_request_denied", return_value=True),
         ):
             checks = PROBE._run(
                 "11111111-1111-4111-8111-111111111111",
                 "22222222-2222-4222-8222-222222222222",
+                "33333333-3333-4333-8333-333333333333",
                 Path("/workspace/git"),
             )
         self.assertFalse(checks["model_authorized_control"])
         self.assertFalse(all(checks.values()))
+
+    def test_cli_requires_three_distinct_repositories_and_dispatches_source_and_other(self):
+        target = "11111111-1111-4111-8111-111111111111"
+        source = "a2222222-b222-4222-8222-222222222222"
+        other = "c3333333-d333-4333-8333-333333333333"
+        expected = {check: True for check in PROBE.CHECKS}
+        with patch.object(PROBE, "_run", return_value=expected) as run:
+            output = io.StringIO()
+            with redirect_stdout(output):
+                self.assertEqual(
+                    PROBE.main(
+                        [
+                            "--target-repository-id",
+                            target,
+                            "--source-repository-id",
+                            source,
+                            "--other-repository-id",
+                            other,
+                            "--workspace",
+                            "/workspace/git",
+                        ]
+                    ),
+                    0,
+                )
+        run.assert_called_once_with(target, source, other, Path("/workspace/git"))
+        self.assertIn("check=source_repository_read_denied status=passed", output.getvalue())
+
+        valid_prefix = [
+            "--target-repository-id",
+            target,
+            "--source-repository-id",
+            source,
+            "--other-repository-id",
+            other,
+        ]
+        invalid_cases = {
+            "missing-target": [
+                "--source-repository-id",
+                source,
+                "--other-repository-id",
+                other,
+            ],
+            "missing-source": [
+                "--target-repository-id",
+                target,
+                "--other-repository-id",
+                other,
+            ],
+            "missing-other": [
+                "--target-repository-id",
+                target,
+                "--source-repository-id",
+                source,
+            ],
+            "noncanonical-source": [
+                *valid_prefix[:3],
+                source.upper(),
+                *valid_prefix[4:],
+            ],
+            "duplicate-target-source": [
+                "--target-repository-id",
+                target,
+                "--source-repository-id",
+                target,
+                "--other-repository-id",
+                other,
+            ],
+            "duplicate-target-other": [
+                "--target-repository-id",
+                target,
+                "--source-repository-id",
+                source,
+                "--other-repository-id",
+                target,
+            ],
+            "duplicate-source-other": [
+                "--target-repository-id",
+                target,
+                "--source-repository-id",
+                source,
+                "--other-repository-id",
+                source,
+            ],
+        }
+        for name, arguments in invalid_cases.items():
+            with self.subTest(name=name), patch.object(PROBE, "_run") as run:
+                output = io.StringIO()
+                with redirect_stdout(output):
+                    self.assertEqual(PROBE.main(arguments), 2)
+                run.assert_not_called()
+                self.assertEqual(output.getvalue().count("status=failed\n"), len(PROBE.CHECKS))
 
     def test_broker_adapter_classifies_real_model_wire_status(self):
         with tempfile.TemporaryDirectory() as directory:

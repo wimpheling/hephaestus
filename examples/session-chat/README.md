@@ -19,6 +19,11 @@ The second discovery root includes the test-only guest denial probe, which is
 kept outside the release package and is therefore not part of the first root's
 module discovery.
 
+The denial probe requires three distinct canonical UUIDs:
+`--target-repository-id`, `--source-repository-id`, and
+`--other-repository-id`. The runtime fixture supplies those IDs while keeping
+the control, secret, and Git-helper paths at their production guest locations.
+
 `build.sh` compiles the three Python modules and stages them as one directory
 artifact. The resulting `agent.toml` declares a required `runtime_git` session
 repository capability scoped to `refs/heads/main`, the agent record/context

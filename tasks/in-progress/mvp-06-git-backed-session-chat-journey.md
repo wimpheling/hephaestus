@@ -645,16 +645,19 @@ ownership boundary and the incomplete acceptance boxes remain unchanged.
 
 ### Test-only released-guest denial probe (2026-09-21)
 
-Commit `b079c48` adds `examples/session-chat/tests/denied_probe.py` and five
-focused Python tests. The probe uses the production runtime credential/helper
-and broker contracts, first requiring an authorized deterministic model call
-with the same credential and binding, then checking source-checkout absence and
-other-repository Git denials, a positive authorized clone followed by a prohibited-path push,
-and undeclared model destination/rule requests. Its adapter checks distinguish
-wire `denied` from `retryable`, transport failure, and malformed responses;
-output is fixed check/status metadata only. This probe is not yet wired into a
-release image or executed in a real VM, so broad released-VM denial acceptance
-remains unchecked.
+Commit `b079c48` records the initial `examples/session-chat/tests/denied_probe.py`
+probe and its focused Python tests. The current follow-up extends it with the
+required distinct source-repository ID and source-repository read and push
+checks; the focused test file now contains six tests. The probe uses the
+production runtime credential/helper and broker contracts, first requiring an
+authorized deterministic model call with the same credential and binding, then
+checking source-checkout absence, source-repository and other-repository Git
+denials, a positive authorized clone followed by a prohibited-path push, and
+undeclared model destination/rule requests. Its adapter checks distinguish wire
+`denied` from `retryable`, transport failure, and malformed responses; output
+is fixed check/status metadata only. This probe is not yet wired into a release
+image or executed in a real VM, so broad released-VM denial acceptance remains
+unchecked.
 
 ### Interactive-path ownership and transition audit (2026-09-21)
 
