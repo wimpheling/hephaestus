@@ -3630,12 +3630,15 @@ async fn seed_model_import(
     project: ProjectId,
     identity: &AuthenticatedIdentity,
 ) -> Uuid {
-    sqlx::query("INSERT INTO project_secret_roles (project_id,user_id,role) VALUES ($1,$2,'secret_manager')")
-        .bind(project.as_uuid())
-        .bind(identity.user_id.as_uuid())
-        .execute(pool)
-        .await
-        .expect("session secret manager role");
+    sqlx::query(
+        "INSERT INTO project_secret_roles (project_id,user_id,role) \
+         VALUES ($1,$2,'secret_manager') ON CONFLICT DO NOTHING",
+    )
+    .bind(project.as_uuid())
+    .bind(identity.user_id.as_uuid())
+    .execute(pool)
+    .await
+    .expect("session secret manager role");
     let service = SecretService::new(
         pool.clone(),
         EncryptedStore::new(
