@@ -1092,6 +1092,37 @@ impl<K: KeyProvider + Send + Sync> SecretService<K> {
             .execute(&mut *tx)
             .await
             .map_err(|_| SecretServiceError::Persistence)?;
+
+            // Runtime-Git capability bindings are the typed authority paired
+            // with the generic capability row. Preserve that immutable
+            // authority when a secret binding creates the next revision;
+            // the database constraint deliberately rejects a generic Git row
+            // without its typed companion.
+            sqlx::query(
+                "INSERT INTO agent_git_capability_bindings
+                   (binding_id, instance_revision_id, requirement_id,
+                    grammar_version, git_operations, ref_globs,
+                    changed_path_globs, branch_update_policy, branch_create,
+                    branch_delete, tag_create, tag_update, tag_delete,
+                    other_create, other_update, other_delete, request_bytes,
+                    pack_bytes, object_count, ref_updates,
+                    exact_parent_required, normalized_hash)
+                 SELECT $1, $2, requirement_id, grammar_version,
+                        git_operations, ref_globs, changed_path_globs,
+                        branch_update_policy, branch_create, branch_delete,
+                        tag_create, tag_update, tag_delete, other_create,
+                        other_update, other_delete, request_bytes, pack_bytes,
+                        object_count, ref_updates, exact_parent_required,
+                        normalized_hash
+                   FROM agent_git_capability_bindings
+                  WHERE binding_id = $3",
+            )
+            .bind(cloned.id().as_uuid())
+            .bind(command.new_revision_id.as_uuid())
+            .bind(binding.source_binding_id)
+            .execute(&mut *tx)
+            .await
+            .map_err(|_| SecretServiceError::Persistence)?;
         }
         let effective_policy = json!({
             "grant_id": import.grant_id,
