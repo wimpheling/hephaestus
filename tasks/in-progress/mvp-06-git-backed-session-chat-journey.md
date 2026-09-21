@@ -533,14 +533,15 @@ supplies only pinned preinstalled dependencies
 
 The PR SHA therefore selects workload code only. Trusted
 `gcp-cooking-run.sh` invokes its `examples/cooking/run.sh` and exports the
-Cooking selector and typed gates ([`gcp-cooking-run.sh`](../../scripts/gcp-cooking-run.sh#L995));
-there is no session-chat input or generic selector. Premerge GCP cannot select
-chat through a PR workflow/controller/startup copy. Selectable chat validation
-requires the reviewed controller/workflow/runtime patch promoted to trusted
-`main`, preserving exact repository/SHA validation, private diagnostics,
-cleanup/post-delete checks and typed gate results. Merging those trusted-controller
-changes still requires user authorization; GCP integration remains within the
-requested scope.
+validated Cooking selector and typed gates ([`gcp-cooking-run.sh`](../../scripts/gcp-cooking-run.sh#L995)).
+The selector implementation described below is present only on the reviewed
+branch commits; the trusted `main` controller/workflow/startup path is not yet
+promoted, so premerge GCP still cannot select chat through a PR SHA alone.
+Selectable chat validation requires that trusted promotion while preserving
+exact repository/SHA validation, private diagnostics, cleanup/post-delete
+checks and typed gate results. Merging the trusted-controller changes still
+requires user authorization; GCP integration remains within the requested
+scope.
 
 Until that promotion, the bounded premerge path remains the standalone local
 runner with `HEPHAESTUS_APP_SESSION_CHAT_E2E=1`,
@@ -558,6 +559,36 @@ The requested-rule command and RPC checks each passed one test, recorded in
 `/tmp/heph-requested-rule-rpc-test.log`.
 These focused checks do not establish full released-agent, browser, VM/model,
 or GCP journey acceptance.
+
+### GCP session selector implementation status (2026-09-21)
+
+Commits `7852201` and `c61bddb` add the reviewed branch implementation for a
+separately selectable `workflow_dispatch` scenario. `cooking_scenario` is an
+allowlisted choice (`cooking`, default; or `session-chat`) and is carried from
+the trusted workflow through validated smoke/startup metadata into
+`gcp-cooking-run.sh` and the shared [`examples/cooking/run.sh`](../../examples/cooking/run.sh).
+The existing Cooking path remains the default. The session branch reuses the
+OIDC, host-bridge and browser fixture lifecycle, then invokes the standalone
+session runner with the session, libkrun, build-proof and browser flags; it
+does not set `HEPHAESTUS_APP_COOKING_E2E=1`.
+
+The session workload phase profile requires the emitted phases
+`browser-setup`, `runtime-guest-build`, `oci-image-materialization`,
+`gateway-services-ready`, `runtime-worker-build`, `gateway-readiness`,
+`golden-tests`, and `database-tests`. The browser projector requires the
+strict two-turn `session_chat_new` contract: initialization, send, response,
+second send, second response, and reconnect, with complete initial browser
+evidence. This is a selector and validation implementation record, not a
+cloud-run result: the controller/startup changes remain unpromoted to trusted
+`main`, no chat cloud run has been dispatched, and full browser/VM/GCP
+acceptance remains pending. The existing exact-SHA/repository checks, WIF
+boundary, immutable image selection, private evidence, cleanup and typed gates
+remain required.
+
+The focused controller, cleanup, sandbox, image, timing and browser-summary
+suite passed 54 tests (`/var/tmp/gcp-chat-integration-focused-final2.log`).
+Shell syntax and `git diff --check` also passed. These checks validate the
+integration contracts; they do not establish a successful cloud workload.
 
 ### Verified standalone first-turn acceptance (2026-09-21)
 

@@ -645,10 +645,57 @@ After the implementation is reviewed on `main`, the operator command is:
 gh workflow run cooking-e2e.yml --repo wimpheling/hephaestus --ref main \
   -f cloud_mode=gcp-cooking -f gcp_zone=europe-west1-d \
   -f runner_image=hephaestus-runner-<validated-manifest-prefix> \
+  -f cooking_scenario=cooking \
   -f pr_number=<open-pr-number> \
   -f pr_repository_id=1312377552 \
   -f pr_head_sha=<exact-pr-head-sha>
 ```
+
+The `cooking_scenario` input is required and defaults to `cooking`; keep it
+explicit in automation. The current authoritative image is selected through
+the repository variable `vars.GCP_RUNNER_IMAGE` (currently
+`hephaestus-runner-f285fc2b8157f8053383fc98bcaec83d`) when `runner_image` is
+empty. That variable remains the image source of truth; the value above is a
+current variable value, not a new hardcoded workflow default.
+
+### MVP-06 session-chat dispatch
+
+The allowlisted `session-chat` selector is implemented by branch commits
+`7852201` (selector, shared lifecycle and phase validation) and `c61bddb`
+(typed browser validation). It is available for GCP only after those trusted
+controller/workflow/startup changes have been reviewed and promoted to
+`main`; a PR workload SHA alone cannot supply new trusted controller behavior.
+After promotion, use the same exact repository and SHA contract with the new
+input:
+
+```sh
+gh workflow run cooking-e2e.yml --repo wimpheling/hephaestus --ref main \
+  -f cloud_mode=gcp-cooking -f gcp_zone=europe-west1-d \
+  -f runner_image= \
+  -f cooking_scenario=session-chat \
+  -f pr_number=<open-pr-number> \
+  -f pr_repository_id=1312377552 \
+  -f pr_head_sha=<exact-pr-head-sha>
+```
+
+Leave `runner_image` empty to use the authoritative `vars.GCP_RUNNER_IMAGE`,
+or provide one validated immutable image explicitly; do not replace that
+repository variable with a changing image name. The trusted path carries the
+selector through `GCP_COOKING_SCENARIO`, validates it in smoke/startup, and
+passes it to the runtime and browser projector. It retains WIF pinned to the
+`main` workflow reference, exact repository `1312377552` and head-SHA checks,
+private evidence collection and scanning, cleanup/post-delete verification,
+and the existing typed gate schema.
+
+Session validation must observe the actual emitted workload phases
+`browser-setup`, `runtime-guest-build`, `oci-image-materialization`,
+`gateway-services-ready`, `runtime-worker-build`, `gateway-readiness`,
+`golden-tests`, and `database-tests`. The browser projector uses
+`--scenario session-chat` and requires the strict two-turn `session_chat_new`
+contract: initialize, send, response, second send, second response, and
+reconnect, with complete initial browser evidence. These commits provide the
+selection and validators only; no session-chat cloud run or full browser/VM
+acceptance is recorded here.
 
 PR mode requires the reviewed runner image with browser dependencies already
 baked. It fails closed on the stock image because installing Playwright
