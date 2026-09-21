@@ -587,7 +587,10 @@ defmodule HephaestusWebWeb.SessionChatNewState do
       installation_id,
       generation_id,
       route,
-      on_success: fn handoff, secret -> UIBrowser.bootstrap_url(handoff, secret, "light", []) end
+      on_success: fn handoff, secret ->
+        projection = Map.put(handoff, "route_base", route)
+        UIBrowser.bootstrap_url(projection, secret, "light", [])
+      end
     )
   end
 

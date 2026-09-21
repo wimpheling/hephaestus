@@ -1,10 +1,30 @@
 defmodule HephaestusWebWeb.SessionChatNewStateTest do
-  use ExUnit.Case, async: true
+  use ExUnit.Case, async: false
 
   alias HephaestusWebWeb.SessionChatNewState
   alias Hephaestus.Common.V1.OpaqueId
   alias Hephaestus.Secret.V1.{ImportSummary, SecretPolicy, SecretTarget}
   alias HephaestusWeb.RPC.Projection
+
+  setup do
+    previous = Application.get_env(:hephaestus_web, :ui_browser)
+
+    Application.put_env(:hephaestus_web, :ui_browser,
+      namespace: "ui.example.com",
+      platform_host: "example.com",
+      port: 443
+    )
+
+    on_exit(fn ->
+      if previous do
+        Application.put_env(:hephaestus_web, :ui_browser, previous)
+      else
+        Application.delete_env(:hephaestus_web, :ui_browser)
+      end
+    end)
+
+    :ok
+  end
 
   @covered_statuses [
     :initial,
@@ -181,6 +201,30 @@ defmodule HephaestusWebWeb.SessionChatNewStateTest do
     assert get_in(Process.get(:session_chat_fake_calls), [:bind_secret]) == 1
     assert get_in(Process.get(:session_chat_fake_calls), [:declare_brokered_https_rule]) == 1
     assert get_in(Process.get(:session_chat_fake_calls), [:install_ui]) == 2
+  end
+
+  test "maps the canonical handoff route before browser projection validation" do
+    state = composition_state()
+    attributes = composition_attributes()
+
+    assert {:created, {:partial, progress, :capability_unavailable}} =
+             SessionChatNewState.execute(state, {:create, :identity, attributes})
+
+    {retry_state, _effects} =
+      SessionChatNewState.reduce(
+        state,
+        {:created, {:partial, progress, :capability_unavailable}}
+      )
+
+    Process.put(:session_chat_fake_handoff_callback, true)
+
+    # The callback receives the generated RPC response shape: the transport
+    # calls this field `route`; the browser URL builder requires `route_base`.
+    assert {:created, {:ok, url, "repo-1", "instance-1"}} =
+             SessionChatNewState.execute(retry_state, {:create, :identity, attributes})
+
+    assert String.starts_with?(url, "https://g-30000000000040008000000000000003.ui.example.com/")
+    assert url =~ "/_heph/bootstrap?heph_theme=light#"
   end
 
   defp composition_state do

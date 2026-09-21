@@ -90,13 +90,32 @@ defmodule HephaestusWebWeb.SessionChatNewStateTest.FakeClient do
       Process.delete(:session_chat_fail_install_once)
       {:error, :install_failed}
     else
-      {:ok, %{"installation_id" => "installation-1", "generation_id" => "generation-1"}}
+      {:ok,
+       %{
+         "installation_id" => "20000000-0000-4000-8000-000000000002",
+         "generation_id" => "30000000-0000-4000-8000-000000000003"
+       }}
     end
   end
 
-  def create_ui_browser_handoff(_identity, _installation_id, _generation_id, _route, _options) do
+  def create_ui_browser_handoff(_identity, installation_id, generation_id, route, options) do
     bump(:handoff)
-    {:ok, "https://ui.test/session-chat"}
+
+    if Process.get(:session_chat_fake_handoff_callback, false) do
+      on_success = Keyword.fetch!(options, :on_success)
+
+      on_success.(
+        %{
+          "handoff_id" => "40000000-0000-4000-8000-000000000004",
+          "installation_id" => installation_id,
+          "generation_id" => generation_id,
+          "route" => route
+        },
+        <<0::256>>
+      )
+    else
+      {:ok, "https://ui.test/session-chat"}
+    end
   end
 
   defp bump(key) do

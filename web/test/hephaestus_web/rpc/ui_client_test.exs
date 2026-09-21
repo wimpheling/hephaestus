@@ -18,6 +18,7 @@ defmodule HephaestusWeb.RPC.UiClientTest do
 
   alias HephaestusWeb.Identity
   alias HephaestusWeb.RPC.Client
+  alias HephaestusWeb.UIBrowser
 
   @organization "10000000-0000-4000-8000-000000000001"
   @installation "20000000-0000-4000-8000-000000000002"
@@ -280,6 +281,47 @@ defmodule HephaestusWeb.RPC.UiClientTest do
     refute Map.has_key?(safe_response, "handoff_secret")
     assert_receive {:secret, secret}
     assert_receive {:callback, ^safe_response, ^secret}
+  end
+
+  test "handoff wire projection preserves route for the browser route-base adapter" do
+    response = %CreateUiBrowserHandoffResponse{
+      handoff_id: %OpaqueId{value: "40000000-0000-4000-8000-000000000004"},
+      installation_id: %OpaqueId{value: @installation},
+      generation_id: %OpaqueId{value: @generation},
+      route: "docs"
+    }
+
+    wire = response |> CreateUiBrowserHandoffResponse.encode() |> IO.iodata_to_binary()
+    decoded = CreateUiBrowserHandoffResponse.decode(wire)
+
+    stub = fn _channel, _request, _options -> {:ok, decoded} end
+
+    assert {:ok, url} =
+             Client.create_ui_browser_handoff(
+               identity(),
+               @installation,
+               @generation,
+               "docs",
+               stub_call: stub,
+               channel_provider: channel_provider(),
+               on_success: fn handoff, secret ->
+                 assert handoff["route"] == "docs"
+
+                 handoff
+                 |> Map.put("route_base", handoff["route"])
+                 |> UIBrowser.bootstrap_url(secret, "light",
+                   namespace: "ui.example.com",
+                   platform_host: "example.com"
+                 )
+               end
+             )
+
+    assert String.starts_with?(
+             url,
+             "https://g-#{String.replace(@generation, "-", "")}.ui.example.com/"
+           )
+
+    assert url =~ "/_heph/bootstrap?heph_theme=light#"
   end
 
   test "handoff does not retry an unavailable mutation or invoke its callback" do
