@@ -444,6 +444,7 @@ pub async fn provision_target(
     )
     .expect("fork target capability revision ID");
     assert_ne!(capability_revision_id, target.source_revision_id);
+    let fork_model_alias = format!("model_fork_{}", model_rule_id.simple());
     let (bound_revision_id, binding_id) = super::seed_model_secret_with_rule(
         pool,
         organization,
@@ -453,6 +454,7 @@ pub async fn provision_target(
         capability_revision_id,
         attachment_id,
         model_rule_id,
+        &fork_model_alias,
     )
     .await;
     assert_ne!(bound_revision_id, target.source_revision_id);

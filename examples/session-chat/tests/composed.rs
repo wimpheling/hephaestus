@@ -1176,7 +1176,7 @@ pub async fn exercise<'a>(
                 .expect("existing session browser repositories")
                 .into_iter()
                 .collect();
-        let model_import = seed_model_import(pool, organization, project, identity).await;
+        let model_import = seed_model_import(pool, organization, project, identity, "model").await;
         run_session_chat_browser(
             database_url,
             running,
@@ -3629,6 +3629,7 @@ async fn seed_model_import(
     organization: OrganizationId,
     project: ProjectId,
     identity: &AuthenticatedIdentity,
+    import_alias: &str,
 ) -> Uuid {
     sqlx::query(
         "INSERT INTO project_secret_roles (project_id,user_id,role) \
@@ -3681,7 +3682,7 @@ async fn seed_model_import(
                 },
                 expires_at: None,
                 import_id,
-                alias: SecretAlias::parse("model").expect("session model alias"),
+                alias: SecretAlias::parse(import_alias).expect("session model alias"),
             },
         )
         .await
@@ -3707,6 +3708,7 @@ async fn seed_model_secret(
         revision,
         attachment,
         MODEL_RULE,
+        "model",
     )
     .await
     .0
@@ -3722,9 +3724,11 @@ async fn seed_model_secret_with_rule(
     revision: Uuid,
     attachment: Uuid,
     model_rule: Uuid,
+    import_alias: &str,
 ) -> (Uuid, Uuid) {
-    let import_id =
-        SecretImportId::from_uuid(seed_model_import(pool, organization, project, identity).await);
+    let import_id = SecretImportId::from_uuid(
+        seed_model_import(pool, organization, project, identity, import_alias).await,
+    );
     let service = SecretService::new(
         pool.clone(),
         EncryptedStore::new(
