@@ -336,9 +336,12 @@ workspace-domain test, four workspace-local tests, two VM credential tests,
 18 heph-init tests, and two tests against fresh disposable PostgreSQL 17.
 These checks cover lifecycle ordering, mount/remote construction, scoped
 materialization and persistence; they do not prove the composed guest journey.
-Review identified a remaining runtime-context dependency: the guest's
-repository/ref/commit fields must describe the authorized target rather than
-inherit the trigger repository's context. That correction is in progress.
+Commit `fd10ad7` corrects the runtime-context dependency: the guest's
+repository/ref/commit fields now describe the immutable runtime target rather
+than inherit the trigger repository's context. The focused real PostgreSQL
+regression passed for differing trigger/target repositories and missing-target
+failure, including a rerun after restoring normal database trigger behavior.
+This resolver fixture does not substitute for production authority issuance.
 
 ### Reference agent packaging and batched publication (2026-09-21)
 
@@ -375,6 +378,16 @@ record were verified. The push fixture's maintainer grant is local to that
 test, preserving shared revocation-test authority. Focused Clippy and formatting
 passed. This proves the host route, not the release browser adapter or the
 complete browser/VM/model journey.
+
+### First composed acceptance attempt (2026-09-21)
+
+The pending standalone session-chat golden scenario compiles and uses the
+production release build/publish helper, instance import, capability revision,
+attachment, secret service and authenticated Git input. Its first real libkrun
+attempt reached application startup and failed on the fixture's stale expected
+migration version (94 versus applied 97). This is a fixture configuration
+failure, not evidence of a successful chat turn. Correcting the expectation and
+executing the full deterministic model/VM/Git path remain in progress.
 
 The completed task records the released protocol version and source revision;
 browser and real-Git evidence for session creation, turns, restart, and fork;
