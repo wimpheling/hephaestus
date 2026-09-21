@@ -4,13 +4,15 @@ from __future__ import annotations
 
 import subprocess
 import sys
+import os
 from pathlib import Path
 import tempfile
 import unittest
+from unittest.mock import patch
 
 sys.path.insert(0, str(Path(__file__).parent))
 
-from git_adapter import LocalGitSession  # noqa: E402
+from git_adapter import LocalGitError, LocalGitSession, _git, _reason  # noqa: E402
 from protocol import (  # noqa: E402
     ContextEntry,
     NewRunRequired,
@@ -60,6 +62,52 @@ class LocalGitAdapterTests(unittest.TestCase):
 
     def tearDown(self) -> None:
         self.temp.cleanup()
+
+    def test_git_error_exposes_only_allowlisted_metadata(self) -> None:
+        secret = "Bearer session-chat-secret-value"
+        helper = self.root / "fake-git"
+        helper.write_text(f"#!/bin/sh\nprintf '%s\\n' '{secret}' >&2\nexit 1\n", encoding="utf-8")
+        helper.chmod(0o755)
+        with patch("git_adapter.GIT_BINARY", str(helper)):
+            with self.assertRaises(LocalGitError) as raised:
+                _git(self.root, "push", "origin", "refs/heads/main")
+        error = raised.exception
+        self.assertEqual((error.operation, error.reason, error.returncode), ("push", "command_failed", 1))
+        self.assertNotIn(secret, str(error))
+
+    def test_helper_failure_code_precedes_generic_git_auth_classification(self) -> None:
+        self.assertEqual(
+            _reason("heph_git_credential_error=authority_protection\n", 128),
+            "helper_authority_protection",
+        )
+        self.assertEqual(
+            _reason(
+                "heph_git_credential_error=target\nfatal: authentication failed\n",
+                128,
+            ),
+            "helper_target",
+        )
+
+    def test_open_reestablishes_release_identity_for_materialized_workspaces(self) -> None:
+        checkout = self.clone("materialized")
+        isolated_git_env = {
+            "GIT_CONFIG_GLOBAL": "/dev/null",
+            "GIT_CONFIG_NOSYSTEM": "1",
+            "PATH": os.environ.get("PATH", ""),
+        }
+        for key in ("user.name", "user.email"):
+            subprocess.run(
+                ["git", "-C", str(checkout.path), "config", "--local", "--unset", key],
+                check=False,
+                capture_output=True,
+                text=True,
+                env=isolated_git_env,
+            )
+        with patch.dict(os.environ, isolated_git_env, clear=True):
+            reopened = LocalGitSession.open(checkout.path)
+            record = user_message("99999999-9999-4999-8999-999999999999", USER_A, "identity")
+            reopened.append_human(record, reopened.head)
+        self.assertEqual(reopened.visible_transcript()[-1], record)
 
     def clone(self, name: str) -> LocalGitSession:
         return LocalGitSession.clone(self.remote, self.root / name)

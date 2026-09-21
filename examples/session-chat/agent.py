@@ -1,4 +1,4 @@
-#!/usr/bin/env python3
+#!/usr/local/bin/python3
 """Reference release agent for the Git-backed session-chat protocol.
 
 The entry point reads one capability-scoped repository checkout, resolves every
@@ -18,7 +18,7 @@ import sys
 from typing import Any, Callable
 from uuid import UUID, uuid4
 
-from git_adapter import LocalGitSession
+from git_adapter import LocalGitError, LocalGitSession
 from protocol import ContextEntry, MAIN_REF, Record, TextContent, utc_now
 
 
@@ -253,6 +253,13 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
     try:
         result = run_once(Path(args.workspace), Path(args.control), Path(args.secrets), args.remote)
+    except LocalGitError as error:
+        print(
+            "session-chat agent failed: "
+            f"git operation={error.operation} reason={error.reason} returncode={error.returncode}",
+            file=sys.stderr,
+        )
+        return 1
     except Exception as error:  # noqa: BLE001 - the guest emits only a typed-safe failure class.
         print(f"session-chat agent failed: {type(error).__name__}", file=sys.stderr)
         return 1

@@ -30,21 +30,106 @@ from protocol import (
 )
 
 
+GIT_BINARY = "/usr/bin/git"
+GIT_USER_NAME = "Reference Chat Release"
+GIT_USER_EMAIL = "reference-chat@example.invalid"
+
+_GIT_OPERATIONS = frozenset(
+    {
+        "add",
+        "clone",
+        "commit",
+        "config",
+        "diff_tree",
+        "fetch",
+        "init",
+        "ls_remote",
+        "merge",
+        "push",
+        "rebase",
+        "remote",
+        "rev_list",
+        "rev_parse",
+        "rm",
+        "show",
+        "symbolic_ref",
+    }
+)
+
+
+def _operation(arguments: tuple[str, ...]) -> str:
+    if not arguments:
+        return "other"
+    operation = arguments[0].replace("-", "_")
+    return operation if operation in _GIT_OPERATIONS else "other"
+
+
+def _reason(stderr: str, returncode: int) -> str:
+    """Classify Git's failure without retaining its potentially secret text."""
+
+    detail = stderr.casefold()
+    helper_codes = {
+        "action",
+        "expected_host",
+        "expected_path",
+        "credential_path",
+        "target",
+        "authority_path",
+        "authority_file",
+        "authority_protection",
+        "authority_decode",
+        "credential_missing",
+        "credential_length",
+        "credential_encoding",
+        "internal",
+    }
+    for code in helper_codes:
+        if f"heph_git_credential_error={code}" in detail:
+            return f"helper_{code}"
+    if "dubious ownership" in detail or "unsafe repository" in detail:
+        return "unsafeownership"
+    if "could not read username" in detail or "terminal prompts disabled" in detail:
+        return "credential_missing"
+    if "authentication failed" in detail:
+        return "auth"
+    if "non-fast-forward" in detail or "fetch first" in detail:
+        return "nonfastforward"
+    if "permission denied" in detail or "access denied" in detail:
+        return "permission"
+    if "not a git repository" in detail:
+        return "invalidrepo"
+    if "pre-receive hook declined" in detail or "remote rejected" in detail:
+        return "rejected"
+    if returncode == 127 or "not found" in detail or "cannot run" in detail:
+        return "missinghelper"
+    return "command_failed"
+
+
+def _configure_identity(path: Path) -> None:
+    _git(path, "config", "user.name", GIT_USER_NAME)
+    _git(path, "config", "user.email", GIT_USER_EMAIL)
+
+
 class LocalGitError(RuntimeError):
     """An ordinary Git command failed in the example repository."""
+
+    def __init__(self, operation: str, returncode: int, reason: str) -> None:
+        self.operation = operation
+        self.returncode = returncode
+        self.reason = reason
+        super().__init__(f"Git {operation} failed ({reason}, exit {returncode})")
 
 
 def _git(path: Path, *arguments: str, check: bool = True) -> str:
     completed = subprocess.run(
-        ["git", "-C", str(path), *arguments],
+        [GIT_BINARY, "-C", str(path), *arguments],
         check=False,
         capture_output=True,
         text=True,
         env={**os.environ, "GIT_TERMINAL_PROMPT": "0"},
     )
     if check and completed.returncode:
-        detail = completed.stderr.strip() or completed.stdout.strip()
-        raise LocalGitError(f"git {' '.join(arguments)} failed: {detail}")
+        raise LocalGitError(_operation(arguments), completed.returncode, _reason(completed.stderr, completed.returncode))
     return completed.stdout.strip()
 
 
@@ -79,8 +164,7 @@ class LocalGitSession:
         path = path.resolve()
         path.mkdir(parents=True, exist_ok=False)
         _git(path, "init", "-b", "main")
-        _git(path, "config", "user.name", "Reference Chat Release")
-        _git(path, "config", "user.email", "reference-chat@example.invalid")
+        _configure_identity(path)
         model = SessionRepo.initialize(session_id, release_id, agent_id, human_ids)
         adapter = cls(path)
         adapter._write_commit(model.baseline.records, "session initialization")
@@ -89,20 +173,31 @@ class LocalGitSession:
     @classmethod
     def clone(cls, remote: Path, destination: Path) -> "LocalGitSession":
         destination = destination.resolve()
-        subprocess.run(
-            ["git", "clone", "--branch", "main", str(remote.resolve()), str(destination)],
-            check=True,
+        completed = subprocess.run(
+            [
+                GIT_BINARY,
+                "clone",
+                "--branch",
+                "main",
+                str(remote.resolve()),
+                str(destination),
+            ],
+            check=False,
             capture_output=True,
             text=True,
             env={**os.environ, "GIT_TERMINAL_PROMPT": "0"},
         )
-        _git(destination, "config", "user.name", "Reference Chat Release")
-        _git(destination, "config", "user.email", "reference-chat@example.invalid")
+        if completed.returncode:
+            raise LocalGitError("clone", completed.returncode, _reason(completed.stderr, completed.returncode))
+        _configure_identity(destination)
         return cls.open(destination)
 
     @classmethod
     def open(cls, path: Path) -> "LocalGitSession":
         adapter = cls(path)
+        # Runtime workspaces are materialized by the platform and do not carry
+        # a release checkout's local Git config into the guest.
+        _configure_identity(path)
         adapter._load()
         return adapter
 

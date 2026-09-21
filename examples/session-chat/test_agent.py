@@ -11,11 +11,14 @@ import sys
 import tempfile
 import threading
 import unittest
+from contextlib import redirect_stderr
+from io import StringIO
+from unittest.mock import patch
 
 sys.path.insert(0, str(Path(__file__).parent))
 
 import agent  # noqa: E402
-from git_adapter import LocalGitSession  # noqa: E402
+from git_adapter import LocalGitError, LocalGitSession  # noqa: E402
 from protocol import MAIN_REF, Record, StaleAgentParent, TextContent, utc_now  # noqa: E402
 
 
@@ -45,6 +48,21 @@ class ReferenceAgentTests(unittest.TestCase):
 
     def tearDown(self) -> None:
         self.temp.cleanup()
+
+    def test_main_logs_only_typed_git_failure_metadata(self) -> None:
+        secret = "https://user:password@example.invalid/private.git"
+        stderr = StringIO()
+        with patch.object(
+            agent,
+            "run_once",
+            side_effect=LocalGitError("push", 1, "auth"),
+        ), redirect_stderr(stderr):
+            self.assertEqual(agent.main([]), 1)
+        self.assertEqual(
+            stderr.getvalue(),
+            "session-chat agent failed: git operation=push reason=auth returncode=1\n",
+        )
+        self.assertNotIn(secret, stderr.getvalue())
 
     def context_for(self, commit_sha: str) -> None:
         (self.control / "context.json").write_text(
