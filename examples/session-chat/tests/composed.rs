@@ -802,7 +802,7 @@ async fn assert_runtime_git_turn_at_commit(
     );
 }
 
-const DENIAL_PROBE_CHECKS: [&str; 9] = [
+const DENIAL_PROBE_CHECKS: [&str; 10] = [
     "source_checkout_absent",
     "model_authorized_control",
     "source_repository_read_denied",
@@ -812,6 +812,7 @@ const DENIAL_PROBE_CHECKS: [&str; 9] = [
     "prohibited_path_push_denied",
     "model_destination_denied",
     "model_rule_denied",
+    "runtime_git_credential_absent_from_surfaces",
 ];
 
 async fn accepted_receive_count(pool: &PgPool, repository_id: Uuid) -> i64 {
@@ -873,7 +874,7 @@ async fn assert_denial_probe_output(pool: &PgPool, run_id: Uuid) {
             .matches("HEPH_SESSION_CHAT_DENIAL_PROBE check=")
             .count(),
         DENIAL_PROBE_CHECKS.len(),
-        "denial probe must emit exactly nine fixed markers"
+        "denial probe must emit exactly ten fixed markers"
     );
 }
 
@@ -910,6 +911,9 @@ fn copy_denial_probe_source(source: &Path, destination: &Path) -> io::Result<()>
     Ok(())
 }
 
+// Keep the generated guest entrypoint beside its source staging so the release
+// fixture remains auditable as one bounded denial-probe setup.
+#[allow(clippy::too_many_lines)]
 fn prepare_denial_probe_source(source_root: &Path, root: &Path) -> PathBuf {
     let destination = root.join(format!("session-chat-denial-source-{}", Uuid::new_v4()));
     copy_denial_probe_source(source_root, &destination).expect("copy denial-probe source");
@@ -947,15 +951,23 @@ def main():
     if not all(isinstance(value, str) for value in (target, source, other)):
         return 1
     try:
+        observer = denied_probe.runtime_credential_observer(target)
+    except Exception:  # noqa: BLE001 - output must stay fixed and credential-free.
+        observer = None
+    try:
         results = denied_probe._run(
             target,
             source,
             other,
             Path("/workspace/git"),
+            observer,
         )
     except Exception:
         results = {check: False for check in denied_probe.CHECKS}
+    final_check = denied_probe.FINAL_CHECK
     for check in denied_probe.CHECKS:
+        if check == final_check:
+            continue
         status = "passed" if results.get(check) is True else "failed"
         print(
             f"HEPH_SESSION_CHAT_DENIAL_PROBE check={check} status={status}",
@@ -964,12 +976,27 @@ def main():
         )
     failed = [
         index for index, check in enumerate(denied_probe.CHECKS)
-        if results.get(check) is not True
+        if check != final_check and results.get(check) is not True
     ]
     if failed:
         return 40 + failed[0]
-    agent.run_once()
-    return 0
+    try:
+        with denied_probe.observe_agent_git(observer):
+            agent.run_once()
+    except Exception:  # noqa: BLE001 - output must stay fixed and credential-free.
+        results[final_check] = False
+    else:
+        try:
+            results[final_check] = observer is not None and observer.scan_config(Path("/workspace/git"))
+        except Exception:  # noqa: BLE001 - output must stay fixed and credential-free.
+            results[final_check] = False
+    status = "passed" if results[final_check] is True else "failed"
+    print(
+        f"HEPH_SESSION_CHAT_DENIAL_PROBE check={final_check} status={status}",
+        file=sys.stderr,
+        flush=True,
+    )
+    return 0 if results[final_check] is True else 49
 
 
 if __name__ == "__main__":
@@ -1436,7 +1463,7 @@ pub async fn exercise(
             "other-repository canonical ref must remain unchanged"
         );
         eprintln!(
-            "HEPH_SESSION_CHAT_DENIAL_PROBE host=validated checks=9 refs=unchanged receives=unchanged"
+            "HEPH_SESSION_CHAT_DENIAL_PROBE host=validated checks=10 refs=unchanged receives=unchanged"
         );
     }
     let (stored_input, stored_ref, stored_revision): (String, String, Uuid) = sqlx::query_as(

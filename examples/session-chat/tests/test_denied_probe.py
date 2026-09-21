@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import base64
 import importlib.util
 import io
 import json
@@ -9,8 +10,10 @@ from pathlib import Path
 import socket
 import struct
 import subprocess
+import sys
 import tempfile
 import threading
+import types
 import unittest
 from contextlib import redirect_stdout
 from unittest.mock import patch
@@ -34,6 +37,132 @@ def result(returncode: int, stderr: str) -> subprocess.CompletedProcess[str]:
 
 
 class DeniedProbeTests(unittest.TestCase):
+    def test_credential_surface_observer_scans_each_surface_without_logging_values(self):
+        token = PROBE.GIT_TOKEN_PREFIX + ("a" * 43)
+        clean = PROBE._CredentialSurfaceObserver(token)
+        clean.inspect_process(
+            [PROBE.GIT, "-C", "/workspace/git", "push"],
+            {"GIT_TERMINAL_PROMPT": "0"},
+            stdin="url=http://127.0.0.1:19100/target\n\n",
+            stdout="ordinary output",
+            stderr="ordinary error",
+        )
+        self.assertTrue(clean.clean)
+
+        surfaces = {
+            "argv": ([PROBE.GIT, token], {}, "", ""),
+            "environment": ([PROBE.GIT], {"LEAK": token}, "", ""),
+            "stdout": ([PROBE.GIT], {}, token, ""),
+            "stderr": ([PROBE.GIT], {}, "", token),
+        }
+        for name, (argv, environment, stdout, stderr) in surfaces.items():
+            with self.subTest(surface=name):
+                observer = PROBE._CredentialSurfaceObserver(token)
+                observer.inspect_process(argv, environment, stdout=stdout, stderr=stderr)
+                self.assertFalse(observer.clean)
+
+        basic = base64.b64encode(f"{PROBE.GIT_USERNAME}:{token}".encode()).decode()
+        observer = PROBE._CredentialSurfaceObserver(token)
+        observer.inspect_process([PROBE.GIT], {}, stdout=f"Authorization: Basic {basic}")
+        self.assertFalse(observer.clean)
+
+    def test_credential_surface_observer_exempts_only_helper_password_stdout(self):
+        token = PROBE.GIT_TOKEN_PREFIX + ("b" * 43)
+        observer = PROBE._CredentialSurfaceObserver(token)
+        observer.inspect_process(
+            [PROBE.GIT, "credential", "fill"],
+            {"HEPH_RUNTIME_GIT_PATH": "target"},
+            stdout=f"username={PROBE.GIT_USERNAME}\npassword={token}\n",
+            stderr="",
+            include_stdout=False,
+        )
+        self.assertTrue(observer.clean)
+
+        observer.inspect_process(
+            [PROBE.GIT, "credential", "fill"],
+            {"HEPH_RUNTIME_GIT_PATH": "target"},
+            stdout=f"password={token}\n",
+            stderr="",
+        )
+        self.assertFalse(observer.clean)
+
+    def test_agent_git_proxy_returns_clean_completion_and_restores_subprocess(self):
+        class FakeSubprocess:
+            def run(self, command, **_kwargs):
+                return subprocess.CompletedProcess(command, 0, "ordinary output", "ordinary error")
+
+        original_subprocess = FakeSubprocess()
+        module = types.SimpleNamespace(subprocess=original_subprocess)
+        observer = PROBE._CredentialSurfaceObserver(
+            PROBE.GIT_TOKEN_PREFIX + ("c" * 43)
+        )
+        with patch.dict(sys.modules, {"git_adapter": module}):
+            with PROBE.observe_agent_git(observer):
+                result = module.subprocess.run([PROBE.GIT, "status"], capture_output=True)
+                self.assertEqual(result.returncode, 0)
+                self.assertTrue(observer.clean)
+            self.assertIs(module.subprocess, original_subprocess)
+
+    def test_agent_git_proxy_scans_effective_environment_and_restores_subprocess(self):
+        token = PROBE.GIT_TOKEN_PREFIX + ("c" * 43)
+        calls = []
+
+        class FakeSubprocess:
+            def run(self, command, **_kwargs):
+                calls.append(command)
+                return subprocess.CompletedProcess(command, 0, "ordinary output", "ordinary error")
+
+        original_subprocess = FakeSubprocess()
+        module = types.SimpleNamespace(subprocess=original_subprocess)
+        observer = PROBE._CredentialSurfaceObserver(token)
+        with (
+            patch.dict(sys.modules, {"git_adapter": module}),
+            patch.dict(PROBE.os.environ, {"LEAKED_RUNTIME_TOKEN": token}),
+        ):
+            with self.assertRaisesRegex(RuntimeError, "^credential surface observation failed$"):
+                with PROBE.observe_agent_git(observer):
+                    self.assertIsNot(module.subprocess, original_subprocess)
+                    module.subprocess.run([PROBE.GIT, "status"], capture_output=True)
+            self.assertIs(module.subprocess, original_subprocess)
+        self.assertEqual(calls, [])
+        self.assertFalse(observer.clean)
+
+    def test_agent_git_proxy_rejects_contaminated_completion_without_token_error(self):
+        token = PROBE.GIT_TOKEN_PREFIX + ("e" * 43)
+
+        class FakeSubprocess:
+            def run(self, command, **_kwargs):
+                return subprocess.CompletedProcess(command, 1, token, "ordinary error")
+
+        original_subprocess = FakeSubprocess()
+        module = types.SimpleNamespace(subprocess=original_subprocess)
+        observer = PROBE._CredentialSurfaceObserver(token)
+        with patch.dict(sys.modules, {"git_adapter": module}):
+            with self.assertRaisesRegex(RuntimeError, "^credential surface observation failed$") as failure:
+                with PROBE.observe_agent_git(observer):
+                    module.subprocess.run([PROBE.GIT, "status"])
+        self.assertNotIn(token, str(failure.exception))
+        self.assertFalse(observer.clean)
+        self.assertIs(module.subprocess, original_subprocess)
+
+    def test_agent_git_proxy_scans_exception_surfaces_and_raises_fixed_error(self):
+        token = PROBE.GIT_TOKEN_PREFIX + ("d" * 43)
+
+        class RaisingSubprocess:
+            def run(self, command, **_kwargs):
+                raise subprocess.TimeoutExpired(command, 1, output=token, stderr=token)
+
+        original_subprocess = RaisingSubprocess()
+        module = types.SimpleNamespace(subprocess=original_subprocess)
+        observer = PROBE._CredentialSurfaceObserver(token)
+        with patch.dict(sys.modules, {"git_adapter": module}):
+            with self.assertRaisesRegex(RuntimeError, "^observed Git subprocess failed$") as failure:
+                with PROBE.observe_agent_git(observer):
+                    module.subprocess.run([PROBE.GIT, "status"])
+        self.assertNotIn(token, str(failure.exception))
+        self.assertFalse(observer.clean)
+        self.assertIs(module.subprocess, original_subprocess)
+
     def test_source_checkout_absent_accepts_missing_or_empty_real_directory_only(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
@@ -87,8 +216,21 @@ class DeniedProbeTests(unittest.TestCase):
         target = "11111111-1111-4111-8111-111111111111"
         source = "a2222222-b222-4222-8222-222222222222"
         other = "c3333333-d333-4333-8333-333333333333"
+        valid_prefix = [
+            "--target-repository-id",
+            target,
+            "--source-repository-id",
+            source,
+            "--other-repository-id",
+            other,
+        ]
+        observer = PROBE._CredentialSurfaceObserver(PROBE.GIT_TOKEN_PREFIX + ("f" * 43))
         expected = {check: True for check in PROBE.CHECKS}
-        with patch.object(PROBE, "_run", return_value=expected) as run:
+        with (
+            patch.object(PROBE, "runtime_credential_observer", return_value=observer),
+            patch.object(observer, "scan_config", return_value=True) as scan_config,
+            patch.object(PROBE, "_run", return_value=expected) as run,
+        ):
             output = io.StringIO()
             with redirect_stdout(output):
                 self.assertEqual(
@@ -106,17 +248,32 @@ class DeniedProbeTests(unittest.TestCase):
                     ),
                     0,
                 )
-        run.assert_called_once_with(target, source, other, Path("/workspace/git"))
+        run.assert_called_once_with(target, source, other, Path("/workspace/git"), observer)
+        scan_config.assert_called_once_with(Path("/workspace/git"))
         self.assertIn("check=source_repository_read_denied status=passed", output.getvalue())
 
-        valid_prefix = [
-            "--target-repository-id",
-            target,
-            "--source-repository-id",
-            source,
-            "--other-repository-id",
-            other,
-        ]
+        dirty_observer = PROBE._CredentialSurfaceObserver(PROBE.GIT_TOKEN_PREFIX + ("g" * 43))
+        dirty_observer.inspect_process([PROBE.GIT, "status"], {"LEAK": PROBE.GIT_TOKEN_PREFIX + ("g" * 43)})
+        with (
+            patch.object(PROBE, "runtime_credential_observer", return_value=dirty_observer),
+            patch.object(dirty_observer, "scan_config", return_value=True),
+            patch.object(PROBE, "_run", return_value=expected),
+        ):
+            output = io.StringIO()
+            with redirect_stdout(output):
+                self.assertEqual(PROBE.main(valid_prefix), 1)
+        self.assertIn(f"check={PROBE.FINAL_CHECK} status=failed", output.getvalue())
+
+        with (
+            patch.object(PROBE, "runtime_credential_observer", side_effect=RuntimeError("hidden")),
+            patch.object(PROBE, "_run") as run,
+        ):
+            output = io.StringIO()
+            with redirect_stdout(output):
+                self.assertEqual(PROBE.main(valid_prefix), 1)
+        run.assert_not_called()
+        self.assertEqual(output.getvalue().count("status=failed\n"), len(PROBE.CHECKS))
+
         invalid_cases = {
             "missing-target": [
                 "--source-repository-id",
