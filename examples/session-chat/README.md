@@ -6,6 +6,16 @@ the authorized repository capability, runtime context, and brokered model
 egress; transcript interpretation, response correlation, batching, and model
 context remain release-owned.
 
+The reference protocol requires an operation warning before a release-owned
+command or adapter exposes a fork or tombstone. A fork carries reachable
+records and tombstones into a new session, but requires fresh target authority
+and model binding; source-session authority is not inherited from Git history.
+A tombstone hides a record from the ordinary view while retaining the record
+and tombstone in Git history, so it is not erasure. These are reference-release
+semantics, not a Hephaestus core approval flow or a requirement for a
+particular UI control; the command or adapter presenting the operation must
+explain them before acting.
+
 Run the focused offline suite with:
 
 ```sh

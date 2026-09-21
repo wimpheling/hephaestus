@@ -150,6 +150,26 @@ omits tombstoned records; Git retains the original record and tombstone for
 audit and fork history. A release may define additional retention policy, but
 it must state whether a view hides a record or whether a new fork keeps it.
 
+### Warnings before fork and retention operations
+
+These are release-owned warnings for the reference protocol. Any command or
+adapter that exposes a fork or tombstone operation must explain the following
+effects before carrying out that operation:
+
+* **Fork:** the new repository retains the reachable historical records and
+  tombstones, but it has a new session identity. The target must receive fresh
+  platform authority and the release must establish a fresh model binding;
+  source-session capabilities, grants, cookies, runtime leases, and other
+  authority are not copied from reachable Git history.
+* **Tombstone:** the targeted record is hidden from the ordinary release view,
+  while the original record and tombstone remain in Git history for audit and
+  fork history. Tombstoning is therefore not erasure.
+
+The warnings describe this reference release protocol; they do not add a
+platform approval flow, require a particular UI control, or define a
+Hephaestus core contract. A distribution command or adapter is responsible
+for presenting the explanation before the operation it exposes.
+
 Model context is separate release-owned internal state. The adapter may store
 bounded context entries under a declared context path such as
 `.heph/session/v1/context/<agent_id>/`; those entries are not transcript

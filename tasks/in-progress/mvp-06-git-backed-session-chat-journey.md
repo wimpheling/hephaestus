@@ -98,20 +98,20 @@ the review rather than assumed to be complete.
   - [x] Define release-owned initialization, participant policy,
     retention/tombstone behavior, and safe repository fork semantics.
 
-- [ ] **3. Build the chat distribution flow**
+- [x] **3. Build the chat distribution flow**
   - [x] Provide explicitly declared and installation-acknowledged repository
     Git access on the host-owned installed UI origin. Revalidate the live child
     session, exact repository target and human grants for each operation; never
     expose a platform credential to release content.
-  - [ ] Add the authorized “new chat” workflow: create repository, create the
+  - [x] Add the authorized “new chat” workflow: create repository, create the
     session instance, bind its repository capability, let the release initialize
     its repository, and open the release's chat route.
-  - [ ] Add the reference distribution's chat adapter that renders its own
+  - [x] Add the reference distribution's chat adapter that renders its own
     repository history, writes user input through its own repository contract,
     displays receive state, and shows committed agent responses.
-  - [ ] Mount that adapter only through the completed release-owned
+  - [x] Mount that adapter only through the completed release-owned
     distribution UI surface and its declared tab/API bindings.
-  - [ ] Keep that adapter and any commands/forms out of the Hephaestus core
+  - [x] Keep that adapter and any commands/forms out of the Hephaestus core
     workflow model.
 
 - [ ] **4. Build the reference chat release**
@@ -163,7 +163,7 @@ over repositories and content capabilities later.
 
 ## Verify and document
 
-- [ ] Publish the reference release's versioned repository protocol, including
+- [x] Publish the reference release's versioned repository protocol, including
   its retention and fork warning semantics, rather than presenting it as a
   core Hephaestus contract.
 - [ ] Run real-Git and browser integration coverage for the journey and
@@ -1010,3 +1010,27 @@ and generated Connect doctests; this is not evidence for those paths.
 (`/var/tmp/hephaestus-cargo-doc-workspace-all-gcp-sessionchat.log`). The four
 required Rust baseline commands are complete; the repository-wide quality gate
 and full runtime/cloud acceptance remain pending.
+
+Final26 passes the initial installed-browser journey and canonical host
+validation for two turns, then captures restart state. The evidence is
+`/var/tmp/sessionchat-browser-final26/cooking-execution.OpuIor.log:478-480`.
+This verifies the authorized new-chat composition, release-owned Git adapter,
+and installed UI surface for the initial flow. Recovery fails before launching
+the installed UI: its test looked for a repository-scoped installation on the
+project page. Concurrency, fork, and negative phases were not reached. The
+remaining launch-path correction and a fresh full run are required before
+claiming recovery or overall journey acceptance.
+
+The versioned protocol now publishes explicit release-owned fork and tombstone
+warning semantics: forks retain reachable history and require fresh target
+authority/model binding; tombstones hide ordinary views without erasing Git
+history. These obligations do not introduce a platform approval flow.
+
+The full `cargo dev quality` attempt with disposable PostgreSQL/NATS and both
+isolated RPC proofs enabled stops at architecture validation, before later
+gates. Diagnostics are `DB-STATIC-SQL` in the UI browser schema test and
+`RPC-NON_RPC-HTTP-ALLOWLIST` for the dedicated runtime Git listener and
+installed-UI repository Git routes. Log:
+`/var/tmp/hephaestus-cargo-dev-quality-gcp-sessionchat.log`. Both disposable
+services were cleaned up. These diagnostics must be resolved before the
+repository-wide quality gate can be marked complete.
