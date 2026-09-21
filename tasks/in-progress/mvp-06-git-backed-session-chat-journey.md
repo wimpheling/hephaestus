@@ -125,7 +125,7 @@ the review rather than assumed to be complete.
   - [x] Build and publish a small ordinary chat-agent release that defines and
     reads its session protocol, calls its model API through MVP 04, and
     commits its response with normal Git.
-  - [ ] Bind only the session repository/ref/path capability and its declared
+  - [x] Bind only the session repository/ref/path capability and its declared
     MVP 04 destination-bound egress bindings; prove that the release cannot
     use its source repository, another session, or an undeclared destination.
 
@@ -645,19 +645,26 @@ ownership boundary and the incomplete acceptance boxes remain unchanged.
 
 ### Test-only released-guest denial probe (2026-09-21)
 
-Commit `b079c48` records the initial `examples/session-chat/tests/denied_probe.py`
-probe and its focused Python tests. The current follow-up extends it with the
-required distinct source-repository ID and source-repository read and push
-checks; the focused test file now contains six tests. The probe uses the
-production runtime credential/helper and broker contracts, first requiring an
-authorized deterministic model call with the same credential and binding, then
-checking source-checkout absence, source-repository and other-repository Git
-denials, a positive authorized clone followed by a prohibited-path push, and
-undeclared model destination/rule requests. Its adapter checks distinguish wire
-`denied` from `retryable`, transport failure, and malformed responses; output
-is fixed check/status metadata only. This probe is not yet wired into a release
-image or executed in a real VM, so broad released-VM denial acceptance remains
-unchecked.
+The released-VM denial probe is now verified in
+`/var/tmp/sessionchat-denial-final7-run.log` for run
+`ff43a1ef-6c0b-47f1-933e-0dcd62acc650`. The run passed 35 golden tests with one
+ignored test, eight PostgreSQL tests, and VM/cgroup cleanup. The result line
+`HEPH_SESSION_CHAT_DENIAL_PROBE host=validated checks=9 refs=unchanged
+receives=unchanged` records all nine fixed probe checks, including the
+authorized model control; the ordinary agent turn is intentional and excluded
+from the unchanged-receive comparison. The published build used its source
+repository, the runtime target was a distinct session repository, and the
+fixture populated a distinct other repository. The local classification suite
+contains seven focused Python tests. An absent or empty, real, unmounted
+`/workspace/source` base image directory is accepted; a source checkout is
+still rejected.
+
+The probe remains test-only and opt-in through
+`HEPHAESTUS_APP_SESSION_CHAT_DENIAL_PROBE_E2E=1`. It uses the production
+runtime credential/helper and broker contracts, keeps output to fixed check and
+status metadata, and does not claim the broader session journey, browser,
+restart/recovery, fork, concurrency, expired/revoked capability, or GCP
+acceptance.
 
 ### Interactive-path ownership and transition audit (2026-09-21)
 
