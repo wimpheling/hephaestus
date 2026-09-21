@@ -36,7 +36,7 @@ use secret_store::{EncryptedStore, LocalKeyProvider};
 use serde_json::Value as JsonValue;
 use sqlx::PgPool;
 use std::{
-    collections::{HashMap, HashSet},
+    collections::{BTreeMap, BTreeSet, HashMap, HashSet},
     fs, io,
     os::unix::fs as unix_fs,
     path::{Path, PathBuf},
@@ -64,6 +64,9 @@ const SESSION_ID: &str = "11111111-1111-4111-8111-111111111111";
 const HUMAN_RECORD_ID: &str = "22222222-2222-4222-8222-222222222222";
 const DENIAL_HUMAN_RECORD_ID: &str = "55555555-5555-4555-8555-555555555555";
 
+#[path = "fork.rs"]
+mod fork;
+
 pub fn enabled() -> bool {
     std::env::var("HEPHAESTUS_APP_SESSION_CHAT_E2E").as_deref() == Ok("1")
 }
@@ -78,6 +81,10 @@ pub fn restart_e2e_enabled() -> bool {
 
 pub fn concurrent_e2e_enabled() -> bool {
     std::env::var("HEPHAESTUS_APP_SESSION_CHAT_CONCURRENT_E2E").as_deref() == Ok("1")
+}
+
+pub fn fork_e2e_enabled() -> bool {
+    std::env::var("HEPHAESTUS_APP_SESSION_CHAT_FORK_E2E").as_deref() == Ok("1")
 }
 
 pub struct SessionBrokerFixture {
@@ -180,7 +187,20 @@ pub async fn start_model_fixture() -> SessionBrokerFixture {
             "session-chat concurrency E2E requires the restart phase"
         );
     }
-    let expected_requests = if concurrent_e2e_enabled() {
+    if fork_e2e_enabled() {
+        assert_eq!(
+            std::env::var("HEPHAESTUS_APP_SESSION_CHAT_BROWSER_E2E").as_deref(),
+            Ok("1"),
+            "session-chat fork E2E requires the browser phase"
+        );
+        assert!(
+            restart_e2e_enabled() && concurrent_e2e_enabled(),
+            "session-chat fork E2E requires restart and concurrency phases"
+        );
+    }
+    let expected_requests = if fork_e2e_enabled() {
+        6
+    } else if concurrent_e2e_enabled() {
         5
     } else if restart_e2e_enabled() {
         3
@@ -1060,27 +1080,31 @@ required = true
     clippy::too_many_arguments,
     clippy::too_many_lines
 )]
-pub async fn exercise(
+pub async fn exercise<'a>(
     pool: &PgPool,
     database_url: &str,
     running: &RunningHephaestus,
     root: &Path,
-    source_root: &Path,
+    source_root: &'a Path,
     project: ProjectId,
     organization: OrganizationId,
     repositories: &PgForgeRepository,
-    identity: &AuthenticatedIdentity,
-    git_token: &str,
-    rpc_token: &(dyn Fn(&str) -> String + Send + Sync),
+    identity: &'a AuthenticatedIdentity,
+    git_token: &'a str,
+    rpc_token: &'a (dyn Fn(&str) -> String + Send + Sync),
     broker: SessionBrokerFixture,
     timeout: Duration,
-) -> Option<BrowserRestartState> {
+) -> Option<BrowserRestartState<'a>> {
     let denial_probe = denial_probe_enabled();
     let browser_e2e =
         std::env::var("HEPHAESTUS_APP_SESSION_CHAT_BROWSER_E2E").as_deref() == Ok("1");
     assert!(
         !concurrent_e2e_enabled() || (browser_e2e && restart_e2e_enabled()),
         "session-chat concurrency E2E requires browser and restart phases"
+    );
+    assert!(
+        !fork_e2e_enabled() || (browser_e2e && restart_e2e_enabled() && concurrent_e2e_enabled()),
+        "session-chat fork E2E requires browser, restart, and concurrency phases"
     );
     assert!(
         !denial_probe || !browser_e2e,
@@ -1179,6 +1203,11 @@ pub async fn exercise(
                 pool,
                 root,
                 project,
+                organization,
+                source_root,
+                identity,
+                git_token,
+                rpc_token,
                 identity.user_id.as_uuid(),
                 built.release_id,
                 built.release_agent_id,
@@ -1574,6 +1603,14 @@ enum SessionChatBrowserMode {
         initial_transcript_count: usize,
         initial_agent_count: usize,
     },
+    Fork {
+        repository_id: Uuid,
+        installation_id: Uuid,
+        generation_id: Uuid,
+        actor_id: Uuid,
+        initial_transcript_count: usize,
+        initial_agent_count: usize,
+    },
 }
 
 #[allow(clippy::too_many_lines)] // Browser setup and selector validation stay one bounded fixture boundary.
@@ -1589,6 +1626,7 @@ async fn run_session_chat_browser(
         SessionChatBrowserMode::New => "initial",
         SessionChatBrowserMode::Existing { .. } => "recovery",
         SessionChatBrowserMode::Concurrent { .. } => "concurrency",
+        SessionChatBrowserMode::Fork { .. } => "fork",
     };
     let fixture_output = PathBuf::from(
         std::env::var("HEPHAESTUS_COOKING_BROWSER_FIXTURE_OUTPUT")
@@ -1654,6 +1692,30 @@ async fn run_session_chat_browser(
             "session_chat_concurrent",
             "cooking concurrent session chat clients reconcile a stale Git push and preserve both turns",
         ),
+        SessionChatBrowserMode::Fork {
+            repository_id,
+            installation_id,
+            generation_id,
+            actor_id,
+            initial_transcript_count,
+            initial_agent_count,
+        } => (
+            serde_json::json!({
+                "session_chat_fork": {
+                    "project_id": project,
+                    "repository_id": repository_id,
+                    "installation_id": installation_id,
+                    "generation_id": generation_id,
+                    "actor_id": actor_id,
+                    "ui_path": "/session-chat/index.html",
+                    "agent_response_text": MODEL_RESPONSE_TEXT,
+                    "initial_transcript_count": initial_transcript_count.to_string(),
+                    "initial_agent_count": initial_agent_count.to_string()
+                }
+            }),
+            "session_chat_fork",
+            "cooking forked session chat preserves inherited history and receives a fresh response",
+        ),
     };
     let fixture_path = match browser_mode {
         "session_chat_new" => fixture_output,
@@ -1666,6 +1728,13 @@ async fn run_session_chat_browser(
         )),
         "session_chat_concurrent" => fixture_output.with_file_name(format!(
             "{}.concurrency.json",
+            fixture_output
+                .file_name()
+                .expect("session-chat fixture filename")
+                .to_string_lossy()
+        )),
+        "session_chat_fork" => fixture_output.with_file_name(format!(
+            "{}.fork.json",
             fixture_output
                 .file_name()
                 .expect("session-chat fixture filename")
@@ -1713,6 +1782,7 @@ async fn run_session_chat_browser(
             "initial" => "browser-initial",
             "recovery" => "browser-recovery",
             "concurrency" => "browser-concurrency",
+            "fork" => "browser-fork",
             _ => unreachable!("session-chat browser phase is allowlisted"),
         },
         super::workload_phase_timing_from_environment(),
@@ -1764,9 +1834,14 @@ struct BrowserSessionObjects {
 }
 
 /// Persisted identifiers and immutable first-phase evidence used by recovery.
-pub struct BrowserRestartState {
+pub struct BrowserRestartState<'a> {
     broker: SessionBrokerFixture,
     project: ProjectId,
+    organization: OrganizationId,
+    source_root: &'a Path,
+    identity: &'a AuthenticatedIdentity,
+    git_token: &'a str,
+    rpc_token: &'a (dyn Fn(&str) -> String + Send + Sync),
     actor_id: Uuid,
     release_id: Uuid,
     release_agent_id: Uuid,
@@ -1784,16 +1859,21 @@ pub struct BrowserRestartState {
 }
 
 #[allow(clippy::too_many_arguments, clippy::too_many_lines)] // One exact persisted-session lookup keeps restart identity immutable.
-async fn load_browser_restart_state(
+async fn load_browser_restart_state<'a>(
     pool: &PgPool,
     root: &Path,
     project: ProjectId,
+    organization: OrganizationId,
+    source_root: &'a Path,
+    identity: &'a AuthenticatedIdentity,
+    git_token: &'a str,
+    rpc_token: &'a (dyn Fn(&str) -> String + Send + Sync),
     actor_id: Uuid,
     release_id: Uuid,
     release_agent_id: Uuid,
     existing_repository_ids: &HashSet<Uuid>,
     broker: SessionBrokerFixture,
-) -> BrowserRestartState {
+) -> BrowserRestartState<'a> {
     let candidates: Vec<BrowserSessionObjects> = sqlx::query_as(
         "SELECT repository.id AS repository_id,
                 instance.id AS instance_id,
@@ -1935,6 +2015,11 @@ async fn load_browser_restart_state(
     BrowserRestartState {
         broker,
         project,
+        organization,
+        source_root,
+        identity,
+        git_token,
+        rpc_token,
         actor_id,
         release_id,
         release_agent_id,
@@ -1959,12 +2044,17 @@ pub async fn exercise_browser_restart(
     database_url: &str,
     running: &RunningHephaestus,
     root: &Path,
-    state: BrowserRestartState,
+    state: BrowserRestartState<'_>,
     restart_boundary: OffsetDateTime,
 ) {
     let BrowserRestartState {
         broker,
         project,
+        organization,
+        source_root,
+        identity,
+        git_token,
+        rpc_token,
         actor_id,
         release_id,
         release_agent_id,
@@ -2242,7 +2332,7 @@ pub async fn exercise_browser_restart(
     assert_eq!(current_revision_id, revision_id);
     eprintln!("HEPH_SESSION_CHAT_BROWSER stage=restart-canonical-validation-passed turns=3");
     if concurrent_e2e_enabled() {
-        exercise_browser_concurrency(
+        let broker = exercise_browser_concurrency(
             pool,
             database_url,
             running,
@@ -2260,6 +2350,97 @@ pub async fn exercise_browser_restart(
             session_id,
         )
         .await;
+        if fork_e2e_enabled() {
+            let source_head =
+                git_output_bare(root, repository_id, &["rev-parse", "refs/heads/main"]).await;
+            let reachable_objects = git_output_bare(
+                root,
+                repository_id,
+                &["rev-list", "--objects", &source_head],
+            )
+            .await
+            .lines()
+            .filter_map(|line| line.split_whitespace().next().map(str::to_owned))
+            .collect::<BTreeSet<_>>();
+            assert!(!reachable_objects.is_empty());
+            let record_paths = git_output_bare(
+                root,
+                repository_id,
+                &["ls-tree", "-r", "--name-only", &source_head],
+            )
+            .await
+            .lines()
+            .filter(|path| path.starts_with(".heph/session/v1/records/"))
+            .map(str::to_owned)
+            .collect::<Vec<_>>();
+            let mut record_blobs = BTreeMap::new();
+            for path in record_paths {
+                record_blobs.insert(
+                    path.clone(),
+                    git_output_bare_bytes(
+                        root,
+                        repository_id,
+                        &["show", &format!("{source_head}:{path}")],
+                    )
+                    .await,
+                );
+            }
+            assert_eq!(record_blobs.len(), 10);
+            let (model_rule_id, model_binding_id): (Uuid, Uuid) = sqlx::query_as(
+                "SELECT rule.id, rule.binding_id
+                   FROM brokered_secret_rules AS rule
+                   JOIN agent_secret_bindings AS binding
+                     ON binding.id = rule.binding_id
+                    AND binding.instance_revision_id = rule.instance_revision_id
+                  WHERE rule.instance_revision_id = $1
+                    AND binding.slot_key = 'model'
+                    AND binding.status = 'active'
+                    AND rule.destination_origin = 'https://api.model.example'",
+            )
+            .bind(revision_id)
+            .fetch_one(pool)
+            .await
+            .expect("source session model rule and binding");
+            let source = fork::SourceSessionState {
+                repository_id,
+                session_id,
+                release_id,
+                release_agent_id,
+                model_rule_id,
+                instance_id,
+                revision_id,
+                attachment_id,
+                installation_id,
+                generation_id,
+                model_binding_id,
+                head: source_head,
+                reachable_objects,
+                record_blobs,
+                accepted_receive_count: accepted_receive_count(pool, repository_id).await,
+            };
+            exercise_browser_fork(
+                pool,
+                database_url,
+                running,
+                root,
+                source_root,
+                project,
+                organization,
+                identity,
+                git_token,
+                rpc_token,
+                broker,
+                source,
+            )
+            .await;
+            return;
+        }
+        let final_requests = broker.assert_observed().await;
+        assert_eq!(
+            final_requests.len(),
+            5,
+            "concurrency flow must make five model turns"
+        );
     } else {
         let final_requests = broker.assert_observed().await;
         assert_eq!(
@@ -2268,6 +2449,367 @@ pub async fn exercise_browser_restart(
             "restart flow must make three model turns"
         );
     }
+}
+
+/// Publishes and exercises the forked repository while retaining the source
+/// broker observer.  The caller owns the restart boundary and supplies the
+/// same production identity/token factories used by the source phase.
+#[allow(
+    clippy::cognitive_complexity,
+    clippy::too_many_arguments,
+    clippy::too_many_lines
+)] // Fork host assertions intentionally cover Git, browser, and runtime provenance together.
+async fn exercise_browser_fork(
+    pool: &PgPool,
+    database_url: &str,
+    running: &RunningHephaestus,
+    root: &Path,
+    source_root: &Path,
+    project: ProjectId,
+    organization: OrganizationId,
+    identity: &AuthenticatedIdentity,
+    git_token: &str,
+    rpc_token: &(dyn Fn(&str) -> String + Send + Sync),
+    broker: SessionBrokerFixture,
+    source: fork::SourceSessionState,
+) {
+    let source_before = source.clone();
+    let target = fork::exercise(
+        pool,
+        running,
+        root,
+        source_root,
+        project,
+        source,
+        git_token,
+        rpc_token,
+    )
+    .await;
+    assert_eq!(target.source_repository_id, source_before.repository_id);
+    assert_eq!(target.source_head, source_before.head);
+    assert_eq!(
+        target.source_model_binding_id,
+        source_before.model_binding_id
+    );
+    assert_eq!(
+        target.source_accepted_receive_count,
+        source_before.accepted_receive_count
+    );
+    assert!(
+        target.checkout.is_dir(),
+        "fork checkout must remain materialized"
+    );
+    assert!(!target.manifest_commit.is_empty());
+    let target_rule_id = Uuid::new_v4();
+    let provisioned = fork::provision_target(
+        pool,
+        running,
+        project,
+        organization,
+        identity,
+        rpc_token,
+        &target,
+        target.source_release_id,
+        target.source_release_agent_id,
+        target_rule_id,
+    )
+    .await;
+    assert_ne!(provisioned.revision_id, source_before.revision_id);
+    assert_ne!(
+        provisioned.capability_revision_id,
+        source_before.revision_id
+    );
+    assert_ne!(provisioned.bound_revision_id, source_before.revision_id);
+    assert_ne!(provisioned.binding_id, source_before.model_binding_id);
+    let binding_revision_id: Uuid =
+        sqlx::query_scalar("SELECT instance_revision_id FROM agent_secret_bindings WHERE id = $1")
+            .bind(provisioned.binding_id)
+            .fetch_one(pool)
+            .await
+            .expect("fork target fresh model binding");
+    assert_eq!(binding_revision_id, provisioned.bound_revision_id);
+    eprintln!("HEPH_SESSION_CHAT_BROWSER stage=fork-started");
+    run_session_chat_browser(
+        database_url,
+        running,
+        project,
+        target.source_release_agent_id,
+        Uuid::nil(),
+        SessionChatBrowserMode::Fork {
+            repository_id: target.repository_id,
+            installation_id: provisioned.installation_id,
+            generation_id: provisioned.generation_id,
+            actor_id: identity.user_id.as_uuid(),
+            initial_transcript_count: 10,
+            initial_agent_count: 5,
+        },
+    )
+    .await;
+    broker.wait_for_observed(6).await;
+    let requests = broker.observed_snapshot();
+    assert_eq!(requests.len(), 6, "fork flow must make six model turns");
+    let target_request = &requests[5];
+    assert_ne!(target_request.session_id, source_before.session_id);
+    assert_eq!(target_request.session_id, target.session_id);
+    assert_eq!(target_request.messages.len(), 11);
+    for (index, message) in target_request.messages.iter().enumerate() {
+        assert_eq!(
+            message.role,
+            if index % 2 == 0 { "user" } else { "assistant" }
+        );
+    }
+    assert_eq!(
+        target_request
+            .messages
+            .last()
+            .map(|message| message.record_id),
+        Some(target_request.record_id)
+    );
+
+    let target_head = git_output_bare(
+        root,
+        target.repository_id,
+        &["rev-parse", "refs/heads/main"],
+    )
+    .await;
+    let source_commit_count = git_output_bare(
+        root,
+        source_before.repository_id,
+        &["rev-list", &source_before.head],
+    )
+    .await
+    .lines()
+    .count();
+    let target_commit_count =
+        git_output_bare(root, target.repository_id, &["rev-list", &target_head])
+            .await
+            .lines()
+            .count();
+    assert_eq!(
+        target_commit_count,
+        source_commit_count + 3,
+        "target history must contain the source, manifest, human, and assistant commits only"
+    );
+    let target_paths = git_output_bare(
+        root,
+        target.repository_id,
+        &["ls-tree", "-r", "--name-only", &target_head],
+    )
+    .await
+    .lines()
+    .map(str::to_owned)
+    .collect::<Vec<_>>();
+    let human_paths = target_paths
+        .iter()
+        .filter(|path| path.starts_with(".heph/session/v1/records/human/"))
+        .cloned()
+        .collect::<Vec<_>>();
+    let agent_paths = target_paths
+        .iter()
+        .filter(|path| path.starts_with(".heph/session/v1/records/agent/"))
+        .cloned()
+        .collect::<Vec<_>>();
+    assert_eq!(
+        human_paths.len(),
+        6,
+        "fork target must retain six human records"
+    );
+    assert_eq!(
+        agent_paths.len(),
+        6,
+        "fork target must retain six assistant records"
+    );
+    for (path, expected) in &source_before.record_blobs {
+        assert_eq!(
+            git_output_bare_bytes(
+                root,
+                target.repository_id,
+                &["show", &format!("{target_head}:{path}")],
+            )
+            .await,
+            expected.as_slice(),
+            "fork target source record changed after target turn: {path}"
+        );
+    }
+    let target_manifest: JsonValue = serde_json::from_str(
+        &git_output_bare(
+            root,
+            target.repository_id,
+            &["show", &format!("{target_head}:{}", target.manifest_path)],
+        )
+        .await,
+    )
+    .expect("fork target manifest JSON");
+    assert_eq!(
+        target_manifest["data"]["session_id"],
+        target.session_id.to_string()
+    );
+    assert_eq!(
+        target_manifest["data"]["forked_from_session_id"],
+        source_before.session_id.to_string()
+    );
+
+    let mut human_record_paths = HashMap::new();
+    for path in &human_paths {
+        let record: JsonValue = serde_json::from_str(
+            &git_output_bare(
+                root,
+                target.repository_id,
+                &["show", &format!("{target_head}:{path}")],
+            )
+            .await,
+        )
+        .expect("fork target human record JSON");
+        let record_id = Uuid::parse_str(
+            record["record_id"]
+                .as_str()
+                .expect("fork target human record ID"),
+        )
+        .expect("fork target human record UUID");
+        human_record_paths.insert(record_id, path.clone());
+    }
+    let mut agent_record_paths = HashMap::new();
+    for path in &agent_paths {
+        let record: JsonValue = serde_json::from_str(
+            &git_output_bare(
+                root,
+                target.repository_id,
+                &["show", &format!("{target_head}:{path}")],
+            )
+            .await,
+        )
+        .expect("fork target assistant record JSON");
+        let record_id = Uuid::parse_str(
+            record["record_id"]
+                .as_str()
+                .expect("fork target assistant record ID"),
+        )
+        .expect("fork target assistant record UUID");
+        assert_eq!(record["content"]["text"], MODEL_RESPONSE_TEXT);
+        agent_record_paths.insert(record_id, (path.clone(), record));
+    }
+    let human_path = human_record_paths
+        .get(&target_request.record_id)
+        .expect("fork target request human record");
+    let human_commit = canonical_record_commit(root, target.repository_id, human_path).await;
+    let agent_entry = agent_record_paths
+        .values()
+        .find(|(_, record)| record["in_reply_to"] == target_request.record_id.to_string())
+        .expect("fork target assistant response");
+    let agent_commit = canonical_record_commit(root, target.repository_id, &agent_entry.0).await;
+    assert_eq!(
+        git_output_bare(
+            root,
+            target.repository_id,
+            &["rev-parse", &format!("{human_commit}^")],
+        )
+        .await,
+        target.manifest_commit,
+        "target human commit must directly follow the fork manifest"
+    );
+    assert_eq!(
+        git_output_bare(
+            root,
+            target.repository_id,
+            &["rev-parse", &format!("{agent_commit}^")],
+        )
+        .await,
+        human_commit,
+        "fork target assistant commit must directly follow its human commit"
+    );
+    let run_id = accepted_normal_run_id(
+        pool,
+        target.repository_id,
+        provisioned.instance_id,
+        provisioned.attachment_id,
+        identity.user_id.as_uuid(),
+        &human_commit,
+    )
+    .await;
+    wait_for_run_succeeded(pool, run_id, Duration::from_secs(120)).await;
+    let expected_human_record_id = target_request.record_id.to_string();
+    assert_runtime_git_turn_at_commit(
+        pool,
+        root,
+        target.repository_id,
+        provisioned.instance_id,
+        provisioned.attachment_id,
+        identity.user_id.as_uuid(),
+        run_id,
+        &human_commit,
+        &agent_commit,
+        Some(&expected_human_record_id),
+    )
+    .await;
+    let (runtime_revision_id, authority_revision_id, runtime_instance_id, runtime_attachment_id): (
+        Uuid,
+        Uuid,
+        Uuid,
+        Uuid,
+    ) = sqlx::query_as(
+        "SELECT run.instance_revision_id, session.instance_revision_id,
+                    session.instance_id, session.attachment_id
+               FROM runs AS run
+               JOIN runtime_authority_sessions AS session ON session.run_id = run.id
+              WHERE run.id = $1",
+    )
+    .bind(run_id)
+    .fetch_one(pool)
+    .await
+    .expect("fork target runtime authority provenance");
+    assert_eq!(runtime_revision_id, provisioned.bound_revision_id);
+    assert_eq!(authority_revision_id, provisioned.bound_revision_id);
+    assert_eq!(runtime_instance_id, provisioned.instance_id);
+    assert_eq!(runtime_attachment_id, provisioned.attachment_id);
+    assert_eq!(accepted_runtime_receive_count(pool, run_id).await, 1);
+    let target_receive_count = accepted_receive_count(pool, target.repository_id).await;
+    assert_eq!(
+        target_receive_count,
+        target.initial_accepted_receive_count + 2,
+        "target turn must add exactly one human and one runtime receive"
+    );
+    let target_run_request_count: i64 = sqlx::query_scalar(
+        "SELECT count(*)
+           FROM run_requests
+          WHERE instance_id = $1 AND repository_id = $2",
+    )
+    .bind(provisioned.instance_id)
+    .bind(target.repository_id)
+    .fetch_one(pool)
+    .await
+    .expect("fork target run request count");
+    assert_eq!(
+        target_run_request_count, 1,
+        "fork target must schedule only its one new model turn"
+    );
+    assert_eq!(
+        git_output_bare(
+            root,
+            target.repository_id,
+            &["rev-parse", "refs/heads/main"]
+        )
+        .await,
+        target_head
+    );
+    assert_eq!(
+        target_head, agent_commit,
+        "target main must finish at the assistant commit"
+    );
+    assert_eq!(
+        git_output_bare(
+            root,
+            source_before.repository_id,
+            &["rev-parse", "refs/heads/main"]
+        )
+        .await,
+        source_before.head
+    );
+    assert_eq!(
+        accepted_receive_count(pool, source_before.repository_id).await,
+        source_before.accepted_receive_count
+    );
+    eprintln!("HEPH_SESSION_CHAT_BROWSER stage=fork-canonical-validation-passed target_turns=6");
+    let _ = broker.assert_observed().await;
 }
 
 // Keep the concurrency assertions together so each production boundary is checked once.
@@ -2292,7 +2834,7 @@ async fn exercise_browser_concurrency(
     installation_id: Uuid,
     generation_id: Uuid,
     session_id: Uuid,
-) {
+) -> SessionBrokerFixture {
     let before_head = git_output_bare(root, repository_id, &["rev-parse", "refs/heads/main"]).await;
     let before_record_paths = git_output_bare(
         root,
@@ -2347,7 +2889,8 @@ async fn exercise_browser_concurrency(
         },
     )
     .await;
-    let requests = broker.assert_observed().await;
+    broker.wait_for_observed(5).await;
+    let requests = broker.observed_snapshot();
     assert_eq!(
         requests.len(),
         5,
@@ -2565,6 +3108,7 @@ async fn exercise_browser_concurrency(
     .expect("concurrency runtime receive count");
     assert_eq!(runtime_receive_count, 2);
     eprintln!("HEPH_SESSION_CHAT_BROWSER stage=concurrency-canonical-validation-passed turns=5");
+    broker
 }
 
 async fn canonical_record_commit(root: &Path, repository_id: Uuid, record_path: &str) -> String {
@@ -3151,6 +3695,31 @@ async fn seed_model_secret(
     revision: Uuid,
     attachment: Uuid,
 ) -> Uuid {
+    seed_model_secret_with_rule(
+        pool,
+        organization,
+        project,
+        identity,
+        instance,
+        revision,
+        attachment,
+        MODEL_RULE,
+    )
+    .await
+    .0
+}
+
+#[allow(clippy::too_many_arguments)] // Secret binding IDs and target rule are all independent acceptance inputs.
+async fn seed_model_secret_with_rule(
+    pool: &PgPool,
+    organization: OrganizationId,
+    project: ProjectId,
+    identity: &AuthenticatedIdentity,
+    instance: Uuid,
+    revision: Uuid,
+    attachment: Uuid,
+    model_rule: Uuid,
+) -> (Uuid, Uuid) {
     let import_id =
         SecretImportId::from_uuid(seed_model_import(pool, organization, project, identity).await);
     let service = SecretService::new(
@@ -3186,8 +3755,8 @@ async fn seed_model_secret(
         .declare_brokered_https_rule(
             identity,
             DeclareBrokeredHttpsRule {
-                command_key: secret_command_key("session-chat-rule", MODEL_RULE),
-                rule_id: MODEL_RULE,
+                command_key: secret_command_key("session-chat-rule", model_rule),
+                rule_id: model_rule,
                 binding_id,
                 destination: String::from("https://api.model.example"),
                 header: String::from("authorization"),
@@ -3196,7 +3765,7 @@ async fn seed_model_secret(
         )
         .await
         .expect("declare session model rule");
-    bound_revision.as_uuid()
+    (bound_revision.as_uuid(), binding_id.as_uuid())
 }
 
 fn instance_client(
