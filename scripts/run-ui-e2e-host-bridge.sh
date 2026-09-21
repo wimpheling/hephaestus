@@ -141,8 +141,8 @@ if diagnostics:
         raise SystemExit("browser diagnostics directory is invalid")
 if runner == "legacy" and payload["phase"] not in {"initial", "post-operation"}:
     raise SystemExit("legacy browser phase is invalid")
-if runner == "installed-ui" and payload["phase"] not in {"initial", "recovery"}:
-    raise SystemExit("installed UI browser bridge supports only the initial or recovery phase")
+if runner == "installed-ui" and payload["phase"] not in {"initial", "recovery", "concurrency"}:
+    raise SystemExit("installed UI browser bridge supports only the initial, recovery, or concurrency phase")
 if not payload["web_port"].isdigit() or not 1 <= int(payload["web_port"]) <= 65535:
     raise SystemExit("browser web port is invalid")
 for key in ("database_url", "rpc_endpoint", "oidc_issuer"):
@@ -152,10 +152,14 @@ if len(payload["rpc_secret"]) < 32:
     raise SystemExit("browser RPC mediator secret is too short")
 if runner == "installed-ui":
     installed_selector = payload["installed_ui_browser_grep"]
+    concurrency_selector = "cooking concurrent session chat clients reconcile a stale Git push and preserve both turns"
+    if (payload["phase"] == "concurrency") != (installed_selector == concurrency_selector):
+        raise SystemExit("session-chat concurrency selector and phase must be paired")
     allowed_selectors = {
         "cooking installed UI TLS",
         "cooking session-chat installed UI initializes and reconnects ordinary Git history",
         "cooking new session chat creates and opens a real Git-backed browser session",
+        "cooking concurrent session chat clients reconcile a stale Git push and preserve both turns",
     }
     if (
         installed_selector not in allowed_selectors

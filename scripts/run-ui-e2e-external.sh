@@ -29,9 +29,14 @@ case "${browser_runner}" in
     installed-ui)
         test_grep="${HEPHAESTUS_INSTALLED_UI_BROWSER_GREP:-cooking installed UI TLS}"
         case "${phase}" in
-            initial|recovery) ;;
-            *) printf 'installed UI browser phase must be initial or recovery: %s\n' "${phase}" >&2; exit 1 ;;
+            initial|recovery|concurrency) ;;
+            *) printf 'installed UI browser phase must be initial, recovery, or concurrency: %s\n' "${phase}" >&2; exit 1 ;;
         esac
+        if [[ "${phase}" == concurrency && "${test_grep}" != 'cooking concurrent session chat clients reconcile a stale Git push and preserve both turns' ]] ||
+            [[ "${test_grep}" == 'cooking concurrent session chat clients reconcile a stale Git push and preserve both turns' && "${phase}" != concurrency ]]; then
+            printf 'session-chat concurrency selector and phase must be paired\n' >&2
+            exit 1
+        fi
         [[ "${#test_grep}" -le 256 && "${test_grep}" != *$'\n'* && "${test_grep}" != *$'\r'* ]] || {
             printf 'installed UI browser grep is invalid\n' >&2
             exit 1
@@ -39,7 +44,8 @@ case "${browser_runner}" in
         case "${test_grep}" in
             "cooking installed UI TLS"|\
             "cooking session-chat installed UI initializes and reconnects ordinary Git history"|\
-            "cooking new session chat creates and opens a real Git-backed browser session") ;;
+            "cooking new session chat creates and opens a real Git-backed browser session"|\
+            "cooking concurrent session chat clients reconcile a stale Git push and preserve both turns") ;;
             *)
                 printf 'unsupported installed UI browser selector\n' >&2
                 exit 1
@@ -69,8 +75,8 @@ if [[ -n "${HEPHAESTUS_COOKING_BROWSER_BRIDGE_DIR:-}" ]]; then
         legacy|installed-ui) ;;
         *) printf 'unsupported browser bridge runner\n' >&2; exit 1 ;;
     esac
-    if [[ "${browser_runner}" == installed-ui && "${phase}" != initial && "${phase}" != recovery ]]; then
-        printf 'installed UI browser bridge supports only the initial or recovery phase\n' >&2
+    if [[ "${browser_runner}" == installed-ui && "${phase}" != initial && "${phase}" != recovery && "${phase}" != concurrency ]]; then
+        printf 'installed UI browser bridge supports only the initial, recovery, or concurrency phase\n' >&2
         exit 1
     fi
     if [[ "${browser_runner}" == installed-ui ]]; then

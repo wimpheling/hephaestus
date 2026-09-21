@@ -22,15 +22,21 @@ case "${browser_grep}" in
     "cooking installed UI TLS") browser_fixture_mode="installed_reference_uis" ;;
     "cooking session-chat installed UI initializes and reconnects ordinary Git history") browser_fixture_mode="session_chat_ui" ;;
     "cooking new session chat creates and opens a real Git-backed browser session") browser_fixture_mode="session_chat_new" ;;
+    "cooking concurrent session chat clients reconcile a stale Git push and preserve both turns") browser_fixture_mode="session_chat_concurrent" ;;
     *)
         printf 'unsupported installed UI browser selector\n' >&2
         exit 1
         ;;
 esac
 case "${phase}" in
-    initial|recovery) true ;;
-    *) printf 'installed UI smoke supports only the initial or recovery phase\n' >&2; exit 1 ;;
+    initial|recovery|concurrency) true ;;
+    *) printf 'installed UI smoke supports only the initial, recovery, or concurrency phase\n' >&2; exit 1 ;;
 esac
+if [[ "${phase}" == concurrency && "${browser_fixture_mode}" != session_chat_concurrent ]] ||
+    [[ "${browser_fixture_mode}" == session_chat_concurrent && "${phase}" != concurrency ]]; then
+    printf 'session-chat concurrency selector and phase must be paired\n' >&2
+    exit 1
+fi
 platform_origin="${HEPHAESTUS_PLATFORM_HTTPS_ORIGIN:?set HEPHAESTUS_PLATFORM_HTTPS_ORIGIN}"
 ca_cert="${HEPHAESTUS_CADDY_TEST_CA_CERT:?set HEPHAESTUS_CADDY_TEST_CA_CERT}"
 ui_namespace="${HEPHAESTUS_UI_NAMESPACE:?set HEPHAESTUS_UI_NAMESPACE}"
@@ -156,6 +162,13 @@ elif fixture_mode == "session_chat_ui":
     required = ("project_id", "repository_id", "installation_id", "generation_id", "actor_id", "ui_path", "agent_response_text")
     if not isinstance(session, dict) or any(not isinstance(session.get(key), str) or not session[key] for key in required):
         raise SystemExit("fixture session_chat_ui fields are invalid")
+elif fixture_mode == "session_chat_concurrent":
+    session = value.get("session_chat_concurrent")
+    required = ("project_id", "repository_id", "installation_id", "generation_id", "actor_id", "ui_path", "agent_response_text", "initial_transcript_count", "initial_agent_count")
+    if not isinstance(session, dict) or any(not isinstance(session.get(key), str) or not session[key] for key in required):
+        raise SystemExit("fixture session_chat_concurrent fields are invalid")
+    if any(not session[key].isdigit() for key in ("initial_transcript_count", "initial_agent_count")):
+        raise SystemExit("fixture session_chat_concurrent counts are invalid")
 elif fixture_mode == "installed_reference_uis":
     installed = value.get("installed_reference_uis")
     required = ("project_id", "static_installation_id", "managed_installation_id")
