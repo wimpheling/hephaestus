@@ -91,7 +91,7 @@ the review rather than assumed to be complete.
   - [ ] Record ownership of the visible transcript separately from
     agent-owned model context and internal workflow state.
 
-- [ ] **2. Define the reference chat release's repository protocol**
+- [x] **2. Define the reference chat release's repository protocol**
   - [x] Document the reference release's session layout, message identity/order,
     user and agent records, correlation IDs, content references, branch/fork
     rules, concurrent-writer behavior, and compatibility/versioning behavior.
@@ -119,7 +119,7 @@ the review rather than assumed to be complete.
     a dedicated guest-to-host bridge must work with disabled or broker-only
     networking, use the existing guarded Git receive path and keep credentials
     out of arguments, environment values, Git configuration and logs.
-  - [ ] Persist runtime receive provenance from the immutable authority
+  - [x] Persist runtime receive provenance from the immutable authority
     snapshot, suppress the originating attachment and reject downstream
     trigger candidates without explicit execution authority.
   - [ ] Build and publish a small ordinary chat-agent release that defines and
@@ -339,6 +339,23 @@ materialization and persistence; they do not prove the composed guest journey.
 Review identified a remaining runtime-context dependency: the guest's
 repository/ref/commit fields must describe the authorized target rather than
 inherit the trigger repository's context. That correction is in progress.
+
+### Reference agent packaging and batched publication (2026-09-21)
+
+Commit `5b83cdb` packages the ordinary Python reference agent and its manifest.
+It opens `/workspace/git`, handles unanswered human records in transcript
+order, and publishes the batch of responses and private context in one commit
+and push. Each model request contains only the transcript prefix through its
+target input. The release declares scoped runtime Git writes and broker-only
+model egress; no core chat protocol or direct HTTPS fallback is introduced.
+
+The focused Python suite passed 19 tests. Compilation, shell syntax and actual
+manifest parsing passed. Disposable artifact staging and direct execution of
+the installed entry point passed with an initialized idle session. The local
+socket-pair broker test verifies wire framing and the sanitized response shape;
+it does not exercise the production broker, provider substitution or VM model
+path. Actual build/install/dispatch and deterministic model acceptance are the
+next composed scenario, not evidence supplied by these package tests.
 
 The completed task records the released protocol version and source revision;
 browser and real-Git evidence for session creation, turns, restart, and fork;
