@@ -302,6 +302,25 @@ Focused formatting and diff checks passed. This is listener evidence; the
 composed guest worktree, production Git service and released-agent journey
 remain pending. Full repository checks and fresh GCP acceptance remain open.
 
+### Runtime workspace resolver validation (2026-09-21)
+
+The pending runtime workspace implementation has focused PostgreSQL evidence:
+`cargo test -p workspace-postgres --test postgres_git -- --nocapture` passed
+two tests against disposable PostgreSQL 17, removed after execution. Coverage
+includes immutable snapshot/provenance resolution, capability repository
+selection independent of the trigger repository, missing/cross-repository
+target rejection, fetch and ref-scope denial, atomic preparing-row/event
+classification, and discovery of interrupted preparing rows for recovery.
+Existing proposal recovery remains selected through its separate result state.
+
+Checks and all-target/all-feature Clippy passed for workspace-domain,
+workspace-postgres and workspace-local; domain/local tests and focused
+formatting passed. This evidence covers the resolver and local materialization,
+not orchestrator cleanup ordering, guest Git operations or the released chat
+journey. Runtime preparation must follow immutable authority snapshot creation;
+the guest needs an exact token-free remote and cleanup after VM termination.
+Those lifecycle integration changes and their verification are still pending.
+
 The completed task records the released protocol version and source revision;
 browser and real-Git evidence for session creation, turns, restart, and fork;
 the reference agent's allowed session-repository push and denied cross-repository
