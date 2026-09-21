@@ -134,6 +134,8 @@ test("session chat stages map to fixed IDs", () => {
     "session-chat-send",
     "session-chat-response",
     "session-chat-reconnect",
+    "session-chat-second-send",
+    "session-chat-second-response",
   ]) {
     reporter.onStepBegin({}, {}, {title});
   }
@@ -145,6 +147,8 @@ test("session chat stages map to fixed IDs", () => {
       {event: "stage", stage_id: "session_chat_send", status: "pending"},
       {event: "stage", stage_id: "session_chat_response", status: "pending"},
       {event: "stage", stage_id: "session_chat_reconnect", status: "pending"},
+      {event: "stage", stage_id: "session_chat_second_send", status: "pending"},
+      {event: "stage", stage_id: "session_chat_second_response", status: "pending"},
     ],
   );
 });

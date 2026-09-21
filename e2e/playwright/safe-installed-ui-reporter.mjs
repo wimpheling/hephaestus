@@ -9,6 +9,8 @@ const STAGE_IDS = new Map([
   ["session-chat-send", "session_chat_send"],
   ["session-chat-response", "session_chat_response"],
   ["session-chat-reconnect", "session_chat_reconnect"],
+  ["session-chat-second-send", "session_chat_second_send"],
+  ["session-chat-second-response", "session_chat_second_response"],
   ["signin", "signin"],
   ["signin-platform", "signin_platform"],
   ["signin-redirect", "signin_redirect"],

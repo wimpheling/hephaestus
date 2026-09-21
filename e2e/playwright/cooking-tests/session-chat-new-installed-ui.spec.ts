@@ -120,9 +120,36 @@ test("cooking new session chat creates and opens a real Git-backed browser sessi
   await test.step("session-chat-response", async () => {
     await expect(agentMessage).toHaveCount(1, {timeout: 60_000});
     await expect(page.locator("[data-status]")).toHaveText("Assistant response received");
+    await expect(page.locator("[data-transcript] article")).toHaveCount(2);
   });
   page.off("request", onRequest);
   expect(pollingFetches).toBeGreaterThan(0);
+
+  const secondMessage = `browser second session message ${testInfo.workerIndex}`;
+  page.on("request", onRequest);
+  await test.step("session-chat-second-send", async () => {
+    const receiveResponse = page.waitForResponse(response => {
+      try {
+        const url = new URL(response.url());
+        return url.pathname.endsWith("/git-receive-pack") && response.request().method() === "POST";
+      } catch {
+        return false;
+      }
+    }, {timeout: 60_000});
+    await page.locator("textarea#message").fill(secondMessage);
+    await page.getByRole("button", {name: "Send"}).click();
+    const receive = await receiveResponse;
+    expect(receive.status()).toBe(200);
+    assertCookieIsolation(await receive.request().allHeaders());
+    await expect(page.locator("article.message-human").filter({hasText: secondMessage})).toHaveCount(1);
+  });
+  await test.step("session-chat-second-response", async () => {
+    await expect(agentMessage).toHaveCount(2, {timeout: 60_000});
+    await expect(page.locator("[data-status]")).toHaveText("Assistant response received");
+    await expectTranscript(page, message, secondMessage, session.agent_response_text);
+  });
+  page.off("request", onRequest);
+  expect(pollingFetches).toBeGreaterThan(1);
 
   await test.step("session-chat-reconnect", async () => {
     const reconnectDiscovery = page.waitForResponse(response => {
@@ -144,13 +171,32 @@ test("cooking new session chat creates and opens a real Git-backed browser sessi
     await page.getByRole("button", {name: "Reconnect"}).click();
     expect((await reconnectDiscovery).status()).toBe(200);
     expect((await reconnectFetch).status()).toBe(200);
-    await expect(page.locator("article.message-human").filter({hasText: message})).toHaveCount(1);
-    await expect(agentMessage).toHaveCount(1);
+    await expectTranscript(page, message, secondMessage, session.agent_response_text);
     expect(repositoryId).toMatch(CANONICAL_UUID);
   });
 });
 
 const CANONICAL_UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+async function expectTranscript(
+  page: import("@playwright/test").Page,
+  firstMessage: string,
+  secondMessage: string,
+  agentResponse: string,
+) {
+  const transcript = page.locator("[data-transcript] article");
+  await expect(transcript).toHaveCount(4);
+  await expect(transcript.nth(0)).toHaveClass(/message-human/);
+  await expect(transcript.nth(0)).toContainText(firstMessage);
+  await expect(transcript.nth(1)).toHaveClass(/message-agent/);
+  await expect(transcript.nth(1)).toContainText(agentResponse);
+  await expect(transcript.nth(2)).toHaveClass(/message-human/);
+  await expect(transcript.nth(2)).toContainText(secondMessage);
+  await expect(transcript.nth(3)).toHaveClass(/message-agent/);
+  await expect(transcript.nth(3)).toContainText(agentResponse);
+  await expect(page.locator("[data-transcript] article.message-human").filter({hasText: firstMessage})).toHaveCount(1);
+  await expect(page.locator("[data-transcript] article.message-agent")).toHaveCount(2);
+}
 
 function loadFixture(): CookingFixture {
   if (!fixturePath) throw new Error("HEPHAESTUS_COOKING_BROWSER_FIXTURE is required");
