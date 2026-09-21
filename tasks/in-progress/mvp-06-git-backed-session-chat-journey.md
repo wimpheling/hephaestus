@@ -250,6 +250,43 @@ installation, revoked release and revoked grant cases. The test emitted
 `REAL_UI_BROWSER_REPOSITORY_GIT_AUTHORITY=1`; the container was removed after
 execution. This proves the verifier matrix, not browser Git or full MVP-06.
 
+### Runtime receive provenance validation (2026-09-21)
+
+Commit `d197bd7`: the focused real PostgreSQL receive/replay test and
+smart-HTTP test passed.
+The latter uses `RuntimeGitCredentialIssuer`, the PostgreSQL credential
+repository, encrypted handoff store, `RuntimeGitHttpAuthenticator`, and the
+actual `pre-receive` executable. It exercises an allowed runtime push,
+wrong-token rejection, denied-path rejection with the canonical ref unchanged,
+durable runtime receive provenance, and human sibling-trigger behavior.
+These tests still use fixture setup for immutable authority rows and do not
+prove released-agent dispatch or guest execution.
+
+Runtime provenance resolves through the immutable session/run/instance/revision
+and Git authorization snapshot, independently of the trigger repository. An
+origin attachment is optional. Originating triggers are suppressed; sibling
+runtime triggers fail closed because current runtime snapshots do not provide
+downstream attachment execution/release-use authority. Human trigger checks
+are retained. Full released-VM and recovery acceptance remains open.
+
+### Internal runtime Git bridge (2026-09-21)
+
+Commit `e445536` adds the dedicated vsock 19003 mapping, optional typed VM
+bridge metadata, guest loopback proxy and packaged credential helper. The
+helper reads the protected bootstrap authority document; its token-free
+host/path contract is exercised through native Git credential URL parsing.
+Proxy tests cover owned-handle cancellation and half-close response delivery.
+
+`cargo test -p vm-libkrun --lib --bins --tests`, `cargo test -p vm-trait`, and
+focused all-target/all-feature Clippy passed. With the actual local libkrun
+runtime, `bash scripts/run-libkrun-integration.sh` exited zero: both the
+existing VM suite and `real_guest_runtime_git_bridge_forwards_disabled_network_http`
+passed. The new test uses a disabled-network guest, packaged helper, actual
+vsock mapping and host Unix socket; guest response and cleanup checks passed.
+Its host peer is deliberately a transport fixture, not the production Git
+service. The daemon Unix listener, exact worktree and composed real Git guest
+journey remain to be implemented and verified.
+
 The completed task records the released protocol version and source revision;
 browser and real-Git evidence for session creation, turns, restart, and fork;
 the reference agent's allowed session-repository push and denied cross-repository
