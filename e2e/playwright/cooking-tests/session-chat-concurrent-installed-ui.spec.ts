@@ -1,5 +1,6 @@
 import {expect, test} from "@playwright/test";
 import {readFileSync} from "node:fs";
+import {parseReceiveCommand} from "./session-chat-concurrent-parser.mjs";
 
 type SessionChatConcurrentFixture = {
   project_id: string;
@@ -223,13 +224,8 @@ function receiveCommand(request: import("@playwright/test").Request): ReceiveCom
     const url = new URL(request.url());
     if (!url.pathname.endsWith("/git-receive-pack") || request.method() !== "POST") return undefined;
     const body = request.postDataBuffer();
-    if (!body || body.length < 4) return undefined;
-    const packetLength = Number.parseInt(body.subarray(0, 4).toString("ascii"), 16);
-    if (!Number.isSafeInteger(packetLength) || packetLength <= 4 || packetLength > body.length) return undefined;
-    const command = body.subarray(4, packetLength).toString("utf8");
-    const match = /^([0-9a-f]{40,64}) [0-9a-f]{40,64} (refs\/heads\/main)(?:\0|$)/i.exec(command);
-    if (!match || /^0+$/.test(match[1])) return undefined;
-    return {oldOid: match[1].toLowerCase(), ref: match[3]};
+    if (!body) return undefined;
+    return parseReceiveCommand(body);
   } catch {
     // Malformed or non-Git requests provide no command evidence.
     return undefined;
