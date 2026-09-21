@@ -1258,15 +1258,15 @@ impl<K: KeyProvider + Send + Sync> SecretService<K> {
         if binding.delivery_mode != "brokered" {
             return Err(SecretServiceError::BindingPolicyMismatch);
         }
-        if existing_command(&mut tx, command.command_key, "declare_brokered_https_rule")
-            .await
-            .map_err(|_| SecretServiceError::Persistence)?
-            .is_some()
+        if let Some((aggregate_id, _)) =
+            existing_command(&mut tx, command.command_key, "declare_brokered_https_rule")
+                .await
+                .map_err(|_| SecretServiceError::Persistence)?
         {
             tx.commit()
                 .await
                 .map_err(|_| SecretServiceError::Persistence)?;
-            return Ok(command.rule_id);
+            return Ok(aggregate_id);
         }
         let destination = ExactHttpsOrigin::parse(command.destination)
             .map_err(|_| SecretServiceError::BindingPolicyMismatch)?;
@@ -1446,7 +1446,12 @@ impl<K: KeyProvider + Send + Sync> SecretService<K> {
                     "SELECT revision.release_agent_id, release.id AS release_id,
                               revision.parameter_hash,
                               revision.platform_policy_version,
-                              attachment.repository_id
+                              CASE WHEN revision.publication_mode = 'runtime_git'
+                                   THEN CASE WHEN git_binding.binding_id IS NOT NULL
+                                             THEN publication_binding.resource_id
+                                        END
+                                   ELSE attachment.repository_id
+                              END AS repository_id
                        FROM runs AS execution
                        JOIN agent_instances AS instance
                          ON instance.id = execution.instance_id
@@ -1461,6 +1466,13 @@ impl<K: KeyProvider + Send + Sync> SecretService<K> {
                        JOIN releases AS release
                          ON release.id = execution.release_id
                         AND release.id = release_agent.release_id
+                       LEFT JOIN agent_capability_bindings AS publication_binding
+                         ON publication_binding.id = revision.publication_repository_binding_id
+                        AND publication_binding.instance_revision_id = revision.id
+                        AND publication_binding.resource_kind = 'repository'
+                       LEFT JOIN agent_git_capability_bindings AS git_binding
+                         ON git_binding.binding_id = publication_binding.id
+                        AND git_binding.instance_revision_id = revision.id
                        JOIN agent_attachments AS attachment
                          ON attachment.id = execution.attachment_id
                         AND attachment.id = $4
@@ -1477,10 +1489,6 @@ impl<K: KeyProvider + Send + Sync> SecretService<K> {
                          AND attachment.enabled
                          AND attachment.removed_at IS NULL
                          AND attachment.ref_selector = $5
-                         AND NOT EXISTS (
-                             SELECT 1 FROM run_instance_provenance
-                             WHERE run_id = execution.id
-                         )
                        FOR UPDATE OF execution, instance",
                 )
                 .bind(command.run_id.as_uuid())
@@ -1653,7 +1661,8 @@ impl<K: KeyProvider + Send + Sync> SecretService<K> {
                 target_ref, target_commit, parameter_hash,
                 platform_policy_version, phase, authorization_model_version)
                VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10,
-                       $11, $12, $13)",
+                       $11, $12, $13)
+               ON CONFLICT (run_id) DO NOTHING",
         )
         .bind(command.run_id.as_uuid())
         .bind(command.instance_id.as_uuid())
@@ -1671,6 +1680,44 @@ impl<K: KeyProvider + Send + Sync> SecretService<K> {
         .execute(&mut *tx)
         .await
         .map_err(|_| SecretServiceError::Persistence)?;
+        let provenance_matches: bool = sqlx::query_scalar(
+            "SELECT EXISTS (
+                 SELECT 1
+                 FROM run_instance_provenance
+                 WHERE run_id = $1
+                   AND instance_id = $2
+                   AND instance_revision_id = $3
+                   AND release_id = $4
+                   AND release_agent_id = $5
+                   AND attachment_id IS NOT DISTINCT FROM $6
+                   AND target_repository_id IS NOT DISTINCT FROM $7
+                   AND target_ref IS NOT DISTINCT FROM $8
+                   AND target_commit IS NOT DISTINCT FROM $9
+                   AND parameter_hash = $10
+                   AND platform_policy_version = $11
+                   AND phase = $12
+                   AND authorization_model_version = $13
+             )",
+        )
+        .bind(command.run_id.as_uuid())
+        .bind(command.instance_id.as_uuid())
+        .bind(command.instance_revision_id.as_uuid())
+        .bind(exact.release_id)
+        .bind(exact.release_agent_id)
+        .bind(command.attachment_id.map(AgentAttachmentId::as_uuid))
+        .bind(exact.repository_id)
+        .bind(command.target_ref.as_ref().map(GitRef::as_str))
+        .bind(command.target_commit.as_ref().map(CommitSha::as_str))
+        .bind(&exact.parameter_hash)
+        .bind(&exact.platform_policy_version)
+        .bind(phase_name(command.phase))
+        .bind(AUTHORIZATION_MODEL_VERSION)
+        .fetch_one(&mut *tx)
+        .await
+        .map_err(|_| SecretServiceError::Persistence)?;
+        if !provenance_matches {
+            return Err(SecretServiceError::Unavailable);
+        }
         sqlx::query(
             "INSERT INTO secret_runtime_sessions
                (id, run_id, instance_id, instance_revision_id, attachment_id,

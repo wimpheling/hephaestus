@@ -330,6 +330,8 @@ async fn runtime_git_context_uses_immutable_target_and_fails_closed_without_it()
         .await
         .expect("enable isolated runtime Git fixture mode");
 
+    let capability_repository = uuid::Uuid::new_v4();
+    let capability_binding = uuid::Uuid::new_v4();
     sqlx::query(
         "UPDATE agent_instance_revisions
             SET publication_mode = 'runtime_git',
@@ -337,12 +339,17 @@ async fn runtime_git_context_uses_immutable_target_and_fails_closed_without_it()
           WHERE id = $1",
     )
     .bind(command.instance_revision_id.as_uuid())
-    .bind(uuid::Uuid::new_v4())
+    .bind(capability_binding)
     .execute(&pool)
     .await
     .expect("select immutable runtime Git publication mode");
+    assert!(matches!(
+        repository.ensure_runtime_git_provenance(&created.run).await,
+        Err(RepositoryError::InvalidData(
+            "runtime Git publication repository capability"
+        ))
+    ));
 
-    let capability_repository = uuid::Uuid::new_v4();
     sqlx::query(
         "INSERT INTO repositories (id, project_id, name)
          VALUES ($1, $2, $3)",
@@ -353,32 +360,61 @@ async fn runtime_git_context_uses_immutable_target_and_fails_closed_without_it()
     .execute(&pool)
     .await
     .expect("capability repository");
-    let target_commit = "b".repeat(40);
+    let capability_requirement = uuid::Uuid::new_v4();
     sqlx::query(
-        "INSERT INTO run_instance_provenance
-         (run_id, instance_id, instance_revision_id, release_id,
-          release_agent_id, attachment_id, target_repository_id, target_ref,
-          target_commit, parameter_hash, platform_policy_version, phase,
-          authorization_model_version)
-         VALUES ($1, $2, $3, $4, $5, $6, $7, 'refs/heads/main', $8, $9,
-                 'platform/test', 'normal', 'test/v1')",
+        "INSERT INTO agent_capability_bindings
+         (id, instance_revision_id, release_agent_id, requirement_id,
+          requirement_hash, slot_key, resource_kind, resource_id,
+          granted_operations, normalized_hash, authorization_model_version,
+          created_by)
+         VALUES ($1, $2, $3, $4, $5, 'session', 'repository', $6,
+                 ARRAY['git_read', 'update_ref'], $7, 'test/v1', $8)",
     )
-    .bind(command.run_id.as_uuid())
-    .bind(command.instance_id.as_uuid())
+    .bind(capability_binding)
     .bind(command.instance_revision_id.as_uuid())
-    .bind(command.release_id.as_uuid())
     .bind(command.release_agent_id.as_uuid())
-    .bind(command.attachment_id.expect("runtime attachment").as_uuid())
+    .bind(capability_requirement)
+    .bind([8_u8; 32].as_slice())
     .bind(capability_repository)
-    .bind(&target_commit)
-    .bind([3_u8; 32].as_slice())
+    .bind([9_u8; 32].as_slice())
+    .bind(uuid::Uuid::new_v4())
     .execute(&pool)
     .await
-    .expect("immutable runtime target provenance");
+    .expect("runtime Git capability binding");
+    sqlx::query(
+        "INSERT INTO agent_git_capability_bindings
+         (binding_id, instance_revision_id, requirement_id, grammar_version,
+          git_operations, ref_globs, changed_path_globs,
+          branch_update_policy, branch_create, branch_delete, tag_create,
+          tag_update, tag_delete, other_create, other_update, other_delete,
+          request_bytes, pack_bytes, object_count, ref_updates,
+          exact_parent_required, normalized_hash)
+         VALUES ($1, $2, $3, 1, ARRAY['discover', 'fetch', 'receive'],
+                 ARRAY['refs/heads/main'], ARRAY['.heph/session/**'],
+                 'fast_forward_only', false, false, false, false, false,
+                 false, false, false, 1048576, 8388608, 10000, 8, true, $4)",
+    )
+    .bind(capability_binding)
+    .bind(command.instance_revision_id.as_uuid())
+    .bind(capability_requirement)
+    .bind([10_u8; 32].as_slice())
+    .execute(&pool)
+    .await
+    .expect("runtime Git typed capability binding");
+    let target_commit = "a".repeat(40);
     sqlx::query("SET session_replication_role = 'origin'")
         .execute(&pool)
         .await
         .expect("restore database trigger behavior");
+
+    repository
+        .ensure_runtime_git_provenance(&created.run)
+        .await
+        .expect("ensure immutable runtime target provenance");
+    repository
+        .ensure_runtime_git_provenance(&created.run)
+        .await
+        .expect("replay immutable runtime target provenance");
 
     let runtime_context = repository
         .load_runtime(&created.run)
@@ -391,11 +427,43 @@ async fn runtime_git_context_uses_immutable_target_and_fails_closed_without_it()
         Some(target_commit.as_str())
     );
 
+    sqlx::query("SET session_replication_role = 'replica'")
+        .execute(&pool)
+        .await
+        .expect("enable isolated provenance conflict fixture mode");
+    sqlx::query(
+        "UPDATE run_instance_provenance
+            SET target_repository_id = $2
+          WHERE run_id = $1",
+    )
+    .bind(command.run_id.as_uuid())
+    .bind(trigger_repository)
+    .execute(&pool)
+    .await
+    .expect("create provenance conflict fixture");
+    sqlx::query("SET session_replication_role = 'origin'")
+        .execute(&pool)
+        .await
+        .expect("restore provenance conflict fixture mode");
+    assert!(matches!(
+        repository.ensure_runtime_git_provenance(&created.run).await,
+        Err(RepositoryError::InvalidData(
+            "runtime Git provenance conflict"
+        ))
+    ));
+    sqlx::query("SET session_replication_role = 'replica'")
+        .execute(&pool)
+        .await
+        .expect("enable provenance cleanup fixture mode");
     sqlx::query("DELETE FROM run_instance_provenance WHERE run_id = $1")
         .bind(command.run_id.as_uuid())
         .execute(&pool)
         .await
-        .expect("remove immutable target provenance");
+        .expect("remove provenance fixture");
+    sqlx::query("SET session_replication_role = 'origin'")
+        .execute(&pool)
+        .await
+        .expect("restore provenance cleanup fixture mode");
     assert!(matches!(
         repository.load_runtime(&created.run).await,
         Err(run_orchestrator::RunRuntimeCatalogError::InvalidData(

@@ -48,6 +48,8 @@ pub enum RepositoryError {
 pub trait RunRepository: Send + Sync + 'static {
     /// Creates a queued run and command-inbox record idempotently.
     async fn create_run(&self, command: &StartRun) -> Result<CreateRunResult, RepositoryError>;
+    /// Captures the immutable runtime Git target before materialization.
+    async fn ensure_runtime_git_provenance(&self, run: &Run) -> Result<(), RepositoryError>;
     /// Loads one run.
     async fn get(&self, run_id: RunId) -> Result<Run, RepositoryError>;
     /// Binds the durable VM identifier and any state-volume resources.

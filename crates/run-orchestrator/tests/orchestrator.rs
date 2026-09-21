@@ -1151,6 +1151,10 @@ impl RunRepository for MemoryRepository {
         })
     }
 
+    async fn ensure_runtime_git_provenance(&self, _run: &Run) -> Result<(), RepositoryError> {
+        Ok(())
+    }
+
     async fn get(&self, _run_id: RunId) -> Result<Run, RepositoryError> {
         Ok(self.run.lock().await.clone())
     }

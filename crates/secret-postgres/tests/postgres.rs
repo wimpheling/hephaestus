@@ -1,6 +1,6 @@
 //! Opt-in real-PostgreSQL secret lifecycle and non-disclosure coverage.
 
-use authz_postgres::PostgresMelangeAuthorizer;
+use authz_postgres::{AUTHORIZATION_MODEL_VERSION, PostgresMelangeAuthorizer};
 use capability_domain::{
     CapabilityBinding, CapabilityBindingId, CapabilityOperation, CapabilityRequirement,
     CapabilityRequirementId, CapabilityResource, CapabilityResourceKind, CapabilitySlotKey,
@@ -827,6 +827,33 @@ async fn encrypted_rotation_delegation_revocation_and_purge_are_atomic() {
         attachment_id,
     )
     .await;
+    // Model the orchestrator's independent provenance ensure: secret dispatch
+    // must consume and validate this row rather than own its target capture.
+    sqlx::query(
+        "INSERT INTO run_instance_provenance
+           (run_id, instance_id, instance_revision_id, release_id,
+            release_agent_id, attachment_id, target_repository_id,
+            target_ref, target_commit, parameter_hash,
+            platform_policy_version, phase, authorization_model_version)
+         SELECT run.id, run.instance_id, run.instance_revision_id,
+                run.release_id, run.release_agent_id, run.attachment_id,
+                attachment.repository_id, 'refs/heads/main', repeat('b', 40),
+                revision.parameter_hash, revision.platform_policy_version,
+                'normal', $2
+           FROM runs AS run
+           JOIN agent_instance_revisions AS revision
+             ON revision.id = run.instance_revision_id
+            AND revision.instance_id = run.instance_id
+           JOIN agent_attachments AS attachment
+             ON attachment.id = run.attachment_id
+            AND attachment.instance_id = run.instance_id
+          WHERE run.id = $1",
+    )
+    .bind(run_id.as_uuid())
+    .bind(AUTHORIZATION_MODEL_VERSION)
+    .execute(&pool)
+    .await
+    .expect("preexisting immutable dispatch provenance");
     let brokered_binding_id: Uuid = sqlx::query_scalar(
         "SELECT id FROM agent_secret_bindings
           WHERE instance_revision_id = $1 AND slot_key = 'model' AND status = 'active'",
@@ -850,6 +877,35 @@ async fn encrypted_rotation_delegation_revocation_and_purge_are_atomic() {
         )
         .await
         .expect("declare exact immutable brokered HTTPS rule");
+    let replayed_rule = service
+        .declare_brokered_https_rule(
+            &ordinary_member,
+            DeclareBrokeredHttpsRule {
+                command_key: key("declare-brokered-rule", brokered_rule_id),
+                rule_id: Uuid::new_v4(),
+                binding_id: AgentSecretBindingId::from_uuid(brokered_binding_id),
+                destination: String::from("https://api.example.test"),
+                header: String::from("authorization"),
+                header_prefix: Some(String::from("Bearer ")),
+            },
+        )
+        .await
+        .expect("same command key should replay stored rule id");
+    assert_eq!(replayed_rule, brokered_rule_id);
+    let collision = service
+        .declare_brokered_https_rule(
+            &ordinary_member,
+            DeclareBrokeredHttpsRule {
+                command_key: key("declare-brokered-rule-collision", brokered_rule_id),
+                rule_id: brokered_rule_id,
+                binding_id: AgentSecretBindingId::from_uuid(brokered_binding_id),
+                destination: String::from("https://api.example.test"),
+                header: String::from("authorization"),
+                header_prefix: Some(String::from("Bearer ")),
+            },
+        )
+        .await;
+    assert!(matches!(collision, Err(SecretServiceError::Persistence)));
     let resolve_key = key("resolve", run_id.as_uuid());
     let authority = service
         .resolve_for_dispatch(

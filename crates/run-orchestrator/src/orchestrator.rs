@@ -600,6 +600,16 @@ impl RunOrchestrator {
                 )
                 .await;
         }
+        if let Err(error) = self.repository.ensure_runtime_git_provenance(&run).await {
+            return self
+                .fail_with_resources(
+                    command.run_id,
+                    attachment.as_ref().map(|value| &value.lease),
+                    None,
+                    &error.to_string(),
+                )
+                .await;
+        }
         let workspace = match self.workspaces.prepare(&run).await {
             Ok(workspace) => workspace,
             Err(error) => {
