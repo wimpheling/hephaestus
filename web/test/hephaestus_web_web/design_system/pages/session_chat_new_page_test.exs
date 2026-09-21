@@ -39,7 +39,6 @@ defmodule HephaestusWebWeb.DesignSystem.Pages.SessionChatNewPageTest do
               "default_branch" => "main",
               "instance_name" => "Session chat",
               "release_agent_id" => "release-1",
-              "model_rule_id" => "00000000-0000-4000-8000-000000000007",
               "model_import_id" => "import-1",
               "acknowledge_repository_git_access" => "false"
             },
@@ -52,6 +51,7 @@ defmodule HephaestusWebWeb.DesignSystem.Pages.SessionChatNewPageTest do
     assert html =~ "Reference session chat"
     assert html =~ "acknowledge_repository_git_access"
     assert html =~ "Allow the release-owned UI to access this repository"
+    refute html =~ "Model rule UUID"
     assert html =~ ~s(phx-hook="InstalledUiNavigation")
   end
 end

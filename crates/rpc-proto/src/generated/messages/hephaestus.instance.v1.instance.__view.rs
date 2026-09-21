@@ -19701,6 +19701,13 @@ pub struct DeclareBrokeredHttpsRuleRequestView<'a> {
     pub header: &'a str,
     /// Field 5: `header_prefix`
     pub header_prefix: ::core::option::Option<&'a str>,
+    /// Optional caller-selected identity used when a release parameter already
+    /// refers to this rule. Absent requests retain server-generated IDs.
+    ///
+    /// Field 6: `requested_rule_id`
+    pub requested_rule_id: ::buffa::MessageFieldView<
+        super::super::super::super::common::v1::__buffa::view::OpaqueIdView<'a>,
+    >,
     pub __buffa_unknown_fields: ::buffa::UnknownFieldsView<'a>,
 }
 impl<'a> ::buffa::MessageView<'a> for DeclareBrokeredHttpsRuleRequestView<'a> {
@@ -19793,6 +19800,27 @@ impl<'a> ::buffa::MessageView<'a> for DeclareBrokeredHttpsRuleRequestView<'a> {
                 )?;
                 view.header_prefix = Some(::buffa::types::borrow_str(&mut cur)?);
             }
+            6u32 => {
+                ::buffa::encoding::check_wire_type(
+                    tag,
+                    ::buffa::encoding::WireType::LengthDelimited,
+                )?;
+                let __sub_ctx = ctx.descend()?;
+                let sub = ::buffa::types::borrow_bytes(&mut cur)?;
+                match view.requested_rule_id.as_mut() {
+                    Some(existing) => {
+                        ::buffa::MessageView::merge_into_view(existing, sub, __sub_ctx)?
+                    }
+                    None => {
+                        view.requested_rule_id = ::buffa::MessageFieldView::set(
+                            <super::super::super::super::common::v1::__buffa::view::OpaqueIdView as ::buffa::MessageView>::decode_view_ctx(
+                                sub,
+                                __sub_ctx,
+                            )?,
+                        );
+                    }
+                }
+            }
             _ => {
                 ::buffa::encoding::skip_field_depth(tag, &mut cur, ctx.depth())?;
                 let span_len = before_tag.len() - cur.len();
@@ -19840,6 +19868,14 @@ impl<'a> ::buffa::MessageView<'a> for DeclareBrokeredHttpsRuleRequestView<'a> {
             destination: self.destination.to_string(),
             header: self.header.to_string(),
             header_prefix: self.header_prefix.map(|s| s.to_string()),
+            requested_rule_id: match self.requested_rule_id.as_option() {
+                Some(v) => {
+                    ::buffa::MessageField::<
+                        super::super::super::super::common::v1::OpaqueId,
+                    >::some(v.to_owned_from_source(__buffa_src)?)
+                }
+                None => ::buffa::MessageField::none(),
+            },
             __buffa_unknown_fields: self.__buffa_unknown_fields.to_owned()?.into(),
             ..::core::default::Default::default()
         })
@@ -19876,6 +19912,14 @@ impl<'a> ::buffa::ViewEncode<'a> for DeclareBrokeredHttpsRuleRequestView<'a> {
         if let Some(ref v) = self.header_prefix {
             size += 1u32 + ::buffa::types::string_encoded_len(v) as u32;
         }
+        if self.requested_rule_id.is_set() {
+            let __slot = __cache.reserve();
+            let inner_size = self.requested_rule_id.compute_size(__cache);
+            __cache.set(__slot, inner_size);
+            size
+                += 1u32 + ::buffa::encoding::varint_len(inner_size as u64) as u32
+                    + inner_size;
+        }
         size += self.__buffa_unknown_fields.encoded_len() as u32;
         size
     }
@@ -19903,6 +19947,10 @@ impl<'a> ::buffa::ViewEncode<'a> for DeclareBrokeredHttpsRuleRequestView<'a> {
         }
         if let Some(ref v) = self.header_prefix {
             ::buffa::types::put_string_field(5u32, v, buf);
+        }
+        if self.requested_rule_id.is_set() {
+            ::buffa::types::put_len_delimited_header(6u32, __cache.consume_next(), buf);
+            self.requested_rule_id.write_to(__cache, buf);
         }
         self.__buffa_unknown_fields.write_to(buf);
     }
@@ -19943,6 +19991,12 @@ impl<'__a> ::serde::Serialize for DeclareBrokeredHttpsRuleRequestView<'__a> {
         }
         if let ::core::option::Option::Some(__v) = self.header_prefix {
             __map.serialize_entry("headerPrefix", __v)?;
+        }
+        {
+            if let ::core::option::Option::Some(__v) = self.requested_rule_id.as_option()
+            {
+                __map.serialize_entry("requestedRuleId", __v)?;
+            }
         }
         __map.end()
     }
@@ -20074,6 +20128,18 @@ impl DeclareBrokeredHttpsRuleRequestOwnedView {
     #[must_use]
     pub fn header_prefix(&self) -> ::core::option::Option<&'_ str> {
         self.0.reborrow().header_prefix
+    }
+    /// Optional caller-selected identity used when a release parameter already
+    /// refers to this rule. Absent requests retain server-generated IDs.
+    ///
+    /// Field 6: `requested_rule_id`
+    #[must_use]
+    pub fn requested_rule_id(
+        &self,
+    ) -> &::buffa::MessageFieldView<
+        super::super::super::super::common::v1::__buffa::view::OpaqueIdView<'_>,
+    > {
+        &self.0.reborrow().requested_rule_id
     }
 }
 impl ::core::convert::From<

@@ -942,6 +942,12 @@ defmodule Hephaestus.Instance.V1.DeclareBrokeredHttpsRuleRequest do
   field(:destination, 3, type: :string)
   field(:header, 4, type: :string)
   field(:header_prefix, 5, proto3_optional: true, type: :string, json_name: "headerPrefix")
+
+  field(:requested_rule_id, 6,
+    proto3_optional: true,
+    type: Hephaestus.Common.V1.OpaqueId,
+    json_name: "requestedRuleId"
+  )
 end
 
 defmodule Hephaestus.Instance.V1.DeclareBrokeredHttpsRuleResponse do

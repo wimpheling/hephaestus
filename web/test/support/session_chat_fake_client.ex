@@ -42,8 +42,9 @@ defmodule HephaestusWebWeb.SessionChatNewStateTest.FakeClient do
     {:ok, %{"repository_id" => "repo-1"}}
   end
 
-  def import_agent(_identity, _project_id, _release_id, _name, _parameters, _policy, _options) do
+  def import_agent(_identity, _project_id, _release_id, _name, parameters, _policy, _options) do
     bump(:import_agent)
+    Process.put(:session_chat_import_parameters, parameters)
     {:ok, %{"instance_id" => "instance-1", "revision_id" => "revision-1"}}
   end
 
@@ -65,12 +66,30 @@ defmodule HephaestusWebWeb.SessionChatNewStateTest.FakeClient do
 
   def bind_secret(_identity, _attributes, _options) do
     bump(:bind_secret)
-    {:ok, %{}}
+    {:ok, %{"binding_id" => "binding-1"}}
+  end
+
+  def declare_brokered_https_rule(_identity, attributes, options) do
+    bump(:declare_brokered_https_rule)
+    Process.put(:session_chat_rule_declaration, {attributes, options})
+
+    rule_id =
+      if Process.get(:session_chat_fake_wrong_rule, false),
+        do: "00000000-0000-4000-8000-000000000099",
+        else: attributes["requested_rule_id"]
+
+    {:ok, %{"rule_id" => rule_id}}
   end
 
   def install_ui(_identity, _organization_id, _target, _release_id, _ui_key, _options) do
     bump(:install_ui)
-    {:ok, %{"installation_id" => "installation-1", "generation_id" => "generation-1"}}
+
+    if Process.get(:session_chat_fail_install_once, false) do
+      Process.delete(:session_chat_fail_install_once)
+      {:error, :install_failed}
+    else
+      {:ok, %{"installation_id" => "installation-1", "generation_id" => "generation-1"}}
+    end
   end
 
   def create_ui_browser_handoff(_identity, _installation_id, _generation_id, _route, _options) do

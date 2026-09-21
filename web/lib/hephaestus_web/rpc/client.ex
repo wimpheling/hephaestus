@@ -62,6 +62,7 @@ defmodule HephaestusWeb.RPC.Client do
     CreateAttachmentRequest,
     CreateMailboxRequest,
     CreateUpdateRequest,
+    DeclareBrokeredHttpsRuleRequest,
     GetInstanceRequest,
     ImportAgentRequest,
     MailboxControlAction,
@@ -1425,6 +1426,29 @@ defmodule HephaestusWeb.RPC.Client do
       options
     )
   end
+
+  @doc "Declares one exact HTTPS substitution rule for an existing brokered binding."
+  def declare_brokered_https_rule(identity, attributes, options \\ []) do
+    mutation(
+      identity,
+      "/hephaestus.instance.v1.AgentInstanceService/DeclareBrokeredHttpsRule",
+      DeclareBrokeredHttpsRuleRequest,
+      [
+        binding_id: id(Map.fetch!(attributes, "binding_id")),
+        destination: Map.fetch!(attributes, "destination"),
+        header: Map.fetch!(attributes, "header"),
+        header_prefix: Map.get(attributes, "header_prefix")
+      ]
+      |> maybe_requested_rule_id(attributes),
+      &AgentInstanceService.Stub.declare_brokered_https_rule/3,
+      options
+    )
+  end
+
+  defp maybe_requested_rule_id(request, %{"requested_rule_id" => rule_id}),
+    do: request ++ [requested_rule_id: id(rule_id)]
+
+  defp maybe_requested_rule_id(request, _attributes), do: request
 
   def create_control(identity, attributes) do
     {context, request_id} = request_context()

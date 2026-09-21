@@ -546,6 +546,7 @@ impl AgentInstanceService for InstanceRpc {
             "DeclareBrokeredHttpsRule",
             &request.context,
         )?;
+        let requested_rule_id = requested_rule_id(&request)?;
         let value = self
             .execute(
                 &identity,
@@ -556,6 +557,7 @@ impl AgentInstanceService for InstanceRpc {
                     destination: request.destination,
                     header: request.header,
                     header_prefix: request.header_prefix,
+                    requested_rule_id,
                 },
             )
             .await
@@ -719,6 +721,16 @@ fn parse_id<T: FromStr>(value: Option<&OpaqueId>) -> Result<T, connectrpc::Conne
         .map_err(|_| into_connect_error(RpcError::InvalidArgument))
 }
 
+fn requested_rule_id(
+    request: &DeclareBrokeredHttpsRuleRequest,
+) -> Result<Option<Uuid>, connectrpc::ConnectError> {
+    request
+        .requested_rule_id
+        .as_option()
+        .map(|value| parse_id(Some(value)))
+        .transpose()
+}
+
 fn policy(value: Option<&ProtoRuntimePolicy>) -> Result<RuntimePolicy, connectrpc::ConnectError> {
     let value = value.ok_or_else(|| into_connect_error(RpcError::InvalidArgument))?;
     let vcpus =
@@ -787,4 +799,43 @@ fn opaque(value: String) -> OpaqueId {
 
 fn invalid<T>(_error: T) -> connectrpc::ConnectError {
     into_connect_error(RpcError::InvalidArgument)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::requested_rule_id;
+    use rpc_proto::messages::hephaestus::{
+        common::v1::OpaqueId, instance::v1::DeclareBrokeredHttpsRuleRequest,
+    };
+    use uuid::Uuid;
+
+    #[test]
+    fn requested_rule_id_is_optional_but_must_be_a_uuid_when_present() {
+        let absent = DeclareBrokeredHttpsRuleRequest::default();
+        assert_eq!(requested_rule_id(&absent).expect("absent is valid"), None);
+
+        let expected = Uuid::new_v4();
+        let valid = DeclareBrokeredHttpsRuleRequest {
+            requested_rule_id: OpaqueId {
+                value: expected.to_string(),
+                ..Default::default()
+            }
+            .into(),
+            ..Default::default()
+        };
+        assert_eq!(
+            requested_rule_id(&valid).expect("valid UUID is accepted"),
+            Some(expected)
+        );
+
+        let malformed = DeclareBrokeredHttpsRuleRequest {
+            requested_rule_id: OpaqueId {
+                value: "rule-from-client".to_owned(),
+                ..Default::default()
+            }
+            .into(),
+            ..Default::default()
+        };
+        assert!(requested_rule_id(&malformed).is_err());
+    }
 }

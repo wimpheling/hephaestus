@@ -24,6 +24,7 @@ defmodule HephaestusWebWeb.SessionChatNewState do
               release_catalog: [],
               secret_imports: [],
               progress: %{},
+              __model_rule_id: nil,
               __attempt_id: nil,
               __client: Client
             },
@@ -32,7 +33,6 @@ defmodule HephaestusWebWeb.SessionChatNewState do
               "default_branch" => "main",
               "instance_name" => "Session chat",
               "release_agent_id" => "",
-              "model_rule_id" => "",
               "model_import_id" => "",
               "acknowledge_repository_git_access" => "false",
               "setup_attempt_id" => ""
@@ -51,6 +51,7 @@ defmodule HephaestusWebWeb.SessionChatNewState do
         release_catalog: [],
         secret_imports: [],
         progress: %{},
+        __model_rule_id: UUID.generate(),
         __attempt_id: attempt_id,
         __client: Client
       },
@@ -59,7 +60,6 @@ defmodule HephaestusWebWeb.SessionChatNewState do
         "default_branch" => "main",
         "instance_name" => "Session chat",
         "release_agent_id" => "",
-        "model_rule_id" => "",
         "model_import_id" => "",
         "acknowledge_repository_git_access" => "false",
         "setup_attempt_id" => attempt_id
@@ -152,12 +152,14 @@ defmodule HephaestusWebWeb.SessionChatNewState do
   def execute(state, {:create, identity, attributes}) do
     client = rpc_client(state)
 
+    model_rule_id =
+      Map.get(state.data.progress, "model_rule_id") || Map.fetch!(state.data, :__model_rule_id)
+
     with :ok <- acknowledge_git?(attributes),
          :ok <- exact_main_branch?(attributes),
          :ok <- valid_attempt_id?(state, attributes),
          {:ok, release_agent} <-
            find_release_agent(state.data.release_catalog, attributes["release_agent_id"]),
-         :ok <- valid_model_rule_id?(attributes["model_rule_id"]),
          {:ok, model_import} <-
            find_import(state.data.secret_imports, attributes["model_import_id"]),
          :ok <- compatible_model_import?(model_import),
@@ -168,7 +170,8 @@ defmodule HephaestusWebWeb.SessionChatNewState do
              attributes,
              release_agent,
              model_import,
-             descriptor
+             descriptor,
+             model_rule_id
            ) do
       progress = state.data.progress
 
@@ -206,8 +209,15 @@ defmodule HephaestusWebWeb.SessionChatNewState do
                 repository,
                 Map.merge(progress, %{
                   "repository_id" => repository["repository_id"],
+                  "model_rule_id" => model_rule_id,
                   "setup_config" =>
-                    setup_config(attributes, release_agent, model_import, descriptor)
+                    setup_config(
+                      attributes,
+                      release_agent,
+                      model_import,
+                      descriptor,
+                      model_rule_id
+                    )
                 })
               )
 
@@ -230,6 +240,8 @@ defmodule HephaestusWebWeb.SessionChatNewState do
          repository,
          progress
        ) do
+    model_rule_id = Map.fetch!(progress, "model_rule_id")
+
     imported_result =
       case progress["instance_id"] do
         instance_id when is_binary(instance_id) ->
@@ -245,7 +257,7 @@ defmodule HephaestusWebWeb.SessionChatNewState do
                  state.data.project_id,
                  release_agent["id"],
                  attributes["instance_name"] || "Session chat",
-                 %{"model_rule_id" => attributes["model_rule_id"]},
+                 %{"model_rule_id" => model_rule_id},
                  selected_policy(release_agent),
                  rpc_options(state, :import_agent)
                ) do
@@ -418,8 +430,36 @@ defmodule HephaestusWebWeb.SessionChatNewState do
          attachment,
          progress
        ) do
-    if progress["secret_bound"] do
+    with {:ok, progress} <-
+           ensure_secret_binding_revision(
+             identity,
+             state,
+             model_import,
+             imported,
+             capabilities,
+             attachment,
+             progress
+           ),
+         {:ok, progress} <- ensure_brokered_https_rule(identity, state, progress) do
       {:ok, progress}
+    else
+      {:error, reason, progress} -> {:error, reason, progress}
+    end
+  end
+
+  defp ensure_secret_binding_revision(
+         identity,
+         state,
+         model_import,
+         imported,
+         capabilities,
+         attachment,
+         progress
+       ) do
+    if progress["secret_bound"] do
+      if is_binary(progress["binding_id"]),
+        do: {:ok, progress},
+        else: {:error, :missing_binding_id, progress}
     else
       case rpc_client(state).bind_secret(
              identity,
@@ -435,8 +475,42 @@ defmodule HephaestusWebWeb.SessionChatNewState do
              },
              rpc_options(state, :bind_secret)
            ) do
-        {:ok, _binding} -> {:ok, Map.put(progress, "secret_bound", true)}
-        {:error, reason} -> {:error, reason, progress}
+        {:ok, %{"binding_id" => binding_id}} when is_binary(binding_id) ->
+          {:ok, Map.merge(progress, %{"secret_bound" => true, "binding_id" => binding_id})}
+
+        {:ok, _binding} ->
+          {:error, :missing_binding_id, progress}
+
+        {:error, reason} ->
+          {:error, reason, progress}
+      end
+    end
+  end
+
+  defp ensure_brokered_https_rule(identity, state, progress) do
+    if progress["brokered_rule_declared"] do
+      {:ok, progress}
+    else
+      case rpc_client(state).declare_brokered_https_rule(
+             identity,
+             %{
+               "binding_id" => progress["binding_id"],
+               "requested_rule_id" => progress["model_rule_id"],
+               "destination" => "https://api.model.example",
+               "header" => "authorization",
+               "header_prefix" => "Bearer "
+             },
+             rpc_options(state, :declare_brokered_https_rule)
+           ) do
+        {:ok, %{"rule_id" => rule_id}} ->
+          if rule_id == progress["model_rule_id"] do
+            {:ok, Map.put(progress, "brokered_rule_declared", true)}
+          else
+            {:error, :model_rule_id_mismatch, progress}
+          end
+
+        {:error, reason} ->
+          {:error, reason, progress}
       end
     end
   end
@@ -554,18 +628,27 @@ defmodule HephaestusWebWeb.SessionChatNewState do
          attributes,
          release_agent,
          model_import,
-         descriptor
+         descriptor,
+         model_rule_id
        )
        when is_map(expected) do
-    if expected == setup_config(attributes, release_agent, model_import, descriptor) do
+    if expected ==
+         setup_config(attributes, release_agent, model_import, descriptor, model_rule_id) do
       :ok
     else
       {:error, :attempt_conflict}
     end
   end
 
-  defp matching_attempt?(_progress, _attributes, _release_agent, _model_import, _descriptor),
-    do: :ok
+  defp matching_attempt?(
+         _progress,
+         _attributes,
+         _release_agent,
+         _model_import,
+         _descriptor,
+         _model_rule_id
+       ),
+       do: :ok
 
   defp valid_attempt_id?(state, %{"setup_attempt_id" => submitted}) when is_binary(submitted) do
     if submitted == Map.fetch!(state.data, :__attempt_id),
@@ -575,14 +658,14 @@ defmodule HephaestusWebWeb.SessionChatNewState do
 
   defp valid_attempt_id?(_state, _attributes), do: {:error, :attempt_conflict}
 
-  defp setup_config(attributes, release_agent, model_import, descriptor) do
+  defp setup_config(attributes, release_agent, model_import, descriptor, model_rule_id) do
     %{
       "repository_name" => attributes["repository_name"] || "",
       "default_branch" => "main",
       "instance_name" => attributes["instance_name"] || "Session chat",
       "release_agent_id" => release_agent["id"],
       "release_id" => release_agent["release_id"],
-      "model_rule_id" => attributes["model_rule_id"],
+      "model_rule_id" => model_rule_id,
       "model_import_id" => model_import["id"],
       "ui_key" => descriptor["key"],
       "ui_route" => descriptor["route_base"]
@@ -637,17 +720,6 @@ defmodule HephaestusWebWeb.SessionChatNewState do
   defp exact_main_branch?(%{"default_branch" => "main"}), do: :ok
   defp exact_main_branch?(_attributes), do: {:error, :invalid_branch}
 
-  defp valid_model_rule_id?(value) when is_binary(value) do
-    if Regex.match?(
-         ~r/\A[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}\z/i,
-         value
-       ),
-       do: :ok,
-       else: {:error, :invalid_model_rule_id}
-  end
-
-  defp valid_model_rule_id?(_value), do: {:error, :invalid_model_rule_id}
-
   defp selected_policy(release_agent) do
     ceiling = get_in(release_agent, ["runtime_contract", "policy_ceiling"]) || %{}
 
@@ -678,11 +750,13 @@ defmodule HephaestusWebWeb.SessionChatNewState do
     do: "Confirm repository Git access before creating the session."
 
   defp present_error(:invalid_branch), do: "Session chat uses the exact main branch."
-  defp present_error(:invalid_model_rule_id), do: "Enter the model rule UUID used by the release."
   defp present_error(:model_import_unavailable), do: "Choose an authorized brokered model import."
 
   defp present_error(:incompatible_model_import),
     do: "Choose an authorized brokered model import for the selected release."
+
+  defp present_error(:model_rule_id_mismatch),
+    do: "The model rule declaration did not match this setup attempt."
 
   defp present_error(:missing_session_ui),
     do: "The selected release has no authorized repository session UI."

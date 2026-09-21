@@ -56,12 +56,6 @@ defmodule HephaestusWebWeb.DesignSystem.Pages.SessionChatNewPage do
             required
           />
           <.input
-            field={@form[:model_rule_id]}
-            label="Model rule UUID"
-            required
-            autocomplete="off"
-          />
-          <.input
             field={@form[:model_import_id]}
             type="select"
             label="Authorized model import"

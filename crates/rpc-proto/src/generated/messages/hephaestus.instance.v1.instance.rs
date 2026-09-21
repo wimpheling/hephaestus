@@ -12054,6 +12054,16 @@ pub struct DeclareBrokeredHttpsRuleRequest {
         skip_serializing_if = "::core::option::Option::is_none"
     )]
     pub header_prefix: ::core::option::Option<::buffa::alloc::string::String>,
+    /// Optional caller-selected identity used when a release parameter already
+    /// refers to this rule. Absent requests retain server-generated IDs.
+    ///
+    /// Field 6: `requested_rule_id`
+    #[serde(
+        rename = "requestedRuleId",
+        alias = "requested_rule_id",
+        skip_serializing_if = "::buffa::json_helpers::skip_if::is_unset_message_field"
+    )]
+    pub requested_rule_id: ::buffa::MessageField<super::super::common::v1::OpaqueId>,
     #[serde(skip)]
     #[doc(hidden)]
     pub __buffa_unknown_fields: ::buffa::UnknownFields,
@@ -12066,6 +12076,7 @@ impl ::core::fmt::Debug for DeclareBrokeredHttpsRuleRequest {
             .field("destination", &self.destination)
             .field("header", &self.header)
             .field("header_prefix", &self.header_prefix)
+            .field("requested_rule_id", &self.requested_rule_id)
             .finish()
     }
 }
@@ -12131,6 +12142,14 @@ impl ::buffa::Message for DeclareBrokeredHttpsRuleRequest {
         if let Some(ref v) = self.header_prefix {
             size += 1u32 + ::buffa::types::string_encoded_len(v) as u32;
         }
+        if self.requested_rule_id.is_set() {
+            let __slot = __cache.reserve();
+            let inner_size = self.requested_rule_id.compute_size(__cache);
+            __cache.set(__slot, inner_size);
+            size
+                += 1u32 + ::buffa::encoding::varint_len(inner_size as u64) as u32
+                    + inner_size;
+        }
         size += self.__buffa_unknown_fields.encoded_len() as u32;
         size
     }
@@ -12157,6 +12176,10 @@ impl ::buffa::Message for DeclareBrokeredHttpsRuleRequest {
         }
         if let Some(ref v) = self.header_prefix {
             ::buffa::types::put_string_field(5u32, v, buf);
+        }
+        if self.requested_rule_id.is_set() {
+            ::buffa::types::put_len_delimited_header(6u32, __cache.consume_next(), buf);
+            self.requested_rule_id.write_to(__cache, buf);
         }
         self.__buffa_unknown_fields.write_to(buf);
     }
@@ -12219,6 +12242,17 @@ impl ::buffa::Message for DeclareBrokeredHttpsRuleRequest {
                     buf,
                 )?;
             }
+            6u32 => {
+                ::buffa::encoding::check_wire_type(
+                    tag,
+                    ::buffa::encoding::WireType::LengthDelimited,
+                )?;
+                ::buffa::Message::merge_length_delimited(
+                    self.requested_rule_id.get_or_insert_default(),
+                    buf,
+                    ctx,
+                )?;
+            }
             _ => {
                 self.__buffa_unknown_fields
                     .push(::buffa::encoding::decode_unknown_field(tag, buf, ctx)?);
@@ -12232,6 +12266,7 @@ impl ::buffa::Message for DeclareBrokeredHttpsRuleRequest {
         self.destination.clear();
         self.header.clear();
         self.header_prefix = ::core::option::Option::None;
+        self.requested_rule_id = ::buffa::MessageField::none();
         self.__buffa_unknown_fields.clear();
     }
 }
