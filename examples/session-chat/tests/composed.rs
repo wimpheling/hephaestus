@@ -11,9 +11,7 @@ use forge_service::CreateRepository;
 use hephaestus_app::RunningHephaestus;
 use identity_domain::AuthenticatedIdentity;
 use rpc_proto::{
-    connect::hephaestus::{
-        instance::v1::AgentInstanceServiceClient, release::v1::ReleaseServiceClient,
-    },
+    connect::hephaestus::instance::v1::AgentInstanceServiceClient,
     messages::hephaestus::{
         common::v1::{
             OpaqueId, ParameterValue, RequestContext, RuntimePolicy, parameter_value::Value,
@@ -22,7 +20,6 @@ use rpc_proto::{
             CapabilityBindingSelection, CreateAttachmentRequest, ImportAgentRequest, RefSelector,
             ReviseCapabilitiesRequest, TriggerPolicy, ref_selector,
         },
-        release::v1::{InstallUiRequest, UiInstallationLifecycle, ui_installation_target},
     },
 };
 use secret_application::{
@@ -39,11 +36,14 @@ use secret_store::{EncryptedStore, LocalKeyProvider};
 use serde_json::Value as JsonValue;
 use sqlx::PgPool;
 use std::{
-    path::Path,
+    collections::HashSet,
+    fs, io,
+    os::unix::fs as unix_fs,
+    path::{Path, PathBuf},
     process::Stdio,
     sync::{
-        Arc,
-        atomic::{AtomicBool, Ordering},
+        Arc, Mutex,
+        atomic::{AtomicUsize, Ordering},
     },
     time::Duration,
 };
@@ -56,19 +56,26 @@ use tokio_rustls::TlsAcceptor;
 use uuid::Uuid;
 
 pub const MODEL_RULE: Uuid = uuid::uuid!("00000000-0000-0000-0000-000000000007");
-const MODEL_SECRET_VALUE: &str = "session-chat-model-fixture-sentinel-007";
+pub const MODEL_SECRET_VALUE: &str = "session-chat-model-fixture-sentinel-007";
 
 const MODEL_RESPONSE_TEXT: &str = "reference answer from deterministic model";
 const SESSION_ID: &str = "11111111-1111-4111-8111-111111111111";
 const HUMAN_RECORD_ID: &str = "22222222-2222-4222-8222-222222222222";
+const DENIAL_HUMAN_RECORD_ID: &str = "55555555-5555-4555-8555-555555555555";
 
 pub fn enabled() -> bool {
     std::env::var("HEPHAESTUS_APP_SESSION_CHAT_E2E").as_deref() == Ok("1")
 }
 
+pub fn denial_probe_enabled() -> bool {
+    std::env::var("HEPHAESTUS_APP_SESSION_CHAT_DENIAL_PROBE_E2E").as_deref() == Ok("1")
+}
+
 pub struct SessionBrokerFixture {
     adapter: Arc<dyn secret_application::BrokerAdapter>,
-    observed: Arc<AtomicBool>,
+    observed: Arc<AtomicUsize>,
+    requests: Arc<Mutex<Vec<ObservedModelRequest>>>,
+    expected_requests: usize,
     server: tokio::task::JoinHandle<()>,
 }
 
@@ -77,17 +84,39 @@ impl SessionBrokerFixture {
         Arc::clone(&self.adapter)
     }
 
-    async fn assert_observed(self) {
+    async fn assert_observed(self) -> Vec<ObservedModelRequest> {
         tokio::time::timeout(Duration::from_secs(20), self.server)
             .await
             .expect("session-chat model upstream request timeout")
             .expect("session-chat model upstream task");
-        assert!(self.observed.load(Ordering::SeqCst));
+        assert_eq!(
+            self.observed.load(Ordering::SeqCst),
+            self.expected_requests,
+            "deterministic model must observe every expected turn"
+        );
+        Arc::try_unwrap(self.requests)
+            .expect("session model request observer still shared")
+            .into_inner()
+            .expect("session model request observer lock")
     }
+}
+
+#[derive(Debug)]
+struct ObservedModelRequest {
+    session_id: Uuid,
+    record_id: Uuid,
+    messages: Vec<ObservedModelMessage>,
+}
+
+#[derive(Debug)]
+struct ObservedModelMessage {
+    record_id: Uuid,
+    role: String,
 }
 
 /// Starts the CA-pinned deterministic HTTPS model before the daemon starts so
 /// the production secret broker owns the only adapter used by the VM.
+#[allow(clippy::too_many_lines)] // The bounded TLS fixture keeps request validation in one place.
 pub async fn start_model_fixture() -> SessionBrokerFixture {
     let _ = rustls::crypto::ring::default_provider().install_default();
     let mut ca_parameters = rcgen::CertificateParams::default();
@@ -101,80 +130,118 @@ pub async fn start_model_fixture() -> SessionBrokerFixture {
         .expect("session model leaf name")
         .signed_by(&leaf_key, &ca, &ca_key)
         .expect("session model leaf");
-    let tls = rustls::ServerConfig::builder()
-        .with_no_client_auth()
-        .with_single_cert(
-            vec![rustls::pki_types::CertificateDer::from(leaf.der().to_vec())],
-            rustls::pki_types::PrivateKeyDer::Pkcs8(leaf_key.serialize_der().into()),
-        )
-        .expect("session model TLS configuration");
+    let tls = Arc::new(
+        rustls::ServerConfig::builder()
+            .with_no_client_auth()
+            .with_single_cert(
+                vec![rustls::pki_types::CertificateDer::from(leaf.der().to_vec())],
+                rustls::pki_types::PrivateKeyDer::Pkcs8(leaf_key.serialize_der().into()),
+            )
+            .expect("session model TLS configuration"),
+    );
     let listener = TcpListener::bind("127.0.0.1:0")
         .await
         .expect("session model listener");
     let port = listener.local_addr().expect("session model address").port();
-    let observed = Arc::new(AtomicBool::new(false));
-    let observed_server = Arc::clone(&observed);
-    let server = tokio::spawn(async move {
-        let (stream, _) = listener.accept().await.expect("session model connection");
-        let mut stream = TlsAcceptor::from(Arc::new(tls))
-            .accept(stream)
-            .await
-            .expect("session model TLS handshake");
-        let request = read_http_request(&mut stream).await;
-        let separator = request
-            .windows(4)
-            .position(|part| part == b"\r\n\r\n")
-            .expect("session model HTTP headers");
-        let headers =
-            std::str::from_utf8(&request[..separator]).expect("session model headers UTF-8");
-        assert!(headers.starts_with("POST /v1/chat HTTP/1.1\r\n"));
-        assert!(
-            headers.contains("authorization: Bearer session-chat-model-fixture-sentinel-007\r\n")
-        );
-        assert!(!headers.contains("heph-placeholder:"));
-        let body: JsonValue =
-            serde_json::from_slice(&request[separator + 4..]).expect("session model body");
-        assert!(
-            body["messages"]
-                .as_array()
-                .is_some_and(|messages| !messages.is_empty())
-        );
-        assert_eq!(
-            body["idempotency_key"],
-            format!("{SESSION_ID}:{HUMAN_RECORD_ID}")
-        );
-        observed_server.store(true, Ordering::SeqCst);
-        let body = br#"{"text":"reference answer from deterministic model"}"#;
-        let response = format!(
-            "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
-            body.len()
-        );
-        stream
-            .write_all(response.as_bytes())
-            .await
-            .expect("session model response headers");
-        stream
-            .write_all(body)
-            .await
-            .expect("session model response body");
-    });
-    let rule = super::BrokeredSecretRule {
-        id: super::BrokeredSecretRuleId::from_uuid(MODEL_RULE),
-        binding_id: Uuid::from_u128(8),
-        instance_revision_id: Uuid::from_u128(9),
-        secret_version_id: Uuid::from_u128(10),
-        destination: Some(
-            super::ExactHttpsOrigin::parse("https://api.model.example")
-                .expect("session model origin"),
-        ),
-        location: super::HttpInjectionLocation::OutboundHeaderPrefix {
-            header: super::HeaderName::parse("authorization").expect("session model header"),
-            prefix: String::from("Bearer "),
-        },
-        gateway_route_id: None,
+    let expected_requests = if std::env::var("HEPHAESTUS_APP_SESSION_CHAT_BROWSER_E2E").as_deref()
+        == Ok("1")
+        || denial_probe_enabled()
+    {
+        2
+    } else {
+        1
     };
-    let adapter = BrokeredHttpsAdapterRegistry::test_only_local_trusted(
-        rule,
+    let observed = Arc::new(AtomicUsize::new(0));
+    let observed_server = Arc::clone(&observed);
+    let requests = Arc::new(Mutex::new(Vec::with_capacity(expected_requests)));
+    let requests_server = Arc::clone(&requests);
+    let server = tokio::spawn(async move {
+        let mut keys = HashSet::new();
+        for request_index in 0..expected_requests {
+            let (stream, _) = listener.accept().await.expect("session model connection");
+            let mut stream = TlsAcceptor::from(Arc::clone(&tls))
+                .accept(stream)
+                .await
+                .expect("session model TLS handshake");
+            let request = read_http_request(&mut stream).await;
+            let separator = request
+                .windows(4)
+                .position(|part| part == b"\r\n\r\n")
+                .expect("session model HTTP headers");
+            let headers =
+                std::str::from_utf8(&request[..separator]).expect("session model headers UTF-8");
+            assert!(headers.starts_with("POST /v1/chat HTTP/1.1\r\n"));
+            assert!(
+                headers
+                    .contains("authorization: Bearer session-chat-model-fixture-sentinel-007\r\n")
+            );
+            assert!(!headers.contains("heph-placeholder:"));
+            let body: JsonValue =
+                serde_json::from_slice(&request[separator + 4..]).expect("session model body");
+            assert!(
+                body["messages"]
+                    .as_array()
+                    .is_some_and(|messages| !messages.is_empty())
+            );
+            let key = body["idempotency_key"]
+                .as_str()
+                .expect("session model idempotency key");
+            let (session_id, record_id) = key
+                .split_once(':')
+                .expect("session model idempotency key shape");
+            Uuid::parse_str(session_id).expect("session model session UUID");
+            Uuid::parse_str(record_id).expect("session model record UUID");
+            if expected_requests == 1 {
+                assert_eq!(key, format!("{SESSION_ID}:{HUMAN_RECORD_ID}"));
+            }
+            assert!(
+                keys.insert(key.to_owned()),
+                "model turn keys must be distinct"
+            );
+            let messages = body["messages"]
+                .as_array()
+                .expect("session model messages")
+                .iter()
+                .map(|message| ObservedModelMessage {
+                    record_id: Uuid::parse_str(
+                        message["record_id"]
+                            .as_str()
+                            .expect("session model message record ID"),
+                    )
+                    .expect("session model message record UUID"),
+                    role: message["role"]
+                        .as_str()
+                        .expect("session model message role")
+                        .to_owned(),
+                })
+                .collect();
+            requests_server
+                .lock()
+                .expect("session model request observer lock")
+                .push(ObservedModelRequest {
+                    session_id: Uuid::parse_str(session_id).expect("session model session UUID"),
+                    record_id: Uuid::parse_str(record_id).expect("session model record UUID"),
+                    messages,
+                });
+            observed_server.store(request_index + 1, Ordering::SeqCst);
+            let body = br#"{"text":"reference answer from deterministic model"}"#;
+            let response = format!(
+                "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+                body.len()
+            );
+            stream
+                .write_all(response.as_bytes())
+                .await
+                .expect("session model response headers");
+            stream
+                .write_all(body)
+                .await
+                .expect("session model response body");
+        }
+        assert_eq!(keys.len(), expected_requests);
+    });
+    let adapter = BrokeredHttpsAdapterRegistry::test_only_local_origin_catalog(
+        "https://api.model.example",
         port,
         "127.0.0.1".parse().expect("session model loopback"),
         ca.pem().as_bytes(),
@@ -183,6 +250,8 @@ pub async fn start_model_fixture() -> SessionBrokerFixture {
     SessionBrokerFixture {
         adapter: Arc::new(adapter),
         observed,
+        requests,
+        expected_requests,
         server,
     }
 }
@@ -344,8 +413,26 @@ async fn run_diagnostics(pool: &PgPool, run_id: Uuid) -> String {
             .then(|| stage.to_owned())
         })
         .collect();
+    let denial_probe_markers: Vec<String> = String::from_utf8_lossy(&log_bytes)
+        .lines()
+        .filter_map(|line| {
+            line.split_once("HEPH_SESSION_CHAT_DENIAL_PROBE ")?
+                .1
+                .strip_suffix('\r')
+        })
+        .filter(|marker| {
+            let fields: Vec<&str> = marker.split_whitespace().collect();
+            fields.len() == 2
+                && fields[0].starts_with("check=")
+                && DENIAL_PROBE_CHECKS
+                    .iter()
+                    .any(|check| fields[0] == format!("check={check}"))
+                && matches!(fields[1], "status=passed" | "status=failed")
+        })
+        .map(str::to_owned)
+        .collect();
     format!(
-        "run={run_id} state={} outcome={:?} failure={:?} exit_code={:?} exit_signal={:?} event_types={events:?} safe_agent_failures={safe_agent_failures:?}",
+        "run={run_id} state={} outcome={:?} failure={:?} exit_code={:?} exit_signal={:?} event_types={events:?} safe_agent_failures={safe_agent_failures:?} denial_probe_markers={denial_probe_markers:?}",
         run.as_ref().map_or("missing", |value| value.state.as_str()),
         run.as_ref().and_then(|value| value.outcome.as_deref()),
         run.as_ref().and_then(|value| value.failure.as_deref()),
@@ -661,6 +748,211 @@ async fn assert_runtime_git_turn(
     );
 }
 
+const DENIAL_PROBE_CHECKS: [&str; 9] = [
+    "source_checkout_absent",
+    "model_authorized_control",
+    "source_repository_read_denied",
+    "source_repository_push_denied",
+    "other_repository_read_denied",
+    "other_repository_push_denied",
+    "prohibited_path_push_denied",
+    "model_destination_denied",
+    "model_rule_denied",
+];
+
+async fn accepted_receive_count(pool: &PgPool, repository_id: Uuid) -> i64 {
+    sqlx::query_scalar(
+        "SELECT count(*)
+           FROM git_receives
+          WHERE repository_id = $1 AND status = 'accepted'",
+    )
+    .bind(repository_id)
+    .fetch_one(pool)
+    .await
+    .expect("count accepted denial-probe Git receives")
+}
+
+async fn canonical_main_ref(pool: &PgPool, repository_id: Uuid) -> Option<String> {
+    sqlx::query_scalar(
+        "SELECT commit_sha FROM git_refs
+          WHERE repository_id = $1 AND git_ref = 'refs/heads/main'",
+    )
+    .bind(repository_id)
+    .fetch_optional(pool)
+    .await
+    .expect("read denial-probe canonical main ref")
+}
+
+async fn assert_denial_probe_output(pool: &PgPool, run_id: Uuid) {
+    let chunks: Vec<JsonValue> = sqlx::query_scalar(
+        "SELECT payload->'bytes'
+           FROM run_events
+          WHERE run_id = $1 AND event_type = 'vm.log'
+          ORDER BY sequence",
+    )
+    .bind(run_id)
+    .fetch_all(pool)
+    .await
+    .expect("read denial-probe VM output");
+    let mut bytes = Vec::new();
+    for chunk in chunks {
+        if let Some(values) = chunk.as_array() {
+            bytes.extend(
+                values
+                    .iter()
+                    .filter_map(JsonValue::as_u64)
+                    .filter_map(|value| u8::try_from(value).ok()),
+            );
+        }
+    }
+    let output = String::from_utf8_lossy(&bytes);
+    for check in DENIAL_PROBE_CHECKS {
+        let marker = format!("HEPH_SESSION_CHAT_DENIAL_PROBE check={check} status=passed");
+        assert_eq!(
+            output.matches(&marker).count(),
+            1,
+            "denial probe must emit one passed marker for {check}"
+        );
+    }
+    assert_eq!(
+        output
+            .matches("HEPH_SESSION_CHAT_DENIAL_PROBE check=")
+            .count(),
+        DENIAL_PROBE_CHECKS.len(),
+        "denial probe must emit exactly nine fixed markers"
+    );
+}
+
+fn copy_denial_probe_source(source: &Path, destination: &Path) -> io::Result<()> {
+    if !source.is_dir() {
+        return Err(io::Error::new(
+            io::ErrorKind::NotFound,
+            "session-chat denial source is not a directory",
+        ));
+    }
+    fs::create_dir_all(destination)?;
+    for entry in fs::read_dir(source)? {
+        let entry = entry?;
+        let name = entry.file_name();
+        if name == ".git" || name == "target" || name == "__pycache__" {
+            continue;
+        }
+        let source_path = entry.path();
+        let destination_path = destination.join(&name);
+        let metadata = fs::symlink_metadata(&source_path)?;
+        if metadata.is_dir() {
+            copy_denial_probe_source(&source_path, &destination_path)?;
+        } else if metadata.file_type().is_symlink() {
+            unix_fs::symlink(fs::read_link(source_path)?, destination_path)?;
+        } else if metadata.is_file() {
+            fs::copy(source_path, destination_path)?;
+        } else {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                "session-chat denial source contains unsupported file type",
+            ));
+        }
+    }
+    Ok(())
+}
+
+fn prepare_denial_probe_source(source_root: &Path, root: &Path) -> PathBuf {
+    let destination = root.join(format!("session-chat-denial-source-{}", Uuid::new_v4()));
+    copy_denial_probe_source(source_root, &destination).expect("copy denial-probe source");
+    let denied_probe_destination = destination.join("tests");
+    fs::create_dir_all(&denied_probe_destination).expect("create denial-probe package");
+    fs::copy(
+        source_root.join("tests/denied_probe.py"),
+        denied_probe_destination.join("denied_probe.py"),
+    )
+    .expect("stage denial-probe module");
+    fs::write(
+        destination.join("denied_probe_entry.py"),
+        r#"#!/usr/local/bin/python3
+import importlib.util
+import json
+from pathlib import Path
+import sys
+
+import agent
+
+_PROBE_SPEC = importlib.util.spec_from_file_location(
+    "session_chat_denied_probe", Path(__file__).with_name("tests") / "denied_probe.py"
+)
+if _PROBE_SPEC is None or _PROBE_SPEC.loader is None:
+    raise SystemExit(1)
+denied_probe = importlib.util.module_from_spec(_PROBE_SPEC)
+_PROBE_SPEC.loader.exec_module(denied_probe)
+
+def main():
+    context = json.loads((Path("/run/hephaestus") / "context.json").read_text(encoding="utf-8"))
+    parameters = json.loads((Path("/run/hephaestus") / "parameters.json").read_text(encoding="utf-8"))
+    target = context.get("repository_id")
+    source = parameters.get("denial_source_repository_id")
+    other = parameters.get("denial_other_repository_id")
+    if not all(isinstance(value, str) for value in (target, source, other)):
+        return 1
+    try:
+        results = denied_probe._run(
+            target,
+            source,
+            other,
+            Path("/workspace/git"),
+        )
+    except Exception:
+        results = {check: False for check in denied_probe.CHECKS}
+    for check in denied_probe.CHECKS:
+        status = "passed" if results.get(check) is True else "failed"
+        print(
+            f"HEPH_SESSION_CHAT_DENIAL_PROBE check={check} status={status}",
+            file=sys.stderr,
+            flush=True,
+        )
+    failed = [
+        index for index, check in enumerate(denied_probe.CHECKS)
+        if results.get(check) is not True
+    ]
+    if failed:
+        return 40 + failed[0]
+    agent.run_once()
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
+"#,
+    )
+    .expect("write denial-probe entrypoint");
+    let build_script = destination.join("build.sh");
+    let mut build = fs::read_to_string(&build_script).expect("read session-chat build script");
+    build.push_str(
+        "\npython3 - <<'PY'\nfrom pathlib import Path\nfor source in (\"tests/denied_probe.py\", \"denied_probe_entry.py\"):\n    path = Path(source)\n    compile(path.read_text(encoding=\"utf-8\"), str(path), \"exec\", dont_inherit=True)\nPY\ninstall -m 0755 denied_probe_entry.py \"$output_root/bin/session-chat/session-chat-agent\"\ninstall -m 0644 agent.py \"$output_root/bin/session-chat/agent.py\"\ninstall -d -m 0755 \"$output_root/bin/session-chat/tests\"\ninstall -m 0644 tests/denied_probe.py \"$output_root/bin/session-chat/tests/denied_probe.py\"\n",
+    );
+    let agent_config = destination.join("agent.toml");
+    let mut config = fs::read_to_string(&agent_config).expect("read denial-probe agent config");
+    config.push_str(
+        r#"
+
+[[parameters]]
+name = "denial_source_repository_id"
+type = "string"
+minimum_length = 36
+maximum_length = 36
+required = true
+
+[[parameters]]
+name = "denial_other_repository_id"
+type = "string"
+minimum_length = 36
+maximum_length = 36
+required = true
+"#,
+    );
+    fs::write(agent_config, config).expect("write denial-probe agent config");
+    fs::write(build_script, build).expect("write denial-probe build script");
+    destination
+}
+
 /// Builds, installs, triggers, and verifies one session-chat turn through the
 /// production Git/build/release/instance/runtime boundaries.
 // The composed acceptance intentionally owns the complete production setup
@@ -672,6 +964,7 @@ async fn assert_runtime_git_turn(
 )]
 pub async fn exercise(
     pool: &PgPool,
+    database_url: &str,
     running: &RunningHephaestus,
     root: &Path,
     source_root: &Path,
@@ -684,6 +977,40 @@ pub async fn exercise(
     broker: SessionBrokerFixture,
     timeout: Duration,
 ) {
+    let denial_probe = denial_probe_enabled();
+    let browser_e2e =
+        std::env::var("HEPHAESTUS_APP_SESSION_CHAT_BROWSER_E2E").as_deref() == Ok("1");
+    assert!(
+        !denial_probe || !browser_e2e,
+        "denial probe is a standalone session mode"
+    );
+    let (denial_other_repository_id, denial_source_root) = if denial_probe {
+        let other = repositories
+            .create_repository_trusted(&CreateRepository {
+                project_id: project,
+                name: format!("session-chat-denial-other-{}", Uuid::new_v4()),
+                default_branch: GitRef::parse("refs/heads/main").expect("denial other ref"),
+                is_public: false,
+                agent_runs_enabled: false,
+            })
+            .await
+            .expect("create denial-probe comparison repository");
+        let other_id = other.id.as_uuid();
+        let other_checkout = root.join("session-chat-denial-other-checkout");
+        initialize_session_checkout(
+            &other_checkout,
+            source_root,
+            other_id,
+            git_token,
+            running,
+            &format!("user:{}", identity.user_id),
+        )
+        .await;
+        let prepared = prepare_denial_probe_source(source_root, root);
+        (Some(other_id), Some(prepared))
+    } else {
+        (None, None)
+    };
     let build_context = super::cooking_builds::CookingBuildContext {
         pool,
         running,
@@ -701,7 +1028,9 @@ pub async fn exercise(
     let built = super::cooking_builds::build_one(
         &build_context,
         "session-chat",
-        source_root.to_path_buf(),
+        denial_source_root
+            .clone()
+            .unwrap_or_else(|| source_root.to_path_buf()),
         "Reference session chat agent",
         false,
     )
@@ -709,8 +1038,38 @@ pub async fn exercise(
     .expect("build and publish session-chat release through production workers");
     assert!(!built.release_id.is_nil());
     assert!(!built.release_agent_id.is_nil());
-    let browser_e2e =
-        std::env::var("HEPHAESTUS_APP_SESSION_CHAT_BROWSER_E2E").as_deref() == Ok("1");
+    let denial_source_repository_id = denial_probe.then_some(built.repository_id.as_uuid());
+    if browser_e2e {
+        eprintln!("HEPH_SESSION_CHAT_BROWSER stage=branch-selected mode=session_chat_new");
+        let existing_repository_ids: HashSet<Uuid> =
+            sqlx::query_scalar("SELECT id FROM repositories WHERE project_id = $1")
+                .bind(project.as_uuid())
+                .fetch_all(pool)
+                .await
+                .expect("existing session browser repositories")
+                .into_iter()
+                .collect();
+        let model_import = seed_model_import(pool, organization, project, identity).await;
+        run_session_chat_browser(
+            database_url,
+            running,
+            project,
+            built.release_agent_id,
+            model_import,
+        )
+        .await;
+        let requests = broker.assert_observed().await;
+        assert_browser_session(
+            pool,
+            root,
+            project,
+            built.release_agent_id,
+            &existing_repository_ids,
+            requests,
+        )
+        .await;
+        return;
+    }
 
     let session_repository = repositories
         .create_repository_trusted(&CreateRepository {
@@ -738,6 +1097,33 @@ pub async fn exercise(
         let baseline = git_output(&checkout, &["rev-parse", "HEAD"]).await;
         (Some(checkout), Some(baseline))
     };
+    let mut parameters = vec![ParameterValue {
+        name: String::from("model_rule_id"),
+        value: Some(Value::StringValue(MODEL_RULE.to_string())),
+        ..Default::default()
+    }];
+    if denial_probe {
+        parameters.extend([
+            ParameterValue {
+                name: String::from("denial_source_repository_id"),
+                value: Some(Value::StringValue(
+                    denial_source_repository_id
+                        .expect("denial source repository ID")
+                        .to_string(),
+                )),
+                ..Default::default()
+            },
+            ParameterValue {
+                name: String::from("denial_other_repository_id"),
+                value: Some(Value::StringValue(
+                    denial_other_repository_id
+                        .expect("denial comparison repository ID")
+                        .to_string(),
+                )),
+                ..Default::default()
+            },
+        ]);
+    }
 
     let imported = instance_client(
         running,
@@ -750,11 +1136,7 @@ pub async fn exercise(
         project_id: opaque(project.as_uuid()).into(),
         release_agent_id: opaque(built.release_agent_id).into(),
         name: String::from("reference-session-chat"),
-        parameters: vec![ParameterValue {
-            name: String::from("model_rule_id"),
-            value: Some(Value::StringValue(MODEL_RULE.to_string())),
-            ..Default::default()
-        }],
+        parameters,
         selected_policy: RuntimePolicy {
             vcpus: 1,
             memory_mib: 256,
@@ -854,78 +1236,34 @@ pub async fn exercise(
     )
     .await;
 
-    if browser_e2e {
-        let installation = install_session_chat_ui(
-            running,
-            rpc_token,
-            organization,
-            session_repository.id.as_uuid(),
-            built.release_id,
-        )
-        .await;
-        run_session_chat_browser(
-            running,
-            project,
-            session_repository.id.as_uuid(),
-            installation,
-            identity.user_id.as_uuid(),
-        )
-        .await;
-        // Browser initialization can itself create an idle run. Derive the
-        // human input from the parent of the canonical agent commit, then
-        // resolve that exact receive into its durable run request.
-        let agent_commit = git_output_bare(
-            root,
-            session_repository.id.as_uuid(),
-            &["rev-parse", "refs/heads/main"],
-        )
-        .await;
-        let human_commit = git_output_bare(
-            root,
-            session_repository.id.as_uuid(),
-            &["rev-parse", &format!("{agent_commit}^")],
-        )
-        .await;
-        let browser_run_id: Uuid = sqlx::query_scalar(
-            "SELECT request.run_id
-               FROM run_requests AS request
-               JOIN git_ref_updates AS update ON update.receive_id = request.receive_id
-              WHERE request.instance_id = $1
-                AND request.repository_id = $2
-                AND request.commit_sha = $3
-                AND request.git_ref = 'refs/heads/main'
-                AND request.request_kind = 'instance_normal'
-                AND request.attachment_id = $4
-                AND update.git_ref = 'refs/heads/main'
-                AND update.new_commit = $3
-              LIMIT 1",
-        )
-        .bind(instance_id)
-        .bind(session_repository.id.as_uuid())
-        .bind(&human_commit)
-        .bind(attachment_id)
-        .fetch_one(pool)
-        .await
-        .expect("session-chat browser human-input run");
-        assert_runtime_git_turn(
-            pool,
-            root,
-            session_repository.id.as_uuid(),
-            instance_id,
-            attachment_id,
-            identity.user_id.as_uuid(),
-            browser_run_id,
-            &human_commit,
-            None,
-        )
-        .await;
-        broker.assert_observed().await;
-        return;
-    }
-
     let user_id = identity.user_id.to_string();
     let checkout = checkout.expect("standalone session checkout");
     let baseline = baseline.expect("standalone session baseline");
+    let accepted_before_turn = accepted_receive_count(pool, session_repository.id.as_uuid()).await;
+    let denial_source_ref_before =
+        denial_source_repository_id.map(|repository_id| canonical_main_ref(pool, repository_id));
+    let denial_source_ref_before = match denial_source_ref_before {
+        Some(reference) => Some(reference.await),
+        None => None,
+    };
+    let denial_other_ref_before =
+        denial_other_repository_id.map(|repository_id| canonical_main_ref(pool, repository_id));
+    let denial_other_ref_before = match denial_other_ref_before {
+        Some(reference) => Some(reference.await),
+        None => None,
+    };
+    let denial_source_accepts_before = denial_source_repository_id
+        .map(|repository_id| accepted_receive_count(pool, repository_id));
+    let denial_source_accepts_before = match denial_source_accepts_before {
+        Some(count) => Some(count.await),
+        None => None,
+    };
+    let denial_other_accepts_before =
+        denial_other_repository_id.map(|repository_id| accepted_receive_count(pool, repository_id));
+    let denial_other_accepts_before = match denial_other_accepts_before {
+        Some(count) => Some(count.await),
+        None => None,
+    };
     append_human_and_push(
         &checkout,
         source_root,
@@ -933,6 +1271,11 @@ pub async fn exercise(
         running,
         &user_id,
         baseline.as_str(),
+        if denial_probe {
+            DENIAL_HUMAN_RECORD_ID
+        } else {
+            HUMAN_RECORD_ID
+        },
     )
     .await;
     let human_commit = git_output(&checkout, &["rev-parse", "HEAD"]).await;
@@ -966,9 +1309,67 @@ pub async fn exercise(
         identity.user_id.as_uuid(),
         run_id,
         &human_commit,
-        Some(HUMAN_RECORD_ID),
+        Some(if denial_probe {
+            DENIAL_HUMAN_RECORD_ID
+        } else {
+            HUMAN_RECORD_ID
+        }),
     )
     .await;
+    if let (
+        Some(source_id),
+        Some(other_id),
+        Some(source_before),
+        Some(other_before),
+        Some(source_ref_before),
+        Some(other_ref_before),
+    ) = (
+        denial_source_repository_id,
+        denial_other_repository_id,
+        denial_source_accepts_before,
+        denial_other_accepts_before,
+        denial_source_ref_before,
+        denial_other_ref_before,
+    ) {
+        assert_eq!(
+            source_ref_before.as_deref(),
+            Some(built.source_commit.as_str()),
+            "denial source must be the published build repository"
+        );
+        assert!(
+            other_ref_before.is_some(),
+            "comparison repository must have a canonical main ref"
+        );
+        assert_denial_probe_output(pool, run_id).await;
+        assert_eq!(
+            accepted_receive_count(pool, session_repository.id.as_uuid()).await,
+            accepted_before_turn + 2,
+            "denial pushes must not add an accepted target receive"
+        );
+        assert_eq!(
+            accepted_receive_count(pool, source_id).await,
+            source_before,
+            "source-repository denial attempts must not be accepted"
+        );
+        assert_eq!(
+            accepted_receive_count(pool, other_id).await,
+            other_before,
+            "other-repository denial attempts must not be accepted"
+        );
+        assert_eq!(
+            canonical_main_ref(pool, source_id).await,
+            source_ref_before,
+            "source-repository canonical ref must remain unchanged"
+        );
+        assert_eq!(
+            canonical_main_ref(pool, other_id).await,
+            other_ref_before,
+            "other-repository canonical ref must remain unchanged"
+        );
+        eprintln!(
+            "HEPH_SESSION_CHAT_DENIAL_PROBE host=validated checks=9 refs=unchanged receives=unchanged"
+        );
+    }
     let (stored_input, stored_ref, stored_revision): (String, String, Uuid) = sqlx::query_as(
         "SELECT request.commit_sha, request.git_ref, run.instance_revision_id
            FROM run_requests request JOIN runs run ON run.id = request.run_id
@@ -994,92 +1395,55 @@ pub async fn exercise(
         run_count, 1,
         "assistant publication must not recursively trigger a run"
     );
-    broker.assert_observed().await;
-}
-
-async fn install_session_chat_ui(
-    running: &RunningHephaestus,
-    token_factory: &(dyn Fn(&str) -> String + Send + Sync),
-    organization: OrganizationId,
-    repository: Uuid,
-    release_id: Uuid,
-) -> (Uuid, Uuid) {
-    let uri = format!("http://{}", running.http_addr())
-        .parse()
-        .expect("session UI release RPC URI");
-    let config = connectrpc::client::ClientConfig::new(uri)
-        .with_default_header(
-            http::header::AUTHORIZATION,
-            http::HeaderValue::from_str(&format!(
-                "Bearer {}",
-                token_factory("/hephaestus.release.v1.ReleaseService/InstallUi")
-            ))
-            .expect("session UI release RPC authorization"),
-        )
-        .with_default_timeout(Duration::from_secs(30));
-    let client = ReleaseServiceClient::new(connectrpc::client::HttpClient::plaintext(), config);
-    let target = rpc_proto::messages::hephaestus::release::v1::UiInstallationTarget {
-        target: Some(ui_installation_target::Target::RepositoryId(
-            opaque(repository).into(),
-        )),
-        ..Default::default()
-    };
-    let response = client
-        .install_ui(InstallUiRequest {
-            context: mutation_context("session-chat-ui-install").into(),
-            organization_id: opaque(organization.as_uuid()).into(),
-            target: target.into(),
-            release_id: opaque(release_id).into(),
-            ui_key: String::from("session-chat"),
-            acknowledge_repository_git_access: true,
-            ..Default::default()
-        })
-        .await
-        .expect("InstallUi session-chat release")
-        .into_owned();
-    assert_eq!(
-        response.lifecycle.to_i32(),
-        UiInstallationLifecycle::UI_INSTALLATION_LIFECYCLE_ENABLED as i32,
-        "session-chat UI installation must be enabled"
-    );
-    (
-        response
-            .installation_id
-            .into_option()
-            .expect("session-chat UI installation ID")
-            .value
-            .parse()
-            .expect("session-chat UI installation UUID"),
-        response
-            .generation_id
-            .into_option()
-            .expect("session-chat UI generation ID")
-            .value
-            .parse()
-            .expect("session-chat UI generation UUID"),
-    )
+    let observed = broker.assert_observed().await;
+    if denial_probe {
+        assert_eq!(
+            observed
+                .iter()
+                .map(|request| request.session_id)
+                .collect::<Vec<_>>(),
+            [
+                Uuid::parse_str(SESSION_ID).expect("denial-probe session UUID"),
+                Uuid::parse_str(SESSION_ID).expect("denial-probe session UUID"),
+            ]
+        );
+        assert_eq!(
+            observed
+                .iter()
+                .map(|request| request.record_id)
+                .collect::<Vec<_>>(),
+            [
+                Uuid::parse_str("22222222-2222-4222-8222-222222222222")
+                    .expect("denial-probe control record UUID"),
+                Uuid::parse_str(DENIAL_HUMAN_RECORD_ID).expect("denial-probe human record UUID"),
+            ]
+        );
+    }
 }
 
 async fn run_session_chat_browser(
+    database_url: &str,
     running: &RunningHephaestus,
     project: ProjectId,
-    repository: Uuid,
-    installation: (Uuid, Uuid),
-    actor: Uuid,
+    release_agent_id: Uuid,
+    model_import_id: Uuid,
 ) {
     let fixture_path = std::env::var("HEPHAESTUS_COOKING_BROWSER_FIXTURE_OUTPUT")
         .expect("session-chat browser fixture output path");
     let fixture = serde_json::json!({
-        "session_chat_ui": {
+        "session_chat_new": {
             "project_id": project,
-            "repository_id": repository,
-            "installation_id": installation.0,
-            "generation_id": installation.1,
-            "actor_id": actor,
+            "release_agent_id": release_agent_id,
+            "model_import_id": model_import_id,
             "ui_path": "/session-chat/index.html",
             "agent_response_text": MODEL_RESPONSE_TEXT
         }
     });
+    assert!(
+        fixture.get("session_chat_new").is_some(),
+        "session-chat browser must select the session_chat_new fixture mode"
+    );
+    eprintln!("HEPH_SESSION_CHAT_BROWSER stage=fixture-selected mode=session_chat_new");
     tokio::fs::write(
         &fixture_path,
         serde_json::to_vec_pretty(&fixture).expect("session-chat browser fixture JSON"),
@@ -1104,11 +1468,7 @@ async fn run_session_chat_browser(
         Path::new(env!("CARGO_MANIFEST_DIR")).join("../../scripts/run-installed-ui-e2e.sh");
     let status = Command::new(script)
         .env("HEPHAESTUS_E2E_COOKING_FIXTURE", &fixture_path)
-        .env(
-            "HEPHAESTUS_E2E_EXTERNAL_DATABASE_URL",
-            std::env::var("HEPHAESTUS_POSTGRES_TEST_URL")
-                .expect("session-chat browser database URL"),
-        )
+        .env("HEPHAESTUS_E2E_EXTERNAL_DATABASE_URL", database_url)
         .env(
             "HEPHAESTUS_E2E_EXTERNAL_RPC_ENDPOINT",
             running.http_addr().to_string(),
@@ -1121,7 +1481,7 @@ async fn run_session_chat_browser(
         .env("HEPHAESTUS_E2E_COOKING_PHASE", "initial")
         .env(
             "HEPHAESTUS_INSTALLED_UI_BROWSER_GREP",
-            "cooking session-chat installed UI",
+            "cooking new session chat creates and opens a real Git-backed browser session",
         )
         .env(
             "HEPHAESTUS_PLATFORM_HTTPS_ORIGIN",
@@ -1140,6 +1500,235 @@ async fn run_session_chat_browser(
         status.success(),
         "session-chat browser E2E failed: {status}"
     );
+    eprintln!("HEPH_SESSION_CHAT_BROWSER stage=playwright-passed mode=session_chat_new");
+}
+
+#[derive(Debug, sqlx::FromRow)]
+#[allow(clippy::struct_field_names)] // These names mirror the four persisted relation IDs.
+struct BrowserSessionObjects {
+    repository_id: Uuid,
+    instance_id: Uuid,
+    revision_id: Uuid,
+    attachment_id: Uuid,
+}
+
+#[allow(clippy::cognitive_complexity, clippy::too_many_lines)] // This is one reviewable assertion over the browser's persisted Git session.
+async fn assert_browser_session(
+    pool: &PgPool,
+    root: &Path,
+    project: ProjectId,
+    release_agent_id: Uuid,
+    existing_repository_ids: &HashSet<Uuid>,
+    requests: Vec<ObservedModelRequest>,
+) {
+    assert_eq!(
+        requests.len(),
+        2,
+        "browser session must make two model turns"
+    );
+    let candidates: Vec<BrowserSessionObjects> = sqlx::query_as(
+        "SELECT repository.id AS repository_id,
+                instance.id AS instance_id,
+                revision.id AS revision_id,
+                attachment.id AS attachment_id
+           FROM repositories repository
+           JOIN agent_families family ON family.repository_id = repository.id
+           JOIN agent_instances instance
+             ON instance.family_id = family.id
+            AND instance.project_id = repository.project_id
+           JOIN agent_instance_revisions revision
+             ON revision.instance_id = instance.id
+            AND revision.release_agent_id = $2
+           JOIN agent_attachments attachment
+             ON attachment.instance_id = instance.id
+            AND attachment.repository_id = repository.id
+            AND attachment.project_id = repository.project_id
+          WHERE repository.project_id = $1
+            AND attachment.ref_selector = 'refs/heads/main'
+            AND attachment.removed_at IS NULL",
+    )
+    .bind(project.as_uuid())
+    .bind(release_agent_id)
+    .fetch_all(pool)
+    .await
+    .expect("browser session repository and attachment");
+    let new_candidates: Vec<_> = candidates
+        .into_iter()
+        .filter(|candidate| !existing_repository_ids.contains(&candidate.repository_id))
+        .collect();
+    assert_eq!(
+        new_candidates.len(),
+        1,
+        "browser session must create one project repository attached to the selected release"
+    );
+    let BrowserSessionObjects {
+        repository_id,
+        instance_id,
+        revision_id,
+        attachment_id,
+    } = new_candidates
+        .into_iter()
+        .next()
+        .expect("new browser session");
+    assert!(!instance_id.is_nil());
+    assert!(!revision_id.is_nil());
+    assert!(!attachment_id.is_nil());
+
+    let head = git_output_bare(root, repository_id, &["rev-parse", "refs/heads/main"])
+        .await
+        .trim()
+        .to_owned();
+    let paths = git_output_bare(
+        root,
+        repository_id,
+        &["ls-tree", "-r", "--name-only", head.trim()],
+    )
+    .await
+    .lines()
+    .map(str::to_owned)
+    .collect::<Vec<_>>();
+    let manifest_path = ".heph/session/v1/manifest.json";
+    assert!(paths.iter().any(|path| path == manifest_path));
+    let manifest: JsonValue = serde_json::from_str(
+        &git_output_bare(
+            root,
+            repository_id,
+            &["show", &format!("{head}:{manifest_path}")],
+        )
+        .await,
+    )
+    .expect("browser session manifest JSON");
+    let session_id = Uuid::parse_str(
+        manifest["data"]["session_id"]
+            .as_str()
+            .expect("browser session manifest session ID"),
+    )
+    .expect("browser session manifest session UUID");
+
+    let human_paths = paths
+        .iter()
+        .filter(|path| path.starts_with(".heph/session/v1/records/human/"))
+        .collect::<Vec<_>>();
+    let agent_paths = paths
+        .iter()
+        .filter(|path| path.starts_with(".heph/session/v1/records/agent/"))
+        .collect::<Vec<_>>();
+    assert_eq!(
+        human_paths.len(),
+        2,
+        "browser session must publish two human records"
+    );
+    assert_eq!(
+        agent_paths.len(),
+        2,
+        "browser session must publish two assistant records"
+    );
+    let mut human_records = Vec::with_capacity(human_paths.len());
+    for path in human_paths {
+        let record: JsonValue = serde_json::from_str(
+            &git_output_bare(root, repository_id, &["show", &format!("{head}:{path}")]).await,
+        )
+        .expect("browser human record JSON");
+        let record_id = Uuid::parse_str(
+            record["record_id"]
+                .as_str()
+                .expect("browser human record ID"),
+        )
+        .expect("browser human record UUID");
+        assert_eq!(record["kind"], "user_message");
+        human_records.push((record_id, record));
+    }
+    let mut agent_records = Vec::with_capacity(agent_paths.len());
+    for path in agent_paths {
+        let record: JsonValue = serde_json::from_str(
+            &git_output_bare(root, repository_id, &["show", &format!("{head}:{path}")]).await,
+        )
+        .expect("browser assistant record JSON");
+        let record_id = Uuid::parse_str(
+            record["record_id"]
+                .as_str()
+                .expect("browser assistant record ID"),
+        )
+        .expect("browser assistant record UUID");
+        assert_eq!(record["kind"], "assistant_message");
+        assert_eq!(record["content"]["text"], MODEL_RESPONSE_TEXT);
+        agent_records.push((record_id, record));
+    }
+
+    let first = &requests[0];
+    let second = &requests[1];
+    assert_eq!(first.session_id, session_id);
+    assert_eq!(second.session_id, session_id);
+    assert_ne!(first.record_id, second.record_id);
+    assert!(
+        human_records
+            .iter()
+            .any(|(record_id, _)| *record_id == first.record_id)
+    );
+    assert!(
+        human_records
+            .iter()
+            .any(|(record_id, _)| *record_id == second.record_id)
+    );
+    assert_eq!(first.messages.len(), 1);
+    assert_eq!(first.messages[0].role, "human");
+    assert_eq!(second.messages.len(), 3);
+    assert_eq!(second.messages[0].role, "human");
+    assert_eq!(second.messages[1].role, "assistant");
+    assert_eq!(second.messages[2].role, "human");
+    assert_eq!(first.messages[0].record_id, first.record_id);
+    assert_eq!(second.messages[0].record_id, first.record_id);
+    assert_eq!(second.messages[2].record_id, second.record_id);
+    let first_agent = agent_records
+        .iter()
+        .find(|(_, record)| record["in_reply_to"] == first.record_id.to_string())
+        .expect("first assistant response");
+    let second_agent = agent_records
+        .iter()
+        .find(|(_, record)| record["in_reply_to"] == second.record_id.to_string())
+        .expect("second assistant response");
+    assert_eq!(second.messages[1].record_id, first_agent.0);
+    assert_ne!(first_agent.0, second_agent.0);
+    assert_eq!(agent_records.len(), 2);
+    let receive_count: i64 =
+        sqlx::query_scalar("SELECT count(*) FROM git_receives WHERE repository_id = $1")
+            .bind(repository_id)
+            .fetch_one(pool)
+            .await
+            .expect("browser session Git receive count");
+    assert!(
+        receive_count >= 4,
+        "browser session must persist both turns and reconnect Git receives"
+    );
+    if let Ok(diagnostics_dir) = std::env::var("HEPHAESTUS_COOKING_DIAGNOSTICS_DIR") {
+        let report = serde_json::json!({
+            "mode": "session_chat_new",
+            "repository_id": repository_id,
+            "instance_id": instance_id,
+            "revision_id": revision_id,
+            "attachment_id": attachment_id,
+            "session_id": session_id,
+            "model_requests": requests.iter().map(|request| serde_json::json!({
+                "session_id": request.session_id,
+                "record_id": request.record_id,
+                "message_ids": request.messages.iter().map(|message| message.record_id).collect::<Vec<_>>(),
+                "message_roles": request.messages.iter().map(|message| message.role.as_str()).collect::<Vec<_>>(),
+            })).collect::<Vec<_>>(),
+            "human_record_ids": human_records.iter().map(|(record_id, _)| record_id).collect::<Vec<_>>(),
+            "assistant_record_ids": agent_records.iter().map(|(record_id, _)| record_id).collect::<Vec<_>>(),
+            "git_receive_count": receive_count,
+        });
+        tokio::fs::create_dir_all(&diagnostics_dir)
+            .await
+            .expect("browser session diagnostics directory");
+        tokio::fs::write(
+            Path::new(&diagnostics_dir).join("session-chat-browser-report.json"),
+            serde_json::to_vec_pretty(&report).expect("browser session diagnostics JSON"),
+        )
+        .await
+        .expect("browser session diagnostics report");
+    }
+    eprintln!("HEPH_SESSION_CHAT_BROWSER stage=canonical-validation-passed turns=2");
 }
 
 async fn initialize_session_checkout(
@@ -1189,6 +1778,7 @@ async fn append_human_and_push(
     _running: &RunningHephaestus,
     user_id: &str,
     baseline: &str,
+    human_record_id: &str,
 ) {
     let appender = r#"
 from pathlib import Path
@@ -1204,7 +1794,7 @@ session.append_human(Record(sys.argv[3], "user_message", actor, "human", actor, 
         .arg(appender)
         .arg(checkout)
         .arg(baseline)
-        .arg(HUMAN_RECORD_ID)
+        .arg(human_record_id)
         .arg(user_id)
         .env("PYTHONPATH", source_root)
         .stdin(Stdio::null())
@@ -1224,14 +1814,11 @@ session.append_human(Record(sys.argv[3], "user_message", actor, "human", actor, 
     .await;
 }
 
-async fn seed_model_secret(
+async fn seed_model_import(
     pool: &PgPool,
     organization: OrganizationId,
     project: ProjectId,
     identity: &AuthenticatedIdentity,
-    instance: Uuid,
-    revision: Uuid,
-    attachment: Uuid,
 ) -> Uuid {
     sqlx::query("INSERT INTO project_secret_roles (project_id,user_id,role) VALUES ($1,$2,'secret_manager')")
         .bind(project.as_uuid())
@@ -1286,6 +1873,28 @@ async fn seed_model_secret(
         )
         .await
         .expect("grant session model secret");
+    import_id.as_uuid()
+}
+
+async fn seed_model_secret(
+    pool: &PgPool,
+    organization: OrganizationId,
+    project: ProjectId,
+    identity: &AuthenticatedIdentity,
+    instance: Uuid,
+    revision: Uuid,
+    attachment: Uuid,
+) -> Uuid {
+    let import_id =
+        SecretImportId::from_uuid(seed_model_import(pool, organization, project, identity).await);
+    let service = SecretService::new(
+        pool.clone(),
+        EncryptedStore::new(
+            LocalKeyProvider::new("golden/v1", [("golden/v1", [17_u8; 32])])
+                .expect("session secret key"),
+        ),
+        Arc::new(super::PostgresMelangeAuthorizer),
+    );
     let binding_id = AgentSecretBindingId::new();
     let bound_revision = release_domain::AgentInstanceRevisionId::new();
     service

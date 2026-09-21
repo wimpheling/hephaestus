@@ -4576,11 +4576,20 @@ async fn bearer_push_starts_run_through_production_bootstrap() {
     let database_url = isolated_database.target_url.clone();
     let libkrun_e2e = env::var("HEPHAESTUS_APP_LIBKRUN_E2E").as_deref() == Ok("1");
     let session_chat_e2e = session_chat::enabled();
+    let session_chat_denial_probe_e2e = session_chat::denial_probe_enabled();
     let session_chat_browser_e2e =
         env::var("HEPHAESTUS_APP_SESSION_CHAT_BROWSER_E2E").as_deref() == Ok("1");
     assert!(
         !session_chat_browser_e2e || session_chat_e2e,
         "session-chat browser E2E requires the standalone session-chat scenario"
+    );
+    assert!(
+        !session_chat_denial_probe_e2e || session_chat_e2e,
+        "session-chat denial probe requires the standalone session-chat scenario"
+    );
+    assert!(
+        !session_chat_denial_probe_e2e || !session_chat_browser_e2e,
+        "session-chat denial probe is a standalone session mode"
     );
     let installed_ui_fixture = env::var("HEPHAESTUS_COOKING_INSTALLED_UI_FIXTURE").as_deref()
         == Ok("1")
@@ -4635,7 +4644,7 @@ async fn bearer_push_starts_run_through_production_bootstrap() {
         "session-chat requires the real libkrun backend"
     );
     assert!(
-        !session_chat_e2e || !cooking::enabled(),
+        !session_chat_e2e || session_chat_browser_e2e || !cooking::enabled(),
         "session-chat acceptance is a standalone golden mode"
     );
     assert!(
@@ -4717,11 +4726,11 @@ async fn bearer_push_starts_run_through_production_bootstrap() {
         "the Cooking service build proof requires HEPHAESTUS_APP_COOKING_BUILD_PROOF=1"
     );
     assert!(
-        !cooking_service_build_proof || cooking::enabled(),
+        !cooking_service_build_proof || cooking::enabled() || session_chat_browser_e2e,
         "the Cooking service build proof requires HEPHAESTUS_APP_COOKING_E2E=1"
     );
     assert!(
-        !caddy_tls || cooking_service_build_proof,
+        !caddy_tls || cooking_service_build_proof || session_chat_browser_e2e,
         "Caddy TLS mode is restricted to the published Cooking service proof"
     );
     assert!(
@@ -4729,7 +4738,7 @@ async fn bearer_push_starts_run_through_production_bootstrap() {
         "the Cooking service build proof requires the joined Caddy/libkrun fixture"
     );
     assert!(
-        !installed_ui_fixture || cooking_service_build_proof,
+        !installed_ui_fixture || cooking_service_build_proof || session_chat_browser_e2e,
         "the installed UI fixture requires the Cooking service build proof"
     );
     assert!(
@@ -5029,7 +5038,7 @@ async fn bearer_push_starts_run_through_production_bootstrap() {
             dispatcher_listen,
             public_authority: String::from("gateway.golden.invalid"),
             ui_origin: session_chat_browser_e2e
-                .then(|| installed_ui_origin_config(dispatcher_listen)),
+                .then(|| installed_ui_origin_config(reserve_installed_ui_listener())),
         })
     } else {
         gateway_edge.as_ref().map(|(config, _)| config.clone())
@@ -5146,10 +5155,14 @@ async fn bearer_push_starts_run_through_production_bootstrap() {
             .as_ref()
             .map(|worker| vec![worker.rootfs_root.clone()])
             .unwrap_or_default();
+        let mut credential_patterns = cooking_confinement::credential_patterns();
+        if session_chat_e2e {
+            credential_patterns.push(session_chat::MODEL_SECRET_VALUE.as_bytes().to_vec());
+        }
         Some(
             backend_fixture
                 .install_vm_observer(
-                    cooking_confinement::credential_patterns(),
+                    credential_patterns,
                     &secret_broker_socket,
                     &required_image_roots,
                 )
@@ -5337,6 +5350,7 @@ async fn bearer_push_starts_run_through_production_bootstrap() {
         };
         session_chat::exercise(
             &pool,
+            &database_url,
             &running,
             &root,
             &source_root,
@@ -5353,6 +5367,10 @@ async fn bearer_push_starts_run_through_production_bootstrap() {
         )
         .await;
         running.shutdown().await.expect("session-chat daemon shutdown");
+        let observer = observer.expect("session-chat VM observer");
+        observer
+            .assert_required_kinds(&["agent"])
+            .expect("session-chat agent VM observation");
         cleanup_streams(&nats_url).await;
         return;
     }
