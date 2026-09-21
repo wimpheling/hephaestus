@@ -2625,25 +2625,29 @@ async fn insert_authenticated_child_for_installation_with_expiry(
     .expect("insert installation-bound authentication handoff");
     let child_id = Uuid::new_v4();
     let mut tx = pool.begin().await.expect("begin installation-bound child");
-    let child_query = if expired {
-        "INSERT INTO ui_browser_sessions
-         (id, session_digest, request_id, handoff_id, parent_session_id,
-          installation_id, generation_id, organization_id, route, issued_at, expires_at)
-         SELECT $1, $2, $3, handoff.id, handoff.parent_session_id,
-                handoff.installation_id, handoff.generation_id, handoff.organization_id,
-                handoff.route, handoff.issued_at,
-                handoff.issued_at + interval '1 second'
-         FROM ui_browser_handoffs AS handoff WHERE handoff.id = $4"
+    let child_insert = if expired {
+        sqlx::query(
+            "INSERT INTO ui_browser_sessions
+             (id, session_digest, request_id, handoff_id, parent_session_id,
+              installation_id, generation_id, organization_id, route, issued_at, expires_at)
+             SELECT $1, $2, $3, handoff.id, handoff.parent_session_id,
+                    handoff.installation_id, handoff.generation_id, handoff.organization_id,
+                    handoff.route, handoff.issued_at,
+                    handoff.issued_at + interval '1 second'
+             FROM ui_browser_handoffs AS handoff WHERE handoff.id = $4",
+        )
     } else {
-        "INSERT INTO ui_browser_sessions
-         (id, session_digest, request_id, handoff_id, parent_session_id,
-          installation_id, generation_id, organization_id, route, issued_at, expires_at)
-         SELECT $1, $2, $3, handoff.id, handoff.parent_session_id,
-                handoff.installation_id, handoff.generation_id, handoff.organization_id,
-                handoff.route, handoff.issued_at, handoff.issued_at + interval '1 hour'
-         FROM ui_browser_handoffs AS handoff WHERE handoff.id = $4"
+        sqlx::query(
+            "INSERT INTO ui_browser_sessions
+             (id, session_digest, request_id, handoff_id, parent_session_id,
+              installation_id, generation_id, organization_id, route, issued_at, expires_at)
+             SELECT $1, $2, $3, handoff.id, handoff.parent_session_id,
+                    handoff.installation_id, handoff.generation_id, handoff.organization_id,
+                    handoff.route, handoff.issued_at, handoff.issued_at + interval '1 hour'
+             FROM ui_browser_handoffs AS handoff WHERE handoff.id = $4",
+        )
     };
-    sqlx::query(child_query)
+    child_insert
         .bind(child_id)
         .bind(
             UiBrowserSessionSecret::from_bytes(scoped_secret(fixture.actor, session_secret))

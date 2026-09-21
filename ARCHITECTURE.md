@@ -59,6 +59,13 @@ Git smart HTTP and minimal health or unavoidable bootstrap endpoints are the
 only deliberate non-Connect protocols served by `hephaestusd`. They do not
 create a general REST or JSON application API.
 
+The owner-only runtime Git listener uses `/` only for its authenticated
+challenge/health transport. The browser Git adapter uses exactly the three
+same-origin routes `/_heph/git/{repository}/info/refs`,
+`/_heph/git/{repository}/git-upload-pack`, and
+`/_heph/git/{repository}/git-receive-pack`; their authority and cookie checks
+remain in the transport adapters.
+
 ## Rust layers and dependency direction
 
 Every workspace package must declare a layer and bounded context in Cargo
