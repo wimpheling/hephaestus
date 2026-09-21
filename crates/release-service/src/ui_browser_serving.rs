@@ -49,6 +49,39 @@ pub struct UiRepositoryGitAuthorization {
     pub context: UiBrowserSessionContext,
 }
 
+/// Verified target projection for an installed UI context request.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct UiBrowserTargetContext {
+    /// Complete child-session context used by the durable UI audit boundary.
+    pub context: UiBrowserSessionContext,
+    /// Repository selected by the immutable repository-scoped installation.
+    pub repository_id: RepositoryId,
+}
+
+/// Application-role port for generic installed-UI target discovery.
+#[async_trait]
+pub trait UiBrowserTargetContextProjection: Send + Sync {
+    /// Rechecks the live child session, generation, installation, release, and
+    /// route permissions before returning a repository target.
+    async fn project_ui_target(
+        &self,
+        request_id: RequestId,
+        session_secret: UiBrowserSessionSecret,
+        expected_generation_id: UiInstallationGenerationId,
+    ) -> Result<UiBrowserTargetContext, UiTargetContextError>;
+}
+
+/// Redacted target-projection failure.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
+pub enum UiTargetContextError {
+    /// The child session is not authorized for a repository target.
+    #[error("UI target context is unauthorized")]
+    Unauthorized,
+    /// The application verifier or connection was unavailable.
+    #[error("UI target context is unavailable")]
+    Unavailable,
+}
+
 /// Application-role port for reserved same-origin UI Git authorization.
 #[async_trait]
 pub trait UiBrowserRepositoryGitAuthorization: Send + Sync {

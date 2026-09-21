@@ -4,23 +4,25 @@
 mod fixture;
 
 use fixture::{
-    fixture_session_secret, insert_authenticated_child, insert_managed_authenticated_child,
-    seed_fixture_reusing_installation_helpers, seed_fixture_reusing_installation_helpers_draft,
+    fixture_session_secret, insert_authenticated_child, insert_authenticated_child_for,
+    insert_managed_authenticated_child, seed_fixture_reusing_installation_helpers,
+    seed_fixture_reusing_installation_helpers_draft,
 };
 use gateway_domain::HttpMethod;
 use identity_domain::RequestId;
 use release_domain::{UiInstallationGenerationId, ui_browser::UiBrowserSessionSecret};
 use release_postgres::{PgUiBrowserServingStore, PgUiGenerationHostResolver};
 use release_service::{
-    UiBrowserHttpRequest, UiBrowserHttpServingProjection, UiGatewayRequestKind, UiGenerationHost,
-    UiGenerationHostResolver, UiNamespace, UiPublicPort, UiServingProjection,
+    UiBrowserHttpRequest, UiBrowserHttpServingProjection, UiBrowserTargetContextProjection,
+    UiGatewayRequestKind, UiGenerationHost, UiGenerationHostResolver, UiNamespace, UiPublicPort,
+    UiServingProjection,
 };
 use serial_test::serial;
 use sqlx::{PgPool, postgres::PgPoolOptions};
 use std::{env, time::Duration};
 use uuid::Uuid;
 
-const EXPECTED_MIGRATION: i64 = 92;
+const EXPECTED_MIGRATION: i64 = 98;
 
 #[tokio::test]
 #[serial]
@@ -38,7 +40,7 @@ async fn ui_browser_resource_adapter_enforces_host_role_projection_and_current_a
     sqlx::migrate!("../../migrations")
         .run(&bootstrap)
         .await
-        .expect("apply migrations through 0092");
+        .expect("apply migrations through 0098");
     let max_migration: i64 = sqlx::query_scalar::<_, Option<i64>>(
         "SELECT max(version) FROM _sqlx_migrations WHERE success",
     )
@@ -98,6 +100,7 @@ async fn ui_browser_resource_adapter_enforces_host_role_projection_and_current_a
     for function_signature in [
         "public.resolve_active_ui_generation_host(uuid)",
         "public.resolve_ui_browser_resource(bytea,uuid,text,text)",
+        "public.resolve_ui_browser_repository_target_context(bytea,uuid)",
     ] {
         let (security_definer, executable, safe_search_path): (bool, bool, bool) = sqlx::query_as(
             "SELECT p.prosecdef,
@@ -138,6 +141,54 @@ async fn ui_browser_resource_adapter_enforces_host_role_projection_and_current_a
     )
     .await;
     let store = PgUiBrowserServingStore::new(app.clone());
+    let repository_secret =
+        UiBrowserSessionSecret::from_bytes(fixture_session_secret(fixture.actor, 96));
+    let repository_child = insert_authenticated_child_for(
+        &worker,
+        &fixture,
+        fixture.organization,
+        fixture.repository_installation,
+        fixture.repository_generation,
+        "schema-repository",
+        repository_secret.digest().as_bytes().to_vec(),
+        "1 hour",
+    )
+    .await;
+    let target = store
+        .project_ui_target(
+            RequestId::new(),
+            repository_secret,
+            UiInstallationGenerationId::from_uuid(fixture.repository_generation),
+        )
+        .await
+        .expect("repository target context projection");
+    assert_eq!(target.context.session_id.as_uuid(), repository_child);
+    assert_eq!(target.repository_id.as_uuid(), fixture.repository);
+
+    let global_secret =
+        UiBrowserSessionSecret::from_bytes(fixture_session_secret(fixture.actor, 97));
+    insert_authenticated_child_for(
+        &worker,
+        &fixture,
+        fixture.organization,
+        fixture.global_installation,
+        fixture.global_generation,
+        "schema-global",
+        global_secret.digest().as_bytes().to_vec(),
+        "1 hour",
+    )
+    .await;
+    assert!(
+        store
+            .project_ui_target(
+                RequestId::new(),
+                global_secret,
+                UiInstallationGenerationId::from_uuid(fixture.global_generation),
+            )
+            .await
+            .is_err(),
+        "global UI must not project a repository target"
+    );
     let static_projection = store
         .authenticate_and_project_http(
             RequestId::new(),
@@ -350,7 +401,7 @@ async fn ui_browser_resource_projection_fails_closed_on_static_api_ambiguity() {
     sqlx::migrate!("../../migrations")
         .run(&bootstrap)
         .await
-        .expect("apply migrations through 0092");
+        .expect("apply migrations through 0098");
     let worker = role_pool(&database_url, "hephaestus_worker").await;
     let app = role_pool(&database_url, "hephaestus_app").await;
     let fixture = seed_fixture_reusing_installation_helpers_draft(&worker).await;

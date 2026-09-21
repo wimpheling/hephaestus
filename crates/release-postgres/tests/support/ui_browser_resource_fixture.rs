@@ -679,12 +679,34 @@ async fn insert_handoff(
     generation: Uuid,
     digest: Vec<u8>,
 ) -> Result<Uuid, sqlx::Error> {
+    insert_handoff_with_route(
+        pool,
+        fixture,
+        organization,
+        installation,
+        generation,
+        fixture.route,
+        digest,
+    )
+    .await
+}
+
+async fn insert_handoff_with_route(
+    pool: &PgPool,
+    fixture: &Fixture,
+    organization: Uuid,
+    installation: Uuid,
+    generation: Uuid,
+    route: &str,
+    digest: Vec<u8>,
+) -> Result<Uuid, sqlx::Error> {
     insert_handoff_with_times_for(
         pool,
         fixture,
         organization,
         installation,
         generation,
+        route,
         digest,
         "0 seconds",
         "60 seconds",
@@ -700,6 +722,7 @@ async fn insert_handoff_with_times_for(
     organization: Uuid,
     installation: Uuid,
     generation: Uuid,
+    route: &str,
     digest: Vec<u8>,
     issued_at: &str,
     expires_at: &str,
@@ -721,7 +744,7 @@ async fn insert_handoff_with_times_for(
     .bind(installation)
     .bind(generation)
     .bind(organization)
-    .bind(fixture.route)
+    .bind(route)
     .bind(issued_at)
     .bind(expires_at)
     .execute(pool)
@@ -745,6 +768,41 @@ pub async fn insert_authenticated_child(
     )
     .await
     .expect("insert authentication handoff");
+    insert_authenticated_child_for_handoff(pool, handoff, session_digest, child_expiry).await
+}
+
+// The helper keeps every installation identity explicit for scope-isolation tests.
+#[allow(clippy::too_many_arguments)]
+pub async fn insert_authenticated_child_for(
+    pool: &PgPool,
+    fixture: &Fixture,
+    organization: Uuid,
+    installation: Uuid,
+    generation: Uuid,
+    route: &str,
+    session_digest: Vec<u8>,
+    child_expiry: &str,
+) -> Uuid {
+    let handoff = insert_handoff_with_route(
+        pool,
+        fixture,
+        organization,
+        installation,
+        generation,
+        route,
+        digest(90),
+    )
+    .await
+    .expect("insert authentication handoff");
+    insert_authenticated_child_for_handoff(pool, handoff, session_digest, child_expiry).await
+}
+
+async fn insert_authenticated_child_for_handoff(
+    pool: &PgPool,
+    handoff: Uuid,
+    session_digest: Vec<u8>,
+    child_expiry: &str,
+) -> Uuid {
     let child_id = Uuid::new_v4();
     let mut tx = pool.begin().await.expect("begin authentication child");
     sqlx::query(

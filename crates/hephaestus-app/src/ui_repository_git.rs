@@ -433,7 +433,7 @@ async fn reject(
         .await
 }
 
-fn request_authority(request: &Request<Body>) -> Result<String, StatusCode> {
+pub fn request_authority(request: &Request<Body>) -> Result<String, StatusCode> {
     if request.uri().scheme().is_some()
         || request.uri().authority().is_some()
         || request.headers().get_all(header::HOST).iter().count() != 1
@@ -448,7 +448,7 @@ fn request_authority(request: &Request<Body>) -> Result<String, StatusCode> {
         .ok_or(StatusCode::BAD_REQUEST)
 }
 
-fn require_same_origin(
+pub fn require_same_origin(
     request: &Request<Body>,
     host: UiGenerationHost,
     namespace: &UiNamespace,
@@ -476,7 +476,7 @@ fn require_same_origin(
     Ok(())
 }
 
-fn parse_child_cookie(request: &Request<Body>) -> Result<UiBrowserSessionSecret, StatusCode> {
+pub fn parse_child_cookie(request: &Request<Body>) -> Result<UiBrowserSessionSecret, StatusCode> {
     let mut found = None;
     for value in &request.headers().get_all(header::COOKIE) {
         let value = value.to_str().map_err(|_| StatusCode::UNAUTHORIZED)?;
@@ -506,7 +506,7 @@ fn parse_child_cookie(request: &Request<Body>) -> Result<UiBrowserSessionSecret,
     found.ok_or(StatusCode::UNAUTHORIZED)
 }
 
-fn error_response(status: StatusCode, message: &'static str) -> Response<Body> {
+pub fn error_response(status: StatusCode, message: &'static str) -> Response<Body> {
     let mut response = Response::new(Body::from(format!("{{\"error\":\"{message}\"}}")));
     *response.status_mut() = status;
     response
@@ -784,7 +784,7 @@ mod tests {
         sqlx::migrate!("../../migrations")
             .run(&bootstrap)
             .await
-            .expect("apply migrations through 0097");
+            .expect("apply migrations through 0098");
         let worker = role_pool(&database_url, "hephaestus_worker").await;
         let app_pool = role_pool(&database_url, "hephaestus_app").await;
         let fixture = resource_fixture::seed_fixture_reusing_installation_helpers(&worker).await;
@@ -865,17 +865,29 @@ mod tests {
             release_domain::UiInstallationGenerationId::from_uuid(fixture.repository_generation),
         );
         let authority = host.authority(&namespace, port);
+        let host_resolver: Arc<dyn UiGenerationHostResolver> = Arc::new(
+            release_postgres::PgUiGenerationHostResolver::new(app_pool.clone()),
+        );
+        let serving_store = Arc::new(release_postgres::PgUiBrowserServingStore::new(
+            app_pool.clone(),
+        ));
+        let audit_sink: Arc<dyn release_service::UiRequestAuditSink> = Arc::new(
+            release_postgres::PgUiRequestAuditRepository::new(worker.clone()),
+        );
         let state = Arc::new(UiRepositoryGitState::new(
-            Arc::new(release_postgres::PgUiGenerationHostResolver::new(
-                app_pool.clone(),
-            )),
-            Arc::new(release_postgres::PgUiBrowserServingStore::new(app_pool)),
+            host_resolver.clone(),
+            serving_store.clone(),
             Arc::clone(&git),
-            namespace,
+            namespace.clone(),
             port,
-            Arc::new(release_postgres::PgUiRequestAuditRepository::new(
-                worker.clone(),
-            )),
+            audit_sink.clone(),
+        ));
+        let context = Arc::new(crate::ui_context::UiContextState::new(
+            host_resolver,
+            serving_store,
+            namespace.clone(),
+            port,
+            audit_sink,
         ));
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
             .await
@@ -884,13 +896,37 @@ mod tests {
         let server = tokio::spawn(async move {
             axum::serve(
                 listener,
-                router(state).into_make_service_with_connect_info::<SocketAddr>(),
+                router(state)
+                    .merge(crate::ui_context::router(context))
+                    .into_make_service_with_connect_info::<SocketAddr>(),
             )
             .await
             .expect("UI Git server");
         });
         let remote = format!("http://{address}/_heph/git/{}", repository_id);
         let cookie = format!("{UI_CHILD_COOKIE}={}", URL_SAFE_NO_PAD.encode(secret));
+        let context_result = tokio::process::Command::new("curl")
+            .args([
+                "--silent",
+                "--show-error",
+                "--fail",
+                "-H",
+                &format!("Host: {authority}"),
+                "-H",
+                &format!("Cookie: {cookie}"),
+                &format!("http://{address}/_heph/ui-context"),
+            ])
+            .output()
+            .await
+            .expect("spawn UI context curl");
+        assert!(
+            context_result.status.success(),
+            "UI context request failed: {context_result:?}"
+        );
+        let context: serde_json::Value =
+            serde_json::from_slice(&context_result.stdout).expect("UI context JSON");
+        assert_eq!(context["repository_id"], fixture.repository.to_string());
+        assert_eq!(context.as_object().expect("UI context object").len(), 1);
         let common = vec![
             String::from("-c"),
             format!("http.extraHeader=Host: {authority}"),
@@ -1053,7 +1089,7 @@ mod tests {
                      statement_timestamp(), statement_timestamp() + interval '60 seconds')",
         )
         .bind(handoff)
-        .bind(vec![77_u8; 32])
+        .bind(secret.to_vec())
         .bind(uuid::Uuid::new_v4())
         .bind(fixture.actor)
         .bind(fixture.parent_session)

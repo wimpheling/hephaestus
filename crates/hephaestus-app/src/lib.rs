@@ -9,6 +9,7 @@ mod service_log_maintenance;
 pub(crate) mod ui_audit;
 mod ui_bootstrap;
 mod ui_browser_content;
+mod ui_context;
 mod ui_origin_config;
 mod ui_origin_wiring;
 mod ui_repository_git;
@@ -199,7 +200,7 @@ use workspace_local::{LocalWorkspaceConfig, LocalWorkspaceManager};
 use workspace_postgres::PgWorkspaceMetadataRepository;
 
 /// Ordered database migration expected by this application version.
-pub const EXPECTED_DATABASE_MIGRATION: i64 = 97;
+pub const EXPECTED_DATABASE_MIGRATION: i64 = 98;
 
 const GATEWAY_SERVICE_SERVING_CAPACITY: usize = 8;
 const GATEWAY_SERVICE_REPLACEMENT_CAPACITY: usize = 2;
@@ -1770,7 +1771,7 @@ impl HephaestusApp {
         let serving_store = Arc::new(PgUiBrowserServingStore::new(self.application_pool.clone()));
         let serving: Arc<dyn release_service::UiBrowserHttpServingProjection> =
             serving_store.clone();
-        let git_authority: Arc<dyn UiBrowserRepositoryGitAuthorization> = serving_store;
+        let git_authority: Arc<dyn UiBrowserRepositoryGitAuthorization> = serving_store.clone();
         let gateway = gateway.ui_dispatcher.clone().ok_or_else(|| {
             AppError::Configuration(String::from("UI origin requires a real gateway dispatcher"))
         })?;
@@ -1788,15 +1789,23 @@ impl HephaestusApp {
             .map_err(component("UI content configuration"))?,
         );
         let git = Arc::new(ui_repository_git::UiRepositoryGitState::new(
-            host_resolver,
+            host_resolver.clone(),
             git_authority,
             git,
             ui.namespace().clone(),
             ui.public_port(),
             Arc::clone(&audit_sink),
         ));
+        let context_state = Arc::new(ui_context::UiContextState::new(
+            Arc::clone(&host_resolver),
+            serving_store,
+            ui.namespace().clone(),
+            ui.public_port(),
+            Arc::clone(&audit_sink),
+        ));
         let router = ui_origin_wiring::bounded_ui_router_with_audit(
             ui_bootstrap::router(bootstrap)
+                .merge(ui_context::router(context_state))
                 .merge(ui_repository_git::router(git))
                 .merge(ui_browser_content::router(content)),
             Arc::new(Semaphore::new(128)),
