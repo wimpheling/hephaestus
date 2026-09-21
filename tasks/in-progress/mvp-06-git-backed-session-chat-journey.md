@@ -287,6 +287,21 @@ Its host peer is deliberately a transport fixture, not the production Git
 service. The daemon Unix listener, exact worktree and composed real Git guest
 journey remain to be implemented and verified.
 
+### Host runtime Git listener (2026-09-21)
+
+Commit `4ebe878` adds an owner-only Unix HTTP listener sharing the public Git
+service and its receive locks. The libkrun configuration receives the effective
+socket path before provider construction. Runtime credential admission precedes
+the existing production verifier; human credentials are rejected on this path.
+Binding rejects live or unsafe socket paths, and cancellation removes only the
+original owned socket inode.
+
+`cargo test -p hephaestus-app --lib runtime_git_listener` passed six tests,
+including an actual Unix HTTP exchange, stale/live socket behavior and cleanup.
+Focused formatting and diff checks passed. This is listener evidence; the
+composed guest worktree, production Git service and released-agent journey
+remain pending. Full repository checks and fresh GCP acceptance remain open.
+
 The completed task records the released protocol version and source revision;
 browser and real-Git evidence for session creation, turns, restart, and fork;
 the reference agent's allowed session-repository push and denied cross-repository
