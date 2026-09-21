@@ -33,8 +33,27 @@ impl Drop for SensitiveString {
 }
 
 fn main() {
-    if run().is_err() {
+    if let Err(error) = run() {
+        eprintln!("heph_git_credential_error={}", safe_error_code(&error));
         std::process::exit(1);
+    }
+}
+
+fn safe_error_code(error: &io::Error) -> &'static str {
+    match error.to_string().as_str() {
+        "action" => "action",
+        "expected host" => "expected_host",
+        "expected path" => "expected_path",
+        "credential path" => "credential_path",
+        "credential target" => "target",
+        "authority path" => "authority_path",
+        "authority file" => "authority_file",
+        "authority file protection" => "authority_protection",
+        "authority" => "authority_decode",
+        "runtime Git credential" => "credential_missing",
+        "runtime Git credential length" => "credential_length",
+        "runtime Git credential encoding" => "credential_encoding",
+        _ => "internal",
     }
 }
 

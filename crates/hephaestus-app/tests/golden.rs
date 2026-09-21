@@ -502,6 +502,8 @@ mod cooking_service_build;
 mod cooking_updates;
 #[path = "service_helpers/revocation.rs"]
 mod service_revocation;
+#[path = "../../../examples/session-chat/tests/composed.rs"]
+mod session_chat;
 // The integration-test support tree is private to this test crate; its
 // `pub(crate)` child boundaries are required by sibling fixture modules.
 #[allow(clippy::redundant_pub_crate)]
@@ -4573,26 +4575,39 @@ async fn bearer_push_starts_run_through_production_bootstrap() {
     let isolated_database = IsolatedGoldenDatabase::create(&parent_database_url).await;
     let database_url = isolated_database.target_url.clone();
     let libkrun_e2e = env::var("HEPHAESTUS_APP_LIBKRUN_E2E").as_deref() == Ok("1");
+    let session_chat_e2e = session_chat::enabled();
+    let session_chat_browser_e2e =
+        env::var("HEPHAESTUS_APP_SESSION_CHAT_BROWSER_E2E").as_deref() == Ok("1");
+    assert!(
+        !session_chat_browser_e2e || session_chat_e2e,
+        "session-chat browser E2E requires the standalone session-chat scenario"
+    );
+    let installed_ui_fixture = env::var("HEPHAESTUS_COOKING_INSTALLED_UI_FIXTURE").as_deref()
+        == Ok("1")
+        || session_chat_browser_e2e;
     let cooking_build_proof = env::var("HEPHAESTUS_APP_COOKING_BUILD_PROOF").as_deref() == Ok("1");
+    let release_build_proof = cooking_build_proof || session_chat_e2e;
     let cooking_service_build_proof =
         env::var("HEPHAESTUS_APP_COOKING_SERVICE_BUILD_PROOF").as_deref() == Ok("1");
     let caddy_tls = env::var("HEPHAESTUS_CADDY_TEST_TLS").as_deref() == Ok("1");
     // Ordinary golden tests keep their short timeout. The real Cooking proof
     // uses the production build limit, with a small margin for the observer's
     // final state poll and cleanup.
-    let build_timeout = if cooking_build_proof {
+    let build_timeout = if release_build_proof {
         Duration::from_secs(15 * 60)
     } else {
         Duration::from_secs(30)
     };
-    let cooking_wait_timeout = if cooking_build_proof {
+    let cooking_wait_timeout = if release_build_proof {
         build_timeout + Duration::from_secs(30)
     } else {
         Duration::from_secs(300)
     };
     let browser_e2e = env::var("HEPHAESTUS_COOKING_BROWSER_E2E").as_deref() == Ok("1");
-    let installed_ui_fixture =
-        env::var("HEPHAESTUS_COOKING_INSTALLED_UI_FIXTURE").as_deref() == Ok("1");
+    assert!(
+        !session_chat_browser_e2e || browser_e2e,
+        "session-chat browser E2E requires the browser phase"
+    );
     let gateway_caddy_e2e = env::var("HEPHAESTUS_APP_GATEWAY_CADDY_E2E").as_deref() == Ok("1");
     let gateway_service_e2e = env::var("HEPHAESTUS_APP_GATEWAY_SERVICE_E2E").as_deref() == Ok("1");
     let gateway_service_external_e2e =
@@ -4614,6 +4629,18 @@ async fn bearer_push_starts_run_through_production_bootstrap() {
     assert!(
         !cooking::enabled() || gateway_caddy_e2e,
         "cooking requires the joined Caddy/libkrun fixture"
+    );
+    assert!(
+        !session_chat_e2e || libkrun_e2e,
+        "session-chat requires the real libkrun backend"
+    );
+    assert!(
+        !session_chat_e2e || !cooking::enabled(),
+        "session-chat acceptance is a standalone golden mode"
+    );
+    assert!(
+        !session_chat_browser_e2e || libkrun_e2e,
+        "session-chat browser E2E requires the real libkrun/Caddy fixture"
     );
     assert!(
         !gateway_caddy_e2e || libkrun_e2e,
@@ -4873,7 +4900,7 @@ async fn bearer_push_starts_run_through_production_bootstrap() {
         "golden-agent",
     )
     .await;
-    let mut brokered_fixture = if libkrun_e2e && !cooking_build_proof {
+    let mut brokered_fixture = if libkrun_e2e && !cooking_build_proof && !session_chat_e2e {
         Some(if cooking::enabled() {
             cooking::seed_brokered_fixture(
                 &pool,
@@ -4893,6 +4920,11 @@ async fn bearer_push_starts_run_through_production_bootstrap() {
             )
             .await
         })
+    } else {
+        None
+    };
+    let mut session_chat_fixture = if session_chat_e2e {
+        Some(session_chat::start_model_fixture().await)
     } else {
         None
     };
@@ -4996,7 +5028,8 @@ async fn bearer_push_starts_run_through_production_bootstrap() {
             caddy_server_name: String::from("shared"),
             dispatcher_listen,
             public_authority: String::from("gateway.golden.invalid"),
-            ui_origin: None,
+            ui_origin: session_chat_browser_e2e
+                .then(|| installed_ui_origin_config(dispatcher_listen)),
         })
     } else {
         gateway_edge.as_ref().map(|(config, _)| config.clone())
@@ -5010,7 +5043,7 @@ async fn bearer_push_starts_run_through_production_bootstrap() {
             host_path: root_image.clone(),
         },
     )]);
-    if cooking_build_proof {
+    if release_build_proof {
         let python_image =
             env::var("HEPHAESTUS_LIBKRUN_UBUNTU_IMAGE").expect("cooking Python image reference");
         let rust_image = env::var("HEPHAESTUS_LIBKRUN_RUST_BUILDER_IMAGE")
@@ -5052,7 +5085,7 @@ async fn bearer_push_starts_run_through_production_bootstrap() {
             },
         );
     }
-    let cooking_worker = if cooking_build_proof {
+    let cooking_worker = if release_build_proof {
         let worker = cooking_oci_worker_config(&root, &repository_root, workload_phase_timing)
             .expect("cooking OCI worker environment");
         root_images.insert(
@@ -5093,7 +5126,7 @@ async fn bearer_push_starts_run_through_production_bootstrap() {
         // explicit provider allowlist root instead of guessing a source-tree
         // cache path or broadening the fixture to the entire local root.
         provider.mount_roots.extend(cooking_layout_mount_roots);
-        if cooking_build_proof {
+        if release_build_proof {
             // The one-shot OCI builder formats its private scratch disk under
             // the fixture root; it must be a disk allowlist root as well as a
             // worker filesystem root. Ordinary libkrun golden runs do not
@@ -5104,7 +5137,7 @@ async fn bearer_push_starts_run_through_production_bootstrap() {
         }
     }
     let secret_broker_socket = root.join("secret-broker.sock");
-    let observer = if cooking_build_proof {
+    let observer = if release_build_proof {
         assert!(
             libkrun_e2e,
             "cooking build proof requires the real libkrun backend"
@@ -5128,20 +5161,26 @@ async fn bearer_push_starts_run_through_production_bootstrap() {
     let mut transient_runtime_roots = backend_fixture.transient_runtime_roots;
     transient_runtime_roots.push(root.join("workspaces"));
     let backend = git_backend().await;
-    let git_pre_receive_hook = root.join("git-hooks/pre-receive");
-    std::fs::create_dir_all(
-        git_pre_receive_hook
-            .parent()
-            .expect("Git hook has a parent directory"),
-    )
-    .expect("Git hook directory");
-    std::fs::write(&git_pre_receive_hook, b"#!/bin/sh\nexit 1\n")
-        .expect("write fail-closed Git hook fixture");
-    std::fs::set_permissions(
-        &git_pre_receive_hook,
-        std::os::unix::fs::PermissionsExt::from_mode(0o700),
-    )
-    .expect("Git hook fixture mode");
+    let git_pre_receive_hook = if session_chat_e2e {
+        let hook = env::var_os("HEPHAESTUS_GIT_PRE_RECEIVE_HOOK")
+            .map(PathBuf::from)
+            .expect("session-chat requires HEPHAESTUS_GIT_PRE_RECEIVE_HOOK");
+        assert!(
+            hook.is_absolute() && hook.is_file(),
+            "session-chat receive hook must be an absolute built executable: {}",
+            hook.display()
+        );
+        hook
+    } else {
+        let hook = root.join("git-hooks/pre-receive");
+        std::fs::create_dir_all(hook.parent().expect("Git hook has a parent directory"))
+            .expect("Git hook directory");
+        std::fs::write(&hook, b"#!/bin/sh\nexit 1\n")
+            .expect("write fail-closed Git hook fixture");
+        std::fs::set_permissions(&hook, std::os::unix::fs::PermissionsExt::from_mode(0o700))
+            .expect("Git hook fixture mode");
+        hook
+    };
     let secret_mount_root = root.join("secret-mounts");
     std::fs::create_dir(&secret_mount_root).expect("secret mount root");
     std::fs::set_permissions(
@@ -5198,9 +5237,14 @@ async fn bearer_push_starts_run_through_production_bootstrap() {
         secret_keys: LocalKeyProvider::new("golden/v1", [("golden/v1", [17_u8; 32])])
             .expect("secret key"),
         secret_broker_socket,
-        secret_broker_adapter: brokered_fixture.as_ref().map_or_else(
-            || Arc::new(DenyingBrokerAdapter) as Arc<dyn secret_application::BrokerAdapter>,
-            |fixture| fixture.upstream.adapter(),
+        secret_broker_adapter: session_chat_fixture.as_ref().map_or_else(
+            || {
+                brokered_fixture.as_ref().map_or_else(
+                    || Arc::new(DenyingBrokerAdapter) as Arc<dyn secret_application::BrokerAdapter>,
+                    |fixture| fixture.upstream.adapter(),
+                )
+            },
+            |fixture| fixture.adapter(),
         ),
         vm_backend: backend_fixture.backend,
         root_images,
@@ -5254,15 +5298,68 @@ async fn bearer_push_starts_run_through_production_bootstrap() {
     let running = async move { app.start().await }.await;
     daemon_readiness_timer.finish(running.is_ok());
     let running = running.expect("start ready application");
-    // The Cooking proof deliberately spans several production builds before
-    // it creates the separate blog repository. Keep its fixture assertion
-    // valid for the bounded 45-minute host trial while ordinary golden tests
-    // retain the shorter token lifetime.
-    let token = signed_token(if cooking_build_proof {
+    let token = signed_token(if release_build_proof {
         Duration::from_secs(45 * 60)
     } else {
         Duration::from_secs(5 * 60)
     });
+    if session_chat_e2e {
+        let source_root = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("../../examples/session-chat")
+            .canonicalize()
+            .expect("session-chat source root");
+        let identity = AuthenticatedIdentity::new(
+            user_id,
+            &browser_oidc_issuer,
+            "golden-subject",
+            serde_json::json!({}),
+            RequestId::new(),
+        );
+        let rpc_token = |audience: &str| {
+            let now = OffsetDateTime::now_utc().unix_timestamp();
+            encode(
+                &Header::new(Algorithm::HS256),
+                &serde_json::json!({
+                    "iss": "hephaestus-web-mediator",
+                    "sub": user_id.to_string(),
+                    "aud": audience,
+                    "iat": now,
+                    "nbf": now,
+                    "exp": now + 25,
+                    "jti": uuid::Uuid::new_v4().to_string(),
+                    "sid": owner_browser_session.to_protocol_string()
+                }),
+                &EncodingKey::from_secret(&hephaestus_app::rpc::mediator_signing_key(
+                    b"golden-internal-command-token-with-sufficient-entropy",
+                )),
+            )
+            .expect("sign session-chat mediator token")
+        };
+        session_chat::exercise(
+            &pool,
+            &running,
+            &root,
+            &source_root,
+            project.id,
+            organization_id,
+            &fixture_repository,
+            &identity,
+            &token,
+            &rpc_token,
+            session_chat_fixture
+                .take()
+                .expect("session-chat broker fixture"),
+            cooking_wait_timeout,
+        )
+        .await;
+        running.shutdown().await.expect("session-chat daemon shutdown");
+        cleanup_streams(&nats_url).await;
+        return;
+    }
+    // The Cooking proof deliberately spans several production builds before
+    // it creates the separate blog repository. Keep its fixture assertion
+    // valid for the bounded 45-minute host trial while ordinary golden tests
+    // retain the shorter token lifetime.
     if cooking_build_proof {
         let installed_ui_fixture =
             env::var("HEPHAESTUS_COOKING_INSTALLED_UI_FIXTURE").as_deref() == Ok("1");
@@ -8133,6 +8230,7 @@ fn signed_token(lifetime: Duration) -> String {
 
 fn installed_ui_fixture_enabled() -> bool {
     env::var("HEPHAESTUS_COOKING_INSTALLED_UI_FIXTURE").as_deref() == Ok("1")
+        || env::var("HEPHAESTUS_APP_SESSION_CHAT_BROWSER_E2E").as_deref() == Ok("1")
 }
 
 fn installed_ui_platform_origin() -> String {

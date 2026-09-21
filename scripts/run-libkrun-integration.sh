@@ -919,6 +919,13 @@ if [[ "${HEPHAESTUS_APP_LIBKRUN_E2E:-0}" == "1" ]]; then
         --manifest-path "${repo_root}/Cargo.toml" \
         --package vm-libkrun \
         --bin hephaestus-vm-libkrun-worker
+    if [[ "${HEPHAESTUS_APP_SESSION_CHAT_E2E:-0}" == "1" ]]; then
+        cargo build \
+            --manifest-path "${repo_root}/Cargo.toml" \
+            --package git-http \
+            --bin pre-receive
+        export HEPHAESTUS_GIT_PRE_RECEIVE_HOOK="${cargo_target_dir}/debug/pre-receive"
+    fi
     if [[ "${HEPHAESTUS_APP_GATEWAY_SERVICE_EXTERNAL_E2E:-0}" == "1" ]]; then
         cargo build \
             --manifest-path "${repo_root}/Cargo.toml" \

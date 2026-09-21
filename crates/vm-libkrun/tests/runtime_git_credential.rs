@@ -53,15 +53,82 @@ fn git_credential_fill_rejects_a_different_repository_route() {
         "http://127.0.0.1:19100/22222222-2222-4222-8222-222222222222",
     );
     assert!(!output.status.success());
+    let stderr = String::from_utf8(output.stderr).expect("helper stderr is UTF-8");
+    assert_eq!(
+        stderr.lines().next(),
+        Some("heph_git_credential_error=target")
+    );
+    assert!(!stderr.contains("abababab"));
+}
+
+#[test]
+fn git_credential_fill_reports_fixed_host_failure_code() {
+    let directory = tempfile::tempdir().expect("temporary authority directory");
+    let authority = directory.path().join("authority.json");
+    fs::write(
+        &authority,
+        br#"{"runtime_git_credential":"abababababababababababababababababababababababababababababababab"}"#,
+    )
+    .expect("write authority");
+    fs::set_permissions(&authority, fs::Permissions::from_mode(0o400)).expect("protect authority");
+
+    let output = run_fill_with(
+        &authority,
+        "127.0.0.1:19101",
+        "11111111-1111-4111-8111-111111111111",
+        "http://127.0.0.1:19100/11111111-1111-4111-8111-111111111111",
+    );
+    assert!(!output.status.success());
+    let stderr = String::from_utf8(output.stderr).expect("helper stderr is UTF-8");
+    assert_eq!(
+        stderr.lines().next(),
+        Some("heph_git_credential_error=target")
+    );
+    assert!(!stderr.contains("abababab"));
+}
+
+#[test]
+fn git_credential_fill_reports_fixed_protection_failure_code() {
+    let directory = tempfile::tempdir().expect("temporary authority directory");
+    let authority = directory.path().join("authority.json");
+    fs::write(
+        &authority,
+        br#"{"runtime_git_credential":"abababababababababababababababababababababababababababababababab"}"#,
+    )
+    .expect("write authority");
+    fs::set_permissions(&authority, fs::Permissions::from_mode(0o644))
+        .expect("make authority too broad");
+
+    let output = run_fill(
+        &authority,
+        "11111111-1111-4111-8111-111111111111",
+        "http://127.0.0.1:19100/11111111-1111-4111-8111-111111111111",
+    );
+    assert!(!output.status.success());
+    let stderr = String::from_utf8(output.stderr).expect("helper stderr is UTF-8");
+    assert_eq!(
+        stderr.lines().next(),
+        Some("heph_git_credential_error=authority_protection")
+    );
+    assert!(!stderr.contains("abababab"));
 }
 
 fn run_fill(authority: &Path, repository: &str, url: &str) -> std::process::Output {
+    run_fill_with(authority, "127.0.0.1:19100", repository, url)
+}
+
+fn run_fill_with(
+    authority: &Path,
+    expected_host: &str,
+    repository: &str,
+    url: &str,
+) -> std::process::Output {
     let mut git = Command::new("git");
     git.args(["credential", "fill"])
         .env("GIT_CONFIG_NOSYSTEM", "1")
         .env("GIT_CONFIG_GLOBAL", "/dev/null")
         .env("HEPH_RUNTIME_AUTHORITY_PATH", authority)
-        .env("HEPH_RUNTIME_GIT_HOST", "127.0.0.1:19100")
+        .env("HEPH_RUNTIME_GIT_HOST", expected_host)
         .env("HEPH_RUNTIME_GIT_PATH", repository)
         .env("GIT_TERMINAL_PROMPT", "0")
         .env("GIT_CONFIG_COUNT", "2")
