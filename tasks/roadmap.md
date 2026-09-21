@@ -48,7 +48,7 @@ interactive session, durable input/output, isolated execution, and reconnectable
 history. It does not by itself deliver the primary administration UI or the
 complete create/code/run project journey.
 
-- [ ] Jointly review the MVP-06 plan with the user before starting or resuming
+- [x] Jointly review the MVP-06 plan with the user before starting or resuming
   implementation. Confirm the intended scope, dependency order and acceptance
   evidence in [the MVP-06 task](in-progress/mvp-06-git-backed-session-chat-journey.md)
   before implementation items are taken up.

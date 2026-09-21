@@ -1,6 +1,6 @@
 # MVP 06: Git-backed session chat journey
 
-Owner: unassigned
+Owner: Astra orchestration / Luna bounded subtasks
 
 ## Outcome
 
@@ -51,23 +51,54 @@ a precursor rather than the final administration UI. The GCP Cooking validation
 follow-up is tracked separately; its current status must be considered during
 the review rather than assumed to be complete.
 
-- [ ] Review this plan jointly with the user and record the agreed scope and
-  sequence here.
-- [ ] Confirm the release-owned UI dependency is ready, or record the agreed
-  dependency resolution before beginning MVP-06 implementation.
-- [ ] Confirm which current GCP Cooking evidence is relevant to the agreed
-  MVP-06 sequence; do not use cleanup-only evidence as a completion claim.
+- [x] Review this plan jointly with the user and record the agreed scope and
+  sequence here. On 2026-09-21 the user authorized MVP-06 on branch
+  `feat/mvp-06-git-backed-chat` and its PR, followed by plugging the completed
+  journey into the GCP Cooking workflow.
+  The agreed sequence is to audit the existing input-to-response transitions,
+  define the release-owned session protocol, implement the new-chat adapter and
+  reference agent on the completed release-owned surfaces, prove the journey
+  with real Git/browser/VM integration and a deterministic fake model, and then
+  add the GCP workflow integration.
+- [x] Confirm the release-owned UI dependency is ready, or record the agreed
+  dependency resolution before beginning MVP-06 implementation. The completed
+  [`release-owned-distribution-ui-surfaces.md`](../done/release-owned-distribution-ui-surfaces.md)
+  records completion on 2026-09-21, final `cargo dev quality` success, and
+  explicit permission for a distribution journey such as MVP-06 to use a
+  release-owned chat tab. MVP-06 therefore consumes that surface and does not
+  add another UI host, iframe, static-serving path, or tab mechanism.
+- [x] Confirm which current GCP Cooking evidence is relevant to the agreed
+  MVP-06 sequence; do not use cleanup-only evidence as a completion claim. The
+  recovered no-VM [run 34674597133](https://github.com/wimpheling/hephaestus/actions/runs/34674597133)
+  satisfies the current GCP workflow acceptance with all three gates and the
+  startup supervisor passing, both browser phases passing, complete retained
+  collection, and encrypted archive validation. The original full [run
+  34673076889](https://github.com/wimpheling/hephaestus/actions/runs/34673076889)
+  remains historically red because it predates the summary projection fix;
+  it does not establish a workload or browser failure. This evidence clears
+  the dependency review but does not satisfy MVP-06's future GCP integration
+  or journey acceptance evidence.
 
 ## Implementation checklist
 
-- [ ] **1. Define the reference chat release's repository protocol**
+- [ ] **1. Audit the existing interactive path**
+  - [ ] Trace user input through durable acceptance, isolated execution,
+    visible response, and reconnectable history using repository evidence and
+    focused experiments.
+  - [ ] Classify each transition as supported, awkward to integrate, or
+    genuinely missing, and record the smallest required changes for response
+    publication, subscriptions, authorization, and recovery.
+  - [ ] Record ownership of the visible transcript separately from
+    agent-owned model context and internal workflow state.
+
+- [ ] **2. Define the reference chat release's repository protocol**
   - [ ] Document the reference release's session layout, message identity/order,
     user and agent records, correlation IDs, content references, branch/fork
     rules, concurrent-writer behavior, and compatibility/versioning behavior.
   - [ ] Define release-owned initialization, participant policy,
     retention/tombstone behavior, and safe repository fork semantics.
 
-- [ ] **2. Build the chat distribution flow**
+- [ ] **3. Build the chat distribution flow**
   - [ ] Add the authorized “new chat” workflow: create repository, create the
     session instance, bind its repository capability, let the release initialize
     its repository, and open the release's chat route.
@@ -79,7 +110,7 @@ the review rather than assumed to be complete.
   - [ ] Keep that adapter and any commands/forms out of the Hephaestus core
     workflow model.
 
-- [ ] **3. Build the reference chat release**
+- [ ] **4. Build the reference chat release**
   - [ ] Build and publish a small ordinary chat-agent release that defines and
     reads its session protocol, calls its model API through MVP 04, and
     commits its response with normal Git.
@@ -87,7 +118,7 @@ the review rather than assumed to be complete.
     MVP 04 destination-bound egress bindings; prove that the release cannot
     use its source repository, another session, or an undeclared destination.
 
-- [ ] **4. Prove the journey**
+- [ ] **5. Prove the journey**
   - [ ] Cover session creation, release-owned initialization, first message,
     agent response, subsequent turn, branch/fork, restart/recovery, concurrent
     release-defined writers, and visibility/history in browser and real-Git
@@ -99,6 +130,16 @@ the review rather than assumed to be complete.
     OpenRouter placeholder-substitution smoke test without weakening credential
     controls.
 
+- [ ] **6. Integrate the accepted journey with the GCP Cooking workflow**
+  - [ ] Add the MVP-06 real-Git/browser/VM acceptance path to the GCP workflow
+    after the local deterministic fake-model proof, preserving disposable VM
+    cleanup, private diagnostics collection, credential scanning, and the
+    existing workflow gate controls.
+  - [ ] Capture and review the GCP run's session creation, turns,
+    restart/recovery, fork, negative capability, and fake-model egress
+    evidence; classify any failure from retained typed evidence rather than
+    inferring a workload or browser failure from an outer workflow result.
+
 ## Non-goals
 
 This task does not add a platform-owned session protocol, public HTTP ingress,
@@ -108,19 +149,26 @@ over repositories and content capabilities later.
 
 ## Verify and document
 
-- Publish the reference release's versioned repository protocol, including its
-  retention and fork warning semantics, rather than presenting it as a core
-  Hephaestus contract.
-- Run real-Git and browser integration coverage for the journey and negative
-  capability cases listed above. Exercise the released agent in its VM runtime
-  with the deterministic fake HTTPS model endpoint; keep an OpenRouter smoke
-  test separately opt-in and use only placeholder substitution.
-- Run `cargo fmt --all -- --check`,
-  `cargo clippy --workspace --all-targets --all-features`,
-  `cargo test --workspace --all-features`, and
-  `cargo doc --workspace --all-features --no-deps`. Run applicable UI checks
-  when the reference distribution adapter changes.
-- Before repository handoff, run `git diff --check` and `cargo dev quality`.
+- [ ] Publish the reference release's versioned repository protocol, including
+  its retention and fork warning semantics, rather than presenting it as a
+  core Hephaestus contract.
+- [ ] Run real-Git and browser integration coverage for the journey and
+  negative capability cases listed above. Exercise the released agent in its
+  VM runtime with the deterministic fake HTTPS model endpoint; keep an
+  OpenRouter smoke test separately opt-in and use only placeholder
+  substitution.
+- [ ] Run `cargo fmt --all -- --check`.
+- [ ] Run `cargo clippy --workspace --all-targets --all-features`.
+- [ ] Run `cargo test --workspace --all-features`.
+- [ ] Run `cargo doc --workspace --all-features --no-deps`.
+- [ ] Run applicable UI checks when the reference distribution adapter changes.
+- [ ] Before repository handoff, run `git diff --check` and `cargo dev quality`.
+- [ ] Record acceptance evidence with the released protocol version and source
+  revision, browser and real-Git evidence for creation, turns, restart/recovery
+  and fork, allowed and denied capability cases, and fake-model placeholder and
+  credential findings, including any explicitly justified exclusions.
+- [ ] Record the GCP workflow integration run, retained artifact identifiers,
+  and the typed outcome for each MVP-06 acceptance phase.
 
 ## Completion evidence
 
