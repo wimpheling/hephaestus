@@ -440,6 +440,27 @@ The disposable database was dropped. This supersedes an earlier ambiguous
 command report with a misspelled environment variable. The composed VM/model
 scenario still needs to verify this path in the complete journey.
 
+### Browser package and response refresh (2026-09-21)
+
+Commits `54a8d4d` and `ec51703` package the repository-scoped reference UI and
+add automatic correlated-response polling. The UI initializes an empty session
+through ordinary human-authorized Git, reads first-parent history, publishes
+human records and refreshes committed responses. Git operations are serialized;
+polling has an abortable deadline and stops on page teardown. The regenerated
+browser bundle is checked in for the network-disabled release builder.
+
+Nineteen local UI tests passed, including protocol parity, real ordinary-Git
+history/initialization, failed publication, correlated response, timeout and
+in-flight disposal coverage. The ordinary-Git push fixture uses a native Git
+test adapter; this does not prove browser HTTP transport. Release staging passed.
+
+The subsequent standalone real-libkrun composed attempt reached the wait for
+`result.completed` but timed out after about 125 seconds. Its golden result was
+34 passed, one ignored and one failed. Retained diagnostics are being inspected;
+an outer diagnostic query targeted the parent database instead of the isolated
+test database, so the timeout alone does not identify the failed lifecycle
+transition. Full deterministic response and browser acceptance remain open.
+
 The completed task records the released protocol version and source revision;
 browser and real-Git evidence for session creation, turns, restart, and fork;
 the reference agent's allowed session-repository push and denied cross-repository
