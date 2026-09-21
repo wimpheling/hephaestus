@@ -78,6 +78,8 @@ set_phase_timing_workload_requirements() {
       --require-workload-phase gateway-readiness
       --require-workload-phase golden-tests
       --require-workload-phase database-tests
+      --require-workload-phase browser-initial
+      --require-workload-phase browser-recovery
     )
   else
     phase_timing_workload_required_args=(

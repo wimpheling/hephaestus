@@ -1524,6 +1524,10 @@ async fn run_session_chat_browser(
     model_import_id: Uuid,
     mode: SessionChatBrowserMode,
 ) {
+    let browser_phase = match &mode {
+        SessionChatBrowserMode::New => "initial",
+        SessionChatBrowserMode::Existing { .. } => "recovery",
+    };
     let fixture_output = PathBuf::from(
         std::env::var("HEPHAESTUS_COOKING_BROWSER_FIXTURE_OUTPUT")
             .expect("session-chat browser fixture output path"),
@@ -1611,6 +1615,14 @@ async fn run_session_chat_browser(
         .expect("session-chat browser OIDC issuer");
     let script =
         Path::new(env!("CARGO_MANIFEST_DIR")).join("../../scripts/run-installed-ui-e2e.sh");
+    let browser_timer = super::WorkloadPhaseTimer::start(
+        if browser_phase == "initial" {
+            "browser-initial"
+        } else {
+            "browser-recovery"
+        },
+        super::workload_phase_timing_from_environment(),
+    );
     let status = Command::new(script)
         .env("HEPHAESTUS_E2E_COOKING_FIXTURE", &fixture_path)
         .env("HEPHAESTUS_E2E_EXTERNAL_DATABASE_URL", database_url)
@@ -1623,9 +1635,7 @@ async fn run_session_chat_browser(
             "golden-internal-command-token-with-sufficient-entropy",
         )
         .env("HEPHAESTUS_E2E_EXTERNAL_OIDC_ISSUER", issuer)
-        // The installed UI wrapper currently allowlists only the initial phase;
-        // recovery uses a separate fixture path while keeping that contract.
-        .env("HEPHAESTUS_E2E_COOKING_PHASE", "initial")
+        .env("HEPHAESTUS_E2E_COOKING_PHASE", browser_phase)
         .env("HEPHAESTUS_INSTALLED_UI_BROWSER_GREP", browser_selector)
         .env(
             "HEPHAESTUS_PLATFORM_HTTPS_ORIGIN",
@@ -1640,6 +1650,7 @@ async fn run_session_chat_browser(
         .status()
         .await
         .expect("run session-chat installed UI browser E2E");
+    browser_timer.finish(status.success());
     assert!(
         status.success(),
         "session-chat browser E2E failed: {status}"

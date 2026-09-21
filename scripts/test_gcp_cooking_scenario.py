@@ -22,7 +22,10 @@ SESSION_PHASES = (
     "gateway-readiness",
     "golden-tests",
     "database-tests",
+    "browser-initial",
+    "browser-recovery",
 )
+SESSION_BROWSER_PHASES = ("browser-initial", "browser-recovery")
 COOKING_PHASES = (
     "dependency-setup",
     "production-project-build",
@@ -55,6 +58,7 @@ PHASE_DOMAINS = {
     "golden-tests": "workload-libkrun",
     "database-tests": "workload-libkrun",
     "browser-initial": "workload-libkrun",
+    "browser-recovery": "workload-libkrun",
     "browser-post-operation": "workload-libkrun",
 }
 
@@ -115,6 +119,7 @@ class GcpCookingScenarioContractTests(unittest.TestCase):
             "HEPHAESTUS_APP_LIBKRUN_E2E=1",
             "HEPHAESTUS_APP_COOKING_BUILD_PROOF=1",
             "HEPHAESTUS_APP_SESSION_CHAT_BROWSER_E2E=1",
+            "HEPHAESTUS_APP_SESSION_CHAT_RESTART_E2E=1",
             "HEPHAESTUS_COOKING_BROWSER_E2E=1",
         ):
             self.assertIn(flag, session_branch)
@@ -129,6 +134,7 @@ class GcpCookingScenarioContractTests(unittest.TestCase):
         )
 
         cooking_branch = self.runtime[cooking_start:]
+        self.assertNotIn("HEPHAESTUS_APP_SESSION_CHAT_RESTART_E2E=1", cooking_branch)
         self.assertIn(
             'workload_scenario_env=(\n        "--setenv=HEPHAESTUS_APP_COOKING_E2E=1"',
             cooking_branch,
@@ -144,6 +150,8 @@ class GcpCookingScenarioContractTests(unittest.TestCase):
             startup,
         )
         for phase in SESSION_PHASES:
+            self.assertIn(f"--require-workload-phase {phase}", smoke)
+        for phase in SESSION_BROWSER_PHASES:
             self.assertIn(f"--require-workload-phase {phase}", smoke)
         for phase in ("production-project-build", "gateway-edge-ready", "browser-initial", "browser-post-operation"):
             self.assertIn(f"--require-workload-phase {phase}", smoke)
@@ -172,20 +180,14 @@ class GcpCookingScenarioContractTests(unittest.TestCase):
         golden = (ROOT.parent / "crates/hephaestus-app/tests/golden.rs").read_text(
             encoding="utf-8"
         )
-        session_return = golden.index(
-            "    if session_chat_e2e {\n        let source_root", golden.index("let running =")
-        )
-        first_cooking_browser_timer = golden.index(
-            'WorkloadPhaseTimer::start("browser-initial"', session_return
-        )
-        self.assertLess(
-            session_return,
-            first_cooking_browser_timer,
-            "session-chat returns before Cooking browser-initial/post-operation phases",
-        )
         libkrun = (ROOT / "run-libkrun-integration.sh").read_text(encoding="utf-8")
         wrapper = (ROOT.parent / "examples/cooking/run.sh").read_text(encoding="utf-8")
         for phase in SESSION_PHASES:
+            if phase in SESSION_BROWSER_PHASES:
+                # These two timers are emitted by the session-chat composed
+                # browser owner; this contract test only covers existing
+                # runner boundaries and phase requirements.
+                continue
             if phase == "browser-setup":
                 self.assertIn("phase_timing_start browser-setup", wrapper)
             elif phase == "gateway-readiness":

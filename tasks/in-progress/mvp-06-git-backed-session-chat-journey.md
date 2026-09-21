@@ -729,5 +729,23 @@ blobs, direct Git ancestry, exact model history, persisted installation and
 revision, fresh runtime authority, and no recursive run. Formatting, golden-test
 compilation, and strict Clippy pass; retained logs are
 `/var/tmp/sessionchat-restart-cargo-{fmt2,check2,clippy2}.log`. The recovery path
-has not executed successfully. Selecting it in the GCP scenario and extending
-typed evidence collection for its second browser phase remain pending.
+has not executed successfully. The GCP scenario now selects it and typed
+evidence collection requires both browser phases; runtime acceptance remains
+pending.
+
+### Latest browser and phase-gate status (2026-09-21)
+
+The retained final11 markers prove that submitting the new-session form reaches
+Phoenix, but compatible model-import validation fails before the RPC. The numeric enum projection bug is fixed in `8b9c4c0`; 31 focused web tests
+pass, including a protobuf encode/decode regression. The browser path is not
+yet runtime verified after that fix.
+
+Projector commit `b2e12c9` requires both initial and recovery phases while
+retaining typed partial failures; its 12 focused tests and collector mode-0600
+coverage pass. Commit `900c2ee` typechecks the concurrency browser spec, but it
+is not yet wired into or run by the host or GCP harness. Recovery timers, the
+GCP restart flag, and required phase checks have focused formatting, check,
+Clippy, and 29 scenario/timing tests passing, and shared harness support now forwards the recovery fixture and RPC endpoint.
+The fake-child bridge contract verifies sequential phases, retained transcript
+counts, and invalid phase/runner rejection. Full initial-plus-recovery runtime
+acceptance remains pending.

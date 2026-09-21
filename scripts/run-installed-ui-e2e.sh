@@ -28,8 +28,8 @@ case "${browser_grep}" in
         ;;
 esac
 case "${phase}" in
-    initial) true ;;
-    *) printf 'installed UI smoke supports only the initial phase\n' >&2; exit 1 ;;
+    initial|recovery) true ;;
+    *) printf 'installed UI smoke supports only the initial or recovery phase\n' >&2; exit 1 ;;
 esac
 platform_origin="${HEPHAESTUS_PLATFORM_HTTPS_ORIGIN:?set HEPHAESTUS_PLATFORM_HTTPS_ORIGIN}"
 ca_cert="${HEPHAESTUS_CADDY_TEST_CA_CERT:?set HEPHAESTUS_CADDY_TEST_CA_CERT}"

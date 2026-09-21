@@ -139,10 +139,10 @@ if diagnostics:
     diag = pathlib.Path(diagnostics)
     if not diag.is_absolute() or diag.is_symlink() or not diag.is_dir():
         raise SystemExit("browser diagnostics directory is invalid")
-if payload["phase"] not in {"initial", "post-operation"}:
-    raise SystemExit("browser phase is invalid")
-if runner == "installed-ui" and payload["phase"] != "initial":
-    raise SystemExit("installed UI browser bridge supports only the initial phase")
+if runner == "legacy" and payload["phase"] not in {"initial", "post-operation"}:
+    raise SystemExit("legacy browser phase is invalid")
+if runner == "installed-ui" and payload["phase"] not in {"initial", "recovery"}:
+    raise SystemExit("installed UI browser bridge supports only the initial or recovery phase")
 if not payload["web_port"].isdigit() or not 1 <= int(payload["web_port"]) <= 65535:
     raise SystemExit("browser web port is invalid")
 for key in ("database_url", "rpc_endpoint", "oidc_issuer"):

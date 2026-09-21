@@ -17,27 +17,37 @@ oidc_client_id="${HEPHAESTUS_E2E_EXTERNAL_OIDC_CLIENT_ID:-hephaestus-web}"
 oidc_client_secret="${HEPHAESTUS_E2E_EXTERNAL_OIDC_CLIENT_SECRET:-development-secret}"
 web_port="${HEPHAESTUS_E2E_EXTERNAL_WEB_PORT:-4000}"
 phase="${HEPHAESTUS_E2E_COOKING_PHASE:-initial}"
-case "${phase}" in
-    initial) test_grep='cooking release install' ;;
-    post-operation) test_grep='cooking post-operation controls' ;;
-    *) printf 'unsupported cooking browser phase: %s\n' "${phase}" >&2; exit 1 ;;
-esac
-if [[ "${HEPHAESTUS_E2E_BROWSER_RUNNER:-legacy}" == installed-ui ]]; then
-    test_grep="${HEPHAESTUS_INSTALLED_UI_BROWSER_GREP:-cooking installed UI TLS}"
-    [[ "${#test_grep}" -le 256 && "${test_grep}" != *$'\n'* && "${test_grep}" != *$'\r'* ]] || {
-        printf 'installed UI browser grep is invalid\n' >&2
-        exit 1
-    }
-    case "${test_grep}" in
-        "cooking installed UI TLS"|\
-        "cooking session-chat installed UI initializes and reconnects ordinary Git history"|\
-        "cooking new session chat creates and opens a real Git-backed browser session") ;;
-        *)
-            printf 'unsupported installed UI browser selector\n' >&2
+browser_runner="${HEPHAESTUS_E2E_BROWSER_RUNNER:-legacy}"
+case "${browser_runner}" in
+    legacy)
+        case "${phase}" in
+            initial) test_grep='cooking release install' ;;
+            post-operation) test_grep='cooking post-operation controls' ;;
+            *) printf 'unsupported cooking browser phase: %s\n' "${phase}" >&2; exit 1 ;;
+        esac
+        ;;
+    installed-ui)
+        test_grep="${HEPHAESTUS_INSTALLED_UI_BROWSER_GREP:-cooking installed UI TLS}"
+        case "${phase}" in
+            initial|recovery) ;;
+            *) printf 'installed UI browser phase must be initial or recovery: %s\n' "${phase}" >&2; exit 1 ;;
+        esac
+        [[ "${#test_grep}" -le 256 && "${test_grep}" != *$'\n'* && "${test_grep}" != *$'\r'* ]] || {
+            printf 'installed UI browser grep is invalid\n' >&2
             exit 1
-            ;;
-    esac
-fi
+        }
+        case "${test_grep}" in
+            "cooking installed UI TLS"|\
+            "cooking session-chat installed UI initializes and reconnects ordinary Git history"|\
+            "cooking new session chat creates and opens a real Git-backed browser session") ;;
+            *)
+                printf 'unsupported installed UI browser selector\n' >&2
+                exit 1
+                ;;
+        esac
+        ;;
+    *) printf 'unsupported browser runner: %s\n' "${browser_runner}" >&2; exit 1 ;;
+esac
 
 if [[ -n "${HEPHAESTUS_COOKING_BROWSER_BRIDGE_DIR:-}" ]]; then
     bridge_dir="${HEPHAESTUS_COOKING_BROWSER_BRIDGE_DIR}"
@@ -55,13 +65,12 @@ if [[ -n "${HEPHAESTUS_COOKING_BROWSER_BRIDGE_DIR:-}" ]]; then
         printf 'browser fixture is outside the bridge directory\n' >&2
         exit 1
     }
-    browser_runner="${HEPHAESTUS_E2E_BROWSER_RUNNER:-legacy}"
     case "${browser_runner}" in
         legacy|installed-ui) ;;
         *) printf 'unsupported browser bridge runner\n' >&2; exit 1 ;;
     esac
-    if [[ "${browser_runner}" == installed-ui && "${phase}" != initial ]]; then
-        printf 'installed UI browser bridge supports only the initial phase\n' >&2
+    if [[ "${browser_runner}" == installed-ui && "${phase}" != initial && "${phase}" != recovery ]]; then
+        printf 'installed UI browser bridge supports only the initial or recovery phase\n' >&2
         exit 1
     fi
     if [[ "${browser_runner}" == installed-ui ]]; then

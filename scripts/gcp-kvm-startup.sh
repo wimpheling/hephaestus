@@ -628,12 +628,12 @@ collect_diagnostics() {
   phase_timing_workload_required_args=()
   if [[ "$selected_cooking_scenario" == session-chat ]]; then
     # The standalone session-chat runner does not execute Cooking's gateway
-    # workload or browser-initial/post-operation phases. These are the phases
-    # emitted by its real libkrun and session browser path.
+    # workload or browser-post-operation phase. Its browser phases are the
+    # initial creation journey and the post-restart recovery journey.
     required_workload_phases=(
       browser-setup runtime-guest-build oci-image-materialization
       gateway-services-ready runtime-worker-build gateway-readiness
-      golden-tests database-tests
+      golden-tests database-tests browser-initial browser-recovery
     )
   else
     required_workload_phases=(
