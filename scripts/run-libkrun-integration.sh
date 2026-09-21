@@ -993,6 +993,13 @@ if [[ "${HEPHAESTUS_APP_LIBKRUN_E2E:-0}" == "1" ]]; then
         # Disable child timing so this outer phase is the sole owner of the
         # negative-process outcome and cannot create duplicate phase records.
         phase_timing_start guest-negative-capability
+        negative_evidence_root="${diagnostics_dir:-${fixture_root}/negative-evidence}"
+        mkdir -p -- "${negative_evidence_root}"
+        chmod 0700 -- "${negative_evidence_root}"
+        negative_private_log="$(mktemp "${negative_evidence_root}/session-chat-negative.XXXXXX.log")"
+        chmod 0600 -- "${negative_private_log}"
+        negative_summary="${negative_evidence_root}/session-chat-negative-summary.json"
+        set +e
         run_as_guest_owner env \
             -u HEPHAESTUS_APP_SESSION_CHAT_BROWSER_E2E \
             -u HEPHAESTUS_APP_SESSION_CHAT_RESTART_E2E \
@@ -1035,8 +1042,30 @@ if [[ "${HEPHAESTUS_APP_LIBKRUN_E2E:-0}" == "1" ]]; then
             --test golden \
             "${golden_features[@]}" \
             bearer_push_starts_run_through_production_bootstrap \
-            -- --exact --nocapture
+            -- --exact --nocapture >"${negative_private_log}" 2>&1
+        negative_status=$?
+        set -e
+        set +e
+        python3 "${repo_root}/scripts/project-session-chat-negative-summary.py" \
+            --private-log "${negative_private_log}" \
+            --exit-status "${negative_status}" \
+            --output "${negative_summary}" >/dev/null 2>&1
+        negative_projection_status=$?
+        set -e
+        if ((negative_status != 0)); then
+            phase_timing_end guest-negative-capability failed
+            printf 'HEPH_SESSION_CHAT_NEGATIVE status=failed reason=runner exit_code=%s\n' \
+                "${negative_status}"
+            exit "${negative_status}"
+        fi
+        if ((negative_projection_status != 0)); then
+            phase_timing_end guest-negative-capability failed
+            printf 'HEPH_SESSION_CHAT_NEGATIVE status=failed reason=projection exit_code=%s\n' \
+                "${negative_projection_status}"
+            exit "${negative_projection_status}"
+        fi
         phase_timing_end guest-negative-capability passed
+        printf 'HEPH_SESSION_CHAT_NEGATIVE status=passed evidence=typed-summary\n'
     fi
     # Reuse the same disposable authority database and JetStream fixture for
     # the gateway publication persistence, RLS, and recovery proof. Keeping
