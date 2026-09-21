@@ -999,6 +999,7 @@ if [[ "$selected_cooking_scenario" == session-chat ]]; then
         "--setenv=HEPHAESTUS_APP_COOKING_BUILD_PROOF=1"
         "--setenv=HEPHAESTUS_APP_SESSION_CHAT_BROWSER_E2E=1"
         "--setenv=HEPHAESTUS_APP_SESSION_CHAT_RESTART_E2E=1"
+        "--setenv=HEPHAESTUS_APP_SESSION_CHAT_CONCURRENT_E2E=1"
         "--setenv=HEPHAESTUS_COOKING_BROWSER_E2E=1"
         "--setenv=HEPHAESTUS_COOKING_SCENARIO=session-chat"
         "--setenv=HEPHAESTUS_LIBKRUN_DIAGNOSTICS_DIR=$evidence_root"

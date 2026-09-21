@@ -80,6 +80,7 @@ set_phase_timing_workload_requirements() {
       --require-workload-phase database-tests
       --require-workload-phase browser-initial
       --require-workload-phase browser-recovery
+      --require-workload-phase browser-concurrency
     )
   else
     phase_timing_workload_required_args=(

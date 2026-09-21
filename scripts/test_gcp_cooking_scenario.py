@@ -24,8 +24,9 @@ SESSION_PHASES = (
     "database-tests",
     "browser-initial",
     "browser-recovery",
+    "browser-concurrency",
 )
-SESSION_BROWSER_PHASES = ("browser-initial", "browser-recovery")
+SESSION_BROWSER_PHASES = ("browser-initial", "browser-recovery", "browser-concurrency")
 COOKING_PHASES = (
     "dependency-setup",
     "production-project-build",
@@ -59,6 +60,7 @@ PHASE_DOMAINS = {
     "database-tests": "workload-libkrun",
     "browser-initial": "workload-libkrun",
     "browser-recovery": "workload-libkrun",
+    "browser-concurrency": "workload-libkrun",
     "browser-post-operation": "workload-libkrun",
 }
 
@@ -120,6 +122,7 @@ class GcpCookingScenarioContractTests(unittest.TestCase):
             "HEPHAESTUS_APP_COOKING_BUILD_PROOF=1",
             "HEPHAESTUS_APP_SESSION_CHAT_BROWSER_E2E=1",
             "HEPHAESTUS_APP_SESSION_CHAT_RESTART_E2E=1",
+            "HEPHAESTUS_APP_SESSION_CHAT_CONCURRENT_E2E=1",
             "HEPHAESTUS_COOKING_BROWSER_E2E=1",
         ):
             self.assertIn(flag, session_branch)
@@ -149,6 +152,13 @@ class GcpCookingScenarioContractTests(unittest.TestCase):
             'phase_timing_workload_required_args+=(--require-workload-phase "$required_phase")',
             startup,
         )
+        session_start = startup.index(
+            'if [[ "$selected_cooking_scenario" == session-chat ]]; then'
+        )
+        session_end = startup.index("  else", session_start)
+        session_startup = startup[session_start:session_end]
+        for phase in SESSION_PHASES:
+            self.assertIn(phase, session_startup)
         for phase in SESSION_PHASES:
             self.assertIn(f"--require-workload-phase {phase}", smoke)
         for phase in SESSION_BROWSER_PHASES:
@@ -184,7 +194,7 @@ class GcpCookingScenarioContractTests(unittest.TestCase):
         wrapper = (ROOT.parent / "examples/cooking/run.sh").read_text(encoding="utf-8")
         for phase in SESSION_PHASES:
             if phase in SESSION_BROWSER_PHASES:
-                # These two timers are emitted by the session-chat composed
+                # These browser timers are emitted by the session-chat composed
                 # browser owner; this contract test only covers existing
                 # runner boundaries and phase requirements.
                 continue
@@ -326,6 +336,7 @@ class GcpCookingScenarioContractTests(unittest.TestCase):
                 "printf 'libkrun=%s\\n' \"${HEPHAESTUS_APP_LIBKRUN_E2E-unset}\" >>\"$SCENARIO_CAPTURE\"\n"
                 "printf 'build=%s\\n' \"${HEPHAESTUS_APP_COOKING_BUILD_PROOF-unset}\" >>\"$SCENARIO_CAPTURE\"\n"
                 "printf 'browser=%s\\n' \"${HEPHAESTUS_APP_SESSION_CHAT_BROWSER_E2E-unset}\" >>\"$SCENARIO_CAPTURE\"\n"
+                "printf 'concurrent=%s\\n' \"${HEPHAESTUS_APP_SESSION_CHAT_CONCURRENT_E2E-unset}\" >>\"$SCENARIO_CAPTURE\"\n"
                 "printf 'cooking=%s\\n' \"${HEPHAESTUS_APP_COOKING_E2E-unset}\" >>\"$SCENARIO_CAPTURE\"\n",
                 encoding="utf-8",
             )
@@ -371,6 +382,9 @@ class GcpCookingScenarioContractTests(unittest.TestCase):
                 "HEPHAESTUS_LIBKRUN_TMP_ROOT": str(libkrun_tmp_root),
                 "SCENARIO_CAPTURE": str(capture),
                 "HEPHAESTUS_APP_COOKING_E2E": "inherited",
+                "HEPHAESTUS_APP_SESSION_CHAT_CONCURRENT_E2E": (
+                    "1" if scenario == "session-chat" else "0"
+                ),
                 "PATH": f"{fake_bin}:{os.environ['PATH']}",
             }
             completed = subprocess.run(
@@ -396,6 +410,7 @@ class GcpCookingScenarioContractTests(unittest.TestCase):
                 "libkrun": "1",
                 "build": "1",
                 "browser": "1",
+                "concurrent": "1",
                 "cooking": "unset",
             },
         )
