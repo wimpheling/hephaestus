@@ -1034,3 +1034,46 @@ installed-UI repository Git routes. Log:
 `/var/tmp/hephaestus-cargo-dev-quality-gcp-sessionchat.log`. Both disposable
 services were cleaned up. These diagnostics must be resolved before the
 repository-wide quality gate can be marked complete.
+
+### Current journey transition audit (final26/final27, 2026-09-21)
+
+This current classification separates implementation and contract presence from
+runtime acceptance. Final26's retained evidence
+(`/var/tmp/sessionchat-browser-final26/cooking-execution.OpuIor.log:478-480`)
+proves the authorized new-chat composition, release-owned adapter, installed
+UI surface, and canonical host validation for two turns, then records restart
+state. Final27 reaches the repository page after correcting final26's
+project-page lookup, but still fails before launching its installed UI because
+the expected installation card is absent
+(`/var/tmp/sessionchat-browser-final27/cooking-execution.FGQAty.log:489-500`).
+The concurrency, fork, and separate negative phases were therefore not
+executed in that run.
+
+| Transition | Responsibility boundary | Current classification and evidence |
+| --- | --- | --- |
+| User intent → trusted creation | Platform composes the authorized new-chat route, repository/session resources, capability, installation, and handoff; the release owns its initialization contract. | **Supported for the exercised initial path.** Final26 created and opened the real Git-backed session. This does not establish a generic platform session API beyond that route. |
+| Trusted creation → release-owned UI | Platform supplies the repository-scoped installation and verified route context; the release adapter owns its transcript and controls. | **Supported for the exercised initial path.** The installed UI initialized and served the session in final26. |
+| Release UI input → human Git receive | The release adapter writes the human record; the platform authenticates and persists the receive with repository/ref attribution. | **Supported for two canonical turns.** Final26's host validation and retained receive evidence cover both turns; this is runtime evidence for the selected journey, not proof of every adapter operation. |
+| Human receive → authorized run → isolated VM/broker | Platform selects the authorized trigger, immutable snapshot, and VM; the release agent reads its protocol and uses brokered model egress. | **Supported for the two-turn initial path.** Final26's canonical host validation follows both turns through the production bootstrap. |
+| Assistant response Git → visible browser response/reconnect | The release adapter reads committed history and correlates responses; platform owns installation and route delivery. | **Supported for final26's initial browser path.** Two responses and the captured restart state are recorded; recovery after a fresh launch is not proven. |
+| Restart state → recovery UI launch and reconnect | Platform/fixture must resolve the repository-scoped installation and handoff; the release UI must reconnect and reread history. | **Poorly composed and unresolved.** Final27 fails before installed-UI launch at the recovery card lookup. The evidence does not distinguish a missing RPC projection from a wrong DOM/page assumption, so it is not evidence of a missing platform primitive. |
+| Recovery → concurrent writers | The platform reruns the release with the same authority boundary; the release handles expected-parent retry and preserves transcript history. | **Unexecuted.** The retry/typed phase code exists, but no runtime concurrency evidence was reached after final27 recovery failure. |
+| Recovery/history → forked session | Trusted composition creates fresh target authority, model binding, and installation; the release copies reachable history and applies its fork manifest. | **Unexecuted.** Fork wiring and protocol semantics exist, but no browser/VM fork acceptance was reached. |
+| Journey → negative capability proof | Platform runs the separate fresh guest denial process; the release/runtime boundary supplies the scoped Git capability and fixed typed result. | **Unexecuted in the combined journey.** The negative process and collector contracts exist, but final27 did not reach it and no fresh combined runtime evidence is inferred. |
+
+The platform-side receipt, UUID, and handoff prerequisites have separate
+focused evidence: secret-binding receipt and replay are verified in the
+PostgreSQL regression (lines 801-809 above); canonical lowercase UUIDs and
+installation are verified in final17 (lines 826-833 above); and the route-base
+handoff projection has a passing positive and mutation-negative test (lines
+863-870 above). Final26 exercises those prerequisites in the initial path. The
+final27 card failure should therefore be classified at the recovery DOM/RPC/
+fixture boundary before changing a platform contract.
+
+The smallest next step is to capture fixed-category recovery DOM/RPC outcomes
+for the expected repository-scoped installation card, distinguishing a load
+error, list error, and empty projection, and change the narrowest owning layer.
+Then rerun the lifecycle through recovery and the subsequent concurrency,
+fork, and negative phases. The versioned protocol's
+fork and tombstone warning semantics remain release-owned and do not add a
+platform approval step (lines 1024-1027 above).
