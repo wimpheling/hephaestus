@@ -822,3 +822,50 @@ disjoint source/checkout object-file device/inode sets. The exact focused test
 runs one test and passes in `/var/tmp/sessionchat-workspace-history-test.log`;
 formatting and strict workspace-local Clippy pass. This closes those two host
 evidence gaps; the broader runtime credential-surface check remains open.
+
+The post-declaration failure was UUID text casing: the web generator emitted
+uppercase hexadecimal, while Rust returned canonical lowercase text. Commit
+`ee54695` fixes the generator and makes the setup fake return Rust-shaped
+lowercase IDs. Twelve focused UUID/client/setup-state tests pass, including
+the semantic mismatch negative case. Final17 confirms the rule ID matches
+and UI installation succeeds, then fails browser-handoff validation. It ends
+with 34 passed, one failed, one ignored; browser turns and recovery are still
+unverified (`/var/tmp/sessionchat-browser-final17-run.log`).
+
+Commit `cb40745` adds the concurrency selector/phase to the shared browser
+bridge. Shell contracts pass for sequential initial/recovery/concurrency
+handoffs, including retained transcript/agent counts and both selector/phase
+mismatch rejections. This is bridge validation, not concurrency execution.
+The stale push is rejected before durable receive persistence: host acceptance
+must expect four accepted receives for the two turns and use browser Git
+packet/retry evidence for the rejected attempt, not require a fifth audit row.
+
+Commit `7deca86` extends typed session-chat browser evidence to require all three
+initial/recovery/concurrency reports. Initial plus recovery alone remains
+partial; a failed concurrency phase retains its typed failure. Collector and
+timing vocabularies include concurrency. The broader Python GCP contract suite
+passes 79 tests (`/var/tmp/sessionchat-gcp-concurrency-contracts.log`); this is
+not a cloud run or host concurrency execution.
+
+Commit `512a687` adds a tenth released-guest check for the actual runtime Git
+credential. It obtains the helper password only in guest memory, scans actual
+Git subprocess arguments, effective environments, captured output, and resolved
+configuration, and emits only a fixed result after the authorized agent turn.
+The intended helper password channel is excluded. Proxy and CLI regressions
+cover contaminated outputs, inherited environments, exceptions, and restoration.
+The real released-VM run `/var/tmp/sessionchat-denial-final8-run.log` verifies
+all ten checks, unchanged denied-repository refs/receives, the authorized turn,
+35 golden tests (one ignored), eight PostgreSQL tests, and runtime/cgroup cleanup.
+Formatting, golden compilation, and focused strict Clippy also pass. This
+evidence covers the exercised guest Git surfaces, not arbitrary host logging,
+process memory, or the intentionally protected authority document.
+
+Commit `b9faca4` fixes final17's handoff projection mismatch by supplying the
+browser URL builder's `route_base` from the requested route, matching existing
+installed-UI navigation. The state regression invokes the real success callback
+with a canonical RPC response and consistent valid installation/generation IDs,
+then requires a successful bootstrap URL. Removing the production mapping makes
+that test fail with `invalid_projection`. The focused state/client/browser suite
+passes 23 tests (`/var/tmp/sessionchat-route-success-focused.log`), with the
+negative mutation proof in `/var/tmp/sessionchat-route-success-negative.log`.
+The browser rerun remains pending; no turn/recovery acceptance is inferred.
