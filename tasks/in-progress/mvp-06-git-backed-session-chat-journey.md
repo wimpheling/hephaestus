@@ -405,6 +405,25 @@ release-service/release-postgres Clippy checks passed. These checks do not prove
 the packaged browser's Git implementation or the complete model/VM journey;
 production-browser acceptance remains open.
 
+### Trusted-shell session setup (2026-09-21)
+
+Commits `7197133` and `d4d6533` add the project-local New session chat flow and
+normalize the generated UI Git-access enum in web RPC projections. Before any
+mutation, setup checks the selected release's repository-scoped, full-page
+static UI descriptor and explicit Git acknowledgement. It composes existing
+repository, import, capability, push attachment, brokered model binding,
+installation and browser-handoff operations. Failed attempts retain completed
+resource IDs in LiveView state and use stable per-step idempotency keys on retry.
+This does not yet establish recovery of setup state across a full page reload.
+
+The web `mix precommit` run passed 313 tests and all 19 architecture checks in
+the existing Podman environment. Regression coverage includes the actual
+protobuf descriptor projection and a failed capability step followed by retry
+without repeating repository creation or agent import. The installed UI launch
+hook and project navigation are wired. A read-only review confirmed production
+RPC field shapes and typed Git-ceiling selection semantics. Actual browser
+setup and the composed response journey remain acceptance work.
+
 The completed task records the released protocol version and source revision;
 browser and real-Git evidence for session creation, turns, restart, and fork;
 the reference agent's allowed session-repository push and denied cross-repository
