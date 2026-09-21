@@ -12,7 +12,7 @@ use brokered_egress_domain::{
 use runtime_types::RunId;
 use secret_application::{
     BrokerAdapter, BrokerAdapterError, BrokerRequest, BrokerResponse, BrokerStatus,
-    SecretRuntimeResolver,
+    SecretRuntimeResolver, VerifiedBrokeredHttpsRule,
 };
 use secret_domain::{OpaqueRuntimeCredential, SecretSlotKey, SecretValue};
 use serde::{Deserialize, Serialize};
@@ -143,6 +143,26 @@ pub struct BrokeredHttpsUpstream {
     pub addresses: Vec<IpAddr>,
 }
 
+/// One operator-pinned HTTPS origin transport usable by dynamically declared
+/// immutable rules.
+///
+/// Rule identity and header authority still come from the verified runtime
+/// lease projection; this entry only permits the origin and supplies its
+/// control-plane-pinned addresses.
+#[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct BrokeredHttpsOrigin {
+    /// Exact HTTPS origin permitted for dynamic rules.
+    pub origin: String,
+    /// Non-private DNS addresses pinned for this origin.
+    pub addresses: Vec<IpAddr>,
+}
+
+struct OriginPinnedHttpsAdapter {
+    destination: String,
+    transport: ReqwestPinnedHttpsTransport,
+}
+
 /// Daemon adapter registry for all explicitly configured brokered HTTPS rules.
 ///
 /// A request is selected solely by its claimed immutable rule ID. The runtime
@@ -150,6 +170,7 @@ pub struct BrokeredHttpsUpstream {
 /// before this registry receives the resolved credential.
 pub struct BrokeredHttpsAdapterRegistry {
     adapters: HashMap<uuid::Uuid, BrokeredHttpsAdapter<ReqwestPinnedHttpsTransport>>,
+    origin_adapters: HashMap<String, OriginPinnedHttpsAdapter>,
 }
 
 impl BrokeredHttpsAdapterRegistry {
@@ -161,6 +182,23 @@ impl BrokeredHttpsAdapterRegistry {
     /// and any upstream for which a certificate-verifying transport cannot be
     /// constructed.
     pub fn new(upstreams: Vec<BrokeredHttpsUpstream>) -> Result<Self, BrokerAdapterError> {
+        Self::new_with_origin_catalog(upstreams, Vec::new())
+    }
+
+    /// Builds exact rule adapters and an optional origin transport catalog.
+    ///
+    /// Exact rule entries retain their legacy rule-ID behavior. Origin
+    /// entries are a separate opt-in for rules declared after daemon startup;
+    /// they never broaden an existing exact rule entry.
+    ///
+    /// # Errors
+    ///
+    /// Returns `Rejected` for duplicate entries, invalid origins, private or
+    /// empty address pins, and invalid TLS transport configuration.
+    pub fn new_with_origin_catalog(
+        upstreams: Vec<BrokeredHttpsUpstream>,
+        origins: Vec<BrokeredHttpsOrigin>,
+    ) -> Result<Self, BrokerAdapterError> {
         let mut adapters = HashMap::with_capacity(upstreams.len());
         for upstream in upstreams {
             let rule = upstream.rule.normalized().map_err(map_rule_error)?;
@@ -172,7 +210,27 @@ impl BrokeredHttpsAdapterRegistry {
                 return Err(BrokerAdapterError::Rejected);
             }
         }
-        Ok(Self { adapters })
+        let mut origin_adapters = HashMap::with_capacity(origins.len());
+        for origin in origins {
+            let destination = destination_from_origin(&origin.origin)?;
+            let transport = ReqwestPinnedHttpsTransport::new(&destination, &origin.addresses)?;
+            if origin_adapters
+                .insert(
+                    destination.clone(),
+                    OriginPinnedHttpsAdapter {
+                        destination,
+                        transport,
+                    },
+                )
+                .is_some()
+            {
+                return Err(BrokerAdapterError::Rejected);
+            }
+        }
+        Ok(Self {
+            adapters,
+            origin_adapters,
+        })
     }
 
     /// Builds one locally pinned, certificate-verifying adapter for an
@@ -206,6 +264,39 @@ impl BrokeredHttpsAdapterRegistry {
         let adapter = BrokeredHttpsAdapter::new(rule, transport)?;
         Ok(Self {
             adapters: HashMap::from([(id, adapter)]),
+            origin_adapters: HashMap::new(),
+        })
+    }
+
+    /// Builds a local CA-pinned origin catalog for integration tests.
+    ///
+    /// # Errors
+    ///
+    /// Returns `Rejected` when the origin, local pin, or certificate cannot be
+    /// used to construct a trusted test transport.
+    #[cfg(feature = "test-fixtures")]
+    pub fn test_only_local_origin_catalog(
+        origin: impl Into<String>,
+        port: u16,
+        address: IpAddr,
+        certificate_pem: &[u8],
+    ) -> Result<Self, BrokerAdapterError> {
+        let destination = destination_from_origin(&origin.into())?;
+        let transport = ReqwestPinnedHttpsTransport::test_only_local_trusted_pin(
+            &destination,
+            port,
+            address,
+            certificate_pem,
+        )?;
+        Ok(Self {
+            adapters: HashMap::new(),
+            origin_adapters: HashMap::from([(
+                destination.clone(),
+                OriginPinnedHttpsAdapter {
+                    destination,
+                    transport,
+                },
+            )]),
         })
     }
 }
@@ -231,6 +322,30 @@ impl BrokerAdapter for BrokeredHttpsAdapterRegistry {
         adapter
             .invoke(credential, destination, operation, body)
             .await
+    }
+
+    async fn invoke_verified_https(
+        &self,
+        credential: &SecretValue,
+        request: &BrokerRequest,
+        rule: &VerifiedBrokeredHttpsRule,
+    ) -> Result<BrokerResponse, BrokerAdapterError> {
+        if let Some(adapter) = self.adapters.get(&rule.rule_id) {
+            return adapter
+                .invoke(
+                    credential,
+                    &request.destination,
+                    &request.operation,
+                    &request.body,
+                )
+                .await;
+        }
+        let destination = destination_from_origin(&rule.destination_origin)?;
+        let adapter = self
+            .origin_adapters
+            .get(&destination)
+            .ok_or(BrokerAdapterError::Rejected)?;
+        adapter.invoke_verified(credential, request, rule).await
     }
 }
 
@@ -263,6 +378,10 @@ fn destination_from_rule(rule: &BrokeredSecretRule) -> Result<String, BrokerAdap
         .as_ref()
         .ok_or(BrokerAdapterError::Rejected)?
         .as_str();
+    destination_from_origin(origin)
+}
+
+fn destination_from_origin(origin: &str) -> Result<String, BrokerAdapterError> {
     let destination = origin
         .strip_prefix("https://")
         .ok_or(BrokerAdapterError::Rejected)?;
@@ -273,6 +392,63 @@ fn destination_from_rule(rule: &BrokeredSecretRule) -> Result<String, BrokerAdap
         return Err(BrokerAdapterError::Rejected);
     }
     Ok(destination.to_owned())
+}
+
+impl OriginPinnedHttpsAdapter {
+    async fn invoke_verified(
+        &self,
+        credential: &SecretValue,
+        request: &BrokerRequest,
+        rule: &VerifiedBrokeredHttpsRule,
+    ) -> Result<BrokerResponse, BrokerAdapterError> {
+        invoke_dynamic_pinned_request(
+            &self.transport,
+            &self.destination,
+            credential,
+            request,
+            rule,
+        )
+        .await
+    }
+}
+
+async fn invoke_dynamic_pinned_request<T: PinnedHttpsTransport>(
+    transport: &T,
+    expected_destination: &str,
+    credential: &SecretValue,
+    request: &BrokerRequest,
+    rule: &VerifiedBrokeredHttpsRule,
+) -> Result<BrokerResponse, BrokerAdapterError> {
+    if request.destination != expected_destination
+        || request.operation != "https_v1"
+        || request.body.len() > MAX_ADAPTER_BODY_BYTES
+        || rule.destination_origin != format!("https://{expected_destination}")
+    {
+        return Err(BrokerAdapterError::Rejected);
+    }
+    let request: BrokeredHttpsRequest =
+        serde_json::from_slice(&request.body).map_err(|_| BrokerAdapterError::Rejected)?;
+    if request.rule_id != rule.rule_id {
+        return Err(BrokerAdapterError::Rejected);
+    }
+    let headers = validate_and_substitute_verified_headers(&request, rule, credential.expose())?;
+    let response = transport
+        .send(UpstreamHttpsRequest {
+            method: request.method,
+            destination: expected_destination.to_owned(),
+            path_and_query: validate_https_path(&request.path_and_query)?,
+            headers,
+            body: request.body,
+        })
+        .await?;
+    if response
+        .body
+        .windows(credential.expose().len())
+        .any(|window| window == credential.expose())
+    {
+        return Err(BrokerAdapterError::Rejected);
+    }
+    Ok(response)
 }
 
 #[async_trait]
@@ -476,12 +652,6 @@ fn validate_and_substitute_headers(
     rule: &BrokeredSecretRule,
     credential: &[u8],
 ) -> Result<Vec<BrokeredHttpsHeader>, BrokerAdapterError> {
-    if request.headers.len() > MAX_HTTPS_HEADERS || request.body.len() > MAX_ADAPTER_BODY_BYTES {
-        return Err(BrokerAdapterError::Rejected);
-    }
-    let mut seen = std::collections::HashSet::new();
-    let mut substitutions = 0_u8;
-    let mut headers = Vec::with_capacity(request.headers.len());
     let (rule_header, value_prefix) = match &rule.location {
         HttpInjectionLocation::OutboundHeaderValue { header } => (header.as_str(), ""),
         HttpInjectionLocation::OutboundHeaderPrefix { header, prefix } => {
@@ -492,6 +662,28 @@ fn validate_and_substitute_headers(
         }
     };
     let placeholder = rule.placeholder();
+    validate_and_substitute_headers_with_binding(
+        request,
+        rule_header,
+        value_prefix,
+        &placeholder,
+        credential,
+    )
+}
+
+fn validate_and_substitute_headers_with_binding(
+    request: &BrokeredHttpsRequest,
+    rule_header: &str,
+    value_prefix: &str,
+    placeholder: &str,
+    credential: &[u8],
+) -> Result<Vec<BrokeredHttpsHeader>, BrokerAdapterError> {
+    if request.headers.len() > MAX_HTTPS_HEADERS || request.body.len() > MAX_ADAPTER_BODY_BYTES {
+        return Err(BrokerAdapterError::Rejected);
+    }
+    let mut seen = std::collections::HashSet::new();
+    let mut substitutions = 0_u8;
+    let mut headers = Vec::with_capacity(request.headers.len());
     for header in &request.headers {
         if !valid_header_name(&header.name)
             || header.name == "host"
@@ -525,6 +717,22 @@ fn validate_and_substitute_headers(
         return Err(BrokerAdapterError::Rejected);
     }
     Ok(headers)
+}
+
+fn validate_and_substitute_verified_headers(
+    request: &BrokeredHttpsRequest,
+    rule: &VerifiedBrokeredHttpsRule,
+    credential: &[u8],
+) -> Result<Vec<BrokeredHttpsHeader>, BrokerAdapterError> {
+    let value_prefix = rule.header_prefix.as_deref().unwrap_or("");
+    let placeholder = format!("heph-placeholder:v1:{}", rule.rule_id);
+    validate_and_substitute_headers_with_binding(
+        request,
+        &rule.header_name,
+        value_prefix,
+        &placeholder,
+        credential,
+    )
 }
 
 const fn map_rule_error(_error: BrokeredEgressError) -> BrokerAdapterError {
@@ -1046,6 +1254,26 @@ mod tests {
         }
     }
 
+    fn dynamic_request(rule_id: Uuid, destination: &str) -> BrokerRequest {
+        BrokerRequest {
+            run_id: RunId::new(),
+            slot: SecretSlotKey::parse("model").expect("slot"),
+            destination: destination.to_owned(),
+            operation: String::from("https_v1"),
+            body: serde_json::to_vec(&BrokeredHttpsRequest {
+                rule_id,
+                method: BrokeredHttpsMethod::Post,
+                path_and_query: String::from("/v1/messages?bounded=true"),
+                headers: vec![BrokeredHttpsHeader {
+                    name: String::from("authorization"),
+                    value: format!("Bearer heph-placeholder:v1:{rule_id}"),
+                }],
+                body: br#"{"message":"hello"}"#.to_vec(),
+            })
+            .expect("request"),
+        }
+    }
+
     struct RecordingExecutor {
         seen: Mutex<Vec<u8>>,
     }
@@ -1341,6 +1569,166 @@ mod tests {
         );
     }
 
+    #[tokio::test]
+    async fn dynamic_rules_share_only_the_explicit_origin_transport() {
+        let transport = RecordingHttpsTransport::default();
+        let credential = SecretValue::new("dynamic-secret-sentinel").expect("secret");
+        for rule_id in [Uuid::new_v4(), Uuid::new_v4()] {
+            let rule = VerifiedBrokeredHttpsRule {
+                rule_id,
+                destination_origin: String::from("https://api.example.test"),
+                header_name: String::from("authorization"),
+                header_prefix: Some(String::from("Bearer ")),
+            };
+            let request = dynamic_request(rule_id, "api.example.test");
+            invoke_dynamic_pinned_request(
+                &transport,
+                "api.example.test",
+                &credential,
+                &request,
+                &rule,
+            )
+            .await
+            .expect("authorized dynamic rule");
+        }
+        assert_eq!(
+            transport
+                .seen
+                .lock()
+                .expect("transport lock")
+                .last()
+                .expect("captured header")
+                .value,
+            "Bearer dynamic-secret-sentinel"
+        );
+    }
+
+    #[tokio::test]
+    async fn origin_catalog_rejects_unknown_origin_and_legacy_unknown_rule() {
+        let configured_rule = outbound_rule();
+        let legacy_registry = BrokeredHttpsAdapterRegistry::new(vec![BrokeredHttpsUpstream {
+            rule: configured_rule.clone(),
+            addresses: vec!["203.0.113.7".parse().expect("test address")],
+        }])
+        .expect("legacy registry");
+        let registry = BrokeredHttpsAdapterRegistry::new_with_origin_catalog(
+            vec![BrokeredHttpsUpstream {
+                rule: configured_rule.clone(),
+                addresses: vec!["203.0.113.7".parse().expect("test address")],
+            }],
+            vec![BrokeredHttpsOrigin {
+                origin: String::from("https://api.example.test"),
+                addresses: vec!["203.0.113.8".parse().expect("test address")],
+            }],
+        )
+        .expect("catalog");
+        let unknown_rule_id = Uuid::new_v4();
+        let request = dynamic_request(unknown_rule_id, "api.example.test");
+        let credential = SecretValue::new("secret").expect("secret");
+        let unknown_rule = VerifiedBrokeredHttpsRule {
+            rule_id: unknown_rule_id,
+            destination_origin: String::from("https://api.example.test"),
+            header_name: String::from("authorization"),
+            header_prefix: Some(String::from("Bearer ")),
+        };
+        assert!(matches!(
+            legacy_registry
+                .invoke_verified_https(&credential, &request, &unknown_rule)
+                .await,
+            Err(BrokerAdapterError::Rejected)
+        ));
+        let unknown_origin = VerifiedBrokeredHttpsRule {
+            destination_origin: String::from("https://other.example.test"),
+            ..unknown_rule
+        };
+        assert!(matches!(
+            registry
+                .invoke_verified_https(
+                    &credential,
+                    &dynamic_request(unknown_origin.rule_id, "other.example.test"),
+                    &unknown_origin,
+                )
+                .await,
+            Err(BrokerAdapterError::Rejected)
+        ));
+    }
+
+    #[cfg(feature = "test-fixtures")]
+    #[tokio::test]
+    async fn origin_catalog_routes_distinct_dynamic_rules_to_one_pinned_origin() {
+        let _provider = rustls::crypto::ring::default_provider().install_default();
+        let mut ca_parameters = rcgen::CertificateParams::default();
+        ca_parameters.is_ca = rcgen::IsCa::Ca(rcgen::BasicConstraints::Unconstrained);
+        let ca_key = rcgen::KeyPair::generate().expect("generate fixture CA key");
+        let ca = ca_parameters.self_signed(&ca_key).expect("sign fixture CA");
+        let leaf_parameters = rcgen::CertificateParams::new(vec![String::from("api.example.test")])
+            .expect("fixture DNS name");
+        let leaf_key = rcgen::KeyPair::generate().expect("generate fixture leaf key");
+        let leaf = leaf_parameters
+            .signed_by(&leaf_key, &ca, &ca_key)
+            .expect("sign fixture leaf");
+        let tls = Arc::new(
+            rustls::ServerConfig::builder()
+                .with_no_client_auth()
+                .with_single_cert(
+                    vec![rustls::pki_types::CertificateDer::from(leaf.der().to_vec())],
+                    rustls::pki_types::PrivateKeyDer::Pkcs8(leaf_key.serialize_der().into()),
+                )
+                .expect("fixture TLS server"),
+        );
+        let listener = TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("bind fixture");
+        let port = listener.local_addr().expect("fixture address").port();
+        let server = tokio::spawn(async move {
+            for _ in 0..2 {
+                let (stream, _) = listener.accept().await.expect("accept fixture");
+                let mut stream = tokio_rustls::TlsAcceptor::from(Arc::clone(&tls))
+                    .accept(stream)
+                    .await
+                    .expect("trusted handshake");
+                let mut request = [0_u8; 4096];
+                let read = stream.read(&mut request).await.expect("read request");
+                assert!(
+                    std::str::from_utf8(&request[..read])
+                        .expect("HTTP request")
+                        .contains("authorization: Bearer dynamic-secret-sentinel")
+                );
+                stream
+                    .write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\n\r\nok")
+                    .await
+                    .expect("write response");
+            }
+        });
+        let registry = BrokeredHttpsAdapterRegistry::test_only_local_origin_catalog(
+            "https://api.example.test",
+            port,
+            "127.0.0.1".parse().expect("loopback address"),
+            ca.pem().as_bytes(),
+        )
+        .expect("local origin catalog");
+        let credential = SecretValue::new("dynamic-secret-sentinel").expect("credential");
+        for rule_id in [Uuid::new_v4(), Uuid::new_v4()] {
+            let rule = VerifiedBrokeredHttpsRule {
+                rule_id,
+                destination_origin: String::from("https://api.example.test"),
+                header_name: String::from("authorization"),
+                header_prefix: Some(String::from("Bearer ")),
+            };
+            let response = registry
+                .invoke_verified_https(
+                    &credential,
+                    &dynamic_request(rule_id, "api.example.test"),
+                    &rule,
+                )
+                .await
+                .expect("dynamic rule should use pinned origin");
+            assert_eq!(response.status, BrokerStatus::Succeeded);
+            assert_eq!(response.body, b"ok");
+        }
+        server.await.expect("fixture server");
+    }
+
     #[test]
     fn registry_rejects_duplicate_or_unpinned_rules() {
         let rule = outbound_rule();
@@ -1357,6 +1745,16 @@ mod tests {
                 rule,
                 addresses: vec!["127.0.0.1".parse().expect("loopback address")],
             }]),
+            Err(BrokerAdapterError::Rejected)
+        ));
+        assert!(matches!(
+            BrokeredHttpsAdapterRegistry::new_with_origin_catalog(
+                Vec::new(),
+                vec![BrokeredHttpsOrigin {
+                    origin: String::from("https://api.example.test"),
+                    addresses: vec!["127.0.0.1".parse().expect("loopback address")],
+                }],
+            ),
             Err(BrokerAdapterError::Rejected)
         ));
     }

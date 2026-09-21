@@ -78,6 +78,14 @@ enum PreAdapterDenialStage {
     Decryption,
 }
 
+#[derive(Debug, sqlx::FromRow)]
+struct BrokeredHttpsRuleSnapshotRow {
+    rule_id: Uuid,
+    destination_origin: String,
+    header_name: String,
+    header_prefix: Option<String>,
+}
+
 impl PreAdapterDenialStage {
     const fn as_str(self) -> &'static str {
         match self {
@@ -2403,7 +2411,7 @@ impl<K: KeyProvider + Send + Sync> SecretRuntimeService<K> {
                 return Err(error);
             }
         };
-        let (https_request, rule_id) = self
+        let (https_request, rule_id, verified_rule) = self
             .authorize_https_operation(&session, &lease, request)
             .await
             .inspect_err(|error| {
@@ -2441,15 +2449,20 @@ impl<K: KeyProvider + Send + Sync> SecretRuntimeService<K> {
                 );
                 service_error
             })?;
-        let response = match adapter
-            .invoke(
-                &value,
-                &request.destination,
-                &request.operation,
-                &request.body,
-            )
-            .await
-        {
+        let adapter_response = match verified_rule.as_ref() {
+            Some(rule) => adapter.invoke_verified_https(&value, request, rule).await,
+            None => {
+                adapter
+                    .invoke(
+                        &value,
+                        &request.destination,
+                        &request.operation,
+                        &request.body,
+                    )
+                    .await
+            }
+        };
+        let response = match adapter_response {
             Ok(response) => response,
             Err(error) => {
                 self.record_https_failure(&session, &lease, https_request, rule_id)
@@ -2650,8 +2663,11 @@ impl<K: KeyProvider + Send + Sync> SecretRuntimeService<K> {
             return Err(error);
         }
         live_authorization?;
-        self.authorize_brokered_https_snapshot(session, lease, request, rule_id)
-            .await
+        if request.operation == "https_v1" {
+            self.authorize_brokered_https_snapshot(session, lease, request, rule_id)
+                .await?;
+        }
+        Ok(())
     }
 
     async fn authorize_https_operation(
@@ -2659,7 +2675,14 @@ impl<K: KeyProvider + Send + Sync> SecretRuntimeService<K> {
         session: &RuntimeSessionRow,
         lease: &RuntimeLeaseAuthorizationRow,
         request: &BrokerRequest,
-    ) -> Result<(Option<Uuid>, Option<Uuid>), SecretServiceError> {
+    ) -> Result<
+        (
+            Option<Uuid>,
+            Option<Uuid>,
+            Option<VerifiedBrokeredHttpsRule>,
+        ),
+        SecretServiceError,
+    > {
         let https_request = (request.operation == "https_v1").then(Uuid::new_v4);
         let rule_id = broker_request_rule_id(request);
         if !lease.destinations.is_empty()
@@ -2683,6 +2706,9 @@ impl<K: KeyProvider + Send + Sync> SecretRuntimeService<K> {
             }
             return Err(SecretServiceError::BrokerRequestDenied);
         }
+        if https_request.is_none() {
+            return Ok((None, None, None));
+        }
         let authorization = self
             .authorize_brokered_https_snapshot(session, lease, request, rule_id)
             .await;
@@ -2703,8 +2729,12 @@ impl<K: KeyProvider + Send + Sync> SecretRuntimeService<K> {
             )
             .await?;
         }
-        authorization?;
-        Ok((https_request, rule_id))
+        let verified_rule = authorization?;
+        Ok((
+            https_request,
+            Some(verified_rule.rule_id).or(rule_id),
+            Some(verified_rule),
+        ))
     }
 
     async fn authenticate_session(
@@ -2786,14 +2816,14 @@ impl<K: KeyProvider + Send + Sync> SecretRuntimeService<K> {
         lease: &RuntimeLeaseAuthorizationRow,
         request: &BrokerRequest,
         rule_id: Option<Uuid>,
-    ) -> Result<(), SecretServiceError> {
-        if request.operation != "https_v1" {
-            return Ok(());
-        }
+    ) -> Result<VerifiedBrokeredHttpsRule, SecretServiceError> {
         let rule_id = rule_id.ok_or(SecretServiceError::BrokerRequestDenied)?;
         let origin = format!("https://{}", request.destination);
-        let found: Option<Uuid> = sqlx::query_scalar(
-            "SELECT snapshot.id
+        let found: Option<BrokeredHttpsRuleSnapshotRow> = sqlx::query_as(
+            "SELECT snapshot.rule_id,
+                    snapshot.destination_origin,
+                    snapshot.header_name,
+                    snapshot.header_prefix
                FROM brokered_secret_lease_snapshots AS snapshot
                JOIN secret_leases AS exact_lease ON exact_lease.id = snapshot.lease_id
                JOIN agent_secret_bindings AS binding ON binding.id = snapshot.binding_id
@@ -2821,11 +2851,14 @@ impl<K: KeyProvider + Send + Sync> SecretRuntimeService<K> {
         .fetch_optional(&self.authorization_pool)
         .await
         .map_err(|_| SecretServiceError::Persistence)?;
-        if found.is_some() {
-            Ok(())
-        } else {
-            Err(SecretServiceError::BrokerRequestDenied)
-        }
+        found
+            .map(|row| VerifiedBrokeredHttpsRule {
+                rule_id: row.rule_id,
+                destination_origin: row.destination_origin,
+                header_name: row.header_name,
+                header_prefix: row.header_prefix,
+            })
+            .ok_or(SecretServiceError::BrokerRequestDenied)
     }
 }
 

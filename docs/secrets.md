@@ -251,16 +251,29 @@ revoked-session cancellation, runtime cleanup, and safe orphan removal without
 minting replacement versions or credentials.
 
 The daemon defaults to `DenyingBrokerAdapter`. To enable generic brokered
-HTTPS, an operator must set `HEPHAESTUS_BROKERED_HTTPS_UPSTREAMS_JSON` to a
-non-empty JSON array of `{ "rule": <immutable brokered rule>, "addresses":
-[<control-plane-pinned public IPs>] }`. The registry rejects duplicate rule
-IDs, private/unpinned addresses, non-outbound rules, and non-default-port
-origins. It selects only the requested rule ID after the runtime service has
-verified that exact ID against the issued lease; it uses a certificate-verifying
-native trust store, exact SNI/hostname, redirects disabled, and no proxy
-environment. The declaration remains operational control-plane configuration:
-it must exactly mirror a durable immutable rule and its DNS pins. A supported
-`AgentInstanceService.DeclareBrokeredHttpsRule` creates that durable rule from
+HTTPS for predeclared rules, an operator must set
+`HEPHAESTUS_BROKERED_HTTPS_UPSTREAMS_JSON` to a non-empty JSON array of
+`{ "rule": <immutable brokered rule>, "addresses": [<control-plane-pinned
+public IPs>] }`. This legacy configuration remains exact rule-ID based.
+
+For releases that declare immutable rules after daemon startup, an operator may
+also set `HEPHAESTUS_BROKERED_HTTPS_ORIGIN_CATALOG_JSON` to a JSON array of
+`{ "origin": "https://host", "addresses": [<control-plane-pinned public IPs>] }`.
+The origin catalog permits only those exact origins; it does not grant a
+binding, rule, secret, or header authority. The runtime service must first
+verify the caller's rule, binding, version, lease, session, run, and origin
+against the immutable PostgreSQL lease snapshot. The adapter then uses the
+verified rule metadata for placeholder/header substitution and the catalog only
+for pinned transport selection. Unknown origins, private or unpinned
+addresses, redirects, and mismatched rule metadata fail closed. The two
+configuration forms may coexist, and an exact rule entry retains precedence
+for its configured rule ID.
+
+Both configurations reject duplicate entries, private/unpinned addresses,
+non-outbound rules, and non-default-port origins. They use a
+certificate-verifying native trust store, exact SNI/hostname, redirects
+disabled, and no proxy environment. A supported
+`AgentInstanceService.DeclareBrokeredHttpsRule` creates the durable rule from
 an active brokered binding: it requires instance-management and brokered-bind
 authority, fixes the currently active secret version, and accepts only the
 binding's exact declared DNS destination plus one outbound header location.
