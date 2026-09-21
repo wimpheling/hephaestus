@@ -65,12 +65,15 @@ test("cooking session-chat installed UI initializes and reconnects ordinary Git 
         return false;
       }
     }, {timeout: 30_000});
+    void documentResponse.catch(() => undefined);
+    void contextResponse.catch(() => undefined);
+    void discoveryResponse.catch(() => undefined);
     await card.getByRole("button", {name: /Launch/}).click();
 
     const document = await documentResponse;
     expect(document.status()).toBe(200);
     assertCookieIsolation(await document.request().allHeaders());
-    await expect(page).toHaveURL(new RegExp(`${escapeRegExp(session.ui_path)}$`));
+    await expect.poll(() => new URL(page.url()).pathname).toBe(session.ui_path);
     await expect(page).toHaveTitle("Session chat");
 
     const context = await contextResponse;

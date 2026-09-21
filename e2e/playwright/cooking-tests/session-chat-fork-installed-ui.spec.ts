@@ -157,7 +157,7 @@ async function launchInstalledSession(page: import("@playwright/test").Page, ses
   const document = await documentResponse;
   expect(document.status()).toBe(200);
   assertCookieIsolation(await document.request().allHeaders());
-  await expect(page).toHaveURL(new RegExp(escapeRegExp(session.ui_path) + "$"));
+  await expect.poll(() => new URL(page.url()).pathname).toBe(session.ui_path);
   await expect(page).toHaveTitle("Session chat");
 
   const context = await contextResponse;
