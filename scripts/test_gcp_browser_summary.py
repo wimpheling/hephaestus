@@ -6,6 +6,7 @@ from __future__ import annotations
 import importlib.util
 import json
 from pathlib import Path
+import stat
 import subprocess
 import sys
 import tempfile
@@ -67,13 +68,15 @@ def report(file_name: str, title: str, status: str, *, error_location: bool = Tr
 
 def safe_session_report(
     *,
+    test_id: str = PROJECTOR.SESSION_CHAT_TEST_ID,
+    stages: tuple[str, ...] = PROJECTOR.SESSION_CHAT_STAGES,
     test_status: str = "passed",
     missing_stage: str | None = None,
     failed_stage: str | None = None,
     terminal_status: str | None = None,
 ) -> str:
     records = [{"event": "run_started", "test_count": 1}]
-    for stage_id in PROJECTOR.SESSION_CHAT_STAGES:
+    for stage_id in stages:
         if stage_id == missing_stage:
             continue
         records.append({"event": "stage", "stage_id": stage_id, "status": "pending"})
@@ -85,7 +88,7 @@ def safe_session_report(
     records.append(
         {
             "event": "test",
-            "test_id": PROJECTOR.SESSION_CHAT_TEST_ID,
+            "test_id": test_id,
             "status": test_status,
             "duration_ms": 12,
             "retry": 0,
@@ -354,18 +357,27 @@ class BrowserSummaryTests(unittest.TestCase):
             self.assertEqual(missing.returncode, 2)
             self.assertEqual(json.loads(missing_output.read_text())["report_state"], "partial")
 
-    def test_session_chat_safe_report_requires_the_complete_two_turn_initial_journey(self):
+    def test_session_chat_requires_initial_and_recovery_journeys(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
-            browser = root / "browser.initial"
-            browser.mkdir()
-            (browser / "playwright.log").write_text(safe_session_report(), encoding="utf-8")
+            initial = root / "browser.initial"
+            recovery = root / "browser.recovery"
+            initial.mkdir()
+            recovery.mkdir()
+            (initial / "playwright.log").write_text(safe_session_report(), encoding="utf-8")
+            (recovery / "playwright.log").write_text(
+                safe_session_report(
+                    test_id=PROJECTOR.SESSION_CHAT_RECOVERY_TEST_ID,
+                    stages=PROJECTOR.SESSION_CHAT_RECOVERY_STAGES,
+                ),
+                encoding="utf-8",
+            )
             summary = PROJECTOR.project(root, "session-chat")
             self.assertEqual(summary["status"], "passed")
             self.assertEqual(summary["result_origin"], "playwright-report")
-            self.assertEqual(summary["observed_phases"], ["initial"])
-            self.assertEqual(summary["passed_phases"], ["initial"])
-            self.assertEqual(summary["counts"], {"passed": 1, "failed": 0, "skipped": 0, "timed_out": 0})
+            self.assertEqual(summary["observed_phases"], ["initial", "recovery"])
+            self.assertEqual(summary["passed_phases"], ["initial", "recovery"])
+            self.assertEqual(summary["counts"], {"passed": 2, "failed": 0, "skipped": 0, "timed_out": 0})
 
             output = root / "summary.json"
             complete = subprocess.run(
@@ -381,81 +393,166 @@ class BrowserSummaryTests(unittest.TestCase):
                 check=False,
             )
             self.assertEqual(complete.returncode, 0)
-            self.assertEqual(json.loads(output.read_text())["status"], "passed")
+            projected = json.loads(output.read_text())
+            self.assertEqual(projected["status"], "passed")
+            bundle = root / "bundle"
+            self.assertEqual(
+                COLLECTOR.collect(bundle, [f"browser-summary={output}"], None, None, None),
+                0,
+            )
+            retained_path = bundle / "sources/browser-summary"
+            self.assertEqual(stat.S_IMODE(retained_path.stat().st_mode), 0o600)
+            retained = json.loads(retained_path.read_text(encoding="utf-8"))
+            self.assertEqual(retained["observed_phases"], ["initial", "recovery"])
 
-    def test_session_chat_safe_failure_and_missing_second_turn_fail_closed(self):
+            invalid = root / "invalid-summary.json"
+            projected["observed_phases"] = ["initial", "recovery", "unknown"]
+            invalid.write_text(json.dumps(projected), encoding="utf-8")
+            with self.assertRaises(COLLECTOR.CollectionError):
+                COLLECTOR.collect(root / "rejected", [f"browser-summary={invalid}"], None, None, None)
+
+    def test_session_chat_missing_recovery_and_duplicate_or_wrong_id_fail_closed(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
-            browser = root / "browser.initial"
-            browser.mkdir()
-            log = browser / "playwright.log"
-            log.write_text(safe_session_report(test_status="failed"), encoding="utf-8")
+            initial = root / "browser.initial"
+            initial.mkdir()
+            (initial / "playwright.log").write_text(safe_session_report(), encoding="utf-8")
+            missing = PROJECTOR.project(root, "session-chat")
+            self.assertEqual(missing["status"], "unknown")
+            self.assertEqual(missing["report_state"], "partial")
+            self.assertEqual(missing["observed_phases"], ["initial"])
+
+            duplicate = root / "browser.duplicate"
+            duplicate.mkdir()
+            (duplicate / "playwright.log").write_text(safe_session_report(), encoding="utf-8")
+            duplicate_summary = PROJECTOR.project(root, "session-chat")
+            self.assertEqual(duplicate_summary["status"], "unknown")
+            self.assertEqual(duplicate_summary["report_state"], "partial")
+
+            (duplicate / "playwright.log").write_text(
+                safe_session_report(test_id="unknown_test"), encoding="utf-8"
+            )
+            wrong_id = PROJECTOR.project(root, "session-chat")
+            self.assertEqual(wrong_id["status"], "unknown")
+            self.assertEqual(wrong_id["report_state"], "partial")
+
+    def test_session_chat_retains_initial_failure_or_timeout_without_recovery(self):
+        for test_status, failed_stage, expected_status, expected_counts in (
+            (
+                "failed",
+                "session_chat_second_response",
+                "failed",
+                {"passed": 0, "failed": 1, "skipped": 0, "timed_out": 0},
+            ),
+            (
+                "timed_out",
+                "session_chat_response",
+                "timed_out",
+                {"passed": 0, "failed": 0, "skipped": 0, "timed_out": 1},
+            ),
+        ):
+            with self.subTest(test_status=test_status), tempfile.TemporaryDirectory() as directory:
+                root = Path(directory)
+                initial = root / "browser.initial"
+                initial.mkdir()
+                terminal_status = "failed" if test_status == "timed_out" else None
+                (initial / "playwright.log").write_text(
+                    safe_session_report(
+                        test_status=test_status,
+                        failed_stage=failed_stage,
+                        terminal_status=terminal_status,
+                    ),
+                    encoding="utf-8",
+                )
+                summary = PROJECTOR.project(root, "session-chat")
+                self.assertEqual(summary["status"], expected_status)
+                self.assertEqual(summary["report_state"], "partial")
+                self.assertEqual(summary["observed_phases"], ["initial"])
+                self.assertEqual(summary["passed_phases"], [])
+                self.assertEqual(summary["counts"], expected_counts)
+                output = root / "summary.json"
+                complete = subprocess.run(
+                    [
+                        sys.executable,
+                        str(ROOT / "project-playwright-browser-summary.py"),
+                        str(root),
+                        str(output),
+                        "--scenario",
+                        "session-chat",
+                        "--require-complete-journey",
+                    ],
+                    check=False,
+                )
+                self.assertEqual(complete.returncode, 2)
+
+    def test_session_chat_failed_timeout_retry_and_incomplete_recovery_fail_closed(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            initial = root / "browser.initial"
+            recovery = root / "browser.recovery"
+            initial.mkdir()
+            recovery.mkdir()
+            (initial / "playwright.log").write_text(safe_session_report(), encoding="utf-8")
+            log = recovery / "playwright.log"
+            recovery_kwargs = {
+                "test_id": PROJECTOR.SESSION_CHAT_RECOVERY_TEST_ID,
+                "stages": PROJECTOR.SESSION_CHAT_RECOVERY_STAGES,
+            }
+            log.write_text(
+                safe_session_report(
+                    **recovery_kwargs,
+                    test_status="failed",
+                    failed_stage="session_chat_response",
+                ),
+                encoding="utf-8",
+            )
             failed = PROJECTOR.project(root, "session-chat")
             self.assertEqual(failed["status"], "failed")
-            self.assertEqual(failed["passed_phases"], [])
+            self.assertEqual(failed["passed_phases"], ["initial"])
+            self.assertEqual(failed["counts"], {"passed": 1, "failed": 1, "skipped": 0, "timed_out": 0})
 
-            log.write_text(
-                safe_session_report(test_status="failed", failed_stage="session_chat_second_response"),
-                encoding="utf-8",
-            )
-            failed_stage = PROJECTOR.project(root, "session-chat")
-            self.assertEqual(failed_stage["status"], "failed")
-            self.assertEqual(failed_stage["report_state"], "complete")
-            self.assertEqual(failed_stage["passed_phases"], [])
-
-            log.write_text(
-                safe_session_report(test_status="timed_out", failed_stage="session_chat_response"),
-                encoding="utf-8",
-            )
-            timed_out = PROJECTOR.project(root, "session-chat")
-            self.assertEqual(timed_out["status"], "timed_out")
-            self.assertEqual(timed_out["counts"]["timed_out"], 1)
-
-            # The installed reporter emits this terminal pair for a real
-            # timeout: the test is timed_out while the run is failed with one
+            # The reporter closes a timed-out test as a failed run with one
             # result in Playwright's `other` bucket.
             log.write_text(
                 safe_session_report(
+                    **recovery_kwargs,
                     test_status="timed_out",
-                    failed_stage="session_chat_initialize",
+                    failed_stage="session_chat_response",
                     terminal_status="failed",
                 ),
                 encoding="utf-8",
             )
-            reporter_timeout = PROJECTOR.project(root, "session-chat")
-            self.assertEqual(reporter_timeout["status"], "timed_out")
-            self.assertEqual(reporter_timeout["report_state"], "complete")
-            self.assertEqual(reporter_timeout["observed_phases"], ["initial"])
-            self.assertEqual(reporter_timeout["passed_phases"], [])
-            self.assertEqual(reporter_timeout["counts"]["timed_out"], 1)
+            timed_out = PROJECTOR.project(root, "session-chat")
+            self.assertEqual(timed_out["status"], "timed_out")
+            self.assertEqual(timed_out["passed_phases"], ["initial"])
+            self.assertEqual(timed_out["counts"]["timed_out"], 1)
 
-            log.write_text(safe_session_report().replace('"test_count":1', '"test_count":true'), encoding="utf-8")
+            log.write_text(
+                safe_session_report(**recovery_kwargs).replace('"test_count":1', '"test_count":true'),
+                encoding="utf-8",
+            )
             bool_count = PROJECTOR.project(root, "session-chat")
             self.assertEqual(bool_count["status"], "unknown")
             self.assertEqual(bool_count["report_state"], "partial")
 
-            log.write_text(safe_session_report().replace('"retry":0', '"retry":1'), encoding="utf-8")
+            log.write_text(
+                safe_session_report(**recovery_kwargs).replace('"retry":0', '"retry":1'),
+                encoding="utf-8",
+            )
             retry = PROJECTOR.project(root, "session-chat")
             self.assertEqual(retry["status"], "unknown")
             self.assertEqual(retry["report_state"], "partial")
 
             log.write_text(
-                safe_session_report(missing_stage="session_chat_second_response"), encoding="utf-8"
+                safe_session_report(
+                    **recovery_kwargs,
+                    missing_stage="session_chat_reconnect",
+                ),
+                encoding="utf-8",
             )
             incomplete = PROJECTOR.project(root, "session-chat")
             self.assertEqual(incomplete["status"], "unknown")
             self.assertEqual(incomplete["report_state"], "partial")
-
-            log.write_text(safe_session_report() + '{"event":"stage","stage_id":"session_chat_send","status":"passed"}\n', encoding="utf-8")
-            duplicate = PROJECTOR.project(root, "session-chat")
-            self.assertEqual(duplicate["status"], "unknown")
-            self.assertEqual(duplicate["report_state"], "partial")
-
-            seeded = safe_session_report().replace(PROJECTOR.SESSION_CHAT_TEST_ID, "session_chat_ui")
-            log.write_text(seeded, encoding="utf-8")
-            seeded_summary = PROJECTOR.project(root, "session-chat")
-            self.assertEqual(seeded_summary["status"], "unknown")
-            self.assertEqual(seeded_summary["report_state"], "partial")
 
     def test_collector_accepts_typed_projection_and_rejects_untrusted_metadata(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -505,6 +602,39 @@ class BrowserSummaryTests(unittest.TestCase):
             browser.write_text(json.dumps(malicious), encoding="utf-8")
             with self.assertRaises(COLLECTOR.CollectionError):
                 COLLECTOR.collect(root / "rejected-raw", [f"browser-summary={browser}"], None, None, None)
+
+    def test_collector_accepts_typed_partial_failure_summary(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            browser = root / "browser.json"
+            browser.write_text(
+                json.dumps(
+                    {
+                        "status": "failed",
+                        "suite": "cooking-playwright",
+                        "test": "browser-journey",
+                        "phase": "browser",
+                        "component": "browser-e2e",
+                        "result_origin": "playwright-report",
+                        "report_state": "partial",
+                        "counts": {"passed": 0, "failed": 1, "skipped": 0, "timed_out": 0},
+                        "observed_phases": ["initial"],
+                        "passed_phases": [],
+                        "failure_metadata": [],
+                    }
+                ),
+                encoding="utf-8",
+            )
+            output = root / "bundle"
+            self.assertEqual(
+                COLLECTOR.collect(output, [f"browser-summary={browser}"], None, None, None),
+                0,
+            )
+            retained = json.loads(
+                (output / "sources/browser-summary").read_text(encoding="utf-8")
+            )
+            self.assertEqual(retained["status"], "failed")
+            self.assertEqual(retained["report_state"], "partial")
 
 
 if __name__ == "__main__":

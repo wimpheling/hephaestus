@@ -397,7 +397,7 @@ BROWSER_REPORT_STATES = frozenset(
     {"complete", "missing", "partial", "malformed", "truncated", "report-error"}
 )
 BROWSER_COUNT_FIELDS = frozenset({"passed", "failed", "skipped", "timed_out"})
-BROWSER_PHASE_VALUES = frozenset({"initial", "post-operation"})
+BROWSER_PHASE_VALUES = frozenset({"initial", "post-operation", "recovery"})
 BROWSER_FAILURE_FIELDS = frozenset(
     {
         "test_id", "phase", "status", "error_class", "matcher", "source_file",
@@ -405,7 +405,7 @@ BROWSER_FAILURE_FIELDS = frozenset(
     }
 )
 BROWSER_TEST_IDS = frozenset({"cooking-live-review", "cooking-post-operation"})
-BROWSER_PHASES = frozenset({"initial", "post-operation"})
+BROWSER_PHASES = frozenset({"initial", "post-operation", "recovery"})
 BROWSER_FAILURE_STATUSES = frozenset({"failed", "timed_out"})
 BROWSER_ERROR_CLASSES = frozenset({"assertion", "timeout", "hook", "runtime", "unknown"})
 BROWSER_MATCHERS = frozenset(

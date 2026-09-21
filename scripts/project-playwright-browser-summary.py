@@ -59,6 +59,17 @@ SESSION_CHAT_STAGES = (
     "session_chat_second_response",
     "session_chat_reconnect",
 )
+SESSION_CHAT_RECOVERY_TEST_ID = "session_chat_ui"
+SESSION_CHAT_RECOVERY_STAGES = (
+    "session_chat_initialize",
+    "session_chat_send",
+    "session_chat_response",
+    "session_chat_reconnect",
+)
+SESSION_CHAT_PHASES = {
+    "initial": (SESSION_CHAT_TEST_ID, SESSION_CHAT_STAGES),
+    "recovery": (SESSION_CHAT_RECOVERY_TEST_ID, SESSION_CHAT_RECOVERY_STAGES),
+}
 SAFE_EVENT_KEYS = {
     "run_started": frozenset({"event", "test_count"}),
     "stage": frozenset({"event", "stage_id", "status"}),
@@ -253,7 +264,13 @@ def _read_safe_report(path: Path) -> tuple[list[dict[str, Any]] | None, str]:
     return records, "complete"
 
 
-def _safe_summary(records: list[dict[str, Any]]) -> dict[str, Any] | None:
+def _safe_summary(
+    records: list[dict[str, Any]],
+    *,
+    phase: str,
+    expected_test_id: str,
+    expected_stages: tuple[str, ...],
+) -> dict[str, Any] | None:
     """Project one complete session-chat reporter stream without retaining its text."""
     if not records or records[0].get("event") != "run_started" or records[-1].get("event") != "run_finished":
         return None
@@ -262,10 +279,10 @@ def _safe_summary(records: list[dict[str, Any]]) -> dict[str, Any] | None:
 
     stage_records = [record for record in records if record.get("event") == "stage"]
     test_records = [record for record in records if record.get("event") == "test"]
-    if len(test_records) != 1 or not stage_records or len(stage_records) > len(SESSION_CHAT_STAGES) * 2:
+    if len(test_records) != 1 or not stage_records or len(stage_records) > len(expected_stages) * 2:
         return None
     stage_ids = [record.get("stage_id") for record in stage_records]
-    expected_stage_ids = [stage for stage in SESSION_CHAT_STAGES for _ in (0, 1)]
+    expected_stage_ids = [stage for stage in expected_stages for _ in (0, 1)]
     if stage_ids != expected_stage_ids[: len(stage_records)] or len(stage_records) % 2:
         return None
     failed_stage = False
@@ -286,7 +303,7 @@ def _safe_summary(records: list[dict[str, Any]]) -> dict[str, Any] | None:
         return None
 
     test = test_records[0]
-    if test.get("test_id") != SESSION_CHAT_TEST_ID:
+    if test.get("test_id") != expected_test_id:
         return None
     if test.get("status") not in SAFE_REPORT_STATUSES:
         return None
@@ -339,7 +356,7 @@ def _safe_summary(records: list[dict[str, Any]]) -> dict[str, Any] | None:
         status = "timed_out"
     elif test["status"] not in {"passed", "failed"}:
         status = "unknown"
-    passed_phases = ["initial"] if status == "passed" else []
+    passed_phases = [phase] if status == "passed" else []
     return {
         "status": status,
         "suite": "cooking-playwright",
@@ -351,7 +368,7 @@ def _safe_summary(records: list[dict[str, Any]]) -> dict[str, Any] | None:
         "result_origin": "playwright-report",
         "report_state": "complete",
         "counts": projected_counts,
-        "observed_phases": ["initial"],
+        "observed_phases": [phase],
         "passed_phases": passed_phases,
         "failure_metadata": [],
     }
@@ -365,18 +382,76 @@ def _project_session_chat(root: Path) -> dict[str, Any]:
     )
     if len(phase_dirs) > MAX_REPORTS:
         return _unknown("truncated")
-    logs = [path / "playwright.log" for path in phase_dirs if (path / "playwright.log").exists()]
-    # One initial run is the only accepted session-chat evidence. A JSON
-    # Playwright report or a retry would make the phase ambiguous.
-    if len(phase_dirs) != 1 or len(logs) != 1:
-        return _unknown("partial" if phase_dirs else "missing")
-    if (phase_dirs[0] / "playwright-report.json").exists():
+    expected_phase_names = tuple(SESSION_CHAT_PHASES)
+    if not phase_dirs:
+        return _unknown("missing")
+    summaries: dict[str, dict[str, Any]] = {}
+    for phase_dir in phase_dirs:
+        log = phase_dir / "playwright.log"
+        # A JSON report, missing log, retry, or duplicate phase is ambiguous.
+        if (phase_dir / "playwright-report.json").exists() or not log.exists():
+            return _unknown("partial")
+        records, state = _read_safe_report(log)
+        if records is None:
+            return _unknown(state)
+        test_records = [record for record in records if record.get("event") == "test"]
+        if len(test_records) != 1:
+            return _unknown("partial")
+        test_id = test_records[0].get("test_id")
+        matched = [
+            (phase, expected_id, stages)
+            for phase, (expected_id, stages) in SESSION_CHAT_PHASES.items()
+            if test_id == expected_id
+        ]
+        if len(matched) != 1:
+            return _unknown("partial")
+        phase, expected_id, stages = matched[0]
+        if phase in summaries:
+            return _unknown("partial")
+        summary = _safe_summary(
+            records,
+            phase=phase,
+            expected_test_id=expected_id,
+            expected_stages=stages,
+        )
+        if summary is None:
+            return _unknown("partial")
+        summaries[phase] = summary
+    if not summaries:
         return _unknown("partial")
-    records, state = _read_safe_report(logs[0])
-    if records is None:
-        return _unknown(state)
-    summary = _safe_summary(records)
-    return summary if summary is not None else _unknown("partial")
+
+    counts = {"passed": 0, "failed": 0, "skipped": 0, "timed_out": 0}
+    passed_phases: list[str] = []
+    for phase in expected_phase_names:
+        if phase not in summaries:
+            continue
+        summary = summaries[phase]
+        for name, value in summary["counts"].items():
+            counts[name] += value
+        if summary["status"] == "passed":
+            passed_phases.append(phase)
+    complete = set(summaries) == set(expected_phase_names)
+    if counts["timed_out"]:
+        status = "timed_out"
+    elif counts["failed"]:
+        status = "failed"
+    elif complete and counts["passed"] == len(summaries):
+        status = "passed"
+    else:
+        status = "unknown"
+    return {
+        "status": status,
+        "suite": "cooking-playwright",
+        "test": "browser-journey",
+        "phase": "browser",
+        "component": "browser-e2e",
+        "result_origin": "playwright-report",
+        "report_state": "complete" if complete else "partial",
+        "counts": counts,
+        "observed_phases": [phase for phase in expected_phase_names if phase in summaries],
+        "passed_phases": passed_phases,
+        "failure_metadata": [],
+    }
 
 
 def project(root: Path, scenario: str = "cooking") -> dict[str, Any]:
@@ -495,7 +570,11 @@ def main() -> int:
         return 0
     if summary["report_state"] != "complete":
         return 2
-    expected_phases = ["initial"] if args.scenario == "session-chat" else ["initial", "post-operation"]
+    expected_phases = (
+        list(SESSION_CHAT_PHASES)
+        if args.scenario == "session-chat"
+        else ["initial", "post-operation"]
+    )
     if summary["observed_phases"] != expected_phases:
         return 3
     if summary["passed_phases"] != expected_phases or summary["status"] != "passed":
