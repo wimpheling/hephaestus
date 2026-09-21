@@ -9,6 +9,8 @@ type SessionChatFixture = {
   actor_id: string;
   ui_path: string;
   agent_response_text: string;
+  initial_transcript_count?: string;
+  initial_agent_count?: string;
 };
 
 type CookingFixture = {
@@ -22,6 +24,10 @@ test("cooking session-chat installed UI initializes and reconnects ordinary Git 
   test.setTimeout(180_000);
   const fixture = loadFixture();
   const session = fixture.session_chat_ui;
+  const initialTranscriptCount = parseCount(session.initial_transcript_count);
+  const initialAgentCount = parseCount(session.initial_agent_count);
+  const transcript = page.locator("[data-transcript] article");
+  let initialTranscriptTexts: string[] = [];
   await test.step("session-chat-initialize", async () => {
     await signIn(page, "reviewer");
     await page.goto(`/projects/${session.project_id}`);
@@ -76,7 +82,8 @@ test("cooking session-chat installed UI initializes and reconnects ordinary Git 
     assertCookieIsolation(await discovery.request().allHeaders());
 
     await expect(page.locator("[data-status]")).toHaveText(`Connected as user:${session.actor_id}`);
-    await expect(page.locator("[data-transcript] article")).toHaveCount(0);
+    await expect(transcript).toHaveCount(initialTranscriptCount);
+    initialTranscriptTexts = (await transcript.allTextContents()).map(text => text.trim());
   });
 
   let pollingFetches = 0;
@@ -110,7 +117,10 @@ test("cooking session-chat installed UI initializes and reconnects ordinary Git 
   });
 
   await test.step("session-chat-response", async () => {
-    await expect(agentMessage).toHaveCount(1, {timeout: 60_000});
+    await expect(agentMessage).toHaveCount(initialAgentCount + 1, {timeout: 60_000});
+    await expect(transcript).toHaveCount(initialTranscriptCount + 2);
+    expect((await transcript.allTextContents()).map(text => text.trim()).slice(0, initialTranscriptCount))
+      .toEqual(initialTranscriptTexts);
     await expect(page.locator("[data-status]")).toHaveText("Assistant response received");
     expect(pollingFetches).toBeGreaterThan(0);
   });
@@ -137,7 +147,10 @@ test("cooking session-chat installed UI initializes and reconnects ordinary Git 
     expect((await reconnectDiscovery).status()).toBe(200);
     expect((await reconnectFetch).status()).toBe(200);
     await expect(page.locator("article.message-human").filter({hasText: message})).toHaveCount(1);
-    await expect(agentMessage).toHaveCount(1);
+    await expect(agentMessage).toHaveCount(initialAgentCount + 1);
+    await expect(transcript).toHaveCount(initialTranscriptCount + 2);
+    expect((await transcript.allTextContents()).map(text => text.trim()).slice(0, initialTranscriptCount))
+      .toEqual(initialTranscriptTexts);
   });
 });
 
@@ -150,7 +163,17 @@ function loadFixture(): CookingFixture {
     throw new Error("session-chat browser fixture is missing its installed UI projection");
   }
   if (!/^\/[^?]*\.html$/.test(session.ui_path)) throw new Error("session-chat fixture UI path is invalid");
+  parseCount(session.initial_transcript_count);
+  parseCount(session.initial_agent_count);
   return {session_chat_ui: session as SessionChatFixture};
+}
+
+function parseCount(value: string | undefined): number {
+  if (value === undefined) return 0;
+  if (!/^[0-9]+$/.test(value)) throw new Error("session-chat fixture count is invalid");
+  const count = Number(value);
+  if (!Number.isSafeInteger(count)) throw new Error("session-chat fixture count is too large");
+  return count;
 }
 
 async function signIn(page: import("@playwright/test").Page, account: string) {

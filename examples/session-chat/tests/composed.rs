@@ -47,6 +47,7 @@ use std::{
     },
     time::Duration,
 };
+use time::OffsetDateTime;
 use tokio::{
     io::{AsyncReadExt, AsyncWriteExt},
     net::TcpListener,
@@ -69,6 +70,10 @@ pub fn enabled() -> bool {
 
 pub fn denial_probe_enabled() -> bool {
     std::env::var("HEPHAESTUS_APP_SESSION_CHAT_DENIAL_PROBE_E2E").as_deref() == Ok("1")
+}
+
+pub fn restart_e2e_enabled() -> bool {
+    std::env::var("HEPHAESTUS_APP_SESSION_CHAT_RESTART_E2E").as_deref() == Ok("1")
 }
 
 pub struct SessionBrokerFixture {
@@ -99,16 +104,33 @@ impl SessionBrokerFixture {
             .into_inner()
             .expect("session model request observer lock")
     }
+
+    async fn wait_for_observed(&self, expected: usize) {
+        tokio::time::timeout(Duration::from_secs(20), async {
+            while self.observed.load(Ordering::SeqCst) < expected {
+                tokio::time::sleep(Duration::from_millis(25)).await;
+            }
+        })
+        .await
+        .expect("session-chat model prefix observation timeout");
+    }
+
+    fn observed_snapshot(&self) -> Vec<ObservedModelRequest> {
+        self.requests
+            .lock()
+            .expect("session model request observer lock")
+            .clone()
+    }
 }
 
-#[derive(Debug)]
+#[derive(Clone, Debug)]
 struct ObservedModelRequest {
     session_id: Uuid,
     record_id: Uuid,
     messages: Vec<ObservedModelMessage>,
 }
 
-#[derive(Debug)]
+#[derive(Clone, Debug)]
 struct ObservedModelMessage {
     record_id: Uuid,
     role: String,
@@ -143,8 +165,9 @@ pub async fn start_model_fixture() -> SessionBrokerFixture {
         .await
         .expect("session model listener");
     let port = listener.local_addr().expect("session model address").port();
-    let expected_requests = if std::env::var("HEPHAESTUS_APP_SESSION_CHAT_BROWSER_E2E").as_deref()
-        == Ok("1")
+    let expected_requests = if restart_e2e_enabled() {
+        3
+    } else if std::env::var("HEPHAESTUS_APP_SESSION_CHAT_BROWSER_E2E").as_deref() == Ok("1")
         || denial_probe_enabled()
     {
         2
@@ -1007,7 +1030,7 @@ pub async fn exercise(
     rpc_token: &(dyn Fn(&str) -> String + Send + Sync),
     broker: SessionBrokerFixture,
     timeout: Duration,
-) {
+) -> Option<BrowserRestartState> {
     let denial_probe = denial_probe_enabled();
     let browser_e2e =
         std::env::var("HEPHAESTUS_APP_SESSION_CHAT_BROWSER_E2E").as_deref() == Ok("1");
@@ -1087,8 +1110,36 @@ pub async fn exercise(
             project,
             built.release_agent_id,
             model_import,
+            SessionChatBrowserMode::New,
         )
         .await;
+        if restart_e2e_enabled() {
+            broker.wait_for_observed(2).await;
+            let requests = broker.observed_snapshot();
+            assert_browser_session(
+                pool,
+                root,
+                project,
+                identity.user_id.as_uuid(),
+                built.release_agent_id,
+                &existing_repository_ids,
+                requests,
+            )
+            .await;
+            let state = load_browser_restart_state(
+                pool,
+                root,
+                project,
+                identity.user_id.as_uuid(),
+                built.release_id,
+                built.release_agent_id,
+                &existing_repository_ids,
+                broker,
+            )
+            .await;
+            eprintln!("HEPH_SESSION_CHAT_BROWSER stage=restart-state-captured turns=2");
+            return Some(state);
+        }
         let requests = broker.assert_observed().await;
         assert_browser_session(
             pool,
@@ -1100,7 +1151,7 @@ pub async fn exercise(
             requests,
         )
         .await;
-        return;
+        return None;
     }
 
     let session_repository = repositories
@@ -1451,31 +1502,83 @@ pub async fn exercise(
             ]
         );
     }
+    None
 }
 
+enum SessionChatBrowserMode {
+    New,
+    Existing {
+        repository_id: Uuid,
+        installation_id: Uuid,
+        generation_id: Uuid,
+        actor_id: Uuid,
+    },
+}
+
+#[allow(clippy::too_many_lines)] // Browser setup and selector validation stay one bounded fixture boundary.
 async fn run_session_chat_browser(
     database_url: &str,
     running: &RunningHephaestus,
     project: ProjectId,
     release_agent_id: Uuid,
     model_import_id: Uuid,
+    mode: SessionChatBrowserMode,
 ) {
-    let fixture_path = std::env::var("HEPHAESTUS_COOKING_BROWSER_FIXTURE_OUTPUT")
-        .expect("session-chat browser fixture output path");
-    let fixture = serde_json::json!({
-        "session_chat_new": {
-            "project_id": project,
-            "release_agent_id": release_agent_id,
-            "model_import_id": model_import_id,
-            "ui_path": "/session-chat/index.html",
-            "agent_response_text": MODEL_RESPONSE_TEXT
-        }
-    });
-    assert!(
-        fixture.get("session_chat_new").is_some(),
-        "session-chat browser must select the session_chat_new fixture mode"
+    let fixture_output = PathBuf::from(
+        std::env::var("HEPHAESTUS_COOKING_BROWSER_FIXTURE_OUTPUT")
+            .expect("session-chat browser fixture output path"),
     );
-    eprintln!("HEPH_SESSION_CHAT_BROWSER stage=fixture-selected mode=session_chat_new");
+    let (fixture, browser_mode, browser_selector) = match mode {
+        SessionChatBrowserMode::New => (
+            serde_json::json!({
+                "session_chat_new": {
+                    "project_id": project,
+                    "release_agent_id": release_agent_id,
+                    "model_import_id": model_import_id,
+                    "ui_path": "/session-chat/index.html",
+                    "agent_response_text": MODEL_RESPONSE_TEXT
+                }
+            }),
+            "session_chat_new",
+            "cooking new session chat creates and opens a real Git-backed browser session",
+        ),
+        SessionChatBrowserMode::Existing {
+            repository_id,
+            installation_id,
+            generation_id,
+            actor_id,
+        } => (
+            serde_json::json!({
+                "session_chat_ui": {
+                    "project_id": project,
+                    "repository_id": repository_id,
+                    "installation_id": installation_id,
+                    "generation_id": generation_id,
+                    "actor_id": actor_id,
+                    "ui_path": "/session-chat/index.html",
+                    "agent_response_text": MODEL_RESPONSE_TEXT,
+                    "initial_transcript_count": "4",
+                    "initial_agent_count": "2"
+                }
+            }),
+            "session_chat_ui",
+            "cooking session-chat installed UI initializes and reconnects ordinary Git history",
+        ),
+    };
+    let fixture_path = match browser_mode {
+        "session_chat_new" => fixture_output,
+        "session_chat_ui" => fixture_output.with_file_name(format!(
+            "{}.recovery.json",
+            fixture_output
+                .file_name()
+                .expect("session-chat fixture filename")
+                .to_string_lossy()
+        )),
+        _ => unreachable!("session-chat browser fixture mode is allowlisted"),
+    };
+    eprintln!(
+        "HEPH_SESSION_CHAT_BROWSER stage=fixture-selected mode={browser_mode} selector={browser_selector}"
+    );
     tokio::fs::write(
         &fixture_path,
         serde_json::to_vec_pretty(&fixture).expect("session-chat browser fixture JSON"),
@@ -1486,9 +1589,19 @@ async fn run_session_chat_browser(
         .parent()
         .expect("session-chat fixture parent")
         .join("installed-ui-control");
-    tokio::fs::create_dir(&control_dir)
-        .await
-        .expect("create session-chat installed UI control directory");
+    match tokio::fs::create_dir(&control_dir).await {
+        Ok(()) => {}
+        Err(error) if error.kind() == io::ErrorKind::AlreadyExists => {
+            let metadata = tokio::fs::symlink_metadata(&control_dir)
+                .await
+                .expect("read existing session-chat installed UI control directory");
+            assert!(
+                metadata.is_dir() && !metadata.file_type().is_symlink(),
+                "session-chat installed UI control directory must remain a real directory"
+            );
+        }
+        Err(error) => panic!("create session-chat installed UI control directory: {error}"),
+    }
     std::fs::set_permissions(
         &control_dir,
         std::os::unix::fs::PermissionsExt::from_mode(0o700),
@@ -1510,11 +1623,10 @@ async fn run_session_chat_browser(
             "golden-internal-command-token-with-sufficient-entropy",
         )
         .env("HEPHAESTUS_E2E_EXTERNAL_OIDC_ISSUER", issuer)
+        // The installed UI wrapper currently allowlists only the initial phase;
+        // recovery uses a separate fixture path while keeping that contract.
         .env("HEPHAESTUS_E2E_COOKING_PHASE", "initial")
-        .env(
-            "HEPHAESTUS_INSTALLED_UI_BROWSER_GREP",
-            "cooking new session chat creates and opens a real Git-backed browser session",
-        )
+        .env("HEPHAESTUS_INSTALLED_UI_BROWSER_GREP", browser_selector)
         .env(
             "HEPHAESTUS_PLATFORM_HTTPS_ORIGIN",
             super::installed_ui_platform_origin(),
@@ -1532,7 +1644,9 @@ async fn run_session_chat_browser(
         status.success(),
         "session-chat browser E2E failed: {status}"
     );
-    eprintln!("HEPH_SESSION_CHAT_BROWSER stage=playwright-passed mode=session_chat_new");
+    eprintln!(
+        "HEPH_SESSION_CHAT_BROWSER stage=playwright-passed mode={browser_mode} selector={browser_selector}"
+    );
 }
 
 #[derive(Debug, sqlx::FromRow)]
@@ -1542,6 +1656,485 @@ struct BrowserSessionObjects {
     instance_id: Uuid,
     revision_id: Uuid,
     attachment_id: Uuid,
+}
+
+/// Persisted identifiers and immutable first-phase evidence used by recovery.
+pub struct BrowserRestartState {
+    broker: SessionBrokerFixture,
+    project: ProjectId,
+    actor_id: Uuid,
+    release_id: Uuid,
+    release_agent_id: Uuid,
+    repository_id: Uuid,
+    instance_id: Uuid,
+    revision_id: Uuid,
+    attachment_id: Uuid,
+    installation_id: Uuid,
+    generation_id: Uuid,
+    session_id: Uuid,
+    initial_head: String,
+    initial_receive_count: i64,
+    initial_record_blobs: HashMap<String, Vec<u8>>,
+    previous_runtime_session_ids: Vec<Uuid>,
+}
+
+#[allow(clippy::too_many_arguments, clippy::too_many_lines)] // One exact persisted-session lookup keeps restart identity immutable.
+async fn load_browser_restart_state(
+    pool: &PgPool,
+    root: &Path,
+    project: ProjectId,
+    actor_id: Uuid,
+    release_id: Uuid,
+    release_agent_id: Uuid,
+    existing_repository_ids: &HashSet<Uuid>,
+    broker: SessionBrokerFixture,
+) -> BrowserRestartState {
+    let candidates: Vec<BrowserSessionObjects> = sqlx::query_as(
+        "SELECT repository.id AS repository_id,
+                instance.id AS instance_id,
+                revision.id AS revision_id,
+                attachment.id AS attachment_id
+           FROM repositories repository
+           JOIN agent_attachments attachment
+             ON attachment.repository_id = repository.id
+            AND attachment.project_id = repository.project_id
+           JOIN agent_instances instance
+             ON instance.id = attachment.instance_id
+            AND instance.project_id = repository.project_id
+           JOIN agent_instance_revisions revision
+             ON revision.id = instance.active_revision_id
+            AND revision.instance_id = instance.id
+            AND revision.release_agent_id = $2
+          WHERE repository.project_id = $1
+            AND attachment.ref_selector = 'refs/heads/main'
+            AND attachment.removed_at IS NULL",
+    )
+    .bind(project.as_uuid())
+    .bind(release_agent_id)
+    .fetch_all(pool)
+    .await
+    .expect("browser restart repository and attachment");
+    let candidates: Vec<_> = candidates
+        .into_iter()
+        .filter(|candidate| !existing_repository_ids.contains(&candidate.repository_id))
+        .collect();
+    assert_eq!(
+        candidates.len(),
+        1,
+        "browser restart must retain exactly one session repository"
+    );
+    let BrowserSessionObjects {
+        repository_id,
+        instance_id,
+        revision_id,
+        attachment_id,
+    } = candidates
+        .into_iter()
+        .next()
+        .expect("browser restart session repository");
+    let (installation_id, generation_id): (Uuid, Uuid) = sqlx::query_as(
+        "SELECT installation.id, installation.current_generation_id
+           FROM ui_installations installation
+           JOIN ui_installation_generations generation
+             ON generation.id = installation.current_generation_id
+            AND generation.installation_id = installation.id
+          WHERE installation.project_id = $1
+            AND installation.repository_id = $2
+            AND installation.scope = 'repository'
+            AND installation.ui_key = 'session-chat'
+            AND installation.lifecycle = 'enabled'
+            AND generation.release_id = $3
+            AND generation.ui_key = 'session-chat'
+            AND generation.ui_scope = 'repository'",
+    )
+    .bind(project.as_uuid())
+    .bind(repository_id)
+    .bind(release_id)
+    .fetch_one(pool)
+    .await
+    .expect("browser restart installed UI generation");
+    let head = git_output_bare(root, repository_id, &["rev-parse", "refs/heads/main"]).await;
+    let manifest_path = ".heph/session/v1/manifest.json";
+    let manifest: JsonValue = serde_json::from_str(
+        &git_output_bare(
+            root,
+            repository_id,
+            &["show", &format!("{head}:{manifest_path}")],
+        )
+        .await,
+    )
+    .expect("browser restart session manifest JSON");
+    let session_id = Uuid::parse_str(
+        manifest["data"]["session_id"]
+            .as_str()
+            .expect("browser restart session ID"),
+    )
+    .expect("browser restart session UUID");
+    let initial_receive_count: i64 =
+        sqlx::query_scalar("SELECT count(*) FROM git_receives WHERE repository_id = $1")
+            .bind(repository_id)
+            .fetch_one(pool)
+            .await
+            .expect("browser restart initial receive count");
+    let record_paths = git_output_bare(
+        root,
+        repository_id,
+        &["ls-tree", "-r", "--name-only", &head],
+    )
+    .await
+    .lines()
+    .filter(|path| path.starts_with(".heph/session/v1/records/"))
+    .map(str::to_owned)
+    .collect::<Vec<_>>();
+    let mut initial_record_blobs = HashMap::with_capacity(record_paths.len());
+    for path in record_paths {
+        let content =
+            git_output_bare_bytes(root, repository_id, &["show", &format!("{head}:{path}")]).await;
+        initial_record_blobs.insert(path, content);
+    }
+    let previous_runtime_session_ids: Vec<Uuid> = sqlx::query_scalar(
+        "SELECT session.id
+           FROM runtime_authority_sessions AS session
+           JOIN run_requests AS request ON request.run_id = session.run_id
+          WHERE session.instance_id = $1
+            AND session.attachment_id = $2
+            AND request.request_kind = 'instance_normal'
+          ORDER BY session.created_at, session.id",
+    )
+    .bind(instance_id)
+    .bind(attachment_id)
+    .fetch_all(pool)
+    .await
+    .expect("browser restart previous runtime authority sessions");
+    let previous_publication_session_ids: Vec<Uuid> = sqlx::query_scalar(
+        "SELECT DISTINCT session.id
+           FROM runtime_authority_sessions AS session
+           JOIN git_receives AS receive
+             ON receive.runtime_session_id = session.id
+          WHERE session.instance_id = $1
+            AND session.attachment_id = $2
+            AND receive.runtime_attachment_id = $2
+            AND receive.status = 'accepted'
+          ORDER BY session.id",
+    )
+    .bind(instance_id)
+    .bind(attachment_id)
+    .fetch_all(pool)
+    .await
+    .expect("browser restart previous publication runtime sessions");
+    assert_eq!(
+        previous_publication_session_ids.len(),
+        2,
+        "first browser phase must publish two runtime-authenticated turns"
+    );
+    BrowserRestartState {
+        broker,
+        project,
+        actor_id,
+        release_id,
+        release_agent_id,
+        repository_id,
+        instance_id,
+        revision_id,
+        attachment_id,
+        installation_id,
+        generation_id,
+        session_id,
+        initial_head: head,
+        initial_receive_count,
+        initial_record_blobs,
+        previous_runtime_session_ids,
+    }
+}
+
+#[allow(clippy::cognitive_complexity, clippy::too_many_lines)]
+/// Restarts the browser-backed session against the already-persisted installation.
+pub async fn exercise_browser_restart(
+    pool: &PgPool,
+    database_url: &str,
+    running: &RunningHephaestus,
+    root: &Path,
+    state: BrowserRestartState,
+    restart_boundary: OffsetDateTime,
+) {
+    let BrowserRestartState {
+        broker,
+        project,
+        actor_id,
+        release_id,
+        release_agent_id,
+        repository_id,
+        instance_id,
+        revision_id,
+        attachment_id,
+        installation_id,
+        generation_id,
+        session_id,
+        initial_head,
+        initial_receive_count,
+        initial_record_blobs,
+        previous_runtime_session_ids,
+    } = state;
+    eprintln!("HEPH_SESSION_CHAT_BROWSER stage=restart-started");
+    run_session_chat_browser(
+        database_url,
+        running,
+        project,
+        release_agent_id,
+        Uuid::nil(),
+        SessionChatBrowserMode::Existing {
+            repository_id,
+            installation_id,
+            generation_id,
+            actor_id,
+        },
+    )
+    .await;
+    let requests = broker.assert_observed().await;
+    assert_eq!(
+        requests.len(),
+        3,
+        "restart flow must make three model turns"
+    );
+    let first = &requests[0];
+    let second = &requests[1];
+    let third = &requests[2];
+    assert_eq!(third.session_id, session_id);
+    assert_eq!(third.messages.len(), 5);
+    assert_eq!(third.messages[0].role, "human");
+    assert_eq!(third.messages[1].role, "assistant");
+    assert_eq!(third.messages[2].role, "human");
+    assert_eq!(third.messages[3].role, "assistant");
+    assert_eq!(third.messages[4].role, "human");
+    assert_eq!(third.messages[0].record_id, first.record_id);
+    assert_eq!(third.messages[2].record_id, second.record_id);
+    assert_eq!(third.messages[4].record_id, third.record_id);
+    assert_ne!(third.record_id, first.record_id);
+    assert_ne!(third.record_id, second.record_id);
+
+    let head = git_output_bare(root, repository_id, &["rev-parse", "refs/heads/main"]).await;
+    assert_ne!(
+        head, initial_head,
+        "restart must persist a new canonical turn"
+    );
+    let ancestor = Command::new("git")
+        .arg(format!(
+            "--git-dir={}",
+            root.join("repositories")
+                .join(format!("{repository_id}.git"))
+                .display()
+        ))
+        .args(["merge-base", "--is-ancestor", &initial_head, &head])
+        .status()
+        .await
+        .expect("check restart Git ancestry");
+    assert!(
+        ancestor.success(),
+        "restart head must retain the first two turns"
+    );
+    let paths = git_output_bare(
+        root,
+        repository_id,
+        &["ls-tree", "-r", "--name-only", head.trim()],
+    )
+    .await
+    .lines()
+    .map(str::to_owned)
+    .collect::<Vec<_>>();
+    let human_paths = paths
+        .iter()
+        .filter(|path| path.starts_with(".heph/session/v1/records/human/"))
+        .cloned()
+        .collect::<Vec<_>>();
+    let agent_paths = paths
+        .iter()
+        .filter(|path| path.starts_with(".heph/session/v1/records/agent/"))
+        .cloned()
+        .collect::<Vec<_>>();
+    assert_eq!(
+        human_paths.len(),
+        3,
+        "restart must retain three human records"
+    );
+    assert_eq!(
+        agent_paths.len(),
+        3,
+        "restart must retain three assistant records"
+    );
+    let mut human_record_paths = HashMap::with_capacity(human_paths.len());
+    for path in &human_paths {
+        let record: JsonValue = serde_json::from_str(
+            &git_output_bare(root, repository_id, &["show", &format!("{head}:{path}")]).await,
+        )
+        .expect("restart human record JSON");
+        let record_id = Uuid::parse_str(
+            record["record_id"]
+                .as_str()
+                .expect("restart human record ID"),
+        )
+        .expect("restart human record UUID");
+        assert_eq!(record["kind"], "user_message");
+        human_record_paths.insert(record_id, path.clone());
+    }
+    let mut agent_record_paths = HashMap::with_capacity(agent_paths.len());
+    for path in &agent_paths {
+        let record: JsonValue = serde_json::from_str(
+            &git_output_bare(root, repository_id, &["show", &format!("{head}:{path}")]).await,
+        )
+        .expect("restart assistant record JSON");
+        let record_id = Uuid::parse_str(
+            record["record_id"]
+                .as_str()
+                .expect("restart assistant record ID"),
+        )
+        .expect("restart assistant record UUID");
+        assert_eq!(record["kind"], "assistant_message");
+        assert_eq!(record["content"]["text"], MODEL_RESPONSE_TEXT);
+        agent_record_paths.insert(record_id, record);
+    }
+    let first_agent_id = agent_record_paths
+        .iter()
+        .find(|(_, record)| record["in_reply_to"] == first.record_id.to_string())
+        .map(|(record_id, _)| *record_id)
+        .expect("restart first assistant record");
+    let second_agent_id = agent_record_paths
+        .iter()
+        .find(|(_, record)| record["in_reply_to"] == second.record_id.to_string())
+        .map(|(record_id, _)| *record_id)
+        .expect("restart second assistant record");
+    assert_eq!(third.messages[1].record_id, first_agent_id);
+    assert_eq!(third.messages[3].record_id, second_agent_id);
+    let third_agent_id = agent_record_paths
+        .iter()
+        .find(|(_, record)| record["in_reply_to"] == third.record_id.to_string())
+        .map(|(record_id, _)| *record_id)
+        .expect("restart third assistant record");
+    let human_path = human_record_paths
+        .get(&third.record_id)
+        .expect("restart third human record path");
+    let human_commit = canonical_record_commit(root, repository_id, human_path).await;
+    assert_eq!(
+        git_output_bare(
+            root,
+            repository_id,
+            &["rev-parse", &format!("{human_commit}^")],
+        )
+        .await,
+        initial_head,
+        "third human commit must directly follow the pre-restart head"
+    );
+    let agent_path = agent_paths
+        .iter()
+        .find(|path| path.ends_with(&format!("{third_agent_id}.json")))
+        .expect("restart third assistant record path");
+    let agent_commit = canonical_record_commit(root, repository_id, agent_path).await;
+    assert_eq!(
+        git_output_bare(
+            root,
+            repository_id,
+            &["rev-parse", &format!("{agent_commit}^")],
+        )
+        .await,
+        human_commit,
+        "restart assistant commit must be based on its human commit"
+    );
+    let run_id = accepted_normal_run_id(
+        pool,
+        repository_id,
+        instance_id,
+        attachment_id,
+        actor_id,
+        &human_commit,
+    )
+    .await;
+    wait_for_run_succeeded(pool, run_id, Duration::from_secs(120)).await;
+    assert_eq!(accepted_runtime_receive_count(pool, run_id).await, 1);
+    let expected_human_record_id = third.record_id.to_string();
+    assert_runtime_git_turn_at_commit(
+        pool,
+        root,
+        repository_id,
+        instance_id,
+        attachment_id,
+        actor_id,
+        run_id,
+        &human_commit,
+        &agent_commit,
+        Some(&expected_human_record_id),
+    )
+    .await;
+    let (runtime_created_at, runtime_session_id): (OffsetDateTime, Uuid) = sqlx::query_as(
+        "SELECT session.created_at, session.id
+           FROM runtime_authority_sessions AS session
+          WHERE session.run_id = $1",
+    )
+    .bind(run_id)
+    .fetch_one(pool)
+    .await
+    .expect("restart runtime authority session");
+    assert!(runtime_created_at > restart_boundary);
+    assert!(!previous_runtime_session_ids.contains(&runtime_session_id));
+    assert_ne!(runtime_session_id, Uuid::nil());
+    for (path, expected) in &initial_record_blobs {
+        assert_eq!(
+            git_output_bare_bytes(root, repository_id, &["show", &format!("{head}:{path}")]).await,
+            expected.as_slice(),
+            "pre-restart record blob changed: {path}"
+        );
+    }
+    let run_request_count: i64 = sqlx::query_scalar(
+        "SELECT count(*) FROM run_requests WHERE instance_id = $1 AND repository_id = $2",
+    )
+    .bind(instance_id)
+    .bind(repository_id)
+    .fetch_one(pool)
+    .await
+    .expect("restart session run request count");
+    assert_eq!(
+        run_request_count, 4,
+        "restart must not recursively schedule runs"
+    );
+    let receive_count: i64 =
+        sqlx::query_scalar("SELECT count(*) FROM git_receives WHERE repository_id = $1")
+            .bind(repository_id)
+            .fetch_one(pool)
+            .await
+            .expect("restart session Git receive count");
+    assert_eq!(
+        receive_count,
+        initial_receive_count + 2,
+        "restart must add exactly one human and one assistant receive"
+    );
+    let (current_installation_id, current_generation_id, current_release_id): (Uuid, Uuid, Uuid) =
+        sqlx::query_as(
+            "SELECT installation.id, installation.current_generation_id, generation.release_id
+           FROM ui_installations installation
+           JOIN ui_installation_generations generation
+             ON generation.id = installation.current_generation_id
+          WHERE installation.id = $1
+            AND installation.project_id = $2
+            AND installation.repository_id = $3
+            AND installation.lifecycle = 'enabled'
+            AND generation.release_id = $4",
+        )
+        .bind(installation_id)
+        .bind(project.as_uuid())
+        .bind(repository_id)
+        .bind(release_id)
+        .fetch_one(pool)
+        .await
+        .expect("restart installed UI persistence");
+    assert_eq!(current_installation_id, installation_id);
+    assert_eq!(current_generation_id, generation_id);
+    assert_eq!(current_release_id, release_id);
+    let current_revision_id: Uuid =
+        sqlx::query_scalar("SELECT active_revision_id FROM agent_instances WHERE id = $1")
+            .bind(instance_id)
+            .fetch_one(pool)
+            .await
+            .expect("restart active instance revision");
+    assert_eq!(current_revision_id, revision_id);
+    eprintln!("HEPH_SESSION_CHAT_BROWSER stage=restart-canonical-validation-passed turns=3");
 }
 
 async fn canonical_record_commit(root: &Path, repository_id: Uuid, record_path: &str) -> String {
@@ -2294,4 +2887,20 @@ async fn git_output_bare(root: &Path, repository: Uuid, arguments: &[&str]) -> S
         .expect("session bare Git output UTF-8")
         .trim()
         .to_owned()
+}
+
+async fn git_output_bare_bytes(root: &Path, repository: Uuid, arguments: &[&str]) -> Vec<u8> {
+    let bare = root.join("repositories").join(format!("{repository}.git"));
+    let output = Command::new("git")
+        .arg(format!("--git-dir={}", bare.display()))
+        .args(arguments)
+        .output()
+        .await
+        .expect("run session bare Git byte output command");
+    assert!(
+        output.status.success(),
+        "bare Git byte output failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    output.stdout
 }

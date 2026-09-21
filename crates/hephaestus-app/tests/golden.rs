@@ -4577,6 +4577,7 @@ async fn bearer_push_starts_run_through_production_bootstrap() {
     let libkrun_e2e = env::var("HEPHAESTUS_APP_LIBKRUN_E2E").as_deref() == Ok("1");
     let session_chat_e2e = session_chat::enabled();
     let session_chat_denial_probe_e2e = session_chat::denial_probe_enabled();
+    let session_chat_restart_e2e = session_chat::restart_e2e_enabled();
     let session_chat_browser_e2e =
         env::var("HEPHAESTUS_APP_SESSION_CHAT_BROWSER_E2E").as_deref() == Ok("1");
     assert!(
@@ -4590,6 +4591,10 @@ async fn bearer_push_starts_run_through_production_bootstrap() {
     assert!(
         !session_chat_denial_probe_e2e || !session_chat_browser_e2e,
         "session-chat denial probe is a standalone session mode"
+    );
+    assert!(
+        !session_chat_restart_e2e || session_chat_browser_e2e,
+        "session-chat restart acceptance requires the browser phase"
     );
     let installed_ui_fixture = env::var("HEPHAESTUS_COOKING_INSTALLED_UI_FIXTURE").as_deref()
         == Ok("1")
@@ -5310,7 +5315,7 @@ async fn bearer_push_starts_run_through_production_bootstrap() {
         WorkloadPhaseTimer::start("gateway-readiness", workload_phase_timing);
     let running = async move { app.start().await }.await;
     daemon_readiness_timer.finish(running.is_ok());
-    let running = running.expect("start ready application");
+    let mut running = running.expect("start ready application");
     let token = signed_token(if release_build_proof {
         Duration::from_secs(45 * 60)
     } else {
@@ -5348,7 +5353,7 @@ async fn bearer_push_starts_run_through_production_bootstrap() {
             )
             .expect("sign session-chat mediator token")
         };
-        session_chat::exercise(
+        let restart_state = session_chat::exercise(
             &pool,
             &database_url,
             &running,
@@ -5366,6 +5371,26 @@ async fn bearer_push_starts_run_through_production_bootstrap() {
             cooking_wait_timeout,
         )
         .await;
+        if let Some(restart_state) = restart_state {
+            running
+                .shutdown()
+                .await
+                .expect("session-chat graceful restart shutdown");
+            let restart_boundary: OffsetDateTime = sqlx::query_scalar("SELECT clock_timestamp()")
+                .fetch_one(&pool)
+                .await
+                .expect("session-chat restart database boundary");
+            running = Box::pin(restart_application(app_config.clone())).await;
+            session_chat::exercise_browser_restart(
+                &pool,
+                &database_url,
+                &running,
+                &root,
+                restart_state,
+                restart_boundary,
+            )
+            .await;
+        }
         running.shutdown().await.expect("session-chat daemon shutdown");
         let observer = observer.expect("session-chat VM observer");
         observer

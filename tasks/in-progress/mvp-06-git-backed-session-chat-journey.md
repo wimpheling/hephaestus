@@ -703,7 +703,31 @@ Commit `07bf487` strengthens the browser initialization and per-turn
 immutable-provenance assertions; focused formatting, checks, and Clippy passed.
 The retained run `/var/tmp/sessionchat-browser-final6-run.log` and
 `browser.XBJeEO/playwright.log` show authenticated OIDC reaching the new-chat
-LiveView, then failing while waiting for the creation form. The run ended with
+LiveView, then failing during the initialization stage. The run ended with
 34 tests passed, one failed, and one ignored; it did not send a message, reach
 the model, or test reconnect. Browser initialization and the full journey
 remain unverified.
+
+The final7 diagnostic run confirms that the creation form becomes visible; the
+failure occurs later within initialization. Its enum-only page-state artifact
+is `/var/tmp/sessionchat-browser-final7/browser.0xg1ql/playwright-results/session-chat-page-state.jsonl`.
+The run again ended with 34 tests passed, one failed, and one ignored. This
+narrows the investigation but does not establish a completed browser turn.
+
+The final9 enum-only diagnostic narrows initialization failure to after the
+`Create and open chat` submission: release/model options and all form controls
+were present, but no installed-UI document followed. The exact composition
+operation remains unknown; focused web tests pass (18 tests). Evidence is
+`/var/tmp/sessionchat-browser-final9/browser.QHitDq/playwright-results/session-chat-page-state.jsonl`.
+
+An opt-in graceful restart fixture is implemented behind
+`HEPHAESTUS_APP_SESSION_CHAT_RESTART_E2E=1` with browser mode enabled. It retains
+the first two turns, shuts down and restarts the production daemon with the same
+configuration and storage, then opens the existing installation in a fresh
+browser and requests a third turn. Assertions cover unchanged prior record
+blobs, direct Git ancestry, exact model history, persisted installation and
+revision, fresh runtime authority, and no recursive run. Formatting, golden-test
+compilation, and strict Clippy pass; retained logs are
+`/var/tmp/sessionchat-restart-cargo-{fmt2,check2,clippy2}.log`. The recovery path
+has not executed successfully. Selecting it in the GCP scenario and extending
+typed evidence collection for its second browser phase remain pending.
