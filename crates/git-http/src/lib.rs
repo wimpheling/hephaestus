@@ -15,7 +15,9 @@ use axum::{
 };
 use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64_STANDARD};
 use bytes::{Bytes, BytesMut};
-use forge_domain::{CommitSha, GitRef, ReceiveId, RefUpdate, RepositoryId};
+use forge_domain::{
+    CommitSha, GitRef, ReceiveId, RefUpdate, RepositoryId, RuntimeReceiveProvenance,
+};
 use forge_postgres::PgForgeRepository;
 use forge_service::{ForgeRepositoryError, GitStorage};
 use futures_util::StreamExt;
@@ -800,6 +802,22 @@ async fn execute(
         Ok(principal) => principal,
         Err(error) => return authentication_error_response(&error.to_string()),
     };
+    let runtime_receive_provenance = if receive {
+        match &principal {
+            Principal::Human(_) => None,
+            Principal::Runtime(runtime) => {
+                let Ok(runtime_session_id) = runtime.runtime_session_id().parse() else {
+                    return error_response(
+                        StatusCode::FORBIDDEN,
+                        "runtime receive session identity is invalid",
+                    );
+                };
+                Some(RuntimeReceiveProvenance { runtime_session_id })
+            }
+        }
+    } else {
+        None
+    };
     match service
         .authorizer
         .authorize(&AuthorizationRequest {
@@ -1095,16 +1113,27 @@ async fn execute(
                         tracing::debug!(%repository_id, %receive_id, "push changed no refs");
                         return;
                     }
-                    if let Err(error) = repository_service
-                        .accept_receive_as(
-                            &repository_for_receive,
-                            receive_id,
-                            &principal_name,
-                            principal_identity.as_ref(),
-                            &updates,
-                        )
-                        .await
-                    {
+                    let result = if let Some(provenance) = runtime_receive_provenance {
+                        repository_service
+                            .accept_runtime_receive(
+                                &repository_for_receive,
+                                receive_id,
+                                provenance,
+                                &updates,
+                            )
+                            .await
+                    } else {
+                        repository_service
+                            .accept_receive_as(
+                                &repository_for_receive,
+                                receive_id,
+                                &principal_name,
+                                principal_identity.as_ref(),
+                                &updates,
+                            )
+                            .await
+                    };
+                    if let Err(error) = result {
                         send_stream_error(
                             &completion_sender,
                             format!("accepted receive persistence failed: {error}"),
