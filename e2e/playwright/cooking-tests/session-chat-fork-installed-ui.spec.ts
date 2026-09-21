@@ -120,7 +120,7 @@ test("cooking forked session chat preserves inherited history and receives a fre
 
 async function launchInstalledSession(page: import("@playwright/test").Page, session: SessionChatForkFixture) {
   await signIn(page, "reviewer");
-  await page.goto(`/projects/${session.project_id}`);
+  await page.goto(`/repositories/${session.repository_id}`);
   await expect(page.locator("[data-phx-main].phx-connected")).toBeVisible();
   const card = page.locator(`#installed-ui-${session.installation_id}`);
   await expect(card).toBeVisible();

@@ -30,7 +30,9 @@ test("cooking session-chat installed UI initializes and reconnects ordinary Git 
   let initialTranscriptTexts: string[] = [];
   await test.step("session-chat-initialize", async () => {
     await signIn(page, "reviewer");
-    await page.goto(`/projects/${session.project_id}`);
+    // Session chat is repository-scoped; the project page only loads
+    // project-scoped installed UIs and cannot expose this repository card.
+    await page.goto(`/repositories/${session.repository_id}`);
     await expect(page.locator("[data-phx-main].phx-connected")).toBeVisible();
 
     const card = page.locator(`#installed-ui-${session.installation_id}`);
