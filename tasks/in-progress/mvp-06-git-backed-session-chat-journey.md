@@ -1035,19 +1035,24 @@ installed-UI repository Git routes. Log:
 services were cleaned up. These diagnostics must be resolved before the
 repository-wide quality gate can be marked complete.
 
-### Current journey transition audit (final26/final27, 2026-09-21)
+### Current journey transition audit (final26/final31, 2026-09-22)
 
 This current classification separates implementation and contract presence from
 runtime acceptance. Final26's retained evidence
 (`/var/tmp/sessionchat-browser-final26/cooking-execution.OpuIor.log:478-480`)
 proves the authorized new-chat composition, release-owned adapter, installed
 UI surface, and canonical host validation for two turns, then records restart
-state. Final27 reaches the repository page after correcting final26's
-project-page lookup, but still fails before launching its installed UI because
-the expected installation card is absent
+state. Final27 is retained as historical evidence: after correcting final26's
+project-page lookup, it still failed before launching its installed UI, with
+insufficient sanitized detail to establish why the card lookup failed
 (`/var/tmp/sessionchat-browser-final27/cooking-execution.FGQAty.log:489-500`).
-The concurrency, fork, and separate negative phases were therefore not
-executed in that run.
+Final30 then proves that the recovery card and launch succeed, the installed
+document returns HTTP 200, and recovery later fails while waiting for the
+document URL (`/var/tmp/sessionchat-browser-final30/cooking-execution.FSdzbp.log`,
+`browser.hfeK2a/playwright-results/session-chat-recovery-card-diagnostic.json`).
+Final31 passes recovery and the canonical third turn, initializes the
+concurrency clients, and fails in the concurrent race; fork and separate
+negative phases are not reached.
 
 | Transition | Responsibility boundary | Current classification and evidence |
 | --- | --- | --- |
@@ -1055,11 +1060,11 @@ executed in that run.
 | Trusted creation → release-owned UI | Platform supplies the repository-scoped installation and verified route context; the release adapter owns its transcript and controls. | **Supported for the exercised initial path.** The installed UI initialized and served the session in final26. |
 | Release UI input → human Git receive | The release adapter writes the human record; the platform authenticates and persists the receive with repository/ref attribution. | **Supported for two canonical turns.** Final26's host validation and retained receive evidence cover both turns; this is runtime evidence for the selected journey, not proof of every adapter operation. |
 | Human receive → authorized run → isolated VM/broker | Platform selects the authorized trigger, immutable snapshot, and VM; the release agent reads its protocol and uses brokered model egress. | **Supported for the two-turn initial path.** Final26's canonical host validation follows both turns through the production bootstrap. |
-| Assistant response Git → visible browser response/reconnect | The release adapter reads committed history and correlates responses; platform owns installation and route delivery. | **Supported for final26's initial browser path.** Two responses and the captured restart state are recorded; recovery after a fresh launch is not proven. |
-| Restart state → recovery UI launch and reconnect | Platform/fixture must resolve the repository-scoped installation and handoff; the release UI must reconnect and reread history. | **Poorly composed and unresolved.** Final27 fails before installed-UI launch at the recovery card lookup. The evidence does not distinguish a missing RPC projection from a wrong DOM/page assumption, so it is not evidence of a missing platform primitive. |
-| Recovery → concurrent writers | The platform reruns the release with the same authority boundary; the release handles expected-parent retry and preserves transcript history. | **Unexecuted.** The retry/typed phase code exists, but no runtime concurrency evidence was reached after final27 recovery failure. |
+| Assistant response Git → visible browser response/reconnect | The release adapter reads committed history and correlates responses; platform owns installation and route delivery. | **Supported for final26's initial browser path.** Two responses and the captured restart state are recorded; final31 additionally proves a third turn and reconnect after restart. |
+| Restart state → recovery UI launch and reconnect | Platform/fixture must resolve the repository-scoped installation and handoff; the release UI must reconnect and reread history. | **Supported by final31.** Recovery and canonical validation of the third turn pass after correcting the harness URL assertion. Bootstrap preserves permitted theme query parameters; the earlier bare-path suffix assertion was invalid. |
+| Recovery → concurrent writers | The platform reruns the release with the same authority boundary; the release handles expected-parent retry and preserves transcript history. | **Partially exercised.** Final31 initializes the concurrent clients, but `session_chat_concurrent_race` fails. The race failure is the next bounded diagnosis; no concurrency acceptance is claimed. |
 | Recovery/history → forked session | Trusted composition creates fresh target authority, model binding, and installation; the release copies reachable history and applies its fork manifest. | **Unexecuted.** Fork wiring and protocol semantics exist, but no browser/VM fork acceptance was reached. |
-| Journey → negative capability proof | Platform runs the separate fresh guest denial process; the release/runtime boundary supplies the scoped Git capability and fixed typed result. | **Unexecuted in the combined journey.** The negative process and collector contracts exist, but final27 did not reach it and no fresh combined runtime evidence is inferred. |
+| Journey → negative capability proof | Platform runs the separate fresh guest denial process; the release/runtime boundary supplies the scoped Git capability and fixed typed result. | **Unexecuted in the combined journey.** The negative process and collector contracts exist, but final30 did not reach it and no fresh combined runtime evidence is inferred. |
 
 The platform-side receipt, UUID, and handoff prerequisites have separate
 focused evidence: secret-binding receipt and replay are verified in the
@@ -1067,14 +1072,12 @@ PostgreSQL regression (lines 801-809 above); canonical lowercase UUIDs and
 installation are verified in final17 (lines 826-833 above); and the route-base
 handoff projection has a passing positive and mutation-negative test (lines
 863-870 above). Final26 exercises those prerequisites in the initial path. The
-final27 card failure should therefore be classified at the recovery DOM/RPC/
-fixture boundary before changing a platform contract.
+final30 document-URL failure was therefore a browser assertion mismatch,
+not a platform contract failure.
 
-The smallest next step is to capture fixed-category recovery DOM/RPC outcomes
-for the expected repository-scoped installation card, distinguishing a load
-error, list error, and empty projection, and change the narrowest owning layer.
-Then rerun the lifecycle through recovery and the subsequent concurrency,
-fork, and negative phases. The versioned protocol's
+The smallest next step is to diagnose the final31 concurrency race, then run
+the full lifecycle through concurrency, fork, and negative phases. The
+versioned protocol's
 fork and tombstone warning semantics remain release-owned and do not add a
 platform approval step (lines 1024-1027 above).
 
@@ -1099,5 +1102,58 @@ removed the disposable containers and confirmed
 `examples/session-chat/ui/node_modules` is absent. This is repository quality
 evidence, not acceptance of the Cooking VM/GCP lifecycle or the full MVP-06
 journey: final26 previously proved the initial browser path and two turns,
-while restart/recovery, concurrency, fork, negative-process integration, and
-the final28 browser run remain pending.
+final31 now proves recovery and the canonical third turn, while concurrency,
+fork, and negative-process integration remain pending.
+
+### Final28 browser evidence (2026-09-22)
+
+The retained final28 run is
+`/var/tmp/sessionchat-browser-final28/cooking-execution.NQ4Le3.log`
+(`session47784`, exit 101). It passed the initial browser phase, canonical
+host validation for two turns, and restart-state capture. Recovery then
+failed during initialization after approximately 31.8 seconds; concurrency,
+fork, and negative phases were not reached. The run cleaned up its processes
+and containers.
+
+This run does not prove that the repository-scoped installation card is
+missing. The diagnostic hook covered only the card assertion, while the
+preceding Phoenix-connected assertion was outside that hook, and the broad
+failure catch can suppress a collection failure. Correct environment-path
+forwarding was verified. The next smallest diagnostic is fixed, credential-
+free breadcrumbs across the whole recovery initialization, including the
+LiveView connection and category-specific fallback states. No recovery root
+cause or full-journey acceptance is claimed from final28.
+
+### Final30 recovery evidence (2026-09-22)
+
+Final30 is retained at
+`/var/tmp/sessionchat-browser-final30/cooking-execution.FSdzbp.log`
+(`session86671`, exit 101), with the recovery diagnostic at
+`browser.hfeK2a/playwright-results/session-chat-recovery-card-diagnostic.json`.
+The initial browser phase, canonical two-turn validation, and restart-state
+capture passed. Recovery now reaches the installation card and launches the
+installed UI; its document returns HTTP 200, then initialization fails while
+waiting for the document URL after about 31.8 seconds. Concurrency, fork, and
+negative phases were not reached, and process/container cleanup was verified.
+
+This supersedes final27's insufficient card-lookup diagnosis while retaining
+final27 as historical evidence. The verified cause was the browser's old
+bare-path suffix assertion: the bootstrap preserves the permitted
+`heph_theme` and `heph_theme_origin` query parameters. Recovery, concurrency,
+and fork assertions now check the pathname consistently with new-chat. Focused
+TypeScript checks, four navigation tests, and four test-listing checks pass;
+temporary diagnostics were removed. Final31 is recorded below; no concurrency
+or full-journey acceptance is claimed until the race and later phases pass.
+
+### Final31 recovery and concurrency evidence (2026-09-22)
+
+Final31 is retained at
+`/var/tmp/sessionchat-browser-final31/cooking-execution.lLeMay.log`
+(`session81852`, exit 101). Initial two-turn validation, restart-state capture,
+recovery browser execution, and canonical validation for the third turn pass.
+The concurrent clients initialize successfully, but
+`session_chat_concurrent_race` fails. Fork and negative phases are not reached;
+process and container cleanup completed. Commit `7f95f72` contains the
+launch-side correction. This is partial lifecycle evidence, not concurrency or
+full-journey acceptance. The next step is a focused race diagnosis before a
+fresh full lifecycle rerun.
