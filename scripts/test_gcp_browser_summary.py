@@ -65,6 +65,41 @@ def report(file_name: str, title: str, status: str, *, error_location: bool = Tr
     }
 
 
+def safe_session_report(
+    *, test_status: str = "passed", missing_stage: str | None = None, failed_stage: str | None = None
+) -> str:
+    records = [{"event": "run_started", "test_count": 1}]
+    for stage_id in PROJECTOR.SESSION_CHAT_STAGES:
+        if stage_id == missing_stage:
+            continue
+        records.append({"event": "stage", "stage_id": stage_id, "status": "pending"})
+        records.append(
+            {"event": "stage", "stage_id": stage_id, "status": "failed" if stage_id == failed_stage else "passed"}
+        )
+        if stage_id == failed_stage:
+            break
+    records.append(
+        {
+            "event": "test",
+            "test_id": PROJECTOR.SESSION_CHAT_TEST_ID,
+            "status": test_status,
+            "duration_ms": 12,
+            "retry": 0,
+        }
+    )
+    counts = {"passed": 0, "failed": 0, "skipped": 0, "other": 0}
+    if test_status == "passed":
+        counts["passed"] = 1
+    elif test_status == "failed":
+        counts["failed"] = 1
+    elif test_status == "skipped":
+        counts["skipped"] = 1
+    else:
+        counts["other"] = 1
+    records.append({"event": "run_finished", "status": test_status, "counts": counts})
+    return "".join(json.dumps(record, separators=(",", ":")) + "\n" for record in records)
+
+
 class BrowserSummaryTests(unittest.TestCase):
     def test_projects_realistic_failure_without_raw_error_fields(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -308,6 +343,91 @@ class BrowserSummaryTests(unittest.TestCase):
             )
             self.assertEqual(missing.returncode, 2)
             self.assertEqual(json.loads(missing_output.read_text())["report_state"], "partial")
+
+    def test_session_chat_safe_report_requires_the_complete_two_turn_initial_journey(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            browser = root / "browser.initial"
+            browser.mkdir()
+            (browser / "playwright.log").write_text(safe_session_report(), encoding="utf-8")
+            summary = PROJECTOR.project(root, "session-chat")
+            self.assertEqual(summary["status"], "passed")
+            self.assertEqual(summary["result_origin"], "playwright-report")
+            self.assertEqual(summary["observed_phases"], ["initial"])
+            self.assertEqual(summary["passed_phases"], ["initial"])
+            self.assertEqual(summary["counts"], {"passed": 1, "failed": 0, "skipped": 0, "timed_out": 0})
+
+            output = root / "summary.json"
+            complete = subprocess.run(
+                [
+                    sys.executable,
+                    str(ROOT / "project-playwright-browser-summary.py"),
+                    str(root),
+                    str(output),
+                    "--scenario",
+                    "session-chat",
+                    "--require-complete-journey",
+                ],
+                check=False,
+            )
+            self.assertEqual(complete.returncode, 0)
+            self.assertEqual(json.loads(output.read_text())["status"], "passed")
+
+    def test_session_chat_safe_failure_and_missing_second_turn_fail_closed(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            browser = root / "browser.initial"
+            browser.mkdir()
+            log = browser / "playwright.log"
+            log.write_text(safe_session_report(test_status="failed"), encoding="utf-8")
+            failed = PROJECTOR.project(root, "session-chat")
+            self.assertEqual(failed["status"], "failed")
+            self.assertEqual(failed["passed_phases"], [])
+
+            log.write_text(
+                safe_session_report(test_status="failed", failed_stage="session_chat_second_response"),
+                encoding="utf-8",
+            )
+            failed_stage = PROJECTOR.project(root, "session-chat")
+            self.assertEqual(failed_stage["status"], "failed")
+            self.assertEqual(failed_stage["report_state"], "complete")
+            self.assertEqual(failed_stage["passed_phases"], [])
+
+            log.write_text(
+                safe_session_report(test_status="timed_out", failed_stage="session_chat_response"),
+                encoding="utf-8",
+            )
+            timed_out = PROJECTOR.project(root, "session-chat")
+            self.assertEqual(timed_out["status"], "timed_out")
+            self.assertEqual(timed_out["counts"]["timed_out"], 1)
+
+            log.write_text(safe_session_report().replace('"test_count":1', '"test_count":true'), encoding="utf-8")
+            bool_count = PROJECTOR.project(root, "session-chat")
+            self.assertEqual(bool_count["status"], "unknown")
+            self.assertEqual(bool_count["report_state"], "partial")
+
+            log.write_text(safe_session_report().replace('"retry":0', '"retry":1'), encoding="utf-8")
+            retry = PROJECTOR.project(root, "session-chat")
+            self.assertEqual(retry["status"], "unknown")
+            self.assertEqual(retry["report_state"], "partial")
+
+            log.write_text(
+                safe_session_report(missing_stage="session_chat_second_response"), encoding="utf-8"
+            )
+            incomplete = PROJECTOR.project(root, "session-chat")
+            self.assertEqual(incomplete["status"], "unknown")
+            self.assertEqual(incomplete["report_state"], "partial")
+
+            log.write_text(safe_session_report() + '{"event":"stage","stage_id":"session_chat_send","status":"passed"}\n', encoding="utf-8")
+            duplicate = PROJECTOR.project(root, "session-chat")
+            self.assertEqual(duplicate["status"], "unknown")
+            self.assertEqual(duplicate["report_state"], "partial")
+
+            seeded = safe_session_report().replace(PROJECTOR.SESSION_CHAT_TEST_ID, "session_chat_ui")
+            log.write_text(seeded, encoding="utf-8")
+            seeded_summary = PROJECTOR.project(root, "session-chat")
+            self.assertEqual(seeded_summary["status"], "unknown")
+            self.assertEqual(seeded_summary["report_state"], "partial")
 
     def test_collector_accepts_typed_projection_and_rejects_untrusted_metadata(self):
         with tempfile.TemporaryDirectory() as directory:
