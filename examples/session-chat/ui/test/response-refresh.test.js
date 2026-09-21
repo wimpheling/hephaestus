@@ -175,6 +175,36 @@ test("a failed refresh reports an error and does not schedule another poll", asy
   assert.equal(timers.timers.filter((timer) => !timer.cancelled).length, 0);
 });
 
+test("default timers do not require the controller as their receiver", async () => {
+  const timers = timerHarness();
+  const originalSetTimeout = globalThis.setTimeout;
+  const originalClearTimeout = globalThis.clearTimeout;
+  globalThis.setTimeout = function setTimeoutWithReceiverCheck(callback, delay) {
+    assert.equal(this, globalThis);
+    return timers.setTimer(callback, delay);
+  };
+  globalThis.clearTimeout = function clearTimeoutWithReceiverCheck(timer) {
+    assert.equal(this, globalThis);
+    timers.clearTimer(timer);
+  };
+  try {
+    const controller = new ResponseRefreshController({
+      client: {
+        async appendHuman(value) { return value; },
+        async readSession() { return session([record()]); },
+        async fetch() { return session([{...record()}, {kind: "assistant_message", in_reply_to: RECORD_ID}]); },
+      },
+    });
+    await controller.publish(record());
+    await timers.runNext();
+    assert.equal(controller.pending.size, 0);
+    controller.dispose();
+  } finally {
+    globalThis.setTimeout = originalSetTimeout;
+    globalThis.clearTimeout = originalClearTimeout;
+  }
+});
+
 test("disposing during an in-flight refresh aborts it without rendering afterward", async () => {
   const timers = timerHarness();
   const statuses = [];

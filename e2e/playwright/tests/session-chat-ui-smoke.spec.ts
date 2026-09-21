@@ -1,6 +1,6 @@
 import {expect, test} from "@playwright/test";
 import {createReadStream, statSync} from "node:fs";
-import {mkdtemp, rm, writeFile} from "node:fs/promises";
+import {mkdir, mkdtemp, rm, writeFile} from "node:fs/promises";
 import {tmpdir} from "node:os";
 import {dirname, extname, join, normalize, resolve} from "node:path";
 import {fileURLToPath} from "node:url";
@@ -25,7 +25,9 @@ async function runGitBackend(root: string, request: IncomingMessage, body: Buffe
   const requestPath = request.url?.split("?")[0] ?? "/";
   const pathInfo = requestPath.includes("/git-receive-pack")
     ? "/remote.git/git-receive-pack"
-    : "/remote.git/info/refs";
+    : requestPath.includes("/git-upload-pack")
+      ? "/remote.git/git-upload-pack"
+      : "/remote.git/info/refs";
   const query = request.url?.split("?")[1] ?? "";
   const child = spawn("git", ["http-backend"], {
     env: {
@@ -41,6 +43,7 @@ async function runGitBackend(root: string, request: IncomingMessage, body: Buffe
     },
     stdio: ["pipe", "pipe", "pipe"],
   });
+  child.stdin.on("error", () => undefined);
   child.stdin.end(body);
   const exit = new Promise<number | null>((resolve, reject) => {
     child.once("error", reject);
@@ -48,6 +51,41 @@ async function runGitBackend(root: string, request: IncomingMessage, body: Buffe
   });
   const [stdout, , exitCode] = await Promise.all([collect(child.stdout), collect(child.stderr), exit]);
   return {stdout, exitCode};
+}
+
+async function appendNativeAssistant(remote: string): Promise<void> {
+  const checkout = await mkdtemp(join(tmpdir(), "heph-session-chat-ui-agent-"));
+  try {
+    await exec("git", ["clone", "--branch", "main", remote, checkout]);
+    const humanPath = (await exec("git", ["-C", checkout, "ls-tree", "-r", "--name-only", "HEAD", ".heph/session/v1/records/human"]))
+      .stdout.trim().split("\n").find(Boolean);
+    if (!humanPath) throw new Error("smoke fixture did not receive a human record");
+    const human = JSON.parse((await exec("git", ["-C", checkout, "show", `HEAD:${humanPath}`])).stdout) as {record_id: string};
+    const assistantId = "123e4567-e89b-12d3-a456-426614174002";
+    const correlationId = "123e4567-e89b-12d3-a456-426614174003";
+    const assistant = {
+      actor: {id: "agent:reference-chat", role: "agent"},
+      content: {kind: "text", text: "native assistant response"},
+      correlation_id: correlationId,
+      created_at: "2026-01-01T00:00:02Z",
+      in_reply_to: human.record_id,
+      kind: "assistant_message",
+      participant_id: "agent:reference-chat",
+      protocol: "heph.session-chat",
+      record_id: assistantId,
+      version: 1,
+    };
+    const assistantPath = ".heph/session/v1/records/agent/agent%3Areference-chat/123e4567-e89b-12d3-a456-426614174002.json";
+    await mkdir(dirname(join(checkout, assistantPath)), {recursive: true});
+    await writeFile(join(checkout, assistantPath), `${JSON.stringify(assistant)}\n`);
+    await exec("git", ["-C", checkout, "add", assistantPath]);
+    await exec("git", ["-C", checkout, "config", "user.name", "Session Chat Smoke"]);
+    await exec("git", ["-C", checkout, "config", "user.email", "session-chat-smoke@example.invalid"]);
+    await exec("git", ["-C", checkout, "commit", "-m", "session assistant response"]);
+    await exec("git", ["-C", checkout, "push", "origin", "HEAD:main"]);
+  } finally {
+    await rm(checkout, {force: true, recursive: true});
+  }
 }
 
 function statSafe(path: string): boolean {
@@ -155,6 +193,33 @@ test("packaged session chat initializes against a real empty git HTTP repository
     await expect(page.locator("[data-status]")).toHaveText(`Connected as user:${repositoryId}`);
     expect(pageErrors).toEqual([]);
     await assertInitializedRepository(server.remote);
+  } finally {
+    await server.close();
+  }
+});
+
+test("packaged session chat refreshes a native Git assistant response", async ({page}) => {
+  const server = await serveGitAndUi();
+  try {
+    await page.goto(server.url, {waitUntil: "networkidle"});
+    await expect(page.locator("[data-status]")).toHaveText(`Connected as user:${repositoryId}`);
+
+    await page.locator("textarea").fill("human request");
+    const send = page.getByRole("button", {name: "Send"});
+    await send.click();
+    await expect(page.locator("[data-status]")).toHaveText("Waiting for the assistant response…");
+
+    await expect.poll(async () => {
+      const records = await exec("git", ["--git-dir", server.remote, "ls-tree", "-r", "--name-only", "refs/heads/main", ".heph/session/v1/records/human"]);
+      return records.stdout.trim() ? "received" : "waiting";
+    }).toBe("received");
+    await appendNativeAssistant(server.remote);
+
+    const messages = page.locator("[data-transcript] article");
+    await expect(messages).toHaveCount(2);
+    await expect(messages.nth(0)).toContainText("human request");
+    await expect(messages.nth(1)).toContainText("native assistant response");
+    await expect(page.locator("[data-status]")).toHaveText("Assistant response received");
   } finally {
     await server.close();
   }

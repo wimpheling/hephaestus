@@ -22515,8 +22515,8 @@ var ResponseRefreshController = class {
     pollIntervalMs = DEFAULT_POLL_INTERVAL_MS,
     responseTimeoutMs = DEFAULT_RESPONSE_TIMEOUT_MS,
     now = () => Date.now(),
-    setTimer = globalThis.setTimeout,
-    clearTimer = globalThis.clearTimeout
+    setTimer = (...args) => globalThis.setTimeout(...args),
+    clearTimer = (timer) => globalThis.clearTimeout(timer)
   }) {
     this.client = client2;
     this.onSession = onSession;
