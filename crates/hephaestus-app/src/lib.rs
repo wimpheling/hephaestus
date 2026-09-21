@@ -200,7 +200,7 @@ use workspace_local::{LocalWorkspaceConfig, LocalWorkspaceManager};
 use workspace_postgres::PgWorkspaceMetadataRepository;
 
 /// Ordered database migration expected by this application version.
-pub const EXPECTED_DATABASE_MIGRATION: i64 = 98;
+pub const EXPECTED_DATABASE_MIGRATION: i64 = 99;
 
 const GATEWAY_SERVICE_SERVING_CAPACITY: usize = 8;
 const GATEWAY_SERVICE_REPLACEMENT_CAPACITY: usize = 2;
@@ -264,6 +264,17 @@ pub enum VmBackendConfig {
     FixtureResult,
     /// Explicit provider injection for hardware-independent end-to-end tests.
     Custom(Arc<dyn VmProvider>),
+    /// Explicit provider injection that retains the runtime Git bridge socket.
+    ///
+    /// Test observers wrap a libkrun provider as a custom provider. Keeping
+    /// this metadata beside that provider prevents the composition root from
+    /// dropping the bridge endpoint while preserving the observer boundary.
+    CustomWithRuntimeGitSocket {
+        /// Provider used to provision and run the guest.
+        provider: Arc<dyn VmProvider>,
+        /// Host Unix socket used by the runtime Git bridge.
+        runtime_git_socket_path: PathBuf,
+    },
     /// Production libkrun provider.
     Libkrun(Box<LibkrunConfig>),
 }
@@ -1238,6 +1249,10 @@ impl HephaestusApp {
                     .clone();
                 Some(path)
             }
+            VmBackendConfig::CustomWithRuntimeGitSocket {
+                runtime_git_socket_path,
+                ..
+            } => Some(runtime_git_socket_path.clone()),
             VmBackendConfig::Fake | VmBackendConfig::FixtureResult | VmBackendConfig::Custom(_) => {
                 None
             }
@@ -1360,7 +1375,8 @@ impl HephaestusApp {
         let provider: Arc<dyn VmProvider> = match config.vm_backend {
             VmBackendConfig::Fake => Arc::new(FakeProvider::new()),
             VmBackendConfig::FixtureResult => Arc::new(ResultFixtureProvider),
-            VmBackendConfig::Custom(provider) => provider,
+            VmBackendConfig::Custom(provider)
+            | VmBackendConfig::CustomWithRuntimeGitSocket { provider, .. } => provider,
             VmBackendConfig::Libkrun(provider) => {
                 Arc::new(LibkrunProvider::new(*provider).map_err(component("libkrun provider"))?)
             }

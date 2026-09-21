@@ -65,11 +65,19 @@ impl BackendFixture {
                 reason: String::from("libkrun image roots omit a required worker root"),
             });
         }
+        let runtime_git_socket_path = provider
+            .runtime_git_socket_path
+            .clone()
+            .unwrap_or_else(|| provider.runtime_root.join("runtime-git.sock"));
+        provider.runtime_git_socket_path = Some(runtime_git_socket_path.clone());
         provider.broker_socket_path = Some(secret_broker_socket.to_owned());
         let provider = Arc::new(vm_libkrun::LibkrunProvider::new(provider)?);
         let observer = VmSpecObserver::new(provider, patterns)?;
         let backend_provider: Arc<dyn VmProvider> = observer.clone();
-        self.backend = VmBackendConfig::Custom(backend_provider);
+        self.backend = VmBackendConfig::CustomWithRuntimeGitSocket {
+            provider: backend_provider,
+            runtime_git_socket_path,
+        };
         Ok(observer)
     }
 }
