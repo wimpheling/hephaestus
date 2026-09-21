@@ -760,3 +760,14 @@ journey remains unverified.
 The safe reporter now maps the concurrency test and its four stages to fixed
 IDs. Seven reporter tests pass; this does not supply concurrency runtime
 evidence or complete its host/GCP integration.
+
+The final13 diagnostic run verifies that the projected-policy consumer fix
+(`8c89a35`) advances creation: all three model-policy checks pass, release
+lookup succeeds, and the repository is created. `ImportAgent` then returns
+`invalid`; no browser message turn or recovery phase runs. Retained typed
+markers are in `/var/tmp/sessionchat-browser-final13/browser.9b2SCC/web-service.log`.
+
+The broader GCP recovery contract suite passes all 78 tests after aligning the
+collector's timing vocabulary with `browser-recovery`. Evidence is retained in
+`/var/tmp/sessionchat-gcp-recovery-contracts2.log`. This is helper/contract
+validation, not cloud acceptance.

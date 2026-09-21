@@ -281,7 +281,7 @@ PHASE_TIMING_PHASE_ORDER = (
     "project-build", "production-project-build", "runtime-guest-build", "runtime-worker-build", "runtime-smoke",
     "gateway-edge-ready", "gateway-services-ready", "gateway-readiness", "oci-image-materialization",
     "oci-builder", "oci-verifier", "golden-tests", "database-tests", "browser-initial",
-    "browser-post-operation", "evidence-scan", "archive", "upload", "vm-delete",
+    "browser-recovery", "browser-post-operation", "evidence-scan", "archive", "upload", "vm-delete",
     "post-delete-download", "cleanup-verification",
 )
 PHASE_TIMING_PHASES = frozenset(PHASE_TIMING_PHASE_ORDER)
