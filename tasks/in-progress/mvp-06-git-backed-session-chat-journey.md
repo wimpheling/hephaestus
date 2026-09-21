@@ -122,7 +122,7 @@ the review rather than assumed to be complete.
   - [x] Persist runtime receive provenance from the immutable authority
     snapshot, suppress the originating attachment and reject downstream
     trigger candidates without explicit execution authority.
-  - [ ] Build and publish a small ordinary chat-agent release that defines and
+  - [x] Build and publish a small ordinary chat-agent release that defines and
     reads its session protocol, calls its model API through MVP 04, and
     commits its response with normal Git.
   - [ ] Bind only the session repository/ref/path capability and its declared
@@ -130,6 +130,9 @@ the review rather than assumed to be complete.
     use its source repository, another session, or an undeclared destination.
 
 - [ ] **5. Prove the journey**
+  - [x] Prove one standalone first-turn path from native human Git input through
+    production build/release and VM execution to the deterministic HTTPS model,
+    canonical assistant response, and runtime Git provenance.
   - [ ] Cover session creation, release-owned initialization, first message,
     agent response, subsequent turn, branch/fork, restart/recovery, concurrent
     release-defined writers, and visibility/history in browser and real-Git
@@ -501,13 +504,13 @@ These are implementation changes, not full journey acceptance. A global guest
 `PATH` change was rejected and reverted. The interpreter is release-owned; the
 full journey remains unverified. Strict workspace Clippy is still pending.
 
-### Current request-time diagnosis and GCP promotion boundary (2026-09-21)
+### Earlier request-time diagnosis and GCP promotion boundary (2026-09-21)
 
 The diagnosis10 request-time finding remains the cause record:
 `/var/tmp/sessionchat-runtime-git-stage-diagnosis10.log` reached `vm.ready`,
 then emitted `heph_git_auth_stage=runtime_admission_missing` before downstream
 authentication and ended with `git operation=push reason=auth returncode=128`.
-The latest terminal rerun is diagnosis11
+The subsequent terminal rerun was diagnosis11
 (`/var/tmp/sessionchat-runtime-git-fixed-diagnosis11.log`, run
 `a5ed7c86-6c73-41d0-a7d7-e0a4e465bfe3`). The challenge fix cleared the prior
 auth failure and repeatedly reached `runtime_authority_accepted`, but push now
@@ -556,6 +559,40 @@ The requested-rule command and RPC checks each passed one test, recorded in
 These focused checks do not establish full released-agent, browser, VM/model,
 or GCP journey acceptance.
 
+### Verified standalone first-turn acceptance (2026-09-21)
+
+The clean production-hook run is retained at
+`/var/tmp/sessionchat-real-hook-clean17.log` (terminal session `18552`, exit
+0), reflected in commit `331afed`. It ran the documented standalone flags
+`HEPHAESTUS_APP_SESSION_CHAT_E2E=1`,
+`HEPHAESTUS_APP_LIBKRUN_E2E=1`, and
+`HEPHAESTUS_APP_COOKING_BUILD_PROOF=1`, without
+`HEPHAESTUS_APP_COOKING_E2E=1`. The golden suite passed 35 tests with one
+ignored and no failures; the PostgreSQL follow-on passed 8 tests with no
+failures; and the runner reported daemon golden E2E passed; runtime and cgroup
+cleanup verified. Targeted `cargo clippy -p hephaestus-app --test golden
+--all-features` also passed.
+
+The run verifies the native human Git input, production build/release and VM
+execution, brokered HTTPS fake-model request, and canonical Git response:
+exactly one assistant record has the expected agent role, model text,
+`in_reply_to` the human record, and a UUID correlation ID; exactly one
+`last_response` context entry carries the same model text. PostgreSQL evidence
+correlates the runtime receive with the immutable session, run, instance,
+attachment, repository, ref, and commit, and confirms no recursive run request
+was created. This is one standalone first turn; browser/new-chat, subsequent
+turns, restart/recovery, fork, concurrent writers, negative capability cases,
+released-VM denial coverage, and GCP integration remain open.
+
+The prior runtime push rejection was caused by the composed fixture installing
+an intentional test pre-receive hook that exited 1 for the session-chat
+scenario. The runner now builds and exports the production git-http
+pre-receive executable for that scenario, while the rejecting fixture hook
+remains the default for other scenarios. Temporary receive diagnostics were
+removed before this clean run. Merging trusted-controller changes still
+requires user authorization; GCP integration remains within the requested
+scope.
+
 Commit `48cc1e7` bounds libkrun diagnostics and preserves interrupted cleanup.
 Commit `6ed9c2c` adds the focused real PostgreSQL runtime Git denial matrix.
 Against a fresh PostgreSQL 17 database, the exact smart-HTTP test passed with
@@ -589,9 +626,9 @@ repository readers can still read those context files.
 
 | Transition | Current classification and evidence |
 | --- | --- |
-| Durable human input → trigger/run | **Supported through the composed trigger.** The latest composed attempt reached a real run; its failure occurred during subsequent runtime preparation/provenance lookup, not at Git input acceptance. The release adapter's human append and expected-parent retry are implemented in [`examples/session-chat/ui/src/git-client.js`](../../examples/session-chat/ui/src/git-client.js#L162). |
-| Trigger/run → isolated runtime and model | **Partially supported, composition still failing.** The packaged agent reads the authorized checkout/control context and uses the brokered model path ([`examples/session-chat/agent.py`](../../examples/session-chat/agent.py#L180)); the latest diagnostic reached `vm.ready` but ended with `LocalGitError`, without establishing a response. |
-| Runtime → assistant Git response | **Release protocol supported; production acceptance missing.** Responses require `in_reply_to` and `correlation_id`, reject stale runs, and publish in one scoped batch ([`examples/session-chat/PROTOCOL.md`](../../examples/session-chat/PROTOCOL.md#ordering-responses-and-concurrent-writers), [`examples/session-chat/git_adapter.py`](../../examples/session-chat/git_adapter.py#L287)). No successful composed assistant commit has yet been correlated with runtime receive provenance. |
+| Durable human input → trigger/run | **Supported through the composed trigger.** The clean standalone run accepted native human Git input and reached the exact input run. The release adapter's human append and expected-parent retry are implemented in [`examples/session-chat/ui/src/git-client.js`](../../examples/session-chat/ui/src/git-client.js#L162). |
+| Trigger/run → isolated runtime and model | **Supported for one standalone first turn.** The clean run reached production build/release, `vm.ready`, the released agent, and the brokered deterministic HTTPS model path ([`examples/session-chat/agent.py`](../../examples/session-chat/agent.py#L180)); broader lifecycle and browser coverage remain open. |
+| Runtime → assistant Git response | **Supported for one standalone first turn.** The run verified the canonical assistant record, model text, `in_reply_to`, correlation UUID, context entry, runtime receive provenance, and recursive-trigger suppression ([`examples/session-chat/PROTOCOL.md`](../../examples/session-chat/PROTOCOL.md#ordering-responses-and-concurrent-writers), [`examples/session-chat/git_adapter.py`](../../examples/session-chat/git_adapter.py#L287)). Subsequent turns, fork, recovery, concurrency, and denial coverage remain open. |
 | Assistant Git response → browser refresh/reconnect | **Adapter supported; end-to-end browser evidence missing.** The UI reads first-parent history and polls for the correlated response ([`examples/session-chat/ui/src/response-refresh.js`](../../examples/session-chat/ui/src/response-refresh.js#L47), [`examples/session-chat/ui/src/index.js`](../../examples/session-chat/ui/src/index.js#L42)). Local adapter/UI checks passed, but real browser HTTP and VM response acceptance remain open. |
 
 This audit records the release-owned transcript/context boundary and the
