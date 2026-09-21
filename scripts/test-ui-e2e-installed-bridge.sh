@@ -10,6 +10,7 @@ fake_repo="${root}/fake-repo"
 fixture="${bridge}/fixture.json"
 recovery_fixture="${bridge}/recovery.json"
 concurrency_fixture="${bridge}/concurrency.json"
+fork_fixture="${bridge}/fork.json"
 host_pid=""
 cleanup() {
     local status="$?"
@@ -27,6 +28,7 @@ chmod 700 -- "${root}" "${bridge}" "${fake_repo}" "${fake_repo}/scripts"
 printf '{}\n' >"${fixture}"
 printf '%s\n' '{"recovery":"fixture","session_chat_ui":{"project_id":"project","repository_id":"repository","installation_id":"installation","generation_id":"generation","actor_id":"actor","ui_path":"/session-chat/index.html","agent_response_text":"response","initial_transcript_count":"4","initial_agent_count":"2"}}' >"${recovery_fixture}"
 printf '%s\n' '{"concurrency":"fixture","session_chat_concurrent":{"project_id":"project","repository_id":"repository","installation_id":"installation","generation_id":"generation","actor_id":"actor","ui_path":"/session-chat/index.html","agent_response_text":"response","initial_transcript_count":"6","initial_agent_count":"3"}}' >"${concurrency_fixture}"
+printf '%s\n' '{"fork":"fixture","session_chat_fork":{"project_id":"fork-project","repository_id":"fork-target-repository","installation_id":"fork-target-installation","generation_id":"fork-target-generation","actor_id":"fork-actor","ui_path":"/session-chat/index.html","agent_response_text":"fork-response","initial_transcript_count":"10","initial_agent_count":"5"}}' >"${fork_fixture}"
 mkdir -m 700 -- "${bridge}/installed-ui-control"
 chmod 600 -- "${fixture}"
 cp -- "${script_dir}/run-ui-e2e-host-bridge.sh" "${fake_repo}/scripts/"
@@ -58,6 +60,9 @@ case "${HEPHAESTUS_INSTALLED_UI_BROWSER_GREP:-}" in
     "cooking concurrent session chat clients reconcile a stale Git push and preserve both turns")
         [[ "${HEPHAESTUS_E2E_COOKING_PHASE:-}" == concurrency ]]
         ;;
+    "cooking forked session chat preserves inherited history and receives a fresh response")
+        [[ "${HEPHAESTUS_E2E_COOKING_PHASE:-}" == fork ]]
+        ;;
     *) exit 1 ;;
 esac
 case "${HEPHAESTUS_E2E_COOKING_PHASE:-}" in
@@ -73,6 +78,14 @@ case "${HEPHAESTUS_E2E_COOKING_PHASE:-}" in
         [[ "${HEPHAESTUS_E2E_COOKING_FIXTURE##*/}" == concurrency.json ]]
         grep -q '"initial_transcript_count":"6"' "${HEPHAESTUS_E2E_COOKING_FIXTURE}"
         grep -q '"initial_agent_count":"3"' "${HEPHAESTUS_E2E_COOKING_FIXTURE}"
+        ;;
+    fork)
+        [[ "${HEPHAESTUS_E2E_COOKING_FIXTURE##*/}" == fork.json ]]
+        grep -q '"repository_id":"fork-target-repository"' "${HEPHAESTUS_E2E_COOKING_FIXTURE}"
+        grep -q '"installation_id":"fork-target-installation"' "${HEPHAESTUS_E2E_COOKING_FIXTURE}"
+        grep -q '"generation_id":"fork-target-generation"' "${HEPHAESTUS_E2E_COOKING_FIXTURE}"
+        grep -q '"initial_transcript_count":"10"' "${HEPHAESTUS_E2E_COOKING_FIXTURE}"
+        grep -q '"initial_agent_count":"5"' "${HEPHAESTUS_E2E_COOKING_FIXTURE}"
         ;;
     *) exit 1 ;;
 esac
@@ -152,6 +165,24 @@ env "${concurrency_env[@]}" \
     HEPHAESTUS_CADDY_TEST_CA_CERT="${root}/source-ca.pem" \
     "${script_dir}/run-ui-e2e-external.sh" || concurrency_status="$?"
 [[ "${concurrency_status}" == 23 ]]
+! compgen -G "${bridge}/ca.*.pem" >/dev/null
+
+fork_env=()
+for value in "${common_env[@]}"; do
+    [[ "${value}" == HEPHAESTUS_E2E_COOKING_FIXTURE=* ]] || fork_env+=("${value}")
+done
+fork_status=0
+env "${fork_env[@]}" \
+    HEPHAESTUS_E2E_COOKING_FIXTURE="${fork_fixture}" \
+    HEPHAESTUS_E2E_COOKING_PHASE=fork \
+    HEPHAESTUS_E2E_BROWSER_RUNNER=installed-ui \
+    HEPHAESTUS_INSTALLED_UI_BROWSER_GREP='cooking forked session chat preserves inherited history and receives a fresh response' \
+    HEPHAESTUS_PLATFORM_HTTPS_ORIGIN='https://platform.localhost:4443' \
+    HEPHAESTUS_UI_NAMESPACE='ui.platform.localhost' \
+    HEPHAESTUS_UI_PORT=4443 \
+    HEPHAESTUS_CADDY_TEST_CA_CERT="${root}/source-ca.pem" \
+    "${script_dir}/run-ui-e2e-external.sh" || fork_status="$?"
+[[ "${fork_status}" == 23 ]]
 ! compgen -G "${bridge}/ca.*.pem" >/dev/null
 
 rm -rf -- "${bridge}/installed-ui-control"
@@ -250,6 +281,51 @@ response="${bridge}/response.invalid"
 for _attempt in {1..100}; do
     [[ -f "${response}" ]] && break
     sleep 0.05
+done
+
+for mismatch in fork-phase-selector fork-selector-phase; do
+    mismatch_request="${bridge}/request.mismatched-${mismatch}.json"
+    mismatch_ca="ca.fork-${mismatch}.pem"
+    printf '%s\n' '-----BEGIN CERTIFICATE-----' 'bridge-test' '-----END CERTIFICATE-----' >"${bridge}/${mismatch_ca}"
+    chmod 600 -- "${bridge}/${mismatch_ca}"
+    if [[ "${mismatch}" == fork-phase-selector ]]; then
+        mismatch_phase=fork
+        mismatch_selector='cooking installed UI TLS'
+    else
+        mismatch_phase=initial
+        mismatch_selector='cooking forked session chat preserves inherited history and receives a fresh response'
+    fi
+    MISMATCH_PHASE="${mismatch_phase}" MISMATCH_SELECTOR="${mismatch_selector}" MISMATCH_CA="${mismatch_ca}" FIXTURE="${fixture}" python3 - "${mismatch_request}" <<'PY'
+import json
+import os
+import sys
+
+payload = {
+    "runner": "installed-ui",
+    "fixture": os.environ["FIXTURE"],
+    "database_url": "postgres://bridge-test.invalid/test",
+    "rpc_endpoint": "http://bridge-test.invalid/rpc",
+    "rpc_secret": "bridge-test-secret-with-sufficient-entropy",
+    "oidc_issuer": "http://bridge-test.invalid/oidc",
+    "oidc_client_id": "hephaestus-web",
+    "oidc_client_secret": "bridge-test-client-secret",
+    "web_port": "4000",
+    "phase": os.environ["MISMATCH_PHASE"],
+    "platform_origin": "https://platform.localhost:4443",
+    "ui_namespace": "ui.platform.localhost",
+    "ui_port": "4443",
+    "ca_cert": os.environ["MISMATCH_CA"],
+    "installed_ui_browser_grep": os.environ["MISMATCH_SELECTOR"],
+}
+with open(sys.argv[1], "x", encoding="utf-8") as stream:
+    json.dump(payload, stream, separators=(",", ":"))
+PY
+    mismatch_response="${bridge}/response.mismatched-${mismatch}"
+    for _attempt in {1..100}; do
+        [[ -f "${mismatch_response}" ]] && break
+        sleep 0.05
+    done
+    [[ "$(cat "${mismatch_response}")" == 1 ]]
 done
 [[ "$(cat "${response}")" == 1 ]]
 

@@ -141,8 +141,8 @@ if diagnostics:
         raise SystemExit("browser diagnostics directory is invalid")
 if runner == "legacy" and payload["phase"] not in {"initial", "post-operation"}:
     raise SystemExit("legacy browser phase is invalid")
-if runner == "installed-ui" and payload["phase"] not in {"initial", "recovery", "concurrency"}:
-    raise SystemExit("installed UI browser bridge supports only the initial, recovery, or concurrency phase")
+if runner == "installed-ui" and payload["phase"] not in {"initial", "recovery", "concurrency", "fork"}:
+    raise SystemExit("installed UI browser bridge supports only the initial, recovery, concurrency, or fork phase")
 if not payload["web_port"].isdigit() or not 1 <= int(payload["web_port"]) <= 65535:
     raise SystemExit("browser web port is invalid")
 for key in ("database_url", "rpc_endpoint", "oidc_issuer"):
@@ -153,13 +153,17 @@ if len(payload["rpc_secret"]) < 32:
 if runner == "installed-ui":
     installed_selector = payload["installed_ui_browser_grep"]
     concurrency_selector = "cooking concurrent session chat clients reconcile a stale Git push and preserve both turns"
+    fork_selector = "cooking forked session chat preserves inherited history and receives a fresh response"
     if (payload["phase"] == "concurrency") != (installed_selector == concurrency_selector):
         raise SystemExit("session-chat concurrency selector and phase must be paired")
+    if (payload["phase"] == "fork") != (installed_selector == fork_selector):
+        raise SystemExit("session-chat fork selector and phase must be paired")
     allowed_selectors = {
         "cooking installed UI TLS",
         "cooking session-chat installed UI initializes and reconnects ordinary Git history",
         "cooking new session chat creates and opens a real Git-backed browser session",
         "cooking concurrent session chat clients reconcile a stale Git push and preserve both turns",
+        "cooking forked session chat preserves inherited history and receives a fresh response",
     }
     if (
         installed_selector not in allowed_selectors

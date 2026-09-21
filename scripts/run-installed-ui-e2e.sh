@@ -23,18 +23,24 @@ case "${browser_grep}" in
     "cooking session-chat installed UI initializes and reconnects ordinary Git history") browser_fixture_mode="session_chat_ui" ;;
     "cooking new session chat creates and opens a real Git-backed browser session") browser_fixture_mode="session_chat_new" ;;
     "cooking concurrent session chat clients reconcile a stale Git push and preserve both turns") browser_fixture_mode="session_chat_concurrent" ;;
+    "cooking forked session chat preserves inherited history and receives a fresh response") browser_fixture_mode="session_chat_fork" ;;
     *)
         printf 'unsupported installed UI browser selector\n' >&2
         exit 1
         ;;
 esac
 case "${phase}" in
-    initial|recovery|concurrency) true ;;
-    *) printf 'installed UI smoke supports only the initial, recovery, or concurrency phase\n' >&2; exit 1 ;;
+    initial|recovery|concurrency|fork) true ;;
+    *) printf 'installed UI smoke supports only the initial, recovery, concurrency, or fork phase\n' >&2; exit 1 ;;
 esac
 if [[ "${phase}" == concurrency && "${browser_fixture_mode}" != session_chat_concurrent ]] ||
     [[ "${browser_fixture_mode}" == session_chat_concurrent && "${phase}" != concurrency ]]; then
     printf 'session-chat concurrency selector and phase must be paired\n' >&2
+    exit 1
+fi
+if [[ "${phase}" == fork && "${browser_fixture_mode}" != session_chat_fork ]] ||
+    [[ "${browser_fixture_mode}" == session_chat_fork && "${phase}" != fork ]]; then
+    printf 'session-chat fork selector and phase must be paired\n' >&2
     exit 1
 fi
 platform_origin="${HEPHAESTUS_PLATFORM_HTTPS_ORIGIN:?set HEPHAESTUS_PLATFORM_HTTPS_ORIGIN}"
@@ -169,6 +175,13 @@ elif fixture_mode == "session_chat_concurrent":
         raise SystemExit("fixture session_chat_concurrent fields are invalid")
     if any(not session[key].isdigit() for key in ("initial_transcript_count", "initial_agent_count")):
         raise SystemExit("fixture session_chat_concurrent counts are invalid")
+elif fixture_mode == "session_chat_fork":
+    session = value.get("session_chat_fork")
+    required = ("project_id", "repository_id", "installation_id", "generation_id", "actor_id", "ui_path", "agent_response_text", "initial_transcript_count", "initial_agent_count")
+    if not isinstance(session, dict) or any(not isinstance(session.get(key), str) or not session[key] for key in required):
+        raise SystemExit("fixture session_chat_fork fields are invalid")
+    if any(not session[key].isdigit() for key in ("initial_transcript_count", "initial_agent_count")):
+        raise SystemExit("fixture session_chat_fork counts are invalid")
 elif fixture_mode == "installed_reference_uis":
     installed = value.get("installed_reference_uis")
     required = ("project_id", "static_installation_id", "managed_installation_id")
@@ -258,6 +271,8 @@ cp -- \
     "${repo_root}/e2e/playwright/cooking-tests/cooking-installed-ui.spec.ts" \
     "${repo_root}/e2e/playwright/cooking-tests/session-chat-installed-ui.spec.ts" \
     "${repo_root}/e2e/playwright/cooking-tests/session-chat-new-installed-ui.spec.ts" \
+    "${repo_root}/e2e/playwright/cooking-tests/session-chat-concurrent-installed-ui.spec.ts" \
+    "${repo_root}/e2e/playwright/cooking-tests/session-chat-fork-installed-ui.spec.ts" \
     "${browser_project}/cooking-tests/"
 cp -- "${fixture}" "${fixture_root}/fixture.json"
 cp -- "${ca_cert}" "${fixture_root}/caddy-ca.pem"
