@@ -105,6 +105,12 @@ jobs:
           trap 'rm -rf -- "$hugo_root"' EXIT
           ../cooking-blog/verify-hugo.sh "$hugo_root/hugo"
           COOKING_HUGO_BINARY="$hugo_root/hugo" python3 -B -m unittest -v
+      - name: Test reference session-chat Python release
+        run: |
+          PYTHONDONTWRITEBYTECODE=1 python3 -m unittest discover \
+            -s examples/session-chat -p 'test_*.py' -v
+          PYTHONDONTWRITEBYTECODE=1 python3 -m unittest discover \
+            -s examples/session-chat/tests -p 'test_*.py' -v
       - name: Check cooking blog
         working-directory: examples/cooking/cooking-blog
         run: python3 check.py

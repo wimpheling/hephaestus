@@ -11,7 +11,13 @@ Run the focused offline suite with:
 ```sh
 PYTHONDONTWRITEBYTECODE=1 python3 -m unittest discover \
   -s examples/session-chat -p 'test_*.py' -v
+PYTHONDONTWRITEBYTECODE=1 python3 -m unittest discover \
+  -s examples/session-chat/tests -p 'test_*.py' -v
 ```
+
+The second discovery root includes the test-only guest denial probe, which is
+kept outside the release package and is therefore not part of the first root's
+module discovery.
 
 `build.sh` compiles the three Python modules and stages them as one directory
 artifact. The resulting `agent.toml` declares a required `runtime_git` session
