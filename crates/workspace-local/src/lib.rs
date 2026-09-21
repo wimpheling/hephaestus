@@ -2274,7 +2274,13 @@ mod tests {
         declared_regular_file, materialize_runtime_git, validate_message, validate_relative_path,
         validate_symlink_target,
     };
-    use std::{fs, os::unix::fs::symlink, path::Path, process::Command};
+    use std::{
+        collections::BTreeSet,
+        fs,
+        os::unix::fs::{MetadataExt, symlink},
+        path::Path,
+        process::Command,
+    };
     use uuid::Uuid;
 
     #[test]
@@ -2352,10 +2358,13 @@ mod tests {
         fs::write(source.join("session.txt"), "immutable\n").expect("source file");
         run_git(&source, &["add", "."]);
         run_git(&source, &["commit", "-m", "initial"]);
-        let parent = git_output_test(&source, &["rev-parse", "HEAD"]);
         fs::write(source.join("transcript.txt"), "second\n").expect("second source file");
         run_git(&source, &["add", "."]);
         run_git(&source, &["commit", "-m", "second"]);
+        let parent = git_output_test(&source, &["rev-parse", "HEAD"]);
+        fs::write(source.join("response.txt"), "third\n").expect("third source file");
+        run_git(&source, &["add", "."]);
+        run_git(&source, &["commit", "-m", "third"]);
         let commit = git_output_test(&source, &["rev-parse", "HEAD"]);
         run_git(
             &source,
@@ -2398,6 +2407,25 @@ mod tests {
             git_output_test(&active, &["rev-parse", concat!("HEAD^", "{tree}")]),
             tree
         );
+        assert_eq!(
+            reachable_object_ids(&source, &commit),
+            reachable_object_ids(&active, "refs/heads/main"),
+            "runtime Git checkout must contain every object reachable from the target commit"
+        );
+        let source_object_inodes = regular_file_inodes(&repository.join("objects"));
+        let checkout_object_inodes = regular_file_inodes(&active.join(".git/objects"));
+        assert!(
+            !source_object_inodes.is_empty(),
+            "source Git object storage scan must find regular files"
+        );
+        assert!(
+            !checkout_object_inodes.is_empty(),
+            "runtime Git object storage scan must find regular files"
+        );
+        assert!(
+            source_object_inodes.is_disjoint(&checkout_object_inodes),
+            "runtime Git checkout must not share hard-linked object files with its source"
+        );
         let config_text = fs::read_to_string(active.join(".git/config")).expect("Git config");
         assert!(config_text.contains("[remote \"origin\"]"));
         assert_eq!(
@@ -2408,6 +2436,33 @@ mod tests {
         assert!(active.join("session.txt").is_file());
         assert!(!active.join("source").exists());
         assert!(!active.join("work").exists());
+    }
+
+    fn reachable_object_ids(directory: &Path, revision: &str) -> BTreeSet<String> {
+        git_output_test(directory, &["rev-list", "--objects", revision])
+            .lines()
+            .filter_map(|line| line.split_ascii_whitespace().next())
+            .map(str::to_owned)
+            .collect()
+    }
+
+    fn regular_file_inodes(root: &Path) -> BTreeSet<(u64, u64)> {
+        let mut inodes = BTreeSet::new();
+        collect_regular_file_inodes(root, &mut inodes);
+        inodes
+    }
+
+    fn collect_regular_file_inodes(root: &Path, inodes: &mut BTreeSet<(u64, u64)>) {
+        for entry in fs::read_dir(root).expect("read Git object storage") {
+            let entry = entry.expect("read Git object storage entry");
+            let path = entry.path();
+            let metadata = fs::symlink_metadata(&path).expect("stat Git object storage entry");
+            if metadata.is_dir() {
+                collect_regular_file_inodes(&path, inodes);
+            } else if metadata.is_file() {
+                inodes.insert((metadata.dev(), metadata.ino()));
+            }
+        }
     }
 
     fn run_git(directory: &Path, arguments: &[&str]) {
