@@ -643,6 +643,19 @@ presence/hash. Blob dereferencing is outside this bounded text-chat scope and
 adds no new MVP-06 acceptance requirement. The session transcript/context
 ownership boundary and the incomplete acceptance boxes remain unchanged.
 
+### Test-only released-guest denial probe (2026-09-21)
+
+Commit `b079c48` adds `examples/session-chat/tests/denied_probe.py` and five
+focused Python tests. The probe uses the production runtime credential/helper
+and broker contracts, first requiring an authorized deterministic model call
+with the same credential and binding, then checking source-checkout absence and
+other-repository Git denials, a positive authorized clone followed by a prohibited-path push,
+and undeclared model destination/rule requests. Its adapter checks distinguish
+wire `denied` from `retryable`, transport failure, and malformed responses;
+output is fixed check/status metadata only. This probe is not yet wired into a
+release image or executed in a real VM, so broad released-VM denial acceptance
+remains unchecked.
+
 ### Interactive-path ownership and transition audit (2026-09-21)
 
 The release protocol assigns the visible transcript to Git history: the first
