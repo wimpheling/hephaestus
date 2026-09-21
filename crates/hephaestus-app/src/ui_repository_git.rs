@@ -534,7 +534,9 @@ mod tests {
     use axum::{body::Body, extract::ConnectInfo};
     use forge_postgres::PgForgeRepository;
     use forge_service::GitStorage;
-    use git_http::{AuthenticationError, GitAuthenticator, PostgresGitAuthorizer, Principal};
+    use git_http::{
+        AuthenticationError, GitAuthenticator, GitHttpLimits, PostgresGitAuthorizer, Principal,
+    };
     use release_service::{
         UiBrowserRepositoryGitAuthorization, UiGenerationHostResolver, UiGitAuthorizationError,
         UiHostLookupError, UiRepositoryGitAuthorization, UiRepositoryGitOperation,
@@ -677,7 +679,7 @@ mod tests {
                 Arc::new(TestAuthenticator),
                 authorizer,
                 PathBuf::from("/bin/false"),
-                Default::default(),
+                GitHttpLimits::default(),
             )
             .expect("Git service"),
         );
@@ -784,7 +786,7 @@ mod tests {
         sqlx::migrate!("../../migrations")
             .run(&bootstrap)
             .await
-            .expect("apply migrations through 0098");
+            .expect("apply migrations through 0099");
         let worker = role_pool(&database_url, "hephaestus_worker").await;
         let app_pool = role_pool(&database_url, "hephaestus_app").await;
         let fixture = resource_fixture::seed_fixture_reusing_installation_helpers(&worker).await;
@@ -816,7 +818,7 @@ mod tests {
             .expect("create canonical bare repository");
         let source = temporary.path().join("source");
         run_git(
-            &temporary.path(),
+            temporary.path(),
             &["init", "--initial-branch=main", source.to_str().unwrap()],
         )
         .await;
@@ -855,7 +857,7 @@ mod tests {
                     authz_postgres::PostgresGitAuthorizer::new(worker.clone()),
                 ))),
                 backend,
-                Default::default(),
+                GitHttpLimits::default(),
             )
             .expect("Git HTTP service"),
         );
@@ -903,7 +905,7 @@ mod tests {
             .await
             .expect("UI Git server");
         });
-        let remote = format!("http://{address}/_heph/git/{}", repository_id);
+        let remote = format!("http://{address}/_heph/git/{repository_id}");
         let cookie = format!("{UI_CHILD_COOKIE}={}", URL_SAFE_NO_PAD.encode(secret));
         let context_result = tokio::process::Command::new("curl")
             .args([

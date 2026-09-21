@@ -1,6 +1,6 @@
-#![cfg(feature = "test-fixtures")]
-
 //! Application-level retention acceptance with the optional gateway edge off.
+
+#![cfg(feature = "test-fixtures")]
 
 use hephaestus_app::{
     AppConfig, EXPECTED_DATABASE_MIGRATION, HephaestusApp, OidcConfig, RegistryConfig,
