@@ -471,6 +471,36 @@ timeout cannot establish whether the agent itself succeeded, because that
 run's lifecycle evidence was lost during fixture teardown. The corrected
 scenario must retain bounded lifecycle diagnostics before teardown on failure.
 
+### Current composed acceptance diagnosis (2026-09-21)
+
+The subsequent instrumented real-libkrun run reached `cleaned_up` but ended
+with outcome `failed` and the typed failure `run runtime operation failed:
+runtime provenance query failed`. It recorded no exit code or signal. This is
+production lifecycle failure evidence and is separate from the earlier
+invalid `result.completed` assertion. The current defect is that runtime
+provenance is written during secret resolution after runtime preparation and
+is skipped for the secretless path; the run-* fix is in progress, so this run
+does not establish a successful chat turn.
+
+The trusted-shell setup audit also shows that `ReviseInstance` carries forward
+secret bindings but not model rules. The trusted-shell new-chat flow therefore
+still needs the model-rule setup correction through a proposed additive
+`requested_rule_id` RPC field; that correction is underway and has no
+acceptance evidence yet.
+
+Commit `48cc1e7` bounds libkrun diagnostics and preserves interrupted cleanup.
+Commit `6ed9c2c` adds the focused real PostgreSQL runtime Git denial matrix.
+Against a fresh PostgreSQL 17 database, the exact smart-HTTP test passed with
+current migration `98`, three runtime sessions and one persisted runtime
+receive; the disposable container was removed. The matrix covers wrong
+repository, prohibited ref/path, delete/force push, expired/revoked
+credentials, canonical-ref preservation and recursive-trigger suppression.
+`cargo clippy -p forge-postgres --test smart_http --all-features` passed; logs
+are retained at `/tmp/forge-smart-http-runtime-matrix-migrations98-final4.log`
+and `/tmp/forge-smart-http-runtime-matrix-clippy-migrations98.log`. These are
+focused authority/denial checks, not full released-agent, browser, VM/model,
+or GCP journey acceptance.
+
 The completed task records the released protocol version and source revision;
 browser and real-Git evidence for session creation, turns, restart, and fork;
 the reference agent's allowed session-repository push and denied cross-repository
