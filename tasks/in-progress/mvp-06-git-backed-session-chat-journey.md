@@ -808,3 +808,17 @@ and same-command replay without duplicate events. It passes without skips in
 `/var/tmp/sessionchat-secret-receipt-focused4.log`; focused strict Clippy and
 application compilation also pass. Browser acceptance remains pending the
 fresh final16 run; this regression alone does not prove the interactive journey.
+
+Final16 confirms `declare-brokered-rule status=ok`, then the page reports a
+partial setup error before installation/handoff evidence. The run terminates
+with exit 101 (34 passed, one failed, one ignored); neither a browser message
+turn nor recovery runs. The next operation in the setup source is installation,
+but retained markers do not yet identify the failing boundary. Evidence:
+`/var/tmp/sessionchat-browser-final16-run.log` and its retained browser directory.
+
+Commit `5f2f2cd` strengthens the host runtime-Git materialization proof to compare
+every reachable object through a three-commit history and assert nonempty,
+disjoint source/checkout object-file device/inode sets. The exact focused test
+runs one test and passes in `/var/tmp/sessionchat-workspace-history-test.log`;
+formatting and strict workspace-local Clippy pass. This closes those two host
+evidence gaps; the broader runtime credential-surface check remains open.
