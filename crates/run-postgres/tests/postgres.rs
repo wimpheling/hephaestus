@@ -275,6 +275,137 @@ async fn commands_transitions_and_events_are_idempotent() {
 
 #[tokio::test]
 #[serial_test::serial]
+async fn runtime_git_context_uses_immutable_target_and_fails_closed_without_it() {
+    let Ok(database_url) = env::var("HEPHAESTUS_POSTGRES_TEST_URL") else {
+        return;
+    };
+    let pool = PgPoolOptions::new()
+        .max_connections(1)
+        .connect(&database_url)
+        .await
+        .expect("connect to Postgres integration database");
+    sqlx::migrate!("../../migrations")
+        .run(&pool)
+        .await
+        .expect("runtime migrations");
+
+    let command = StartRun {
+        command_id: CommandId::new(),
+        run_id: RunId::new(),
+        instance_id: AgentInstanceId::new(),
+        instance_revision_id: AgentInstanceRevisionId::new(),
+        release_id: ReleaseId::new(),
+        release_agent_id: ReleaseAgentId::new(),
+        attachment_id: Some(AgentAttachmentId::new()),
+        kind: RunKind::Normal,
+        requires_state: false,
+    };
+    seed_instance(&pool, &command).await;
+    sqlx::query(
+        "INSERT INTO release_artifacts
+         (id, release_id, path, kind, mode, content_hash, size_bytes,
+          media_type, storage_key)
+         VALUES ($1, $2, 'bin/agent', 'executable', 365, $3, 5,
+                 'application/octet-stream', $4)",
+    )
+    .bind(uuid::Uuid::new_v4())
+    .bind(command.release_id.as_uuid())
+    .bind([7_u8; 32].as_slice())
+    .bind(uuid::Uuid::new_v4())
+    .execute(&pool)
+    .await
+    .expect("runtime artifact");
+    let (project_id, trigger_repository) = seed_run_request(&pool, &command).await;
+    let repository = PgRunRepository::new(pool.clone());
+    let created = repository.create_run(&command).await.expect("create run");
+    let trigger_context = repository
+        .load_runtime(&created.run)
+        .await
+        .expect("load trigger context before runtime Git authority");
+    assert_eq!(trigger_context.repository_id, Some(trigger_repository));
+    // This fixture bypasses immutable publication/FK triggers only to model
+    // already-persisted authority rows without recreating the issuer graph.
+    sqlx::query("SET session_replication_role = 'replica'")
+        .execute(&pool)
+        .await
+        .expect("enable isolated runtime Git fixture mode");
+
+    sqlx::query(
+        "UPDATE agent_instance_revisions
+            SET publication_mode = 'runtime_git',
+                publication_repository_binding_id = $2
+          WHERE id = $1",
+    )
+    .bind(command.instance_revision_id.as_uuid())
+    .bind(uuid::Uuid::new_v4())
+    .execute(&pool)
+    .await
+    .expect("select immutable runtime Git publication mode");
+
+    let capability_repository = uuid::Uuid::new_v4();
+    sqlx::query(
+        "INSERT INTO repositories (id, project_id, name)
+         VALUES ($1, $2, $3)",
+    )
+    .bind(capability_repository)
+    .bind(project_id)
+    .bind(format!("runtime-target-{capability_repository}"))
+    .execute(&pool)
+    .await
+    .expect("capability repository");
+    let target_commit = "b".repeat(40);
+    sqlx::query(
+        "INSERT INTO run_instance_provenance
+         (run_id, instance_id, instance_revision_id, release_id,
+          release_agent_id, attachment_id, target_repository_id, target_ref,
+          target_commit, parameter_hash, platform_policy_version, phase,
+          authorization_model_version)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, 'refs/heads/main', $8, $9,
+                 'platform/test', 'normal', 'test/v1')",
+    )
+    .bind(command.run_id.as_uuid())
+    .bind(command.instance_id.as_uuid())
+    .bind(command.instance_revision_id.as_uuid())
+    .bind(command.release_id.as_uuid())
+    .bind(command.release_agent_id.as_uuid())
+    .bind(command.attachment_id.expect("runtime attachment").as_uuid())
+    .bind(capability_repository)
+    .bind(&target_commit)
+    .bind([3_u8; 32].as_slice())
+    .execute(&pool)
+    .await
+    .expect("immutable runtime target provenance");
+    sqlx::query("SET session_replication_role = 'origin'")
+        .execute(&pool)
+        .await
+        .expect("restore database trigger behavior");
+
+    let runtime_context = repository
+        .load_runtime(&created.run)
+        .await
+        .expect("load immutable runtime Git context");
+    assert_eq!(runtime_context.repository_id, Some(capability_repository));
+    assert_eq!(runtime_context.git_ref.as_deref(), Some("refs/heads/main"));
+    assert_eq!(
+        runtime_context.commit_sha.as_deref(),
+        Some(target_commit.as_str())
+    );
+
+    sqlx::query("DELETE FROM run_instance_provenance WHERE run_id = $1")
+        .bind(command.run_id.as_uuid())
+        .execute(&pool)
+        .await
+        .expect("remove immutable target provenance");
+    assert!(matches!(
+        repository.load_runtime(&created.run).await,
+        Err(run_orchestrator::RunRuntimeCatalogError::InvalidData(
+            "normal run target provenance"
+        ))
+    ));
+}
+
+#[tokio::test]
+#[serial_test::serial]
 async fn retry_runtime_catalog_preserves_mailbox_input_and_rejects_broken_lineage() {
     let Ok(database_url) = env::var("HEPHAESTUS_POSTGRES_TEST_URL") else {
         return;
