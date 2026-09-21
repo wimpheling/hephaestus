@@ -1,8 +1,8 @@
 # Graceful session handoff — 2026-09-20
 
-Resumed on 2026-09-20. The stopped-session details below are historical;
-see the [active task checkpoints](release-owned-distribution-ui-surfaces.md)
-for subsequent implementation, verification, and remaining acceptance criteria.
+Resumed on 2026-09-20. This handoff is now historical and fully fulfilled;
+the completed [release-owned distribution UI task](release-owned-distribution-ui-surfaces.md)
+contains the final implementation, verification, and acceptance evidence.
 
 The user requested a graceful stop to restart the session in tmux. All three
 agents stopped and reported no active Cargo, PostgreSQL, NATS, or tool processes.
@@ -19,7 +19,7 @@ approval for the already approved scope below.
 - Original worktree `/home/a/projects/hephaestus` contains preserved unrelated
   changes. Do not reset, clean, or use it for this implementation.
 - Goal source: `/home/a/.codex/attachments/686daf60-034c-4406-ab1c-26dc36e4a8a6/pasted-text-1.txt`.
-- Persistent services are completed; release UI is incomplete. Do not begin
+- Persistent services and release UI are completed; do not begin
   reference chat or MVP-06. Follow the active release UI task for requirements.
 - Astra medium orchestrates/reviews; Luna high handles one bounded task at a
   time. Use one Cargo/PG owner and central exact-file commits/pushes.

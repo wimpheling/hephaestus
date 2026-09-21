@@ -3,10 +3,11 @@
 This guide describes the release-owned UI package and the two Cooking reference
 fixtures. It covers the repository-local build and the daemon's opt-in UI
 origin. Project-owned installed Caddy, VM, TLS, and browser evidence is recorded
-in the [release UI acceptance record](../tasks/in-progress/release-owned-distribution-ui-surfaces.md#final-installed-ui-runtime-proof-2026-09-21).
+in the [release UI acceptance record](../tasks/done/release-owned-distribution-ui-surfaces.md#final-installed-ui-runtime-proof-2026-09-21).
 Owner navigation, guest-boundary coverage, live child recovery, and the
 separated live-child replacement proof now pass in the bounded runtime. The
-final repository-wide quality gate remains pending.
+final repository-wide quality gate has passed; the acceptance record retains
+the exact command and logs.
 
 ## Package compatibility
 
@@ -190,8 +191,8 @@ change. A disposable Caddy 2.10.2 preflight passed both origins with that
 image. This proves the image and local TLS trust path. The completed installed
 reference release evidence, including the daemon, gateway, RPC, browser
 environment, owner navigation, guest-boundary, and live-child replacement, is
-recorded in the acceptance record linked above; only the final repository-wide
-quality gate remains pending.
+recorded in the acceptance record linked above; the final repository-wide
+quality gate is now complete.
 
 ## Verification status
 
@@ -204,5 +205,5 @@ one ignored, eight PostgreSQL checks, outer exit zero, and cleanup success; its
 execution log is `/home/a/heph-installed-ui-thirtysecond-runtime-diag-20260921/cooking-execution.OpmPOO.log`.
 The live child guest replacement proof is distinct from the separated daemon
 restart proof. No account-administration API or browser-driven account-admin
-action is claimed. Only the final repository-wide quality gate remains
-pending.
+action is claimed. The final repository-wide quality gate passed in rerun4;
+the earlier failed attempts remain historical evidence in the acceptance record.

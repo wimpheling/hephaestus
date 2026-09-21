@@ -49,7 +49,7 @@ batch project runs.
   foundations, especially [MVP-01](../done/mvp-01-agent-principals-capabilities-and-runtime-authority.md),
   [MVP-01.2](../done/mvp-01.2-replace-controlled-result-publication-with-runtime-git.md),
   and [MVP-04](../done/mvp-04-brokered-model-and-outbound-capabilities.md).
-- [Release-owned distribution UI surfaces](release-owned-distribution-ui-surfaces.md),
+- [Release-owned distribution UI surfaces](../done/release-owned-distribution-ui-surfaces.md),
   including explicitly authorized global-interface registration.
 - The [MVP-06 Git-backed session chat journey](../in-progress/mvp-06-git-backed-session-chat-journey.md)
   as an interaction precursor, after its required joint plan review; MVP-06 is
@@ -151,7 +151,7 @@ arbitrary agents. It does not make a functioning assistant necessary for
 installation, recovery, grants, deployment approvals, or break-glass operation.
 
 It does not require persistent gateway service mode for batch project runs;
-that remains the separately scoped [persistent gateway runtime task](../in-progress/persistent-gateway-service-runtime-and-development-workflow.md).
+that remains the separately scoped [persistent gateway runtime task](../done/persistent-gateway-service-runtime-and-development-workflow.md).
 
 ## Verification and completion evidence
 

@@ -4,6 +4,9 @@ Owner: Astra orchestration / Luna bounded subtasks
 
 ## Current status
 
+Completed on 2026-09-21. All seven checklist sections and final integration
+review passed; PR 51 remains draft and unmerged.
+
 Work resumed on 2026-09-20 from the
 [session handoff](release-ui-session-handoff-2026-09-20.md). Isolated-database
 CI execution, organization-owned static installations, disable/remove lifecycle,
@@ -16,16 +19,16 @@ reference theme helpers pass focused checks. The bounded HTTP listener and reque
 Project-owned static/managed installed-browser smoke, live disable/stale-cookie
 and reactivation, removal, owner navigation, guest-boundary coverage, live
 child recovery, and the reusable reference UI kit integration now pass in the
-bounded runtime. The final repository-wide quality gate remains open.
-The handoff remains the record of the stopped session; new evidence is recorded
-below as each resumed slice passes review and verification.
+bounded runtime. The final repository-wide quality gate has also passed.
+The handoff is now historical; the completed task record below contains the
+final verification evidence.
 
 Persistent services are a completed prerequisite on the same branch and PR 51;
 service checkpoint `8c1fb51` passed repository-wide quality. Its later SQLx
 cancellation fix has focused runtime and CI evidence in the completed task.
 The retained-cleanup CI follow-up now has a focused-validated fixture isolation
-fix. CI passed at `9c0c0ac` (`35495099582`); final integrated quality remains
-required. The original CI lock sequence was not captured directly.
+fix. CI passed at `9c0c0ac` (`35495099582`). The original CI lock sequence was
+not captured directly.
 
 Release UI declaration, immutable capture, receive/manual build identities,
 exact artifact/agent resolution, transactional publication, and authorized
@@ -33,7 +36,7 @@ inspection through `GetRelease` are implemented and focused-validated. Checklist
 section 1 is complete. The versioned CSS kit and its local/CI checks are also
 implemented. Both reference fixtures consume the repository-local versioned kit
 and have installed browser evidence; no registry publication is claimed. The
-final repository-wide quality gate remains open.
+final repository-wide quality gate is recorded below.
 
 Verified static-byte loading and read-only release-page metadata display are
 implemented. Durable browser sessions are integrated through RPC and Phoenix.
@@ -44,25 +47,35 @@ approved organization-owned
 global installations and organization isolation. Historical checkpoints record the state
 at their time; later integration checkpoints supersede earlier pending notes.
 
-## Final quality gate attempts (2026-09-21)
+## Final quality gate completion (2026-09-21)
 
-The final repository-wide gate remains pending. The first attempt at the
-current integration state was stopped by stale embedded runtime-authority SQLx
-migrations; `4c2dd81` rebuilds those migrations when the schema changes. The
-scoped architecture exception for migration build-fingerprint reads is recorded
-at `c14cf6d`, with its documentation checkpoint at `5ddc940`.
+Earlier attempts at the current integration state were stopped by stale
+embedded runtime-authority SQLx migrations; `4c2dd81` rebuilds those migrations
+when the schema changes. The scoped architecture exception for migration
+build-fingerprint reads is recorded at `c14cf6d`, with its documentation
+checkpoint at `5ddc940`.
 
 Rerun2 reached the isolated browser-session phase after the Rust checks but
 stopped because the host-PostgreSQL/container-mode guard was not enabled. Rerun3
 kept the shared existing target, corrected the private runner modes, and passed
 the repository Rust formatting, Clippy, tests, documentation, Cooking service,
-and both isolated RPC phases before the Phoenix phase. The retained logs are
+and both isolated RPC phases before the Phoenix phase. Rerun4 then passed the
+complete gate in session `84853`, with exit code 0. Its retained log is
+`/home/a/heph-quality-release-ui-final-rerun4-20260921.log`.
+
+The invocation was `bash /tmp/heph-run-quality-release-ui-final-rerun4-20260921.sh`,
+which runs `cargo dev quality` with the pinned toolchain, existing shared build
+target, disposable PostgreSQL/NATS, and both real RPC checks in container mode.
+Code checkpoint `a97cac0` was unchanged during verification; `958e44c` only
+recorded the preceding runtime proof. Final review found no remaining blockers.
+Owned test resources were cleaned up and pre-existing resources were preserved.
+
+Rerun4 passed 61 Rust architecture rules, 15 protobuf policies, Rust format,
+Clippy, tests, documentation, Cooking service, both real RPC markers, Phoenix
+tests (303), UI tests (113), and the Node bridge checks. The earlier attempt
+logs remain historical evidence in
 `/home/a/heph-quality-release-ui-final-rerun2-20260921.log` and
-`/home/a/heph-quality-release-ui-final-rerun3-20260921.log`. The latest rerun
-then stopped in Phoenix architecture with 70 violations, concentrated in the
-in-progress installed UI navigation/live/state structural migration. Phoenix
-structural fixes and a fresh full gate remain required; checklist section 7
-stays unchecked.
+`/home/a/heph-quality-release-ui-final-rerun3-20260921.log`.
 
 ## Final installed UI runtime proof (2026-09-20)
 
@@ -76,8 +89,8 @@ eight PostgreSQL checks passed; the outer run exited zero and cleanup passed.
 The run proves live child guest replacement separately from the existing
 separated-daemon restart proof. It does not claim an account-administration API
 or browser-driven account-admin action. No owner, guest-boundary, or recovery
-acceptance item remains open; section 7 remains pending while final repository
-quality is running.
+acceptance item remains open. At the time of this historical run, section 7
+was still pending while final repository quality was running.
 
 ```text
 REAL_UI_INSTALLATION_GUEST_POLICY=1 credential_headers_stripped=1 guest_response_headers_rejected=3 gateway_correlation=1
@@ -98,8 +111,8 @@ All guest-boundary, live recovery, parent-session, removal, disable, audit, and
 owner-navigation markers passed. Golden results were 35 passed, one ignored,
 and eight PostgreSQL checks passed; runtime cleanup passed.
 
-This is bounded installed-runtime evidence. The final repository-quality rerun
-is still in progress, so checklist section 7 remains open.
+This is bounded installed-runtime evidence. The final repository-quality gate
+passed separately as recorded above.
 
 ## First complete installed UI runtime proof (2026-09-20)
 
@@ -138,11 +151,11 @@ Playwright's URL-filtered inventory does not preserve host-only domain semantics
 `008be7e` removes disposable npm dependencies before the unchanged evidence scan;
 a copied evidence tree passed and an unrelated symlink still failed that scan.
 
-This checkpoint does not complete release UI. The live disable/stale-cookie
-proof is recorded below; cross-runtime reactivation/removal, parent/account
-revocation, additional guest boundary and owner-navigation proofs, and the
-final repository-wide quality gate remain to be completed. Earlier pending
-runtime notes below are historical.
+This historical checkpoint did not complete release UI. The live
+disable/stale-cookie proof is recorded below; later checkpoints cover the
+cross-runtime reactivation/removal, parent/account revocation, additional guest
+boundary, owner-navigation, and final quality work. Earlier pending runtime
+notes below are historical.
 
 ## Live disable lifecycle runtime proof (2026-09-20)
 
@@ -2649,16 +2662,23 @@ rustdoc, and architecture checks passed. Rust evidence is recorded in
     handoff, undeclared APIs, arbitrary URLs, traversal, unsafe MIME handling,
     CSP/sandbox escape attempts, and raw-secret/token disclosure.
 
-- [ ] **7. Verify and document**
-  - [ ] Run `cargo fmt --all -- --check`.
-  - [ ] Run `cargo clippy --workspace --all-targets --all-features`.
-  - [ ] Run `cargo test --workspace --all-features`.
-  - [ ] Run `cargo doc --workspace --all-features --no-deps`.
-  - [ ] Run `cargo dev quality` and `git diff --check`.
+- [x] **7. Verify and document**
+  - [x] Run `cargo fmt --all -- --check`.
+  - [x] Run `cargo clippy --workspace --all-targets --all-features`.
+  - [x] Run `cargo test --workspace --all-features`.
+  - [x] Run `cargo doc --workspace --all-features --no-deps`.
+  - [x] Run `cargo dev quality` and `git diff --check`.
 
 ## Completion evidence
 
-Record the declaration schema/version; static and managed-service release
+Final verification: `cargo dev quality` rerun4 session `84853` exited 0;
+`/home/a/heph-quality-release-ui-final-rerun4-20260921.log` records 61 Rust
+architecture rules, 15 protobuf policies, Rust format/Clippy/tests/docs,
+Cooking service, both real RPC markers, Phoenix (303), UI (113), and Node
+bridge checks. The installed runtime proof is Run 32 at
+`/home/a/heph-installed-ui-thirtysecond-runtime-diag-20260921/cooking-execution.OpmPOO.log`;
+it records 35 golden passes, one ignored, eight PostgreSQL checks, all runtime
+acceptance markers, and cleanup. The declaration schema/version, static and managed-service release
 fixtures; project/repository and global-interface registration evidence; artifact
 integrity and route-binding evidence; browser screenshots or tests for both
 presentation modes and themes; allowed/denied gateway and browser authority
