@@ -1035,7 +1035,7 @@ installed-UI repository Git routes. Log:
 services were cleaned up. These diagnostics must be resolved before the
 repository-wide quality gate can be marked complete.
 
-### Current journey transition audit (final26/final31, 2026-09-22)
+### Current journey transition audit (final26/final33, 2026-09-22)
 
 This current classification separates implementation and contract presence from
 runtime acceptance. Final26's retained evidence
@@ -1052,7 +1052,11 @@ document URL (`/var/tmp/sessionchat-browser-final30/cooking-execution.FSdzbp.log
 `browser.hfeK2a/playwright-results/session-chat-recovery-card-diagnostic.json`).
 Final31 passes recovery and the canonical third turn, initializes the
 concurrency clients, and fails in the concurrent race; fork and separate
-negative phases are not reached.
+negative phases are not reached. Final32 captures both concurrent requests,
+then fails while checking a ref before either release completes. Final33
+passes initial, recovery, and concurrency browser stages with canonical
+validation for five turns, then fails in fork setup before fork browser
+execution.
 
 | Transition | Responsibility boundary | Current classification and evidence |
 | --- | --- | --- |
@@ -1062,9 +1066,9 @@ negative phases are not reached.
 | Human receive → authorized run → isolated VM/broker | Platform selects the authorized trigger, immutable snapshot, and VM; the release agent reads its protocol and uses brokered model egress. | **Supported for the two-turn initial path.** Final26's canonical host validation follows both turns through the production bootstrap. |
 | Assistant response Git → visible browser response/reconnect | The release adapter reads committed history and correlates responses; platform owns installation and route delivery. | **Supported for final26's initial browser path.** Two responses and the captured restart state are recorded; final31 additionally proves a third turn and reconnect after restart. |
 | Restart state → recovery UI launch and reconnect | Platform/fixture must resolve the repository-scoped installation and handoff; the release UI must reconnect and reread history. | **Supported by final31.** Recovery and canonical validation of the third turn pass after correcting the harness URL assertion. Bootstrap preserves permitted theme query parameters; the earlier bare-path suffix assertion was invalid. |
-| Recovery → concurrent writers | The platform reruns the release with the same authority boundary; the release handles expected-parent retry and preserves transcript history. | **Partially exercised.** Final31 initializes the concurrent clients, but `session_chat_concurrent_race` fails. The race failure is the next bounded diagnosis; no concurrency acceptance is claimed. |
-| Recovery/history → forked session | Trusted composition creates fresh target authority, model binding, and installation; the release copies reachable history and applies its fork manifest. | **Unexecuted.** Fork wiring and protocol semantics exist, but no browser/VM fork acceptance was reached. |
-| Journey → negative capability proof | Platform runs the separate fresh guest denial process; the release/runtime boundary supplies the scoped Git capability and fixed typed result. | **Unexecuted in the combined journey.** The negative process and collector contracts exist, but final30 did not reach it and no fresh combined runtime evidence is inferred. |
+| Recovery → concurrent writers | The platform reruns the release with the same authority boundary; the release handles expected-parent retry and preserves transcript history. | **Supported for the exercised browser phase.** Final33 passes all concurrency browser stages and canonical validation for five turns after the parser correction. Broader fork, negative, and full-journey acceptance remains open. |
+| Recovery/history → forked session | Trusted composition creates fresh target authority, model binding, and installation; the release copies reachable history and applies its fork manifest. | **Partially exercised.** Final33 reaches fork setup, then fails before fork browser execution on a duplicate project-secret-manager role constraint. The narrow fixture investigation is pending. |
+| Journey → negative capability proof | Platform runs the separate fresh guest denial process; the release/runtime boundary supplies the scoped Git capability and fixed typed result. | **Unexecuted in the combined journey.** Final33 does not reach the negative phase and no fresh combined runtime evidence is inferred. |
 
 The platform-side receipt, UUID, and handoff prerequisites have separate
 focused evidence: secret-binding receipt and replay are verified in the
@@ -1075,8 +1079,9 @@ handoff projection has a passing positive and mutation-negative test (lines
 final30 document-URL failure was therefore a browser assertion mismatch,
 not a platform contract failure.
 
-The smallest next step is to diagnose the final31 concurrency race, then run
-the full lifecycle through concurrency, fork, and negative phases. The
+The smallest next step is to resolve the duplicate project-secret-manager role
+constraint in the fork fixture, then run the full lifecycle through fork and
+negative phases. The
 versioned protocol's
 fork and tombstone warning semantics remain release-owned and do not add a
 platform approval step (lines 1024-1027 above).
@@ -1102,8 +1107,9 @@ removed the disposable containers and confirmed
 `examples/session-chat/ui/node_modules` is absent. This is repository quality
 evidence, not acceptance of the Cooking VM/GCP lifecycle or the full MVP-06
 journey: final26 previously proved the initial browser path and two turns,
-final31 now proves recovery and the canonical third turn, while concurrency,
-fork, and negative-process integration remain pending.
+final33 now proves recovery, the canonical third turn, and concurrency with
+five canonical turns, while fork and negative-process integration remain
+pending.
 
 ### Final28 browser evidence (2026-09-22)
 
@@ -1157,3 +1163,30 @@ process and container cleanup completed. Commit `7f95f72` contains the
 launch-side correction. This is partial lifecycle evidence, not concurrency or
 full-journey acceptance. The next step is a focused race diagnosis before a
 fresh full lifecycle rerun.
+
+### Final32 concurrency parser evidence (2026-09-22)
+
+Final32 is retained as session `52053`, exit 101, with the diagnostic artifact
+at
+`/var/tmp/sessionchat-browser-final32/browser.AXTy8B/playwright-results/session-chat-concurrent-race-diagnostic.json`.
+Initial two-turn validation, restart-state capture, recovery browser execution,
+and canonical validation for the third turn pass. Both concurrent requests are
+captured, but the race fails during ref checking before either release
+completes. The harness parser regex has two capture groups while the checker
+reads `match[3]`; the correct ref group is `match[2]`. The narrow harness fix
+is recorded in commit `6a65296`, with runner/CI helper updates in `b8243c`.
+This does not prove fork or full-journey acceptance; the next step is the fork
+fixture correction followed by a fresh full lifecycle run.
+
+### Final33 concurrency and fork-setup evidence (2026-09-22)
+
+Final33 is retained at
+`/var/tmp/sessionchat-browser-final33/cooking-execution.yXD1Pc.log`
+(`session91574`, exit 101). Initial two-turn validation, recovery with the
+canonical third turn, all concurrency browser stages, and canonical validation
+for five turns pass. Fork setup then fails before fork browser execution on a
+duplicate project-secret-manager role constraint. The negative phase is not
+reached and cleanup completed. Commits `6a65296` and `b8243c` contain the
+parser and runner/CI helper corrections; 26 Node checks and TypeScript checks
+pass. This is not fork or full-journey acceptance. The next step is the narrow
+fork-fixture role investigation followed by a fresh full lifecycle run.
