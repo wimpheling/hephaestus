@@ -696,3 +696,14 @@ or prohibited-write attempts; and fake-model egress evidence showing a
 placeholder in the guest and no real provider token in guest-visible artifacts.
 It also records the verification commands, results, and any explicitly
 justified test-environment exclusions.
+
+### Browser initialization acceptance attempt (2026-09-21)
+
+Commit `07bf487` strengthens the browser initialization and per-turn
+immutable-provenance assertions; focused formatting, checks, and Clippy passed.
+The retained run `/var/tmp/sessionchat-browser-final6-run.log` and
+`browser.XBJeEO/playwright.log` show authenticated OIDC reaching the new-chat
+LiveView, then failing while waiting for the creation form. The run ended with
+34 tests passed, one failed, and one ignored; it did not send a message, reach
+the model, or test reconnect. Browser initialization and the full journey
+remain unverified.
