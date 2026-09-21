@@ -461,6 +461,16 @@ an outer diagnostic query targeted the parent database instead of the isolated
 test database, so the timeout alone does not identify the failed lifecycle
 transition. Full deterministic response and browser acceptance remain open.
 
+Code review subsequently identified an invalid assertion in this attempt:
+`result.completed` and `run_results` belong to proposal-workspace publication.
+The reference release disables that workspace and publishes directly through
+runtime Git. Its acceptance must instead observe the exact input run's durable
+`run.succeeded` event and verify the canonical assistant commit against the
+runtime-authenticated `git_receives`/`git_ref_updates` provenance. The earlier
+timeout cannot establish whether the agent itself succeeded, because that
+run's lifecycle evidence was lost during fixture teardown. The corrected
+scenario must retain bounded lifecycle diagnostics before teardown on failure.
+
 The completed task records the released protocol version and source revision;
 browser and real-Git evidence for session creation, turns, restart, and fork;
 the reference agent's allowed session-repository push and denied cross-repository
