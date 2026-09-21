@@ -6167,6 +6167,7 @@ name = "workspace-domain"
 version = "0.1.0"
 dependencies = [
  "async-trait",
+ "git-capability-domain",
  "run-domain",
  "runtime-types",
  "serde",

@@ -23,10 +23,11 @@ use std::{
 use uuid::Uuid;
 use vm_trait::VmMount;
 use workspace_domain::{
-    ArtifactId, PreparedWorkspace, PublishedResult, ResultArtifactMetadata, ResultId,
-    ResultMetadata, ResultRepository, RunWorkspaceManager, WorkspaceError, WorkspaceId,
-    WorkspaceMetadata, WorkspaceMetadataRepository, WorkspaceRepositoryError,
-    WorkspaceRequestMetadata,
+    ArtifactId, PreparedRuntimeGitWorkspace, PreparedWorkspace, PublishedResult,
+    RUNTIME_GIT_GUEST_PATH, RUNTIME_GIT_LOOPBACK_PORT, ResultArtifactMetadata, ResultId,
+    ResultMetadata, ResultRepository, RunWorkspaceManager, RuntimeGitWorkspaceManager,
+    RuntimeGitWorkspaceRequest, WorkspaceError, WorkspaceId, WorkspaceMetadata,
+    WorkspaceMetadataRepository, WorkspaceRepositoryError, WorkspaceRequestMetadata,
 };
 
 const SOURCE_GUEST_PATH: &str = "/workspace/repo";
@@ -81,6 +82,194 @@ pub struct LocalWorkspaceManager {
 }
 
 impl LocalWorkspaceManager {
+    // Keep the durable workspace row, trusted Git setup, and failure cleanup
+    // together so recovery observes one auditable lifecycle boundary.
+    #[allow(clippy::too_many_lines)]
+    async fn prepare_runtime_git_run(
+        &self,
+        run: &Run,
+    ) -> Result<Option<PreparedRuntimeGitWorkspace>, LocalWorkspaceError> {
+        let Some(request) = self
+            .metadata
+            .runtime_git_request(run.id)
+            .await
+            .map_err(repository)?
+        else {
+            return Ok(None);
+        };
+        request.validate().map_err(repository)?;
+        let workspace_id = WorkspaceId::new();
+        let owner = run.id.to_string();
+        let active_path = self.config.workspace_root.join("active").join(&owner);
+        let temporary_path = self
+            .config
+            .workspace_root
+            .join("active")
+            .join(format!("{owner}.runtime-git-preparing"));
+        let active_text = utf8_path(&active_path)?;
+        let sealed_path = self.config.workspace_root.join("sealed").join(&owner);
+        let sealed_text = utf8_path(&sealed_path)?;
+        self.metadata
+            .insert_runtime_git_preparing(
+                &WorkspaceMetadata {
+                    id: workspace_id.as_uuid(),
+                    state: String::from("preparing"),
+                    active_path: active_text.clone(),
+                    sealed_path: sealed_text,
+                    input_commit: Some(request.target_commit.clone()),
+                },
+                request.repository_id,
+                &request.target_commit,
+                run.id,
+                serde_json::json!({
+                    "workspace_id": workspace_id.to_string(),
+                    "repository_id": request.repository_id,
+                    "target_ref": request.target_ref,
+                    "target_commit": request.target_commit,
+                }),
+            )
+            .await
+            .map_err(repository)?;
+
+        let repository_path = self.repository_path(RepositoryId::from_uuid(request.repository_id));
+        let config = self.config.clone();
+        let failed_temporary_path = temporary_path.clone();
+        let materialization_request = request.clone();
+        let active_path_for_materialization = active_path.clone();
+        let materialized = tokio::task::spawn_blocking(move || {
+            materialize_runtime_git(
+                &config,
+                &repository_path,
+                &materialization_request,
+                &temporary_path,
+                &active_path_for_materialization,
+            )
+        })
+        .await
+        .map_err(join_error)?;
+        let (tree, manifest_hash) = match materialized {
+            Ok(value) => value,
+            Err(error) => {
+                if failed_temporary_path.exists() {
+                    remove_owned_workspace(&self.config, &failed_temporary_path, "active")?;
+                }
+                self.metadata
+                    .mark_materialization_failed(run.id, &error.to_string())
+                    .await
+                    .map_err(repository)?;
+                return Err(error);
+            }
+        };
+        self.metadata
+            .mark_active(
+                run.id,
+                &tree,
+                &manifest_hash,
+                serde_json::json!({
+                    "workspace_id": workspace_id.to_string(),
+                    "repository_id": request.repository_id,
+                    "target_ref": request.target_ref,
+                    "target_commit": request.target_commit,
+                    "guest_path": RUNTIME_GIT_GUEST_PATH,
+                    "remote": "origin",
+                }),
+            )
+            .await
+            .map_err(repository)?;
+        Ok(Some(PreparedRuntimeGitWorkspace {
+            id: workspace_id,
+            mount: VmMount {
+                tag: String::from("runtime-git-worktree"),
+                host_path: active_path,
+                guest_path: PathBuf::from(RUNTIME_GIT_GUEST_PATH),
+                read_only: false,
+            },
+            bridge: vm_trait::RuntimeGitBridge::new(
+                request.repository_id,
+                RUNTIME_GIT_LOOPBACK_PORT,
+            ),
+            target_ref: request.target_ref,
+            target_commit: request.target_commit,
+        }))
+    }
+
+    async fn abandon_runtime_git_run(&self, run_id: RunId) -> Result<(), LocalWorkspaceError> {
+        let row = self
+            .metadata
+            .runtime_git_workspace(run_id)
+            .await
+            .map_err(repository)?;
+        let Some(row) = row else {
+            return Ok(());
+        };
+        if row.state == "cleaned" {
+            return Ok(());
+        }
+        let active = PathBuf::from(&row.active_path);
+        let preparing = active.with_file_name(format!(
+            "{}.runtime-git-preparing",
+            active
+                .file_name()
+                .and_then(OsStr::to_str)
+                .unwrap_or_default()
+        ));
+        if preparing.exists() {
+            remove_owned_workspace(&self.config, &preparing, "active")?;
+        }
+        for (path, class) in [
+            (active, "active"),
+            (PathBuf::from(row.sealed_path), "sealed"),
+        ] {
+            if path.exists() {
+                remove_owned_workspace(&self.config, &path, class)?;
+            }
+        }
+        self.metadata
+            .set_state(run_id, "abandoned")
+            .await
+            .map_err(repository)?;
+        self.metadata
+            .event(run_id, "runtime_git.abandoned", serde_json::json!({}))
+            .await
+            .map_err(repository)
+    }
+
+    async fn recover_runtime_git_runs(&self) -> Result<usize, LocalWorkspaceError> {
+        let rows = self
+            .metadata
+            .runtime_git_workspaces()
+            .await
+            .map_err(repository)?;
+        let mut recovered = 0;
+        for (run_id, row) in rows {
+            let active = PathBuf::from(&row.active_path);
+            let preparing = active.with_file_name(format!(
+                "{}.runtime-git-preparing",
+                active
+                    .file_name()
+                    .and_then(OsStr::to_str)
+                    .unwrap_or_default()
+            ));
+            if preparing.exists() {
+                remove_owned_workspace(&self.config, &preparing, "active")?;
+            }
+            for (path, class) in [
+                (active, "active"),
+                (PathBuf::from(row.sealed_path), "sealed"),
+            ] {
+                if path.exists() {
+                    remove_owned_workspace(&self.config, &path, class)?;
+                }
+            }
+            self.metadata
+                .mark_cleaned(run_id)
+                .await
+                .map_err(repository)?;
+            recovered += 1;
+        }
+        Ok(recovered)
+    }
+
     /// Creates a manager after validating its configured roots.
     ///
     /// # Errors
@@ -261,6 +450,30 @@ impl RunWorkspaceManager for LocalWorkspaceManager {
 
     async fn recover(&self) -> Result<usize, WorkspaceError> {
         self.recover_incomplete()
+            .await
+            .map_err(WorkspaceError::operation)
+    }
+}
+
+#[async_trait]
+impl RuntimeGitWorkspaceManager for LocalWorkspaceManager {
+    async fn prepare_runtime_git(
+        &self,
+        run: &Run,
+    ) -> Result<Option<PreparedRuntimeGitWorkspace>, WorkspaceError> {
+        self.prepare_runtime_git_run(run)
+            .await
+            .map_err(WorkspaceError::operation)
+    }
+
+    async fn abandon_runtime_git(&self, run_id: RunId) -> Result<(), WorkspaceError> {
+        self.abandon_runtime_git_run(run_id)
+            .await
+            .map_err(WorkspaceError::operation)
+    }
+
+    async fn recover_runtime_git(&self) -> Result<usize, WorkspaceError> {
+        self.recover_runtime_git_runs()
             .await
             .map_err(WorkspaceError::operation)
     }
@@ -973,6 +1186,113 @@ fn materialize(
     })
 }
 
+fn materialize_runtime_git(
+    config: &LocalWorkspaceConfig,
+    repository: &Path,
+    request: &RuntimeGitWorkspaceRequest,
+    temporary: &Path,
+    active: &Path,
+) -> Result<(String, String), LocalWorkspaceError> {
+    validate_repository(config, repository)?;
+    ensure_workspace_path(config, temporary, "active")?;
+    ensure_workspace_path(config, active, "active")?;
+    if temporary.exists() || active.exists() {
+        return Err(LocalWorkspaceError::State(String::from(
+            "runtime Git workspace path already exists",
+        )));
+    }
+    fs::create_dir(temporary).map_err(io_error)?;
+    let owner = active
+        .file_name()
+        .and_then(OsStr::to_str)
+        .ok_or_else(|| LocalWorkspaceError::UnsafePath(String::from("runtime owner is invalid")))?;
+    write_owner_marker(temporary, owner)?;
+    let repository_text = utf8_path(repository)?;
+    git_worktree_output(
+        config,
+        temporary,
+        &["init", "--initial-branch=runtime-target"],
+    )?;
+    git_worktree_output(
+        config,
+        temporary,
+        &[
+            "fetch",
+            "--no-tags",
+            "--no-write-fetch-head",
+            &repository_text,
+            &request.target_commit,
+        ],
+    )?;
+    let commit_object = [request.target_commit.as_str(), "^{commit}"].concat();
+    let fetched = git_worktree_text(
+        config,
+        temporary,
+        &["rev-parse", "--verify", &commit_object],
+    )?;
+    if fetched != request.target_commit {
+        return Err(LocalWorkspaceError::Integrity(String::from(
+            "runtime Git fetch did not resolve the immutable target commit",
+        )));
+    }
+    git_worktree_output(
+        config,
+        temporary,
+        &["update-ref", &request.target_ref, &request.target_commit],
+    )?;
+    git_worktree_output(
+        config,
+        temporary,
+        &["symbolic-ref", "HEAD", &request.target_ref],
+    )?;
+    git_worktree_output(
+        config,
+        temporary,
+        &["read-tree", "--reset", "-u", &request.target_ref],
+    )?;
+    let remote_url =
+        vm_trait::RuntimeGitBridge::new(request.repository_id, RUNTIME_GIT_LOOPBACK_PORT)
+            .remote_url();
+    git_worktree_output(config, temporary, &["remote", "add", "origin", &remote_url])?;
+    let head = git_worktree_text(config, temporary, &["rev-parse", "HEAD"])?;
+    if head != request.target_commit {
+        return Err(LocalWorkspaceError::Integrity(String::from(
+            "runtime Git checkout changed the immutable target commit",
+        )));
+    }
+    let symbolic_head = git_worktree_text(config, temporary, &["symbolic-ref", "HEAD"])?;
+    if symbolic_head != request.target_ref {
+        return Err(LocalWorkspaceError::Integrity(String::from(
+            "runtime Git worktree HEAD is not the authorized branch",
+        )));
+    }
+    let configured_origin = git_worktree_text(config, temporary, &["remote", "get-url", "origin"])?;
+    if configured_origin != remote_url
+        || git_worktree_optional(
+            config,
+            temporary,
+            &["config", "--local", "--get-regexp", "^remote\\."],
+        )?
+        .is_none()
+    {
+        return Err(LocalWorkspaceError::Integrity(String::from(
+            "runtime Git origin is not the token-free bridge URL",
+        )));
+    }
+    let alternates = temporary.join(".git/objects/info/alternates");
+    if alternates.exists() {
+        return Err(LocalWorkspaceError::Integrity(String::from(
+            "runtime Git worktree contains an object alternates file",
+        )));
+    }
+    let tree_object = [request.target_commit.as_str(), "^{", "tree}"].concat();
+    let tree = git_worktree_text(config, temporary, &["rev-parse", &tree_object])?;
+    let manifest_hash =
+        sha256(format!("{}\n{}\n", request.target_ref, request.target_commit).as_bytes());
+    fs::rename(temporary, active).map_err(io_error)?;
+    Ok((tree, manifest_hash))
+}
+
 struct GitTreeEntry {
     mode: u32,
     kind: String,
@@ -1523,6 +1843,66 @@ fn git_output(
     Ok(output.stdout)
 }
 
+fn git_worktree_output(
+    config: &LocalWorkspaceConfig,
+    worktree: &Path,
+    arguments: &[&str],
+) -> Result<Vec<u8>, LocalWorkspaceError> {
+    let mut command = git_worktree_command(config, worktree, arguments);
+    command.stdout(Stdio::piped()).stderr(Stdio::piped());
+    let output = command.output().map_err(io_error)?;
+    if !output.status.success() {
+        return Err(LocalWorkspaceError::Git(format!(
+            "Git {:?} failed: {}",
+            arguments,
+            String::from_utf8_lossy(&output.stderr).trim()
+        )));
+    }
+    Ok(output.stdout)
+}
+
+fn git_worktree_text(
+    config: &LocalWorkspaceConfig,
+    worktree: &Path,
+    arguments: &[&str],
+) -> Result<String, LocalWorkspaceError> {
+    let bytes = git_worktree_output(config, worktree, arguments)?;
+    let text = std::str::from_utf8(&bytes)
+        .map_err(|_| LocalWorkspaceError::Git(String::from("Git output is not UTF-8")))?;
+    Ok(text.trim().to_owned())
+}
+
+fn git_worktree_optional(
+    config: &LocalWorkspaceConfig,
+    worktree: &Path,
+    arguments: &[&str],
+) -> Result<Option<String>, LocalWorkspaceError> {
+    let mut command = git_worktree_command(config, worktree, arguments);
+    let output = command.output().map_err(io_error)?;
+    if !output.status.success() {
+        return Ok(None);
+    }
+    let text = std::str::from_utf8(&output.stdout)
+        .map_err(|_| LocalWorkspaceError::Git(String::from("Git output is not UTF-8")))?;
+    Ok(Some(text.trim().to_owned()))
+}
+
+fn git_worktree_command(
+    config: &LocalWorkspaceConfig,
+    worktree: &Path,
+    arguments: &[&str],
+) -> Command {
+    let mut command = Command::new(&config.git_binary);
+    command
+        .env_clear()
+        .env("GIT_CONFIG_NOSYSTEM", "1")
+        .env("GIT_CONFIG_GLOBAL", "/dev/null")
+        .arg("-C")
+        .arg(worktree)
+        .args(arguments);
+    command
+}
+
 fn git_command(config: &LocalWorkspaceConfig, repository: &Path, arguments: &[&str]) -> Command {
     let mut command = Command::new(&config.git_binary);
     command
@@ -1890,10 +2270,12 @@ pub enum LocalWorkspaceError {
 #[cfg(test)]
 mod tests {
     use super::{
-        LocalWorkspaceError, declared_regular_file, validate_message, validate_relative_path,
+        LocalWorkspaceConfig, LocalWorkspaceError, RuntimeGitWorkspaceRequest, WorkspaceLimits,
+        declared_regular_file, materialize_runtime_git, validate_message, validate_relative_path,
         validate_symlink_target,
     };
-    use std::{fs, os::unix::fs::symlink};
+    use std::{fs, os::unix::fs::symlink, path::Path, process::Command};
+    use uuid::Uuid;
 
     #[test]
     fn rejects_repository_and_symlink_path_escapes() {
@@ -1948,5 +2330,110 @@ mod tests {
             Err(LocalWorkspaceError::InvalidResult(_))
         ));
         declared_regular_file(&work, "actual/result.txt").expect("direct regular file");
+    }
+
+    #[test]
+    fn runtime_git_materialization_is_private_and_remote_free() {
+        let temporary = tempfile::tempdir().expect("temporary runtime Git root");
+        let source = temporary.path().join("source");
+        let repository = temporary.path().join("repository.git");
+        let workspace_root = temporary.path().join("workspaces");
+        let active_root = workspace_root.join("active");
+        let staging = active_root.join("staging");
+        let active = active_root.join(Uuid::new_v4().to_string());
+        fs::create_dir(&source).expect("source directory");
+        fs::create_dir_all(&active_root).expect("active directory");
+        run_git(&source, &["init", "--initial-branch=main"]);
+        run_git(&source, &["config", "user.name", "Runtime test"]);
+        run_git(
+            &source,
+            &["config", "user.email", "runtime@example.invalid"],
+        );
+        fs::write(source.join("session.txt"), "immutable\n").expect("source file");
+        run_git(&source, &["add", "."]);
+        run_git(&source, &["commit", "-m", "initial"]);
+        let parent = git_output_test(&source, &["rev-parse", "HEAD"]);
+        fs::write(source.join("transcript.txt"), "second\n").expect("second source file");
+        run_git(&source, &["add", "."]);
+        run_git(&source, &["commit", "-m", "second"]);
+        let commit = git_output_test(&source, &["rev-parse", "HEAD"]);
+        run_git(
+            &source,
+            &[
+                "init",
+                "--bare",
+                repository.to_str().expect("repository path"),
+            ],
+        );
+        run_git(
+            &source,
+            &[
+                "push",
+                repository.to_str().expect("repository path"),
+                "HEAD:refs/heads/main",
+            ],
+        );
+        let config = LocalWorkspaceConfig {
+            workspace_root,
+            artifact_root: temporary.path().join("artifacts"),
+            repository_root: temporary.path().to_path_buf(),
+            git_binary: Path::new("/usr/bin/git").to_path_buf(),
+            limits: WorkspaceLimits::default(),
+        };
+        fs::create_dir_all(&config.workspace_root).expect("workspace root");
+        let repository_id = Uuid::new_v4();
+        let request = RuntimeGitWorkspaceRequest {
+            repository_id,
+            target_repository_id: repository_id,
+            target_ref: String::from("refs/heads/main"),
+            target_commit: commit.clone(),
+            git_operations: vec![String::from("fetch")],
+            ref_globs: vec![String::from("refs/heads/main")],
+        };
+        let (tree, _) = materialize_runtime_git(&config, &repository, &request, &staging, &active)
+            .expect("materialize runtime Git worktree");
+        assert_eq!(git_output_test(&active, &["rev-parse", "HEAD"]), commit);
+        assert_eq!(git_output_test(&active, &["rev-parse", "HEAD^"]), parent);
+        assert_eq!(
+            git_output_test(&active, &["rev-parse", concat!("HEAD^", "{tree}")]),
+            tree
+        );
+        let config_text = fs::read_to_string(active.join(".git/config")).expect("Git config");
+        assert!(config_text.contains("[remote \"origin\"]"));
+        assert_eq!(
+            git_output_test(&active, &["remote", "get-url", "origin"]),
+            format!("http://127.0.0.1:19100/{repository_id}")
+        );
+        assert!(!active.join(".git/objects/info/alternates").exists());
+        assert!(active.join("session.txt").is_file());
+        assert!(!active.join("source").exists());
+        assert!(!active.join("work").exists());
+    }
+
+    fn run_git(directory: &Path, arguments: &[&str]) {
+        let output = Command::new("/usr/bin/git")
+            .current_dir(directory)
+            .args(arguments)
+            .output()
+            .expect("run Git");
+        assert!(
+            output.status.success(),
+            "Git {:?}: {}",
+            arguments,
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
+
+    fn git_output_test(directory: &Path, arguments: &[&str]) -> String {
+        let output = Command::new("/usr/bin/git")
+            .current_dir(directory)
+            .args(arguments)
+            .output()
+            .expect("run Git");
+        assert!(output.status.success(), "Git {arguments:?}");
+        String::from_utf8(output.stdout)
+            .expect("Git UTF-8")
+            .trim()
+            .to_owned()
     }
 }

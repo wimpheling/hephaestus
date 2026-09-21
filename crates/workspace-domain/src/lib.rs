@@ -6,7 +6,12 @@ use runtime_types::RunId;
 use serde_json::Value;
 use std::{error::Error, fmt};
 use uuid::Uuid;
-use vm_trait::VmMount;
+use vm_trait::{RuntimeGitBridge, VmMount};
+
+/// Guest location reserved for one isolated runtime-Git worktree.
+pub const RUNTIME_GIT_GUEST_PATH: &str = "/workspace/git";
+/// Fixed guest loopback port used by the runtime-Git bridge.
+pub const RUNTIME_GIT_LOOPBACK_PORT: u16 = 19_100;
 
 /// Provider-neutral persistence failure for workspace metadata and results.
 #[derive(Debug, thiserror::Error)]
@@ -36,6 +41,76 @@ pub struct WorkspaceRequestMetadata {
     pub instance_id: Uuid,
     /// Serialized agent configuration.
     pub configuration: Value,
+}
+
+/// Immutable runtime-Git checkout authority resolved for one run.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RuntimeGitWorkspaceRequest {
+    /// Repository selected by the immutable runtime capability snapshot.
+    pub repository_id: Uuid,
+    /// Repository recorded by immutable trigger provenance.
+    pub target_repository_id: Uuid,
+    /// Fully qualified branch ref selected by immutable run provenance.
+    pub target_ref: String,
+    /// Exact commit selected by immutable run provenance.
+    pub target_commit: String,
+    /// Runtime-Git operations copied into the immutable capability snapshot.
+    pub git_operations: Vec<String>,
+    /// Ref globs copied into the immutable capability snapshot.
+    pub ref_globs: Vec<String>,
+}
+
+impl RuntimeGitWorkspaceRequest {
+    /// Validates the minimum authority needed to materialize a writable
+    /// checkout without inferring repository or ref data from the user.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when fetch authority, a scoped branch, or a valid
+    /// immutable commit is absent.
+    pub fn validate(&self) -> Result<(), WorkspaceRepositoryError> {
+        if self.target_repository_id.is_nil() || self.target_repository_id != self.repository_id {
+            return Err(WorkspaceRepositoryError::new(
+                "runtime Git target repository is not proven by the capability snapshot",
+            ));
+        }
+        if !self
+            .git_operations
+            .iter()
+            .any(|operation| operation == "fetch")
+        {
+            return Err(WorkspaceRepositoryError::new(
+                "runtime Git capability does not authorize fetch",
+            ));
+        }
+        if !self.target_ref.starts_with("refs/heads/")
+            || self.target_ref.len() <= "refs/heads/".len()
+        {
+            return Err(WorkspaceRepositoryError::new(
+                "runtime Git target must be a branch ref",
+            ));
+        }
+        if !self
+            .ref_globs
+            .iter()
+            .filter_map(|glob| git_capability_domain::RefGlob::parse_explicitly_broad(glob).ok())
+            .any(|glob| glob.is_match(&self.target_ref))
+        {
+            return Err(WorkspaceRepositoryError::new(
+                "runtime Git target ref is outside the immutable capability scope",
+            ));
+        }
+        if !is_commit_sha(&self.target_commit) {
+            return Err(WorkspaceRepositoryError::new(
+                "runtime Git target commit is invalid",
+            ));
+        }
+        Ok(())
+    }
+}
+
+fn is_commit_sha(value: &str) -> bool {
+    matches!(value.len(), 40 | 64) && value.bytes().all(|byte| byte.is_ascii_hexdigit())
 }
 
 /// Durable workspace row.
@@ -112,6 +187,15 @@ pub trait WorkspaceMetadataRepository: Send + Sync + 'static {
         input_commit: &str,
         run_id: RunId,
     ) -> Result<(), WorkspaceRepositoryError>;
+    /// Inserts a runtime-Git workspace and its classification event atomically.
+    async fn insert_runtime_git_preparing(
+        &self,
+        metadata: &WorkspaceMetadata,
+        repository_id: Uuid,
+        input_commit: &str,
+        run_id: RunId,
+        event: Value,
+    ) -> Result<(), WorkspaceRepositoryError>;
     /// Records materialization failure.
     async fn mark_materialization_failed(
         &self,
@@ -144,6 +228,31 @@ pub trait WorkspaceMetadataRepository: Send + Sync + 'static {
     ) -> Result<(), WorkspaceRepositoryError>;
     /// Marks cleanup complete.
     async fn mark_cleaned(&self, run_id: RunId) -> Result<(), WorkspaceRepositoryError>;
+
+    /// Resolves runtime-Git authority from immutable dispatch rows.
+    async fn runtime_git_request(
+        &self,
+        run_id: RunId,
+    ) -> Result<Option<RuntimeGitWorkspaceRequest>, WorkspaceRepositoryError> {
+        let _ = run_id;
+        Ok(None)
+    }
+
+    /// Reads one workspace only when its durable runtime-Git classification is present.
+    async fn runtime_git_workspace(
+        &self,
+        run_id: RunId,
+    ) -> Result<Option<WorkspaceMetadata>, WorkspaceRepositoryError> {
+        let _ = run_id;
+        Ok(None)
+    }
+
+    /// Lists incomplete runtime-Git workspaces for restart recovery.
+    async fn runtime_git_workspaces(
+        &self,
+    ) -> Result<Vec<(RunId, WorkspaceMetadata)>, WorkspaceRepositoryError> {
+        Ok(Vec::new())
+    }
 }
 
 /// PostgreSQL-independent result persistence and recovery port.
@@ -287,6 +396,21 @@ pub struct PreparedWorkspace {
     pub mounts: Vec<VmMount>,
 }
 
+/// Prepared isolated runtime-Git worktree and its token-free bridge route.
+#[derive(Debug, Clone)]
+pub struct PreparedRuntimeGitWorkspace {
+    /// Durable workspace identifier shared with cleanup and recovery.
+    pub id: WorkspaceId,
+    /// Writable private worktree mount for the guest agent.
+    pub mount: VmMount,
+    /// Opaque repository route for the host-side authenticated bridge.
+    pub bridge: RuntimeGitBridge,
+    /// Exact branch checkout delivered to the guest.
+    pub target_ref: String,
+    /// Exact commit delivered to the guest.
+    pub target_commit: String,
+}
+
 impl PreparedWorkspace {
     /// Returns a disabled workspace with no guest mounts.
     #[must_use]
@@ -342,6 +466,51 @@ pub trait RunWorkspaceManager: Send + Sync + 'static {
 
     /// Reconciles incomplete seals and Git ref publications after restart.
     async fn recover(&self) -> Result<usize, WorkspaceError>;
+}
+
+/// Separate lifecycle boundary for runtime-Git worktrees.
+#[async_trait]
+pub trait RuntimeGitWorkspaceManager: Send + Sync + 'static {
+    /// Resolves immutable authority and prepares one isolated worktree.
+    async fn prepare_runtime_git(
+        &self,
+        run: &Run,
+    ) -> Result<Option<PreparedRuntimeGitWorkspace>, WorkspaceError>;
+    /// Removes one runtime-Git worktree after the guest is gone.
+    async fn abandon_runtime_git(&self, run_id: RunId) -> Result<(), WorkspaceError>;
+    /// Reconciles preparing and active runtime-Git worktrees after restart.
+    async fn recover_runtime_git(&self) -> Result<usize, WorkspaceError>;
+}
+
+#[cfg(test)]
+mod tests {
+    use super::RuntimeGitWorkspaceRequest;
+    use uuid::Uuid;
+
+    fn request() -> RuntimeGitWorkspaceRequest {
+        let repository_id = Uuid::new_v4();
+        RuntimeGitWorkspaceRequest {
+            repository_id,
+            target_repository_id: repository_id,
+            target_ref: String::from("refs/heads/main"),
+            target_commit: "a".repeat(40),
+            git_operations: vec![String::from("fetch")],
+            ref_globs: vec![String::from("refs/heads/main")],
+        }
+    }
+
+    #[test]
+    fn runtime_git_requires_fetch_and_scoped_branch() {
+        let mut value = request();
+        value.git_operations.clear();
+        assert!(value.validate().is_err());
+        value = request();
+        value.target_ref = String::from("refs/tags/release");
+        assert!(value.validate().is_err());
+        value = request();
+        value.ref_globs = vec![String::from("refs/heads/other")];
+        assert!(value.validate().is_err());
+    }
 }
 
 /// Workspace manager used when no repository workspace is configured.

@@ -1631,7 +1631,12 @@ impl HephaestusApp {
                 spec_factory,
                 config.agent_state_capacity_bytes,
             )
-            .with_workspace_manager(workspaces)
+            .with_workspace_manager(
+                Arc::clone(&workspaces) as Arc<dyn workspace_domain::RunWorkspaceManager>
+            )
+            .with_runtime_git_workspace_manager(
+                workspaces as Arc<dyn workspace_domain::RuntimeGitWorkspaceManager>,
+            )
             .with_runtime_manager(run_runtime)
             .with_launch_authorizer(launch_authorizer)
             .with_resource_observer(Arc::new(MailboxRunResources::new(Arc::clone(

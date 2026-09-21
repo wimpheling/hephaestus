@@ -184,9 +184,12 @@ fn run() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
             String::from(RUNTIME_GIT_PATH_ENV),
             config.repository_id.to_string(),
         );
+        // The host materializes the managed worktree before the guest starts,
+        // so its numeric owner may differ from AGENT_UID. Restrict Git's
+        // ownership exception to this one runtime-managed path.
         command
             .env
-            .insert(String::from("GIT_CONFIG_COUNT"), String::from("2"));
+            .insert(String::from("GIT_CONFIG_COUNT"), String::from("3"));
         command.env.insert(
             String::from("GIT_CONFIG_KEY_0"),
             String::from("credential.helper"),
@@ -202,6 +205,14 @@ fn run() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         command
             .env
             .insert(String::from("GIT_CONFIG_VALUE_1"), String::from("true"));
+        command.env.insert(
+            String::from("GIT_CONFIG_KEY_2"),
+            String::from("safe.directory"),
+        );
+        command.env.insert(
+            String::from("GIT_CONFIG_VALUE_2"),
+            String::from("/workspace/git"),
+        );
         command
             .env
             .insert(String::from("GIT_TERMINAL_PROMPT"), String::from("0"));

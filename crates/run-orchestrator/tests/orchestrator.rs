@@ -53,10 +53,14 @@ use volume_trait::{
     VolumeState, VolumeStore,
 };
 use workspace_domain::{
-    PreparedWorkspace, PublishedResult, RunWorkspaceManager, WorkspaceError, WorkspaceId,
+    PreparedRuntimeGitWorkspace, PreparedWorkspace, PublishedResult, RunWorkspaceManager,
+    RuntimeGitWorkspaceManager, WorkspaceError, WorkspaceId,
 };
 
 #[tokio::test]
+// This integration fixture keeps launch, guest cleanup, and duplicate-start
+// assertions together so the ordering is checked against one run trace.
+#[allow(clippy::too_many_lines)]
 async fn destroys_vm_before_releasing_lease_and_deduplicates_start() {
     let log = Arc::new(StdMutex::new(Vec::new()));
     let command = StartRun {
@@ -92,6 +96,9 @@ async fn destroys_vm_before_releasing_lease_and_deduplicates_start() {
     .with_runtime_manager(Arc::new(RecordingRuntimeManager {
         log: Arc::clone(&log),
     }))
+    .with_runtime_git_workspace_manager(Arc::new(RecordingRuntimeGitWorkspaceManager {
+        log: Arc::clone(&log),
+    }))
     .with_authority_manager(Arc::new(RecordingAuthorityManager {
         log: Arc::clone(&log),
         reject_acknowledgement: false,
@@ -112,7 +119,7 @@ async fn destroys_vm_before_releasing_lease_and_deduplicates_start() {
             .any(|event| event.event_type == "vm.exited"),
         "final VM event was not persisted"
     );
-    let (destroyed, runtime_destroyed, released) = {
+    let (destroyed, runtime_git_abandoned, runtime_destroyed, released) = {
         let entries = lock(&log);
         let destroyed = entries
             .iter()
@@ -122,15 +129,26 @@ async fn destroys_vm_before_releasing_lease_and_deduplicates_start() {
             .iter()
             .position(|entry| *entry == "runtime-destroy")
             .expect("runtime destroy event");
+        let runtime_git_abandoned = entries
+            .iter()
+            .position(|entry| *entry == "runtime-git-abandon")
+            .expect("runtime Git abandon event");
         let released = entries
             .iter()
             .position(|entry| *entry == "release")
             .expect("release event");
         drop(entries);
-        (destroyed, runtime_destroyed, released)
+        (
+            destroyed,
+            runtime_git_abandoned,
+            runtime_destroyed,
+            released,
+        )
     };
     assert!(
-        destroyed < runtime_destroyed && runtime_destroyed < released,
+        destroyed < runtime_git_abandoned
+            && runtime_git_abandoned < runtime_destroyed
+            && runtime_destroyed < released,
         "runtime or lease cleanup happened before VM destruction"
     );
     assert_launch_order(&log);
@@ -141,6 +159,21 @@ async fn destroys_vm_before_releasing_lease_and_deduplicates_start() {
         .find(|disk| disk.id == INSTANCE_STATE_DISK_ID)
         .expect("instance-state disk");
     assert!(!disk.read_only);
+    assert_eq!(
+        spec.command.working_dir,
+        Some(PathBuf::from("/workspace/git"))
+    );
+    assert_eq!(
+        spec.runtime_git_bridge
+            .expect("runtime Git bridge")
+            .remote_url(),
+        "http://127.0.0.1:19100/00000000-0000-0000-0000-000000000001"
+    );
+    assert!(
+        spec.mounts
+            .iter()
+            .any(|mount| mount.tag == "runtime-git-worktree")
+    );
 
     let before = lock(&log).len();
     let duplicate = orchestrator
@@ -781,6 +814,10 @@ struct RecordingRuntimeManager {
     log: Arc<StdMutex<Vec<&'static str>>>,
 }
 
+struct RecordingRuntimeGitWorkspaceManager {
+    log: Arc<StdMutex<Vec<&'static str>>>,
+}
+
 struct RecordingAuthorityManager {
     log: Arc<StdMutex<Vec<&'static str>>>,
     reject_acknowledgement: bool,
@@ -990,6 +1027,40 @@ impl RunRuntimeManager for RecordingRuntimeManager {
     }
 
     async fn recover(&self) -> Result<usize, RunRuntimeError> {
+        Ok(0)
+    }
+}
+
+#[async_trait]
+impl RuntimeGitWorkspaceManager for RecordingRuntimeGitWorkspaceManager {
+    async fn prepare_runtime_git(
+        &self,
+        _run: &Run,
+    ) -> Result<Option<PreparedRuntimeGitWorkspace>, WorkspaceError> {
+        lock(&self.log).push("runtime-git-prepare");
+        Ok(Some(PreparedRuntimeGitWorkspace {
+            id: WorkspaceId::new(),
+            mount: VmMount {
+                tag: String::from("runtime-git-worktree"),
+                host_path: PathBuf::from("/fake/runtime-git"),
+                guest_path: PathBuf::from("/workspace/git"),
+                read_only: false,
+            },
+            bridge: vm_trait::RuntimeGitBridge::new(
+                Uuid::from_u128(1),
+                workspace_domain::RUNTIME_GIT_LOOPBACK_PORT,
+            ),
+            target_ref: String::from("refs/heads/main"),
+            target_commit: "a".repeat(40),
+        }))
+    }
+
+    async fn abandon_runtime_git(&self, _run_id: RunId) -> Result<(), WorkspaceError> {
+        lock(&self.log).push("runtime-git-abandon");
+        Ok(())
+    }
+
+    async fn recover_runtime_git(&self) -> Result<usize, WorkspaceError> {
         Ok(0)
     }
 }
