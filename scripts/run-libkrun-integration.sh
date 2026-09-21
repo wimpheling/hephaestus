@@ -480,11 +480,11 @@ diagnostics_body() {
     fi
     for service in "${postgres_container_name}" "${nats_container_name}" "${zot_container_name}"; do
         [[ -n "${service}" ]] || continue
-        if podman container exists "${service}" 2>/dev/null; then
-            podman inspect --format \
+        if timeout --kill-after=2s 8s podman container exists "${service}" 2>/dev/null; then
+            timeout --kill-after=2s 8s podman inspect --format \
                 '  container={{.Name}} state={{.State.Status}} exit={{.State.ExitCode}}' \
                 "${service}" 2>&1 || true
-            podman logs "${service}" 2>&1 | tail -100 || true
+            timeout --kill-after=2s 8s podman logs "${service}" 2>&1 | tail -100 || true
         fi
     done
 }
@@ -735,7 +735,10 @@ failure_diagnostics() {
 
 cleanup() {
     local status=$?
-    trap - EXIT INT TERM
+    # Keep cleanup running if the outer runner sends TERM while bounded
+    # diagnostics are being collected. Clearing the traps here would restore
+    # the default action and strand the disposable service containers.
+    trap '' EXIT INT TERM
     set +e
     phase_timing_finish_open "${status}"
     heph_shell_failure_on_exit "${status}" "${LINENO}"
@@ -745,16 +748,16 @@ cleanup() {
     fi
     cleanup_cgroup
     if [[ -n "${container_name}" ]]; then
-        podman rm --force "${container_name}" >/dev/null 2>&1
+        timeout --kill-after=2s 8s podman rm --force "${container_name}" >/dev/null 2>&1 || true
     fi
     if [[ -n "${nats_container_name}" ]]; then
-        podman rm --force "${nats_container_name}" >/dev/null 2>&1
+        timeout --kill-after=2s 8s podman rm --force "${nats_container_name}" >/dev/null 2>&1 || true
     fi
     if [[ -n "${zot_container_name}" ]]; then
-        podman rm --force "${zot_container_name}" >/dev/null 2>&1 || true
+        timeout --kill-after=2s 8s podman rm --force "${zot_container_name}" >/dev/null 2>&1 || true
     fi
     if [[ -n "${postgres_container_name}" ]]; then
-        podman rm --force "${postgres_container_name}" >/dev/null 2>&1
+        timeout --kill-after=2s 8s podman rm --force "${postgres_container_name}" >/dev/null 2>&1 || true
     fi
     if [[ "${builder_image_loaded}" == "true" ]]; then
         podman rmi "${builder_vm_image}" >/dev/null 2>&1 || true
