@@ -6,3 +6,8 @@
 /e2e/playwright/test-results/
 /scripts/__pycache__/
 /examples/cooking/**/__pycache__/
+
+# RepoWise's local index, databases, caches, and generated repository state.
+/.repowise/
+# RepoWise regenerates this Claude guidance file from the local index.
+/.claude/CLAUDE.md
