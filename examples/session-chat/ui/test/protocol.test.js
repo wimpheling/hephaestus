@@ -29,6 +29,35 @@ test("reader rejects future protocol versions and malformed human identity", () 
   assert.throws(() => makeHumanMessage({ recordId: record.record_id, actorId: "user:not-a-uuid", text: "hello", createdAt: record.created_at }), /actorId/);
 });
 
+test("record variants reject assistant tombstones and tombstone content", () => {
+  const assistant = {
+    protocol: "heph.session-chat",
+    version: 1,
+    record_id: "123e4567-e89b-12d3-a456-426614174002",
+    kind: "assistant_message",
+    actor: { id: "agent:reference-chat", role: "agent" },
+    participant_id: "agent:reference-chat",
+    created_at: "2026-09-21T12:00:00Z",
+    content: { kind: "text", text: "answer" },
+    in_reply_to: record.record_id,
+    correlation_id: "123e4567-e89b-12d3-a456-426614174003",
+  };
+  assert.throws(() => parseRecord({ ...assistant, tombstone_of: record.record_id }), /invalid assistant message/);
+
+  const tombstone = {
+    protocol: "heph.session-chat",
+    version: 1,
+    record_id: "123e4567-e89b-12d3-a456-426614174004",
+    kind: "tombstone",
+    actor: { id: "release:reference-chat", role: "release" },
+    participant_id: "release:reference-chat",
+    created_at: "2026-09-21T12:00:00Z",
+    tombstone_of: record.record_id,
+  };
+  assert.doesNotThrow(() => parseRecord(tombstone));
+  assert.throws(() => parseRecord({ ...tombstone, content: { kind: "text", text: "hidden" } }), /invalid tombstone/);
+});
+
 test("stale writer reconciliation preserves duplicate no-op and rejects ID conflicts", () => {
   assert.equal(reconcileRecord([], record).kind, "append");
   assert.equal(reconcileRecord([record], record).kind, "duplicate");

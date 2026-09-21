@@ -22,3 +22,20 @@ test("browser Git transport includes browser credentials without exposing cookie
     globalThis.fetch = previousFetch;
   }
 });
+
+test("browser Git transport forwards the refresh abort signal", async () => {
+  const previousFetch = globalThis.fetch;
+  const signal = new AbortController().signal;
+  let seen;
+  globalThis.fetch = async (_url, options) => {
+    seen = options;
+    return new Response(new Uint8Array(), { status: 200, headers: { "Heph-Git-Actor-Id": "123e4567-e89b-12d3-a456-426614174000" } });
+  };
+  try {
+    const client = browserHttp(undefined, () => signal);
+    await client.request({ url: "https://example.test/_heph/git/repo/info/refs", method: "GET", headers: {} });
+    assert.equal(seen.signal, signal);
+  } finally {
+    globalThis.fetch = previousFetch;
+  }
+});

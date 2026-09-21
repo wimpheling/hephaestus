@@ -63,14 +63,18 @@ function sameOriginUrl(path) {
   return url;
 }
 
-export function browserHttp(onResponse) {
+export function browserHttp(onResponse, signalProvider = () => undefined) {
   return {
     async request(request) {
       // The browser supplies the HttpOnly child cookie and Origin. This adapter
       // never reads document.cookie and never creates an Authorization header.
       const response = await http.request({
         ...request,
-        fetchOptions: { ...(request.fetchOptions ?? {}), credentials: "include" },
+        fetchOptions: {
+          ...(request.fetchOptions ?? {}),
+          credentials: "include",
+          signal: request.signal ?? signalProvider() ?? request.fetchOptions?.signal,
+        },
       });
       onResponse?.(response);
       return response;
@@ -214,17 +218,19 @@ export class SessionGitClient extends GitSessionAdapter {
     const url = sameOriginUrl(repositoryUrl ?? `/_heph/git/${canonicalRepositoryId}`);
     if (url.pathname !== `/\u005fheph/git/${canonicalRepositoryId}` && url.pathname !== `/\u005fheph/git/${canonicalRepositoryId}/`) throw new Error("repository URL is outside the reserved Git route");
     let verifiedActorId;
+    let activeSignal;
     const clientHttp = browserHttp((response) => {
       const actor = response.headers?.[ACTOR_HEADER];
       if (actor !== undefined) {
         if (!UUID.test(actor)) throw new Error("server returned an invalid verified Git actor");
         verifiedActorId = actor;
       }
-    });
+    }, () => activeSignal);
     const fs = new LightningFS(storageName).promises;
     super({ fs, http: clientHttp, repositoryUrl: url.href.replace(/\/$/, ""), humanDisplayName });
     this.repositoryId = canonicalRepositoryId;
     this._browserVerifiedActorId = () => verifiedActorId;
+    this._setFetchSignal = (signal) => { activeSignal = signal; };
   }
 
   async connect() {
@@ -248,10 +254,15 @@ export class SessionGitClient extends GitSessionAdapter {
     await this.reconnect();
   }
 
-  async fetch() {
-    await git.fetch({ fs: this.fs, http: this.http, dir: this.dir, remote: "origin", ref: "main", singleBranch: true, headers: {} });
-    await git.fastForward({ fs: this.fs, http: this.http, dir: this.dir, ref: "main", remote: "origin", singleBranch: true, headers: {} });
-    return this.readSession();
+  async fetch({ signal } = {}) {
+    this._setFetchSignal?.(signal);
+    try {
+      await this.git.fetch({ fs: this.fs, http: this.http, dir: this.dir, remote: "origin", ref: "main", singleBranch: true, headers: {}, signal });
+      await this.git.fastForward({ fs: this.fs, http: this.http, dir: this.dir, ref: "main", remote: "origin", singleBranch: true, headers: {} });
+      return this.readSession();
+    } finally {
+      this._setFetchSignal?.(undefined);
+    }
   }
 
 }

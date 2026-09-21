@@ -1,5 +1,6 @@
 import { SessionGitClient } from "./git-client.js";
 import { makeHumanMessage } from "./protocol.js";
+import { ResponseRefreshController } from "./response-refresh.js";
 import { loadUiContext } from "./ui-context.js";
 import "./style.css";
 
@@ -10,11 +11,12 @@ const form = root?.querySelector("form");
 const input = root?.querySelector("textarea");
 const reconnect = root?.querySelector("[data-reconnect]");
 let client;
+let controller;
 
-function setStatus(message, error = false) {
+function setStatus(message, state = "ready") {
   if (status) {
     status.textContent = message;
-    status.dataset.state = error ? "error" : "ready";
+    status.dataset.state = typeof state === "boolean" ? (state ? "error" : "ready") : state;
   }
 }
 
@@ -38,9 +40,7 @@ function render(records) {
 }
 
 async function refresh() {
-  const session = await client.reconnect();
-  render(session.transcript);
-  setStatus(`Connected as user:${session.actorId}`);
+  await controller.refresh({ reconnect: true });
 }
 
 async function start() {
@@ -50,6 +50,11 @@ async function start() {
   const session = await client.connect();
   render(session.transcript);
   setStatus(`Connected as user:${session.actorId}`);
+  controller = new ResponseRefreshController({
+    client,
+    onSession: (updated) => render(updated.transcript),
+    onStatus: (message, state) => setStatus(message, state),
+  });
 }
 
 form?.addEventListener("submit", async (event) => {
@@ -59,11 +64,8 @@ form?.addEventListener("submit", async (event) => {
   input.disabled = true;
   setStatus("Publishing message…");
   try {
-    await client.appendHuman(makeHumanMessage({ recordId: crypto.randomUUID(), actorId: `user:${client.verifiedActorId}`, text: message }));
+    await controller.publish(makeHumanMessage({ recordId: crypto.randomUUID(), actorId: `user:${client.verifiedActorId}`, text: message }));
     input.value = "";
-    const session = await client.readSession();
-    render(session.transcript);
-    setStatus(`Connected as user:${session.actorId}`);
   } catch (error) {
     setStatus(error instanceof Error ? error.message : "Message could not be published", true);
   } finally {
@@ -80,3 +82,4 @@ reconnect?.addEventListener("click", async () => {
 });
 
 if (root) start().catch((error) => setStatus(error instanceof Error ? error.message : "Session could not be opened", true));
+if (typeof window !== "undefined") window.addEventListener("pagehide", () => controller?.dispose(), { once: true });

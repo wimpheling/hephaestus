@@ -86,9 +86,9 @@ export function parseRecord(value) {
     if (actor.role !== "human" || actor.id !== record.participant_id || !record.content || record.content.kind !== "text") throw new ProtocolError("invalid user message");
     if (record.in_reply_to !== undefined || record.correlation_id !== undefined || record.tombstone_of !== undefined) throw new ProtocolError("user message has response fields");
   } else if (record.kind === "assistant_message") {
-    if (actor.role !== "agent" || actor.id !== record.participant_id || !record.content || record.in_reply_to === undefined || record.correlation_id === undefined) throw new ProtocolError("invalid assistant message");
+    if (actor.role !== "agent" || actor.id !== record.participant_id || !record.content || record.in_reply_to === undefined || record.correlation_id === undefined || record.tombstone_of !== undefined) throw new ProtocolError("invalid assistant message");
   } else if (record.kind === "tombstone") {
-    if (actor.role !== "release" || record.tombstone_of === undefined) throw new ProtocolError("invalid tombstone");
+    if (actor.role !== "release" || record.content !== undefined || record.tombstone_of === undefined) throw new ProtocolError("invalid tombstone");
   } else if (record.kind === "participant") {
     const participantData = requireObject(record.data, "participant.data");
     if (actor.role !== "release" || record.content !== undefined || !participantData.role) throw new ProtocolError("invalid participant");

@@ -9721,12 +9721,12 @@ var require_Mutex2 = __commonJS({
       // Returns true if successful, gives up after 10 minutes
       async wait({ timeout = 6e5 } = {}) {
         return new Promise((resolve, reject) => {
-          const controller = new AbortController();
+          const controller2 = new AbortController();
           setTimeout(() => {
-            controller.abort();
+            controller2.abort();
             reject(new Error("Mutex timeout"));
           }, timeout);
-          navigator.locks.request(this._database + "_lock", { signal: controller.signal }, (lock2) => {
+          navigator.locks.request(this._database + "_lock", { signal: controller2.signal }, (lock2) => {
             this._has = !!lock2;
             resolve(!!lock2);
             return new Promise((resolve2) => {
@@ -22200,9 +22200,9 @@ function parseRecord(value) {
     if (actor.role !== "human" || actor.id !== record.participant_id || !record.content || record.content.kind !== "text") throw new ProtocolError("invalid user message");
     if (record.in_reply_to !== void 0 || record.correlation_id !== void 0 || record.tombstone_of !== void 0) throw new ProtocolError("user message has response fields");
   } else if (record.kind === "assistant_message") {
-    if (actor.role !== "agent" || actor.id !== record.participant_id || !record.content || record.in_reply_to === void 0 || record.correlation_id === void 0) throw new ProtocolError("invalid assistant message");
+    if (actor.role !== "agent" || actor.id !== record.participant_id || !record.content || record.in_reply_to === void 0 || record.correlation_id === void 0 || record.tombstone_of !== void 0) throw new ProtocolError("invalid assistant message");
   } else if (record.kind === "tombstone") {
-    if (actor.role !== "release" || record.tombstone_of === void 0) throw new ProtocolError("invalid tombstone");
+    if (actor.role !== "release" || record.content !== void 0 || record.tombstone_of === void 0) throw new ProtocolError("invalid tombstone");
   } else if (record.kind === "participant") {
     const participantData = requireObject(record.data, "participant.data");
     if (actor.role !== "release" || record.content !== void 0 || !participantData.role) throw new ProtocolError("invalid participant");
@@ -22310,12 +22310,16 @@ function sameOriginUrl(path) {
   if (url.origin !== window.location.origin) throw new Error("session Git must use the installed UI origin");
   return url;
 }
-function browserHttp(onResponse) {
+function browserHttp(onResponse, signalProvider = () => void 0) {
   return {
     async request(request2) {
       const response = await web_default.request({
         ...request2,
-        fetchOptions: { ...request2.fetchOptions ?? {}, credentials: "include" }
+        fetchOptions: {
+          ...request2.fetchOptions ?? {},
+          credentials: "include",
+          signal: request2.signal ?? signalProvider() ?? request2.fetchOptions?.signal
+        }
       });
       onResponse?.(response);
       return response;
@@ -22451,17 +22455,21 @@ var SessionGitClient = class extends GitSessionAdapter {
     const url = sameOriginUrl(repositoryUrl ?? `/_heph/git/${canonicalRepositoryId}`);
     if (url.pathname !== `/_heph/git/${canonicalRepositoryId}` && url.pathname !== `/_heph/git/${canonicalRepositoryId}/`) throw new Error("repository URL is outside the reserved Git route");
     let verifiedActorId;
+    let activeSignal;
     const clientHttp = browserHttp((response) => {
       const actor = response.headers?.[ACTOR_HEADER];
       if (actor !== void 0) {
         if (!UUID2.test(actor)) throw new Error("server returned an invalid verified Git actor");
         verifiedActorId = actor;
       }
-    });
+    }, () => activeSignal);
     const fs = new import_lightning_fs.default(storageName).promises;
     super({ fs, http: clientHttp, repositoryUrl: url.href.replace(/\/$/, ""), humanDisplayName });
     this.repositoryId = canonicalRepositoryId;
     this._browserVerifiedActorId = () => verifiedActorId;
+    this._setFetchSignal = (signal) => {
+      activeSignal = signal;
+    };
   }
   async connect() {
     this.dir = `/session-${crypto.randomUUID()}`;
@@ -22480,10 +22488,150 @@ var SessionGitClient = class extends GitSessionAdapter {
   async reconnectForRetry() {
     await this.reconnect();
   }
-  async fetch() {
-    await isomorphic_git_default.fetch({ fs: this.fs, http: this.http, dir: this.dir, remote: "origin", ref: "main", singleBranch: true, headers: {} });
-    await isomorphic_git_default.fastForward({ fs: this.fs, http: this.http, dir: this.dir, ref: "main", remote: "origin", singleBranch: true, headers: {} });
-    return this.readSession();
+  async fetch({ signal } = {}) {
+    this._setFetchSignal?.(signal);
+    try {
+      await this.git.fetch({ fs: this.fs, http: this.http, dir: this.dir, remote: "origin", ref: "main", singleBranch: true, headers: {}, signal });
+      await this.git.fastForward({ fs: this.fs, http: this.http, dir: this.dir, ref: "main", remote: "origin", singleBranch: true, headers: {} });
+      return this.readSession();
+    } finally {
+      this._setFetchSignal?.(void 0);
+    }
+  }
+};
+
+// src/response-refresh.js
+var DEFAULT_POLL_INTERVAL_MS = 1e3;
+var DEFAULT_RESPONSE_TIMEOUT_MS = 3e4;
+var ResponseRefreshController = class {
+  constructor({
+    client: client2,
+    onSession,
+    onStatus,
+    pollIntervalMs = DEFAULT_POLL_INTERVAL_MS,
+    responseTimeoutMs = DEFAULT_RESPONSE_TIMEOUT_MS,
+    now = () => Date.now(),
+    setTimer = globalThis.setTimeout,
+    clearTimer = globalThis.clearTimeout
+  }) {
+    this.client = client2;
+    this.onSession = onSession;
+    this.onStatus = onStatus;
+    this.pollIntervalMs = pollIntervalMs;
+    this.responseTimeoutMs = responseTimeoutMs;
+    this.now = now;
+    this.setTimer = setTimer;
+    this.clearTimer = clearTimer;
+    this.operation = Promise.resolve();
+    this.pending = /* @__PURE__ */ new Map();
+    this.pollTimer = void 0;
+    this.activeAbortController = void 0;
+    this.disposed = false;
+  }
+  enqueue(operation) {
+    if (this.disposed) return Promise.reject(new Error("session chat is closed"));
+    const next = this.operation.then(() => {
+      if (this.disposed) throw new Error("session chat is closed");
+      return operation();
+    });
+    this.operation = next.catch(() => void 0);
+    return next;
+  }
+  async publish(record) {
+    const result = await this.enqueue(async () => {
+      const accepted = await this.client.appendHuman(record);
+      const session = await this.client.readSession();
+      this.observe(session);
+      return accepted;
+    });
+    this.waitFor(record.record_id);
+    return result;
+  }
+  refresh({ reconnect: reconnect2 = false, signal } = {}) {
+    return this.enqueue(async () => {
+      const session = reconnect2 ? await this.client.reconnect() : await this.client.fetch({ signal });
+      this.observe(session);
+      return session;
+    });
+  }
+  waitFor(recordId) {
+    if (this.disposed || this.pending.has(recordId)) return;
+    this.pending.set(recordId, this.now());
+    this.onStatus?.("Waiting for the assistant response\u2026", "waiting");
+    this.schedulePoll(0);
+  }
+  observe(session) {
+    if (this.disposed) return;
+    this.onSession?.(session);
+    const completed = [...this.pending.keys()].filter(
+      (recordId) => session.records.some(
+        (record) => record.kind === "assistant_message" && record.in_reply_to === recordId
+      )
+    );
+    for (const recordId of completed) this.pending.delete(recordId);
+    if (completed.length > 0) {
+      this.onStatus?.("Assistant response received", "completed");
+    } else if (this.pending.size === 0) {
+      this.onStatus?.(`Connected as user:${session.actorId}`, "ready");
+    }
+    if (this.pending.size === 0) this.cancelPoll();
+  }
+  schedulePoll(delay) {
+    if (this.disposed || this.pending.size === 0 || this.pollTimer !== void 0) return;
+    this.pollTimer = this.setTimer(() => {
+      this.pollTimer = void 0;
+      void this.poll();
+    }, delay);
+  }
+  async poll() {
+    if (this.disposed || this.pending.size === 0) return;
+    const expired = [...this.pending.entries()].filter(
+      ([, startedAt]) => this.now() - startedAt >= this.responseTimeoutMs
+    );
+    for (const [recordId] of expired) this.pending.delete(recordId);
+    if (expired.length > 0) {
+      this.onStatus?.("The assistant response timed out; reconnect to check again", "timeout");
+    }
+    if (this.pending.size === 0) return;
+    const remaining = Math.min(
+      ...[...this.pending.values()].map((startedAt) => this.responseTimeoutMs - (this.now() - startedAt))
+    );
+    const abortController = typeof AbortController === "function" ? new AbortController() : void 0;
+    this.activeAbortController = abortController;
+    let deadlineTimer;
+    if (abortController) deadlineTimer = this.setTimer(() => abortController.abort(), Math.max(0, remaining));
+    try {
+      await this.refresh({ signal: abortController?.signal });
+    } catch (error) {
+      if (this.disposed) return;
+      if (abortController?.signal.aborted) {
+        this.pending.clear();
+        this.onStatus?.("The assistant response timed out; reconnect to check again", "timeout");
+        return;
+      }
+      this.pending.clear();
+      this.onStatus?.(
+        error instanceof Error ? `Response refresh failed: ${error.message}` : "Response refresh failed",
+        "error"
+      );
+      return;
+    } finally {
+      if (deadlineTimer !== void 0) this.clearTimer(deadlineTimer);
+      if (this.activeAbortController === abortController) this.activeAbortController = void 0;
+    }
+    this.schedulePoll(this.pollIntervalMs);
+  }
+  cancelPoll() {
+    if (this.pollTimer === void 0) return;
+    this.clearTimer(this.pollTimer);
+    this.pollTimer = void 0;
+  }
+  dispose() {
+    this.disposed = true;
+    this.pending.clear();
+    this.cancelPoll();
+    this.activeAbortController?.abort();
+    this.activeAbortController = void 0;
   }
 };
 
@@ -22510,10 +22658,11 @@ var form = root?.querySelector("form");
 var input = root?.querySelector("textarea");
 var reconnect = root?.querySelector("[data-reconnect]");
 var client;
-function setStatus(message, error = false) {
+var controller;
+function setStatus(message, state = "ready") {
   if (status2) {
     status2.textContent = message;
-    status2.dataset.state = error ? "error" : "ready";
+    status2.dataset.state = typeof state === "boolean" ? state ? "error" : "ready" : state;
   }
 }
 function render(records) {
@@ -22533,9 +22682,7 @@ function render(records) {
   }
 }
 async function refresh() {
-  const session = await client.reconnect();
-  render(session.transcript);
-  setStatus(`Connected as user:${session.actorId}`);
+  await controller.refresh({ reconnect: true });
 }
 async function start() {
   if (!root) throw new Error("the session chat UI shell is unavailable");
@@ -22544,6 +22691,11 @@ async function start() {
   const session = await client.connect();
   render(session.transcript);
   setStatus(`Connected as user:${session.actorId}`);
+  controller = new ResponseRefreshController({
+    client,
+    onSession: (updated) => render(updated.transcript),
+    onStatus: (message, state) => setStatus(message, state)
+  });
 }
 form?.addEventListener("submit", async (event) => {
   event.preventDefault();
@@ -22552,11 +22704,8 @@ form?.addEventListener("submit", async (event) => {
   input.disabled = true;
   setStatus("Publishing message\u2026");
   try {
-    await client.appendHuman(makeHumanMessage({ recordId: crypto.randomUUID(), actorId: `user:${client.verifiedActorId}`, text: message }));
+    await controller.publish(makeHumanMessage({ recordId: crypto.randomUUID(), actorId: `user:${client.verifiedActorId}`, text: message }));
     input.value = "";
-    const session = await client.readSession();
-    render(session.transcript);
-    setStatus(`Connected as user:${session.actorId}`);
   } catch (error) {
     setStatus(error instanceof Error ? error.message : "Message could not be published", true);
   } finally {
@@ -22575,6 +22724,7 @@ reconnect?.addEventListener("click", async () => {
   reconnect.disabled = false;
 });
 if (root) start().catch((error) => setStatus(error instanceof Error ? error.message : "Session could not be opened", true));
+if (typeof window !== "undefined") window.addEventListener("pagehide", () => controller?.dispose(), { once: true });
 /*! Bundled license information:
 
 ieee754/index.js:
