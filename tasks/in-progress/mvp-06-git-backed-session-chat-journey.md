@@ -173,8 +173,8 @@ over repositories and content capabilities later.
   substitution.
 - [x] Run `cargo fmt --all -- --check`.
 - [x] Run `cargo clippy --workspace --all-targets --all-features`.
-- [ ] Run `cargo test --workspace --all-features`.
-- [ ] Run `cargo doc --workspace --all-features --no-deps`.
+- [x] Run `cargo test --workspace --all-features`.
+- [x] Run `cargo doc --workspace --all-features --no-deps`.
 - [ ] Run applicable UI checks when the reference distribution adapter changes.
 - [ ] Before repository handoff, run `git diff --check` and `cargo dev quality`.
 - [ ] Record acceptance evidence with the released protocol version and source
@@ -998,3 +998,15 @@ old Buffer-fixed bundle fails with `Illegal invocation`; the new bundle passes
 (`/var/tmp/sessionchat-refresh-{old,new}-bundle-smoke.log`). All 20 UI tests
 pass from an external dependency tree, and two generated bundle builds match
 byte-for-byte. A fresh full installed-browser/VM run remains required.
+
+The PostgreSQL-backed workspace rerun passes: 1,196 tests passed, none failed,
+95 ignored across 236 result groups
+(`/var/tmp/hephaestus-cargo-test-workspace-all-pg-gcp-sessionchat.log`). The
+previously failing runtime Git resolver test passes against that disposable
+database. Ignored cases include NATS-dependent integration, UI installation
+PG/NATS composition, Zot/Podman, publication guards, daemon TLS composition,
+and generated Connect doctests; this is not evidence for those paths.
+`cargo doc --workspace --all-features --no-deps` also passes
+(`/var/tmp/hephaestus-cargo-doc-workspace-all-gcp-sessionchat.log`). The four
+required Rust baseline commands are complete; the repository-wide quality gate
+and full runtime/cloud acceptance remain pending.
