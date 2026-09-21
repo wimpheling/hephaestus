@@ -629,11 +629,11 @@ collect_diagnostics() {
   if [[ "$selected_cooking_scenario" == session-chat ]]; then
     # The standalone session-chat runner does not execute Cooking's gateway
     # workload or browser-post-operation phase. Its browser phases are the
-    # initial creation, post-restart recovery, and concurrency journeys.
+    # initial creation, post-restart recovery, concurrency, and fork journeys.
     required_workload_phases=(
       browser-setup runtime-guest-build oci-image-materialization
       gateway-services-ready runtime-worker-build gateway-readiness
-      golden-tests database-tests browser-initial browser-recovery browser-concurrency
+      golden-tests database-tests browser-initial browser-recovery browser-concurrency browser-fork
     )
   else
     required_workload_phases=(

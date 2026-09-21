@@ -245,7 +245,8 @@ BROWSER_SUMMARY_STATES = {
     "complete", "missing", "partial", "malformed", "truncated", "report-error", "unknown",
 }
 BROWSER_SUMMARY_COUNT_FIELDS = {"passed", "failed", "skipped", "timed_out"}
-BROWSER_SUMMARY_PHASE_VALUES = {"initial", "post-operation"}
+BROWSER_SUMMARY_PHASE_VALUES = {"initial", "post-operation", "recovery", "concurrency", "fork"}
+BROWSER_SUMMARY_PHASE_ORDER = ("initial", "post-operation", "recovery", "concurrency", "fork")
 BROWSER_SUMMARY_REASON_CLASSES = {
     "browser-tests-not-passed", "browser-tests-failed", "clean-exit", "complete",
     "incomplete-phases", "invalid-report", "report-validation-failed", "timeout",
@@ -378,7 +379,7 @@ def _project_browser_summary(
             if (
                 not isinstance(item, list)
                 or len(item) > len(BROWSER_SUMMARY_PHASE_VALUES)
-                or item != sorted(item)
+                or item != [phase for phase in BROWSER_SUMMARY_PHASE_ORDER if phase in item]
                 or any(phase not in BROWSER_SUMMARY_PHASE_VALUES for phase in item)
                 or len(set(item)) != len(item)
             ):
@@ -388,7 +389,7 @@ def _project_browser_summary(
             if (
                 not isinstance(item, list)
                 or len(item) > len(BROWSER_SUMMARY_PHASE_VALUES)
-                or item != sorted(item)
+                or item != [phase for phase in BROWSER_SUMMARY_PHASE_ORDER if phase in item]
                 or any(phase not in BROWSER_SUMMARY_PHASE_VALUES for phase in item)
                 or len(set(item)) != len(item)
             ):

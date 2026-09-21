@@ -25,8 +25,14 @@ SESSION_PHASES = (
     "browser-initial",
     "browser-recovery",
     "browser-concurrency",
+    "browser-fork",
 )
-SESSION_BROWSER_PHASES = ("browser-initial", "browser-recovery", "browser-concurrency")
+SESSION_BROWSER_PHASES = (
+    "browser-initial",
+    "browser-recovery",
+    "browser-concurrency",
+    "browser-fork",
+)
 COOKING_PHASES = (
     "dependency-setup",
     "production-project-build",
@@ -61,6 +67,7 @@ PHASE_DOMAINS = {
     "browser-initial": "workload-libkrun",
     "browser-recovery": "workload-libkrun",
     "browser-concurrency": "workload-libkrun",
+    "browser-fork": "workload-libkrun",
     "browser-post-operation": "workload-libkrun",
 }
 
@@ -123,6 +130,7 @@ class GcpCookingScenarioContractTests(unittest.TestCase):
             "HEPHAESTUS_APP_SESSION_CHAT_BROWSER_E2E=1",
             "HEPHAESTUS_APP_SESSION_CHAT_RESTART_E2E=1",
             "HEPHAESTUS_APP_SESSION_CHAT_CONCURRENT_E2E=1",
+            "HEPHAESTUS_APP_SESSION_CHAT_FORK_E2E=1",
             "HEPHAESTUS_COOKING_BROWSER_E2E=1",
         ):
             self.assertIn(flag, session_branch)
@@ -337,6 +345,7 @@ class GcpCookingScenarioContractTests(unittest.TestCase):
                 "printf 'build=%s\\n' \"${HEPHAESTUS_APP_COOKING_BUILD_PROOF-unset}\" >>\"$SCENARIO_CAPTURE\"\n"
                 "printf 'browser=%s\\n' \"${HEPHAESTUS_APP_SESSION_CHAT_BROWSER_E2E-unset}\" >>\"$SCENARIO_CAPTURE\"\n"
                 "printf 'concurrent=%s\\n' \"${HEPHAESTUS_APP_SESSION_CHAT_CONCURRENT_E2E-unset}\" >>\"$SCENARIO_CAPTURE\"\n"
+                "printf 'fork=%s\\n' \"${HEPHAESTUS_APP_SESSION_CHAT_FORK_E2E-unset}\" >>\"$SCENARIO_CAPTURE\"\n"
                 "printf 'cooking=%s\\n' \"${HEPHAESTUS_APP_COOKING_E2E-unset}\" >>\"$SCENARIO_CAPTURE\"\n",
                 encoding="utf-8",
             )
@@ -385,6 +394,9 @@ class GcpCookingScenarioContractTests(unittest.TestCase):
                 "HEPHAESTUS_APP_SESSION_CHAT_CONCURRENT_E2E": (
                     "1" if scenario == "session-chat" else "0"
                 ),
+                "HEPHAESTUS_APP_SESSION_CHAT_FORK_E2E": (
+                    "1" if scenario == "session-chat" else "0"
+                ),
                 "PATH": f"{fake_bin}:{os.environ['PATH']}",
             }
             completed = subprocess.run(
@@ -411,6 +423,7 @@ class GcpCookingScenarioContractTests(unittest.TestCase):
                 "build": "1",
                 "browser": "1",
                 "concurrent": "1",
+                "fork": "1",
                 "cooking": "unset",
             },
         )

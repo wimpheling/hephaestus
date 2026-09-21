@@ -162,6 +162,17 @@ class PhaseTimingTests(unittest.TestCase):
             self.run_cli("project", "--path", str(concurrency), "--output", str(concurrency_projection))
             self.assertEqual(json.loads(concurrency_projection.read_text())["phases"][0]["phase"], "browser-concurrency")
 
+            fork = path.with_name("browser-fork.jsonl")
+            fork_args = self.common(fork, "browser-fork")
+            fork_args[fork_args.index("supervisor")] = "workload"
+            fork_args[fork_args.index("guest-runtime")] = "workload-libkrun"
+            self.run_cli("start", *fork_args)
+            self.run_cli("end", *fork_args, "--outcome", "passed")
+            self.run_cli("validate", "--path", str(fork), "--require-phase", "browser-fork")
+            fork_projection = fork.with_name("browser-fork-projection.json")
+            self.run_cli("project", "--path", str(fork), "--output", str(fork_projection))
+            self.assertEqual(json.loads(fork_projection.read_text())["phases"][0]["phase"], "browser-fork")
+
     def test_missing_and_duplicate_phases_fail_closed(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory) / "timing.jsonl"

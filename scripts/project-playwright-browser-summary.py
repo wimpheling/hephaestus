@@ -73,10 +73,18 @@ SESSION_CHAT_CONCURRENT_STAGES = (
     "session_chat_concurrent_stale_retry",
     "session_chat_concurrent_reconnect",
 )
+SESSION_CHAT_FORK_TEST_ID = "session_chat_fork"
+SESSION_CHAT_FORK_STAGES = (
+    "session_chat_fork_initialize",
+    "session_chat_fork_send",
+    "session_chat_fork_response",
+    "session_chat_fork_reconnect",
+)
 SESSION_CHAT_PHASES = {
     "initial": (SESSION_CHAT_TEST_ID, SESSION_CHAT_STAGES),
     "recovery": (SESSION_CHAT_RECOVERY_TEST_ID, SESSION_CHAT_RECOVERY_STAGES),
     "concurrency": (SESSION_CHAT_CONCURRENT_TEST_ID, SESSION_CHAT_CONCURRENT_STAGES),
+    "fork": (SESSION_CHAT_FORK_TEST_ID, SESSION_CHAT_FORK_STAGES),
 }
 SAFE_EVENT_KEYS = {
     "run_started": frozenset({"event", "test_count"}),
