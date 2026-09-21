@@ -869,3 +869,34 @@ that test fail with `invalid_projection`. The focused state/client/browser suite
 passes 23 tests (`/var/tmp/sessionchat-route-success-focused.log`), with the
 negative mutation proof in `/var/tmp/sessionchat-route-success-negative.log`.
 The browser rerun remains pending; no turn/recovery acceptance is inferred.
+
+Commits `d927054` and `f791d0c` wire the opt-in concurrency host phase and GCP
+selection/timing requirements. Host checks cover two correlated turns, exact
+receive/run provenance, four accepted receives, retained ancestry, and unchanged
+prior record blobs. Compilation, formatting, and strict golden-test Clippy pass;
+runtime concurrency remains unverified. Review also corrected model-payload role
+assertions to `user`, matching the released agent (Git actor roles remain human).
+
+Final18 reaches successful server provisioning and handoff but fails installed
+UI initialization. Final19 adds fixed, credential-free browser categories and
+confirms the expected document returns HTTP 200 with HTML content, the correct
+path and `Session chat` title, and the chat root/input present. Initialization
+still fails afterward, before any verified turn, recovery, or concurrency phase.
+The earlier title-failure inference is disproved. Evidence is retained in
+`/var/tmp/sessionchat-browser-final19-run.log` and
+`/var/tmp/sessionchat-browser-final19/browser.perlIe/playwright-results/session-chat-safe-diagnostics.jsonl`.
+
+Commit `ce659f1` fixes Playwright discovery of the concurrency spec and adds a
+forked-target browser spec. Exact selector listings each discover one test;
+TypeScript and nine safe-reporter tests pass. The fork spec is not host-wired or
+runtime-verified and does not complete fork acceptance.
+
+Final20 narrows the remaining initialization failure: installed UI context and
+Git discovery both return successful responses, context has the expected cache
+policy and shape, and discovery contains a canonical verified actor header.
+The UI then enters its connection error state. This does not yet identify the
+failing Git operation or prove any browser-backed turn. Fixed-category evidence:
+`/var/tmp/sessionchat-browser-final20/browser.2kxWYH/playwright-results/session-chat-safe-diagnostics.jsonl`.
+The pinned HTTP transport's header normalization matches the client; focused UI
+tests pass 19/19 (`/var/tmp/sessionchat-ui-focused-tests.log`), but those tests do
+not substitute for the failing installed-browser path.
