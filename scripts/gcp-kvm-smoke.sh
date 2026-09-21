@@ -54,8 +54,50 @@ gcloud_json_output=''
 gcloud_json_stderr=''
 controller_phase_timing_path="${HEPH_GCP_CONTROLLER_PHASE_TIMING_PATH:-${RUNNER_TEMP:-/tmp}/gcp-phase-timing-controller-${GITHUB_RUN_ID:-manual}-${GITHUB_RUN_ATTEMPT:-1}-$(date +%s%N)-$$.jsonl}"
 controller_phase_timing_open=''
+phase_timing_workload_required_args=()
 
 die() { printf 'gcp-kvm-smoke: %s\n' "$*" >&2; exit 1; }
+
+validate_cooking_scenario() {
+  case "$1" in
+    cooking|session-chat) ;;
+    *) die 'GCP_COOKING_SCENARIO must be cooking or session-chat' ;;
+  esac
+}
+
+set_phase_timing_workload_requirements() {
+  local scenario="$1"
+  validate_cooking_scenario "$scenario"
+  if [[ "$scenario" == session-chat ]]; then
+    phase_timing_workload_required_args=(
+      --require-workload-phase browser-setup
+      --require-workload-phase runtime-guest-build
+      --require-workload-phase oci-image-materialization
+      --require-workload-phase gateway-services-ready
+      --require-workload-phase runtime-worker-build
+      --require-workload-phase gateway-readiness
+      --require-workload-phase golden-tests
+      --require-workload-phase database-tests
+    )
+  else
+    phase_timing_workload_required_args=(
+      --require-workload-phase dependency-setup --require-workload-phase production-project-build
+      --require-workload-phase browser-setup
+      --require-workload-phase runtime-guest-build
+      --require-workload-phase runtime-worker-build
+      --require-workload-phase oci-image-materialization
+      --require-workload-phase gateway-edge-ready
+      --require-workload-phase gateway-services-ready
+      --require-workload-phase gateway-readiness
+      --require-workload-phase oci-builder
+      --require-workload-phase oci-verifier
+      --require-workload-phase golden-tests
+      --require-workload-phase database-tests
+      --require-workload-phase browser-initial
+      --require-workload-phase browser-post-operation
+    )
+  fi
+}
 
 controller_phase_timing_start() {
   local name="$1" source_sha="${GCP_WORKLOAD_SHA:-${validated_source_sha:-${GITHUB_SHA:-}}}"
@@ -422,6 +464,8 @@ _download_diagnostics() {
   local status_path="${GCP_DIAGNOSTICS_STATUS:-${RUNNER_TEMP:-/tmp}/gcp-diagnostics-status.json}"
   local extract_root="${destination}.extract" output digest archive_bytes download_timeout
   local phase_timing_status='not-applicable' phase_timing_error='' phase_timing_object phase_timing_destination phase_timing_staging
+  local cooking_scenario="${GCP_COOKING_SCENARIO:-cooking}"
+  validate_cooking_scenario "$cooking_scenario"
   local expected_mode="${GCP_DIAGNOSTICS_EXPECT_MODE:-}"
   local expected_gate_script_sha256="${GCP_DIAGNOSTICS_EXPECT_GATE_SCRIPT_SHA256:-}"
   local expectation_file="${RUNNER_TEMP:-/tmp}/gcp-diagnostics-gate-expectation"
@@ -608,6 +652,7 @@ PYGATE
     return 1
   fi
   if [[ "$expected_mode" == gcp-cooking && "${GCP_EXPECT_PHASE_TIMING:-false}" == true ]]; then
+    set_phase_timing_workload_requirements "$cooking_scenario"
     # Timing is required for acceptance, but a missing or invalid projection
     # must not discard the archive scan and triage already completed above.
     phase_timing_object="${object%.tar.gz}.phase-timing.json"
@@ -637,14 +682,7 @@ PYGATE
         --expected-source-sha "$diagnostics_source_sha" \
         --require-supervisor-phase archive --require-supervisor-phase evidence-scan \
         --require-supervisor-phase upload \
-        --require-workload-phase dependency-setup --require-workload-phase production-project-build \
-        --require-workload-phase browser-setup --require-workload-phase runtime-guest-build \
-        --require-workload-phase runtime-worker-build --require-workload-phase oci-image-materialization \
-        --require-workload-phase gateway-edge-ready --require-workload-phase gateway-services-ready \
-        --require-workload-phase gateway-readiness --require-workload-phase oci-builder \
-        --require-workload-phase oci-verifier --require-workload-phase golden-tests \
-        --require-workload-phase database-tests --require-workload-phase browser-initial \
-        --require-workload-phase browser-post-operation >/dev/null; then
+        "${phase_timing_workload_required_args[@]}" >/dev/null; then
       diagnostics_download_error='phase-timing-invalid'
       phase_timing_status='unavailable'
       phase_timing_error="$diagnostics_download_error"
@@ -1073,10 +1111,14 @@ if any(labels.get(k)!=v for k,v in expected.items()): raise SystemExit("ownershi
 
 smoke() {
   local mode="${1:-smoke}"
+  local cooking_scenario="${GCP_COOKING_SCENARIO:-cooking}"
   case "$mode" in
     smoke|gcp-cooking|diagnostic) ;;
     *) die "unsupported test mode: $mode" ;;
   esac
+  validate_cooking_scenario "$cooking_scenario"
+  [[ "$mode" == gcp-cooking || "$cooking_scenario" == cooking ]] ||
+    die 'GCP_COOKING_SCENARIO is supported only for gcp-cooking'
   [[ -f "$STARTUP_SCRIPT" && ! -L "$STARTUP_SCRIPT" ]] || die "startup script is unavailable or symlinked: $STARTUP_SCRIPT"
   [[ -f "$PASST_PREFLIGHT_SCRIPT" && ! -L "$PASST_PREFLIGHT_SCRIPT" ]] || die "passthrough preflight script is unavailable or symlinked: $PASST_PREFLIGHT_SCRIPT"
   if [[ "$mode" == smoke || "$mode" == gcp-cooking || "$mode" == diagnostic ]]; then
@@ -1203,6 +1245,7 @@ smoke() {
   if [[ "$mode" == gcp-cooking ]]; then
     [[ "$cache_generation" =~ ^[1-9][0-9]*$ ]] ||
       die 'cache preflight generation is unavailable for gcp-cooking'
+    metadata_values+=",cooking-scenario=${cooking_scenario}"
     metadata_values+=",cooking-runtime-script-sha256=${cooking_runtime_script_sha256},cooking-browser-summary-script-sha256=${cooking_browser_summary_script_sha256},phase-timing-script-sha256=${phase_timing_script_sha256}"
     metadata_values+=",cache-generation=${cache_generation}"
     if [[ "$pr_workload_mode" == true ]]; then

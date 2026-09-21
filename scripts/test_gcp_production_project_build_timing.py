@@ -6,6 +6,7 @@ from __future__ import annotations
 import importlib.util
 import json
 from pathlib import Path
+import re
 import subprocess
 import sys
 import tempfile
@@ -45,18 +46,18 @@ class ProductionProjectBuildTimingTests(unittest.TestCase):
         """The Rust producer's marker satisfies the strict production profile."""
 
         producer = GOLDEN_PATH.read_text(encoding="utf-8")
-        self.assertIn(
-            'WorkloadPhaseTimer::start("production-project-build", workload_phase_timing)',
+        timer_start_match = re.search(
+            r'WorkloadPhaseTimer::start\(\s*'
+            r'"production-project-build",\s*workload_phase_timing,?\s*\)',
             producer,
         )
+        self.assertIsNotNone(timer_start_match)
         self.assertIn("production_project_build_timer.finish(result.is_ok())", producer)
         self.assertIn(
             '"HEPH_GCP_COOKING event={WORKLOAD_PHASE_TIMING_EVENT} phase={} status={status} duration_ms={duration_ms}"',
             producer,
         )
-        timer_start = producer.index(
-            'WorkloadPhaseTimer::start("production-project-build", workload_phase_timing)'
-        )
+        timer_start = timer_start_match.start()
         build_call = producer.index("cooking_builds::build_and_publish(cooking_builds::CookingBuildContext", timer_start)
         await_end = producer.index(".await;", build_call)
         timer_finish = producer.index("production_project_build_timer.finish(result.is_ok())", await_end)
@@ -69,7 +70,10 @@ class ProductionProjectBuildTimingTests(unittest.TestCase):
         startup = (ROOT / "gcp-kvm-startup.sh").read_text(encoding="utf-8")
         smoke = (ROOT / "gcp-kvm-smoke.sh").read_text(encoding="utf-8")
         self.assertIn("dependency-setup production-project-build browser-setup", startup)
-        self.assertIn("--require-workload-phase dependency-setup --require-workload-phase production-project-build", startup)
+        self.assertIn(
+            'phase_timing_workload_required_args+=(--require-workload-phase "$required_phase")',
+            startup,
+        )
         self.assertIn("--require-workload-phase dependency-setup --require-workload-phase production-project-build", smoke)
 
         with tempfile.TemporaryDirectory() as directory:

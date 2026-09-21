@@ -47,6 +47,19 @@ timeout_seconds="${HEPHAESTUS_COOKING_TIMEOUT_SECONDS:-900}"
     printf 'HEPHAESTUS_COOKING_TIMEOUT_SECONDS must be a positive integer.\n' >&2
     exit 1
 }
+cooking_scenario="${HEPHAESTUS_COOKING_SCENARIO:-cooking}"
+case "${cooking_scenario}" in
+    cooking|session-chat) ;;
+    *)
+        printf 'HEPHAESTUS_COOKING_SCENARIO must be cooking or session-chat.\n' >&2
+        exit 1
+        ;;
+esac
+if [[ "${cooking_scenario}" == session-chat ]]; then
+    # The shared browser/OIDC/bridge lifecycle must see this before setup;
+    # the standalone runner receives the same flag again at invocation.
+    export HEPHAESTUS_COOKING_BROWSER_E2E=1
+fi
 diagnostics_dir="${HEPHAESTUS_COOKING_DIAGNOSTICS_DIR:-}"
 if [[ -n "${diagnostics_dir}" ]]; then
     [[ "${diagnostics_dir}" = /* && ! -L "${diagnostics_dir}" ]] || {
@@ -293,6 +306,26 @@ failure_diagnostics() {
 # Keep preflight, compilation and the VM process in one process group so the
 # deadline covers all work and timeout can terminate nested guests together.
 run_cooking() {
+    if [[ "${cooking_scenario}" == session-chat ]]; then
+        timeout --kill-after=30s "${run_timeout_seconds}s" env \
+            -u HEPHAESTUS_APP_COOKING_E2E \
+            HEPHAESTUS_COOKING_SCENARIO=session-chat \
+            HEPHAESTUS_APP_SESSION_CHAT_E2E=1 \
+            HEPHAESTUS_APP_LIBKRUN_E2E=1 \
+            HEPHAESTUS_APP_COOKING_BUILD_PROOF=1 \
+            HEPHAESTUS_APP_SESSION_CHAT_BROWSER_E2E=1 \
+            HEPHAESTUS_COOKING_BROWSER_E2E=1 \
+            HEPHAESTUS_COOKING_SOURCE_ROOT="${cooking_root}" \
+            HEPHAESTUS_LIBKRUN_UBUNTU_IMAGE="${python_image}" \
+            HEPHAESTUS_LIBKRUN_RUST_BUILDER_IMAGE="${rust_builder_image}" \
+            HEPH_GCP_PHASE_TIMING_PATH="${phase_timing_path}" \
+            HEPH_GCP_PHASE_TIMING_SOURCE_SHA="${phase_timing_source_sha}" \
+            HEPH_GCP_PHASE_TIMING_RUN_ID="${phase_timing_run_id}" \
+            HEPH_GCP_PHASE_TIMING_ATTEMPT="${phase_timing_attempt}" \
+            bash -Eeuo pipefail \
+            "${repo_root}/scripts/run-libkrun-integration.sh"
+        return
+    fi
     timeout --kill-after=30s "${run_timeout_seconds}s" env \
     HEPHAESTUS_APP_COOKING_E2E=1 \
     HEPHAESTUS_APP_COOKING_BUILD_PROOF=1 \

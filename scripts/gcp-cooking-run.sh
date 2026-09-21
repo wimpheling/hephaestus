@@ -78,9 +78,15 @@ runtime_phase_timing_cache_sha256=''
 runtime_phase_timing_cache_generation=''
 runtime_phase_timing_cache_bytes=''
 runtime_phase_timing_image_fingerprint="${HEPH_GCP_PHASE_TIMING_IMAGE_FINGERPRINT:-}"
+cooking_scenario="${HEPH_GCP_COOKING_SCENARIO:-cooking}"
 declare -A runtime_phase_timing_occurrence=()
 
 fail() { printf 'gcp-cooking-run: %s\n' "$*" >&2; return 1; }
+
+case "$cooking_scenario" in
+    cooking|session-chat) ;;
+    *) fail 'HEPH_GCP_COOKING_SCENARIO must be cooking or session-chat' ;;
+esac
 
 runtime_phase_timing_outcome() {
     case "$1" in
@@ -981,6 +987,34 @@ local workload_trust_value="${workload_trust:-trusted}"
 local workload_home_value="${workload_home:-/home/forge}"
 local workload_cargo_home_value="${workload_cargo_home:-/home/forge/.cargo}"
 local workload_rustup_home_value="${workload_rustup_home:-/home/forge/.rustup}"
+local selected_cooking_scenario="${cooking_scenario:-cooking}"
+local workload_scenario_env=()
+if [[ "$selected_cooking_scenario" == session-chat ]]; then
+    # Session-chat owns its standalone runner contract.  Do not set the
+    # Cooking scenario flag or manufacture Cooking workload phases here.
+    unset HEPHAESTUS_APP_COOKING_E2E
+    workload_scenario_env=(
+        "--setenv=HEPHAESTUS_APP_SESSION_CHAT_E2E=1"
+        "--setenv=HEPHAESTUS_APP_LIBKRUN_E2E=1"
+        "--setenv=HEPHAESTUS_APP_COOKING_BUILD_PROOF=1"
+        "--setenv=HEPHAESTUS_APP_SESSION_CHAT_BROWSER_E2E=1"
+        "--setenv=HEPHAESTUS_COOKING_BROWSER_E2E=1"
+        "--setenv=HEPHAESTUS_COOKING_SCENARIO=session-chat"
+        "--setenv=HEPHAESTUS_LIBKRUN_DIAGNOSTICS_DIR=$evidence_root"
+    )
+    printf 'HEPH_GCP_COOKING event=scenario-selected scenario=session-chat\n'
+else
+    workload_scenario_env=(
+        "--setenv=HEPHAESTUS_APP_COOKING_E2E=1"
+        "--setenv=HEPHAESTUS_APP_COOKING_BUILD_PROOF=1"
+        "--setenv=HEPHAESTUS_COOKING_UPDATE_E2E=1"
+        "--setenv=HEPHAESTUS_COOKING_OCI_BASE_IMPORT_DIAGNOSTIC=0"
+        "--setenv=HEPHAESTUS_APP_UPDATE_ADMISSION_E2E=0"
+        "--setenv=HEPHAESTUS_APP_UPDATE_ADMISSION_RACE_E2E=0"
+        "--setenv=HEPHAESTUS_COOKING_BROWSER_E2E=1"
+    )
+    printf 'HEPH_GCP_COOKING event=scenario-selected scenario=cooking\n'
+fi
 if [[ "$workload_trust_value" == untrusted-pr ]]; then
     # PR code is a forge workload.  Keep the KVM/passthrough devices and
     # network available, while hiding controller state, credentials, and the
@@ -1009,14 +1043,8 @@ timeout --kill-after=30s "${cooking_remaining}s" systemd-run \
     --setenv=HEPHAESTUS_LIBKRUN_UBUNTU_IMAGE="$runtime_python_ref" \
     --setenv=HEPHAESTUS_LIBKRUN_RUST_BUILDER_IMAGE="$runtime_rust_ref" \
     --setenv=HEPHAESTUS_COOKING_TIMEOUT_SECONDS="$cooking_timeout" \
-    --setenv=HEPHAESTUS_APP_COOKING_E2E=1 \
-    --setenv=HEPHAESTUS_APP_COOKING_BUILD_PROOF=1 \
-    --setenv=HEPHAESTUS_COOKING_UPDATE_E2E=1 \
-    --setenv=HEPHAESTUS_COOKING_OCI_BASE_IMPORT_DIAGNOSTIC=0 \
-    --setenv=HEPHAESTUS_APP_UPDATE_ADMISSION_E2E=0 \
-    --setenv=HEPHAESTUS_APP_UPDATE_ADMISSION_RACE_E2E=0 \
     --setenv=HEPHAESTUS_COOKING_DIAGNOSTICS_DIR="$evidence_root" \
-    --setenv=HEPHAESTUS_COOKING_BROWSER_E2E=1 \
+    "${workload_scenario_env[@]}" \
     --setenv=PLAYWRIGHT_BROWSERS_PATH="$browser_root" \
     --setenv=HEPH_GCP_PHASE_TIMING_PATH="$phase_timing_path" \
     --setenv=HEPH_GCP_PHASE_TIMING_SOURCE_SHA="${gate_results_revision:-unknown}" \
@@ -1179,7 +1207,8 @@ gate_update complete evidence-scan --state "$scan_gate_state" --exit-code "$scan
 gate_update begin browser-validation || true
 set +e
 run_with_deadline python3 -B "${browser_summary_script:-${checkout_root:-}/scripts/project-playwright-browser-summary.py}" \
-    "$evidence_root" "$evidence_root/browser-summary.json" --require-complete-journey
+    "$evidence_root" "$evidence_root/browser-summary.json" \
+    --scenario "$cooking_scenario" --require-complete-journey
 browser_summary_status=$?
 set -e
 browser_report_state='unknown'

@@ -75,6 +75,12 @@ on:
         required: false
         type: string
         default: '1'
+      cooking_scenario:
+        description: 'Allowlisted gcp-cooking workload scenario'
+        required: true
+        type: choice
+        options: [cooking, session-chat]
+        default: cooking
   pull_request:
   push:
     branches: [main]
@@ -131,6 +137,7 @@ jobs:
           GCP_PR_REPOSITORY_ID: ${{ inputs.pr_repository_id }}
           GCP_PR_HEAD_SHA: ${{ inputs.pr_head_sha }}
           GCP_WORKLOAD_SHA: ${{ inputs.pr_head_sha || github.sha }}
+          GCP_COOKING_SCENARIO: ${{ inputs.cooking_scenario || 'cooking' }}
           GCP_SMOKE_LOG: ${{ runner.temp }}/gcp-kvm-smoke.log
           GCP_DIAGNOSTICS_STATUS: ${{ runner.temp }}/gcp-diagnostics-status.json
           HEPH_GCP_CONTROLLER_PHASE_TIMING_PATH: ${{ runner.temp }}/gcp-phase-timing-controller.jsonl
@@ -204,6 +211,7 @@ jobs:
         if: ${{ always() && (inputs.cloud_mode == 'diagnostic' || inputs.cloud_mode == 'smoke' || inputs.cloud_mode == 'gcp-cooking') }}
         env:
           GCP_ZONE: ${{ inputs.gcp_zone || 'europe-west1-b' }}
+          GCP_COOKING_SCENARIO: ${{ inputs.cooking_scenario || 'cooking' }}
           GCP_WORKLOAD_SHA: ${{ inputs.pr_head_sha || github.sha }}
           HEPH_GCP_CONTROLLER_PHASE_TIMING_PATH: ${{ runner.temp }}/gcp-phase-timing-controller.jsonl
         run: bash scripts/gcp-kvm-smoke.sh cleanup
@@ -211,6 +219,7 @@ jobs:
         if: ${{ always() && (inputs.cloud_mode == 'diagnostic' || inputs.cloud_mode == 'smoke' || inputs.cloud_mode == 'gcp-cooking') }}
         env:
           GCP_ZONE: ${{ inputs.gcp_zone || 'europe-west1-b' }}
+          GCP_COOKING_SCENARIO: ${{ inputs.cooking_scenario || 'cooking' }}
           GCP_WORKLOAD_SHA: ${{ inputs.pr_head_sha || github.sha }}
           GCP_DIAGNOSTICS_ARCHIVE: ${{ runner.temp }}/gcp-diagnostics.tar.gz
           GCP_DIAGNOSTICS_STATUS: ${{ runner.temp }}/gcp-diagnostics-status.json
