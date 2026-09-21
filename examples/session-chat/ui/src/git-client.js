@@ -1,6 +1,9 @@
+import { Buffer } from "buffer";
 import git from "isomorphic-git";
 import http from "isomorphic-git/http/web";
 import LightningFS from "@isomorphic-git/lightning-fs";
+
+if (globalThis.Buffer === undefined) globalThis.Buffer = Buffer;
 import {
   MAIN_REF,
   SESSION_ROOT,
