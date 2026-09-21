@@ -58,7 +58,7 @@ complete create/code/run project journey.
   genuinely missing, using repository evidence and focused experiments.
 - [ ] Identify the smallest necessary changes for response publication,
   subscriptions, authorization and recovery before committing to an API design.
-- [ ] Record ownership of the visible transcript separately from agent-owned
+- [x] Record ownership of the visible transcript separately from agent-owned
   model context and internal workflow state.
 
 This is an audit of Hephaestus's own requirements and existing primitives.

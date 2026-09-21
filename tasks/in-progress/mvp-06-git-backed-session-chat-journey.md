@@ -481,12 +481,11 @@ preceding attempt is fixed by `b4bd671`; this historical run does not
 establish a successful chat turn or assistant commit and remains separate from
 the invalid `result.completed` assertion.
 
-The latest retained diagnostic (`/var/tmp/sessionchat-typed-diagnostic.log`)
+The earlier retained diagnostic (`/var/tmp/sessionchat-typed-diagnostic.log`)
 is run `b7db6b79-b0b6-4103-9bc4-6ccd0b6e4318`. It reached `vm.ready`, then
 cleaned up with outcome `failed`, exit 1, no guest exit signal, and
-`safe_agent_failures=["LocalGitError"]`. The run still did not reach
-`run.succeeded` or prove an assistant commit; the next investigation is the
-local-Git failure, not the already-fixed provenance boundary.
+`safe_agent_failures=["LocalGitError"]`. It remains historical evidence: the
+run did not reach `run.succeeded` or prove an assistant commit.
 
 The model-rule setup correction is implemented and pushed in `aff1233` through
 the additive `requested_rule_id` RPC field. Its command and RPC unit checks
@@ -494,10 +493,59 @@ pass, but the full production composed turn and browser proof remain open.
 
 Commits `b4bd671`, `aff1233`, `7992e83` and `d1318e2` are reflected in the
 current evidence: socket metadata and the provenance boundary are fixed and
-the latest lint-only change removes UI/documentation warnings. A global guest
-`PATH` change was rejected and reverted; interpreter launch remains
-release-owned work in progress and is not claimed as validated. Strict
-workspace Clippy is still pending.
+the latest lint-only change removes UI/documentation warnings. Commit
+`f20fb25` now supplies the release interpreter path and initializes the
+release Git identity while reporting a typed safe failure. Commit `666cb89`
+adds the verified runtime model-rule path and dynamic pinned-origin catalog.
+These are implementation changes, not full journey acceptance. A global guest
+`PATH` change was rejected and reverted. The interpreter is release-owned; the
+full journey remains unverified. Strict workspace Clippy is still pending.
+
+### Current request-time diagnosis and GCP promotion boundary (2026-09-21)
+
+The diagnosis10 request-time finding remains the cause record:
+`/var/tmp/sessionchat-runtime-git-stage-diagnosis10.log` reached `vm.ready`,
+then emitted `heph_git_auth_stage=runtime_admission_missing` before downstream
+authentication and ended with `git operation=push reason=auth returncode=128`.
+The latest terminal rerun is diagnosis11
+(`/var/tmp/sessionchat-runtime-git-fixed-diagnosis11.log`, run
+`a5ed7c86-6c73-41d0-a7d7-e0a4e465bfe3`). The challenge fix cleared the prior
+auth failure and repeatedly reached `runtime_authority_accepted`, but push now
+ends with `git operation=push reason=rejected returncode=1`; it still did not
+reach `run.succeeded`. The listener now supplies the Basic-auth challenge; no full
+journey success is claimed. Earlier `LocalGitError` and provenance results
+remain historical evidence.
+
+The premerge GCP trust boundary is defined by the reviewed controller path. The
+`gcp-cloud` job in [`cooking-e2e.yml`](../../.github/workflows/cooking-e2e.yml#L89)
+runs only from `refs/heads/main` on `workflow_dispatch`, with WIF pinned to the
+`main` workflow reference ([`docs/gcp-cooking-ci.md`](../../docs/gcp-cooking-ci.md#reviewed-same-repository-pr-controller)).
+The controller validates the operator-approved PR number, fixed repository ID
+`1312377552`, and exact head SHA before VM creation
+([`gcp-kvm-smoke.sh`](../../scripts/gcp-kvm-smoke.sh#L222)). The VM checks out
+that SHA as workload code, while main-revision startup stages hash-anchored
+runtime, gate, scanner, browser-summary and timing helpers; the reviewed image
+supplies only pinned preinstalled dependencies
+([`gcp-kvm-startup.sh`](../../scripts/gcp-kvm-startup.sh#L310)).
+
+The PR SHA therefore selects workload code only. Trusted
+`gcp-cooking-run.sh` invokes its `examples/cooking/run.sh` and exports the
+Cooking selector and typed gates ([`gcp-cooking-run.sh`](../../scripts/gcp-cooking-run.sh#L995));
+there is no session-chat input or generic selector. Premerge GCP cannot select
+chat through a PR workflow/controller/startup copy. Selectable chat validation
+requires the reviewed controller/workflow/runtime patch promoted to trusted
+`main`, preserving exact repository/SHA validation, private diagnostics,
+cleanup/post-delete checks and typed gate results. Merging those trusted-controller
+changes still requires user authorization; GCP integration remains within the
+requested scope.
+
+Until that promotion, the bounded premerge path remains the standalone local
+runner with `HEPHAESTUS_APP_SESSION_CHAT_E2E=1`,
+`HEPHAESTUS_APP_LIBKRUN_E2E=1` and
+`HEPHAESTUS_APP_COOKING_BUILD_PROOF=1`, without
+`HEPHAESTUS_APP_COOKING_E2E=1`; the browser extension is selected by
+`HEPHAESTUS_APP_SESSION_CHAT_BROWSER_E2E=1`. Those local results do not carry
+the GCP typed gate or trust-boundary acceptance.
 
 The focused web rerun passed 7 tests with 0 failures (`/tmp/heph-web-focused-tests-rerun.log`);
 the latest pre-commit web run passed 315 tests with 0 failures

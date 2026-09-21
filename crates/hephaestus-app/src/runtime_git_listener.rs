@@ -94,18 +94,18 @@ pub fn router(service: &GitHttpService) -> Router {
 }
 
 async fn admit_runtime_credential(request: Request<Body>, next: Next) -> Response {
-    if request
-        .headers()
-        .get(AUTHORIZATION)
-        .is_some_and(is_runtime_credential)
-    {
-        next.run(request).await
-    } else {
-        Response::builder()
-            .status(StatusCode::UNAUTHORIZED)
-            .body(Body::empty())
-            .expect("static response is valid")
+    match request.headers().get(AUTHORIZATION) {
+        Some(value) if is_runtime_credential(value) => next.run(request).await,
+        Some(_) | None => runtime_admission_denied_response(),
     }
+}
+
+fn runtime_admission_denied_response() -> Response<Body> {
+    Response::builder()
+        .status(StatusCode::UNAUTHORIZED)
+        .header("www-authenticate", r#"Basic realm="hephaestus-git""#)
+        .body(Body::empty())
+        .expect("static response is valid")
 }
 
 fn is_runtime_credential(value: &HeaderValue) -> bool {
@@ -195,13 +195,21 @@ mod tests {
         body::Body,
         http::{HeaderValue, Request, StatusCode},
         middleware,
-        routing::get,
+        routing::{any, get},
     };
     use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64_STANDARD};
-    use std::{fs, os::unix::fs::PermissionsExt};
+    use std::{
+        fs,
+        os::unix::fs::PermissionsExt,
+        sync::{
+            Arc,
+            atomic::{AtomicBool, Ordering},
+        },
+    };
     use tokio::{
         io::{AsyncReadExt, AsyncWriteExt},
-        net::UnixStream,
+        net::{TcpListener, UnixStream},
+        process::Command,
     };
     use tokio_util::sync::CancellationToken;
     use tower::ServiceExt;
@@ -243,6 +251,10 @@ mod tests {
             .await
             .expect("human response");
         assert_eq!(denied.status(), StatusCode::UNAUTHORIZED);
+        assert_eq!(
+            denied.headers()["www-authenticate"],
+            r#"Basic realm="hephaestus-git""#
+        );
 
         let runtime = BASE64_STANDARD.encode("heph-runtime:heph_git_v1_test");
         let accepted = router
@@ -256,6 +268,87 @@ mod tests {
             .await
             .expect("runtime response");
         assert_eq!(accepted.status(), StatusCode::OK);
+    }
+
+    #[tokio::test]
+    async fn native_git_retries_with_helper_after_runtime_basic_challenge() {
+        let directory = tempfile::tempdir().expect("credential helper directory");
+        let helper = directory.path().join("credential-helper");
+        fs::write(
+            &helper,
+            b"#!/bin/sh\nprintf '%s\\n' 'username=heph-runtime' 'password=heph_git_v1_test'\n",
+        )
+        .expect("write credential helper");
+        fs::set_permissions(&helper, fs::Permissions::from_mode(0o700))
+            .expect("protect credential helper");
+
+        let saw_authorization = Arc::new(AtomicBool::new(false));
+        let saw_authorization_handler = Arc::clone(&saw_authorization);
+        let router = Router::new()
+            .fallback(any(move |request: Request<Body>| {
+                let saw_authorization = Arc::clone(&saw_authorization_handler);
+                async move {
+                    if request.headers().contains_key("authorization") {
+                        saw_authorization.store(true, Ordering::Release);
+                    }
+                    (
+                        StatusCode::OK,
+                        Body::from("001e# service=git-upload-pack\n0000"),
+                    )
+                }
+            }))
+            .layer(middleware::from_fn(admit_runtime_credential));
+        let listener = TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("bind HTTP listener");
+        let address = listener.local_addr().expect("listener address");
+        let cancellation = CancellationToken::new();
+        let server_cancellation = cancellation.clone();
+        let server = tokio::spawn(async move {
+            axum::serve(listener, router)
+                .with_graceful_shutdown(server_cancellation.cancelled_owned())
+                .await
+                .expect("serve HTTP listener");
+        });
+
+        let output = tokio::time::timeout(
+            std::time::Duration::from_secs(5),
+            Command::new("/usr/bin/git")
+                .args([
+                    "-c",
+                    "credential.helper=",
+                    "-c",
+                    &format!("credential.helper=!{}", helper.display()),
+                    "-c",
+                    "credential.useHttpPath=true",
+                    "ls-remote",
+                    &format!("http://{address}/repository"),
+                ])
+                .env("GIT_CONFIG_NOSYSTEM", "1")
+                .env("GIT_CONFIG_GLOBAL", "/dev/null")
+                .env_remove("GIT_CONFIG_COUNT")
+                .env_remove("GIT_CONFIG_KEY_0")
+                .env_remove("GIT_CONFIG_VALUE_0")
+                .env("GIT_TERMINAL_PROMPT", "0")
+                .kill_on_drop(true)
+                .output(),
+        )
+        .await
+        .expect("native Git handshake timeout")
+        .expect("run native Git handshake");
+        cancellation.cancel();
+        server.await.expect("server task");
+
+        assert!(
+            saw_authorization.load(Ordering::Acquire),
+            "Git helper was not retried after challenge"
+        );
+        assert!(
+            !output
+                .stderr
+                .windows(b"heph_git_v1_test".len())
+                .any(|window| { window == b"heph_git_v1_test" })
+        );
     }
 
     #[tokio::test]
