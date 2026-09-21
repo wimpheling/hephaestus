@@ -88,7 +88,7 @@ the review rather than assumed to be complete.
   - [ ] Classify each transition as supported, awkward to integrate, or
     genuinely missing, and record the smallest required changes for response
     publication, subscriptions, authorization, and recovery.
-  - [ ] Record ownership of the visible transcript separately from
+  - [x] Record ownership of the visible transcript separately from
     agent-owned model context and internal workflow state.
 
 - [x] **2. Define the reference chat release's repository protocol**
@@ -500,6 +500,29 @@ are retained at `/tmp/forge-smart-http-runtime-matrix-migrations98-final4.log`
 and `/tmp/forge-smart-http-runtime-matrix-clippy-migrations98.log`. These are
 focused authority/denial checks, not full released-agent, browser, VM/model,
 or GCP journey acceptance.
+
+### Interactive-path ownership and transition audit (2026-09-21)
+
+The release protocol assigns the visible transcript to Git history: the first
+parent chain of `refs/heads/main`, followed by UTF-8 path order within each
+commit. User and assistant records are rendered after applying release-owned
+tombstones ([`examples/session-chat/PROTOCOL.md`](../../examples/session-chat/PROTOCOL.md#ordering-responses-and-concurrent-writers), [`examples/session-chat/ui/src/git-client.js`](../../examples/session-chat/ui/src/git-client.js#L96)).
+The agent's model context is separate release-owned state under the context
+namespace and is passed to the model but omitted from transcript rendering
+([`examples/session-chat/PROTOCOL.md`](../../examples/session-chat/PROTOCOL.md#forks-retention-and-model-context), [`examples/session-chat/agent.py`](../../examples/session-chat/agent.py#L201)).
+This is logical ownership, not a confidentiality boundary: ordinary Git
+repository readers can still read those context files.
+
+| Transition | Current classification and evidence |
+| --- | --- |
+| Durable human input → trigger/run | **Supported through the composed trigger.** The latest composed attempt reached a real run; its failure occurred during subsequent runtime preparation/provenance lookup, not at Git input acceptance. The release adapter's human append and expected-parent retry are implemented in [`examples/session-chat/ui/src/git-client.js`](../../examples/session-chat/ui/src/git-client.js#L162). |
+| Trigger/run → isolated runtime and model | **Partially supported, composition still failing.** The packaged agent reads the authorized checkout/control context and uses the brokered model path ([`examples/session-chat/agent.py`](../../examples/session-chat/agent.py#L180)); the latest run ended with `run runtime operation failed: runtime provenance query failed`, without establishing a response. |
+| Runtime → assistant Git response | **Release protocol supported; production acceptance missing.** Responses require `in_reply_to` and `correlation_id`, reject stale runs, and publish in one scoped batch ([`examples/session-chat/PROTOCOL.md`](../../examples/session-chat/PROTOCOL.md#ordering-responses-and-concurrent-writers), [`examples/session-chat/git_adapter.py`](../../examples/session-chat/git_adapter.py#L287)). No successful composed assistant commit has yet been correlated with runtime receive provenance. |
+| Assistant Git response → browser refresh/reconnect | **Adapter supported; end-to-end browser evidence missing.** The UI reads first-parent history and polls for the correlated response ([`examples/session-chat/ui/src/response-refresh.js`](../../examples/session-chat/ui/src/response-refresh.js#L47), [`examples/session-chat/ui/src/index.js`](../../examples/session-chat/ui/src/index.js#L42)). Local adapter/UI checks passed, but real browser HTTP and VM response acceptance remain open. |
+
+This audit records the release-owned transcript/context boundary and the
+current transition evidence; it does not complete the remaining audit
+workstream or any MVP-06 journey acceptance item.
 
 The completed task records the released protocol version and source revision;
 browser and real-Git evidence for session creation, turns, restart, and fork;
