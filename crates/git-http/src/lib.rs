@@ -611,6 +611,63 @@ pub struct GitHttpLimits {
     pub transaction_timeout: Duration,
 }
 
+/// One canonical Git endpoint selected by a trusted browser adapter.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AuthenticatedHumanGitEndpoint {
+    /// Clone advertisement.
+    CloneInfoRefs,
+    /// Push advertisement.
+    PushInfoRefs,
+    /// Fetch object transfer.
+    UploadPack,
+    /// Push object transfer and receive persistence.
+    ReceivePack,
+}
+
+impl AuthenticatedHumanGitEndpoint {
+    fn parameters(self) -> (GitOperation, &'static str, Option<String>, bool) {
+        match self {
+            Self::CloneInfoRefs => (
+                GitOperation::Clone,
+                "info/refs",
+                Some(String::from("service=git-upload-pack")),
+                false,
+            ),
+            Self::PushInfoRefs => (
+                GitOperation::Push,
+                "info/refs",
+                Some(String::from("service=git-receive-pack")),
+                false,
+            ),
+            Self::UploadPack => (GitOperation::Fetch, "git-upload-pack", None, false),
+            Self::ReceivePack => (GitOperation::Push, "git-receive-pack", None, true),
+        }
+    }
+
+    /// Returns the native endpoint name used by `git-http-backend`.
+    #[must_use]
+    pub const fn backend_endpoint(self) -> &'static str {
+        match self {
+            Self::CloneInfoRefs | Self::PushInfoRefs => "info/refs",
+            Self::UploadPack => "git-upload-pack",
+            Self::ReceivePack => "git-receive-pack",
+        }
+    }
+}
+
+/// One browser-origin Git request whose human identity was verified by the
+/// enclosing UI authority boundary.
+pub struct AuthenticatedHumanGitRequest {
+    /// Exact repository selected by the trusted adapter.
+    pub repository_id: RepositoryId,
+    /// Canonical endpoint and operation requested by the adapter.
+    pub endpoint: AuthenticatedHumanGitEndpoint,
+    /// Sanitized HTTP request body and transport headers.
+    pub request: Request<Body>,
+    /// Human identity selected by live UI authorization.
+    pub identity: AuthenticatedIdentity,
+}
+
 impl Default for GitHttpLimits {
     fn default() -> Self {
         Self {
@@ -674,6 +731,13 @@ impl GitHttpService {
         }
         self.runtime_receive_hook = Some(hook);
         Ok(self)
+    }
+
+    /// Returns the configured request and response ceilings for trusted
+    /// adapters that perform transport-level admission before execution.
+    #[must_use]
+    pub const fn limits(&self) -> &GitHttpLimits {
+        &self.limits
     }
 
     /// Builds Axum routes rooted at `/{repository_id}`.
@@ -802,6 +866,85 @@ async fn execute(
         Ok(principal) => principal,
         Err(error) => return authentication_error_response(&error.to_string()),
     };
+    execute_principal(
+        service,
+        GitExecutionRequest {
+            repository_id,
+            operation,
+            endpoint,
+            query,
+            principal,
+            request,
+            receive,
+        },
+    )
+    .await
+}
+
+/// Executes one Git transaction for a human identity already verified by an
+/// enclosing trusted boundary.
+///
+/// The public Git router never calls this path: it always authenticates its
+/// own bearer credential first. The call still performs Git's live repository
+/// authorization before invoking the backend.
+pub async fn execute_authenticated_human(
+    service: Arc<GitHttpService>,
+    authenticated: AuthenticatedHumanGitRequest,
+) -> Response<Body> {
+    let AuthenticatedHumanGitRequest {
+        repository_id,
+        endpoint,
+        mut request,
+        identity,
+    } = authenticated;
+    let (operation, endpoint_name, query, receive) = endpoint.parameters();
+    // Browser session credentials are consumed by the UI authority boundary;
+    // neither they nor a caller-supplied bearer token may reach Git.
+    request.headers_mut().remove(http::header::AUTHORIZATION);
+    request.headers_mut().remove(http::header::COOKIE);
+    let principal = Principal::human(identity);
+    execute_principal(
+        service,
+        GitExecutionRequest {
+            repository_id,
+            operation,
+            endpoint: endpoint_name,
+            query,
+            principal,
+            request,
+            receive,
+        },
+    )
+    .await
+}
+
+struct GitExecutionRequest {
+    repository_id: RepositoryId,
+    operation: GitOperation,
+    endpoint: &'static str,
+    query: Option<String>,
+    principal: Principal,
+    request: Request<Body>,
+    receive: bool,
+}
+
+// Keep the shared authorization, receive lock, streaming backend, and
+// persistence lifecycle together so public and trusted human entry points
+// cannot drift in security-critical ordering.
+#[allow(clippy::too_many_lines)]
+async fn execute_principal(
+    service: Arc<GitHttpService>,
+    execution: GitExecutionRequest,
+) -> Response<Body> {
+    let GitExecutionRequest {
+        repository_id,
+        operation,
+        endpoint,
+        query,
+        principal,
+        request,
+        receive,
+    } = execution;
     let runtime_receive_provenance = if receive {
         match &principal {
             Principal::Human(_) => None,
@@ -1545,9 +1688,10 @@ pub enum GitHttpError {
 #[cfg(test)]
 mod tests {
     use super::{
-        AuthorizationRequest, BackendEnvironment, GitAuthorizer, GitOperation,
-        PostgresGitAuthorizer, Principal, authentication_error_response, backend_command,
-        diff_refs, parse_basic_pat, parse_cgi_headers, pat_operation, validate_backend_path,
+        AuthenticatedHumanGitEndpoint, AuthorizationRequest, BackendEnvironment, GitAuthorizer,
+        GitOperation, PostgresGitAuthorizer, Principal, authentication_error_response,
+        backend_command, diff_refs, parse_basic_pat, parse_cgi_headers, pat_operation,
+        validate_backend_path,
     };
     use async_trait::async_trait;
     use authz_domain::{
@@ -1565,6 +1709,23 @@ mod tests {
     use uuid::Uuid;
 
     struct UnexpectedRuntimeDelegate;
+
+    #[test]
+    fn authenticated_endpoint_closes_operation_query_and_receive_semantics() {
+        assert_eq!(
+            AuthenticatedHumanGitEndpoint::CloneInfoRefs.parameters(),
+            (
+                GitOperation::Clone,
+                "info/refs",
+                Some(String::from("service=git-upload-pack")),
+                false
+            )
+        );
+        assert_eq!(
+            AuthenticatedHumanGitEndpoint::ReceivePack.parameters(),
+            (GitOperation::Push, "git-receive-pack", None, true)
+        );
+    }
 
     #[async_trait]
     impl GitRepositoryAuthorizer for UnexpectedRuntimeDelegate {

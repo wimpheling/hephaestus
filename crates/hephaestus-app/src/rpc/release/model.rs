@@ -383,7 +383,8 @@ pub(super) fn application_error(error: ReleaseError) -> super::super::RpcError {
 mod tests {
     use super::*;
     use release_domain::ui::{
-        UiIcon, UiKey, UiLabel, UiMediaType, UiPresentation, UiRoutePath, UiScope,
+        UiIcon, UiKey, UiLabel, UiMediaType, UiPresentation, UiRepositoryGitAccess, UiRoutePath,
+        UiScope,
     };
     use rpc_proto::messages::hephaestus::release::v1::release_ui_descriptor::Content;
     use uuid::Uuid;
@@ -399,6 +400,7 @@ mod tests {
             entrypoint: UiRoutePath::parse("index.html").expect("valid entrypoint"),
             ui_kit_version: 1,
             cache: ApplicationUiCachePolicy::NoStore,
+            repository_git_access: UiRepositoryGitAccess::None,
             content: ApplicationUiContent::Static { files: Vec::new() },
             apis: Vec::new(),
         }

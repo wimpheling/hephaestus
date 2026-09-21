@@ -11,6 +11,7 @@ mod ui_bootstrap;
 mod ui_browser_content;
 mod ui_origin_config;
 mod ui_origin_wiring;
+mod ui_repository_git;
 
 pub use ui_origin_config::{UiOriginConfig, UiOriginConfigError};
 
@@ -128,7 +129,10 @@ use release_postgres::{
     PgUiBrowserServingStore, PgUiBrowserSessionStore, PgUiGenerationHostResolver,
     PgUiRequestAuditRepository, ReleaseService, ReleaseServiceError,
 };
-use release_service::{BeginUpdateHook, UiBrowserSessionStore};
+use release_service::{
+    BeginUpdateHook, UiBrowserRepositoryGitAuthorization, UiBrowserSessionStore,
+    UiGenerationHostResolver,
+};
 use review_domain::CONTROL_EXECUTE_SUBJECT;
 use review_postgres::{GitRepositoryLocator, PostgresReviewRepository};
 use review_service::{NatsControlHandler, ReviewControlService, ReviewOutboxPublisher};
@@ -1725,6 +1729,7 @@ impl HephaestusApp {
     /// gateway configuration is reconciled.
     async fn build_ui_listener(
         &self,
+        git: Arc<GitHttpService>,
     ) -> Result<Option<(tokio::net::TcpListener, Router)>, AppError> {
         let Some(gateway) = &self.gateway_edge else {
             return Ok(None);
@@ -1753,7 +1758,7 @@ impl HephaestusApp {
         let audit_sink: Arc<dyn release_service::UiRequestAuditSink> = Arc::new(
             PgUiRequestAuditRepository::new(self.service_log_pool.clone()),
         );
-        let host_resolver: Arc<dyn release_service::UiGenerationHostResolver> = Arc::new(
+        let host_resolver: Arc<dyn UiGenerationHostResolver> = Arc::new(
             PgUiGenerationHostResolver::new(self.application_pool.clone()),
         );
         let bootstrap = Arc::new(ui_bootstrap::UiBootstrapState::new(
@@ -1762,14 +1767,16 @@ impl HephaestusApp {
             origin,
             Arc::clone(&audit_sink),
         ));
+        let serving_store = Arc::new(PgUiBrowserServingStore::new(self.application_pool.clone()));
         let serving: Arc<dyn release_service::UiBrowserHttpServingProjection> =
-            Arc::new(PgUiBrowserServingStore::new(self.application_pool.clone()));
+            serving_store.clone();
+        let git_authority: Arc<dyn UiBrowserRepositoryGitAuthorization> = serving_store;
         let gateway = gateway.ui_dispatcher.clone().ok_or_else(|| {
             AppError::Configuration(String::from("UI origin requires a real gateway dispatcher"))
         })?;
         let content = Arc::new(
             ui_browser_content::UiContentState::new(
-                host_resolver,
+                Arc::clone(&host_resolver),
                 serving,
                 Arc::new(self.artifact_store.clone()),
                 gateway,
@@ -1780,8 +1787,18 @@ impl HephaestusApp {
             )
             .map_err(component("UI content configuration"))?,
         );
+        let git = Arc::new(ui_repository_git::UiRepositoryGitState::new(
+            host_resolver,
+            git_authority,
+            git,
+            ui.namespace().clone(),
+            ui.public_port(),
+            Arc::clone(&audit_sink),
+        ));
         let router = ui_origin_wiring::bounded_ui_router_with_audit(
-            ui_bootstrap::router(bootstrap).merge(ui_browser_content::router(content)),
+            ui_bootstrap::router(bootstrap)
+                .merge(ui_repository_git::router(git))
+                .merge(ui_browser_content::router(content)),
             Arc::new(Semaphore::new(128)),
             Duration::from_secs(30),
             Arc::clone(&audit_sink),
@@ -1855,8 +1872,9 @@ impl HephaestusApp {
         let runtime_git_router = runtime_git_listener
             .as_ref()
             .map(|_| runtime_git_listener::router(git.as_ref()));
-        // Bind the optional UI listener after the shared Git listener setup.
-        let ui_listener = self.build_ui_listener().await?;
+        // Bind the optional UI listener after creating the shared Git service,
+        // so browser and public Git requests share repository receive locks.
+        let ui_listener = self.build_ui_listener(Arc::clone(&git)).await?;
         let broker = BrokerServer::bind(
             self.secret_broker_socket,
             Arc::clone(&self.secret_broker_executor),

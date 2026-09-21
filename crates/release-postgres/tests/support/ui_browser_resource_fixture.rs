@@ -1,5 +1,4 @@
-//! Shared real-PostgreSQL fixture for focused UI resource tests.
-
+/// Shared real-PostgreSQL fixture for focused UI resource tests.
 use release_domain::ui_browser::UiBrowserSessionSecret;
 use sqlx::PgPool;
 use uuid::Uuid;
@@ -13,6 +12,7 @@ pub struct Fixture {
     pub organization: Uuid,
     pub project: Uuid,
     pub source_project: Uuid,
+    pub repository: Uuid,
     pub release: Uuid,
     pub release_agent: Uuid,
     pub other_organization: Uuid,
@@ -264,15 +264,20 @@ async fn seed_fixture_reusing_installation_helpers_with_publication(
         sqlx::query(
             "INSERT INTO release_ui_descriptors
              (release_id, ui_key, scope, label, icon, presentation, route_base,
-              entrypoint, ui_kit_version, cache, content_kind)
+              entrypoint, ui_kit_version, cache, content_kind, repository_git_access)
              VALUES ($1, $2, $5, $3, 'app', 'iframe', $4,
-                     'index.html', 1, 'no_store', 'static')",
+                     'index.html', 1, 'no_store', 'static', $6)",
         )
         .bind(release)
         .bind(ui_key)
         .bind(ui_key)
         .bind(route_base)
         .bind(scope)
+        .bind(if scope == "repository" {
+            "read_write"
+        } else {
+            "none"
+        })
         .execute(worker)
         .await
         .expect("seed release UI descriptor");
@@ -317,7 +322,8 @@ async fn seed_fixture_reusing_installation_helpers_with_publication(
         "INSERT INTO release_ui_static_files
          (release_id, ui_key, route, artifact_id, artifact_kind, artifact_media_type)
          VALUES ($1, 'schema-ui', 'index.html', $2, 'file', 'text/html'),
-                ($1, 'schema-global', 'index.html', $2, 'file', 'text/html')",
+                ($1, 'schema-global', 'index.html', $2, 'file', 'text/html'),
+                ($1, 'schema-repository', 'index.html', $2, 'file', 'text/html')",
     )
     .bind(release)
     .bind(artifact)
@@ -481,6 +487,7 @@ async fn seed_fixture_reusing_installation_helpers_with_publication(
         organization,
         project,
         source_project,
+        repository,
         release,
         release_agent,
         other_organization,
@@ -642,8 +649,9 @@ async fn seed_repository_installation(
     .expect("seed repository UI installation");
     sqlx::query(
         "INSERT INTO ui_installation_generations
-         (id, installation_id, generation_no, release_id, ui_key, ui_scope)
-         VALUES ($1, $2, 1, $3, $4, 'repository')",
+         (id, installation_id, generation_no, release_id, ui_key, ui_scope,
+          repository_git_access)
+         VALUES ($1, $2, 1, $3, $4, 'repository', 'read_write')",
     )
     .bind(generation_id)
     .bind(installation_id)

@@ -67,7 +67,7 @@ async fn ui_browser_schema_matrix_enforces_bindings_lifecycle_timing_and_roles()
     sqlx::migrate!("../../migrations")
         .run(&bootstrap)
         .await
-        .expect("apply migrations through 0096");
+        .expect("apply migrations through 0097");
     let max_migration: i64 = sqlx::query_scalar::<_, Option<i64>>(
         "SELECT max(version) FROM _sqlx_migrations WHERE success",
     )
@@ -204,7 +204,7 @@ async fn ui_browser_application_authentication_is_generation_and_route_bound() {
     sqlx::migrate!("../../migrations")
         .run(&bootstrap)
         .await
-        .expect("apply migrations through 0096");
+        .expect("apply migrations through 0097");
     let worker = role_pool(&database_url, "hephaestus_worker").await;
     let app = role_pool(&database_url, "hephaestus_app").await;
     let fixture = seed_fixture_reusing_installation_helpers(&worker).await;
@@ -3151,7 +3151,7 @@ async fn ui_browser_issue_binds_current_authority_and_fresh_expiry() {
     sqlx::migrate!("../../migrations")
         .run(&bootstrap)
         .await
-        .expect("apply migrations through 0096");
+        .expect("apply migrations through 0097");
     let worker = role_pool(&database_url, "hephaestus_worker").await;
     let app = role_pool(&database_url, "hephaestus_app").await;
     let fixture = seed_fixture_reusing_installation_helpers(&worker).await;
@@ -3845,7 +3845,7 @@ async fn ui_browser_exchange_is_atomic_generation_bound_and_parent_capped() {
     sqlx::migrate!("../../migrations")
         .run(&bootstrap)
         .await
-        .expect("apply migrations through 0096");
+        .expect("apply migrations through 0097");
     let worker = role_pool(&database_url, "hephaestus_worker").await;
     let app = role_pool(&database_url, "hephaestus_app").await;
     let fixture = seed_fixture_reusing_installation_helpers(&worker).await;

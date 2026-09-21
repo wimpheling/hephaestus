@@ -37,7 +37,7 @@ impl UiRepositoryGitOperation {
 }
 
 /// Typed repository Git authority returned by the browser verifier.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct UiRepositoryGitAuthorization {
     /// Actual user selected by the live browser child session.
     pub actor_id: UserId,
@@ -45,6 +45,8 @@ pub struct UiRepositoryGitAuthorization {
     pub repository_id: RepositoryId,
     /// Effective approved access mode.
     pub access: release_domain::ui::UiRepositoryGitAccess,
+    /// Complete child-session context used by the durable UI audit boundary.
+    pub context: UiBrowserSessionContext,
 }
 
 /// Application-role port for reserved same-origin UI Git authorization.

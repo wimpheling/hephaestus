@@ -73,9 +73,16 @@ impl PgUiBrowserServingStore {
 
 #[derive(Debug, sqlx::FromRow)]
 struct GitAuthorizationRow {
+    session_id: Uuid,
+    parent_session_id: Uuid,
     actor_id: Uuid,
+    organization_id: Uuid,
+    installation_id: Uuid,
+    generation_id: Uuid,
     repository_id: Uuid,
     access: String,
+    session_route: String,
+    expires_at: OffsetDateTime,
 }
 
 #[async_trait]
@@ -94,8 +101,10 @@ impl UiBrowserRepositoryGitAuthorization for PgUiBrowserServingStore {
             .await
             .map_err(|_| UiGitAuthorizationError::Unavailable)?;
         let row = sqlx::query_as::<_, GitAuthorizationRow>(
-            "SELECT actor_id, repository_id, access
-             FROM public.resolve_ui_browser_repository_git_access($1, $2, $3, $4)",
+            "SELECT session_id, parent_session_id, actor_id, organization_id,
+                    installation_id, generation_id, repository_id, access,
+                    session_route, expires_at
+             FROM public.resolve_ui_browser_repository_git_context($1, $2, $3, $4)",
         )
         .bind(session_secret.digest().as_bytes().as_slice())
         .bind(expected_generation_id.as_uuid())
@@ -114,10 +123,23 @@ impl UiBrowserRepositoryGitAuthorization for PgUiBrowserServingStore {
             .commit()
             .await
             .map_err(|_| UiGitAuthorizationError::Unavailable)?;
+        let route = release_domain::ui_browser::UiBrowserRoute::parse(row.session_route)
+            .map_err(|_| UiGitAuthorizationError::Unavailable)?;
+        let context = release_service::UiBrowserSessionContext {
+            session_id: release_domain::ui_browser::UiBrowserSessionId::from_uuid(row.session_id),
+            parent_session_id: identity_domain::BrowserSessionId::from_uuid(row.parent_session_id),
+            actor_id: UserId::from_uuid(row.actor_id),
+            organization_id: forge_domain::OrganizationId::from_uuid(row.organization_id),
+            installation_id: release_domain::UiInstallationId::from_uuid(row.installation_id),
+            generation_id: UiInstallationGenerationId::from_uuid(row.generation_id),
+            route,
+            expires_at: row.expires_at,
+        };
         Ok(UiRepositoryGitAuthorization {
             actor_id: UserId::from_uuid(row.actor_id),
             repository_id: RepositoryId::from_uuid(row.repository_id),
             access,
+            context,
         })
     }
 }
