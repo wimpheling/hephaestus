@@ -424,6 +424,22 @@ hook and project navigation are wired. A read-only review confirmed production
 RPC field shapes and typed Git-ceiling selection semantics. Actual browser
 setup and the composed response journey remain acceptance work.
 
+### Runtime Git authority after secret binding (2026-09-21)
+
+Commit `13a39ae` fixes `BindSecret` revision creation to carry forward typed Git
+authority alongside the cloned generic capability binding. Repository scope,
+ref/path rules, operations, limits and exact-parent policy remain unchanged;
+the new publication binding points at the new revision's capability row.
+
+The focused secret-postgres Clippy checks and formatting passed. A fresh
+PostgreSQL regression with `HEPHAESTUS_POSTGRES_TEST_URL` passed the named
+`bind_secret_carries_runtime_git_authority_to_new_revision` test. Post-test SQL
+confirmed one seeded runtime-Git release agent and two typed binding rows,
+proving the test ran rather than returning through its optional-database skip.
+The disposable database was dropped. This supersedes an earlier ambiguous
+command report with a misspelled environment variable. The composed VM/model
+scenario still needs to verify this path in the complete journey.
+
 The completed task records the released protocol version and source revision;
 browser and real-Git evidence for session creation, turns, restart, and fork;
 the reference agent's allowed session-repository push and denied cross-repository
