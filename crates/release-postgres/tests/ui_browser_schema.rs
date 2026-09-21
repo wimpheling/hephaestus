@@ -18,7 +18,7 @@ use release_service::{
     UiBrowserHandoffError, UiBrowserRequestRoute, UiBrowserSessionContext, UiBrowserSessionError,
 };
 
-const EXPECTED_MIGRATION: i64 = 90;
+const EXPECTED_MIGRATION: i64 = 96;
 
 #[derive(Clone, Copy)]
 struct Fixture {
@@ -40,6 +40,10 @@ struct Fixture {
     global_generation: Uuid,
     repository_installation: Uuid,
     repository_generation: Uuid,
+    no_git_repository_installation: Uuid,
+    no_git_repository_generation: Uuid,
+    write_repository_installation: Uuid,
+    write_repository_generation: Uuid,
     managed_installation: Uuid,
     managed_generation: Uuid,
     managed_gateway: Uuid,
@@ -63,7 +67,7 @@ async fn ui_browser_schema_matrix_enforces_bindings_lifecycle_timing_and_roles()
     sqlx::migrate!("../../migrations")
         .run(&bootstrap)
         .await
-        .expect("apply migrations through 0090");
+        .expect("apply migrations through 0096");
     let max_migration: i64 = sqlx::query_scalar::<_, Option<i64>>(
         "SELECT max(version) FROM _sqlx_migrations WHERE success",
     )
@@ -200,7 +204,7 @@ async fn ui_browser_application_authentication_is_generation_and_route_bound() {
     sqlx::migrate!("../../migrations")
         .run(&bootstrap)
         .await
-        .expect("apply migrations through 0090");
+        .expect("apply migrations through 0096");
     let worker = role_pool(&database_url, "hephaestus_worker").await;
     let app = role_pool(&database_url, "hephaestus_app").await;
     let fixture = seed_fixture_reusing_installation_helpers(&worker).await;
@@ -818,6 +822,328 @@ async fn ui_browser_application_authentication_is_generation_and_route_bound() {
     assert_application_auth_tables_are_denied(&app).await;
 }
 
+#[tokio::test]
+#[serial]
+async fn ui_browser_repository_git_authority_is_explicit_and_live() {
+    let Some(database_url) = env::var("HEPHAESTUS_POSTGRES_TEST_URL").ok() else {
+        eprintln!("skipping UI browser Git authority: test URL is unset");
+        return;
+    };
+    let bootstrap = PgPoolOptions::new()
+        .max_connections(2)
+        .connect(&database_url)
+        .await
+        .expect("connect bootstrap PostgreSQL role");
+    sqlx::migrate!("../../migrations")
+        .run(&bootstrap)
+        .await
+        .expect("apply UI Git migrations");
+    let worker = role_pool(&database_url, "hephaestus_worker").await;
+    let app = role_pool(&database_url, "hephaestus_app").await;
+    let fixture = seed_fixture_reusing_installation_helpers(&worker).await;
+    let repository_id: Uuid =
+        sqlx::query_scalar("SELECT repository_id FROM ui_installations WHERE id = $1")
+            .bind(fixture.repository_installation)
+            .fetch_one(&worker)
+            .await
+            .expect("repository installation target");
+    let secret = scoped_secret(fixture.actor, test_secret(fixture.actor, 97));
+    insert_authenticated_child_for_installation(
+        &worker,
+        &fixture,
+        fixture.repository_installation,
+        fixture.repository_generation,
+        "schema-repository",
+        test_secret(fixture.actor, 97),
+    )
+    .await;
+    let digest = UiBrowserSessionSecret::from_bytes(secret)
+        .digest()
+        .as_bytes()
+        .to_vec();
+    let allowed: (Uuid, Uuid, String) = sqlx::query_as(
+        "SELECT actor_id, repository_id, access
+         FROM resolve_ui_browser_repository_git_access($1, $2, $3, 'read')",
+    )
+    .bind(&digest)
+    .bind(fixture.repository_generation)
+    .bind(repository_id)
+    .fetch_one(&app)
+    .await
+    .expect("approved repository Git read");
+    assert_eq!(allowed.0, fixture.actor);
+    assert_eq!(allowed.1, repository_id);
+    assert_eq!(allowed.2, "read");
+
+    insert_authenticated_child_for_installation(
+        &worker,
+        &fixture,
+        fixture.no_git_repository_installation,
+        fixture.no_git_repository_generation,
+        "schema-repository-no-git",
+        test_secret(fixture.actor, 99),
+    )
+    .await;
+    let no_git_digest = UiBrowserSessionSecret::from_bytes(test_secret(fixture.actor, 99))
+        .digest()
+        .as_bytes()
+        .to_vec();
+    let no_opt_in = sqlx::query_scalar::<_, Uuid>(
+        "SELECT repository_id
+         FROM resolve_ui_browser_repository_git_access($1, $2, $3, 'read')",
+    )
+    .bind(&no_git_digest)
+    .bind(fixture.no_git_repository_generation)
+    .bind(repository_id)
+    .fetch_optional(&app)
+    .await
+    .expect("no-opt-in denial query");
+    assert!(no_opt_in.is_none());
+
+    let wrong_repository = sqlx::query_scalar::<_, Uuid>(
+        "SELECT repository_id
+         FROM resolve_ui_browser_repository_git_access($1, $2, $3, 'read')",
+    )
+    .bind(&digest)
+    .bind(fixture.repository_generation)
+    .bind(fixture.source_project)
+    .fetch_optional(&app)
+    .await
+    .expect("wrong repository denial query");
+    assert!(wrong_repository.is_none());
+
+    insert_authenticated_child_for_installation(
+        &worker,
+        &fixture,
+        fixture.write_repository_installation,
+        fixture.write_repository_generation,
+        "schema-repository-write",
+        test_secret(fixture.actor, 100),
+    )
+    .await;
+    let write_digest = UiBrowserSessionSecret::from_bytes(test_secret(fixture.actor, 100))
+        .digest()
+        .as_bytes()
+        .to_vec();
+    let write_allowed = sqlx::query_scalar::<_, Uuid>(
+        "SELECT repository_id
+         FROM resolve_ui_browser_repository_git_access($1, $2, $3, 'write')",
+    )
+    .bind(&write_digest)
+    .bind(fixture.write_repository_generation)
+    .bind(repository_id)
+    .fetch_optional(&app)
+    .await
+    .expect("approved repository Git write query");
+    assert_eq!(write_allowed, Some(repository_id));
+
+    sqlx::query("DELETE FROM organization_members WHERE organization_id = $1 AND user_id = $2")
+        .bind(fixture.organization)
+        .bind(fixture.actor)
+        .execute(&worker)
+        .await
+        .expect("revoke write-level organization grant");
+    sqlx::query(
+        "DELETE FROM project_maintainers
+         WHERE user_id = $1 AND project_id IN ($2, $3)",
+    )
+    .bind(fixture.actor)
+    .bind(fixture.project)
+    .bind(fixture.source_project)
+    .execute(&worker)
+    .await
+    .expect("revoke direct project write grants");
+    sqlx::query("DELETE FROM repository_managers WHERE repository_id = $1 AND user_id = $2")
+        .bind(repository_id)
+        .bind(fixture.actor)
+        .execute(&worker)
+        .await
+        .expect("revoke direct repository write grant");
+    let write_without_grant = sqlx::query_scalar::<_, Uuid>(
+        "SELECT repository_id
+         FROM resolve_ui_browser_repository_git_access($1, $2, $3, 'write')",
+    )
+    .bind(&write_digest)
+    .bind(fixture.write_repository_generation)
+    .bind(repository_id)
+    .fetch_optional(&app)
+    .await
+    .expect("revoked write grant denial query");
+    assert!(write_without_grant.is_none());
+    sqlx::query(
+        "INSERT INTO organization_members (organization_id, user_id, role)
+         VALUES ($1, $2, 'owner') ON CONFLICT (organization_id, user_id)
+         DO UPDATE SET role = EXCLUDED.role",
+    )
+    .bind(fixture.organization)
+    .bind(fixture.actor)
+    .execute(&worker)
+    .await
+    .expect("restore write-level organization grant");
+    let write_without_declaration = sqlx::query_scalar::<_, Uuid>(
+        "SELECT repository_id
+         FROM resolve_ui_browser_repository_git_access($1, $2, $3, 'write')",
+    )
+    .bind(&digest)
+    .bind(fixture.repository_generation)
+    .bind(repository_id)
+    .fetch_optional(&app)
+    .await
+    .expect("read-only write denial query");
+    assert!(write_without_declaration.is_none());
+
+    let stale_generation = sqlx::query_scalar::<_, Uuid>(
+        "SELECT repository_id
+         FROM resolve_ui_browser_repository_git_access($1, $2, $3, 'read')",
+    )
+    .bind(&digest)
+    .bind(fixture.other_generation)
+    .bind(repository_id)
+    .fetch_optional(&app)
+    .await
+    .expect("stale generation denial query");
+    assert!(stale_generation.is_none());
+
+    let unknown_child = UiBrowserSessionSecret::from_bytes(test_secret(fixture.actor, 98))
+        .digest()
+        .as_bytes()
+        .to_vec();
+    let revoked_child = sqlx::query_scalar::<_, Uuid>(
+        "SELECT repository_id
+         FROM resolve_ui_browser_repository_git_access($1, $2, $3, 'read')",
+    )
+    .bind(&unknown_child)
+    .bind(fixture.repository_generation)
+    .bind(repository_id)
+    .fetch_optional(&app)
+    .await
+    .expect("unknown child denial query");
+    assert!(revoked_child.is_none());
+
+    let expired_secret = test_secret(fixture.actor, 101);
+    insert_expired_authenticated_child_for_installation(
+        &worker,
+        &fixture,
+        fixture.repository_installation,
+        fixture.repository_generation,
+        "schema-repository",
+        expired_secret,
+    )
+    .await;
+    let expired_digest = UiBrowserSessionSecret::from_bytes(expired_secret)
+        .digest()
+        .as_bytes()
+        .to_vec();
+    tokio::time::sleep(Duration::from_secs(2)).await;
+    let expired_child = sqlx::query_scalar::<_, Uuid>(
+        "SELECT repository_id
+         FROM resolve_ui_browser_repository_git_access($1, $2, $3, 'read')",
+    )
+    .bind(&expired_digest)
+    .bind(fixture.repository_generation)
+    .bind(repository_id)
+    .fetch_optional(&app)
+    .await
+    .expect("expired child denial query");
+    assert!(expired_child.is_none());
+
+    sqlx::query("UPDATE ui_installations SET lifecycle = 'disabled' WHERE id = $1")
+        .bind(fixture.repository_installation)
+        .execute(&worker)
+        .await
+        .expect("disable repository UI installation");
+    let disabled_installation = sqlx::query_scalar::<_, Uuid>(
+        "SELECT repository_id
+         FROM resolve_ui_browser_repository_git_access($1, $2, $3, 'read')",
+    )
+    .bind(&digest)
+    .bind(fixture.repository_generation)
+    .bind(repository_id)
+    .fetch_optional(&app)
+    .await
+    .expect("disabled installation denial query");
+    assert!(disabled_installation.is_none());
+    sqlx::query("UPDATE ui_installations SET lifecycle = 'enabled' WHERE id = $1")
+        .bind(fixture.repository_installation)
+        .execute(&worker)
+        .await
+        .expect("restore repository UI installation");
+
+    sqlx::query("DELETE FROM organization_members WHERE organization_id = $1 AND user_id = $2")
+        .bind(fixture.organization)
+        .bind(fixture.actor)
+        .execute(&worker)
+        .await
+        .expect("revoke live repository Git grants");
+    let revoked_grants = sqlx::query_scalar::<_, Uuid>(
+        "SELECT repository_id
+         FROM resolve_ui_browser_repository_git_access($1, $2, $3, 'read')",
+    )
+    .bind(&digest)
+    .bind(fixture.repository_generation)
+    .bind(repository_id)
+    .fetch_optional(&app)
+    .await
+    .expect("revoked grants denial query");
+    assert!(revoked_grants.is_none());
+    sqlx::query(
+        "INSERT INTO organization_members (organization_id, user_id, role)
+         VALUES ($1, $2, 'owner') ON CONFLICT (organization_id, user_id)
+         DO UPDATE SET role = EXCLUDED.role",
+    )
+    .bind(fixture.organization)
+    .bind(fixture.actor)
+    .execute(&worker)
+    .await
+    .expect("restore live repository Git grants");
+
+    // Release revocation is intentionally terminal, so keep this mutation as
+    // the final assertion in the disposable fixture.
+    sqlx::query(
+        "UPDATE releases
+         SET state = 'revoked', revoked_at = statement_timestamp()
+         WHERE id = $1",
+    )
+    .bind(fixture.release)
+    .execute(&worker)
+    .await
+    .expect("revoke published release");
+    let revoked_release = sqlx::query_scalar::<_, Uuid>(
+        "SELECT repository_id
+         FROM resolve_ui_browser_repository_git_access($1, $2, $3, 'read')",
+    )
+    .bind(&digest)
+    .bind(fixture.repository_generation)
+    .bind(repository_id)
+    .fetch_optional(&app)
+    .await
+    .expect("revoked release denial query");
+    assert!(revoked_release.is_none());
+    sqlx::query(
+        "UPDATE human_browser_sessions
+         SET revoked_at = statement_timestamp(), revocation_reason = 'logout'
+         WHERE id = $1",
+    )
+    .bind(fixture.parent_session)
+    .execute(&worker)
+    .await
+    .expect("revoke repository parent session");
+    let revoked_parent = sqlx::query_scalar::<_, Uuid>(
+        "SELECT repository_id
+         FROM resolve_ui_browser_repository_git_access($1, $2, $3, 'read')",
+    )
+    .bind(&digest)
+    .bind(fixture.repository_generation)
+    .bind(repository_id)
+    .fetch_optional(&app)
+    .await
+    .expect("revoked parent denial query");
+    assert!(revoked_parent.is_none());
+    println!(
+        "REAL_UI_BROWSER_REPOSITORY_GIT_AUTHORITY=1 opt_in=1 no_opt_in=1 wrong_repository=1 read_only_write_denied=1 write_allowed=1 write_grant_revoked=1 stale_generation=1 child_expired=1 parent_revoked=1 installation_disabled=1 release_revoked=1 grants_revoked=1"
+    );
+}
+
 async fn authenticate_static(
     store: &PgUiBrowserSessionStore,
     fixture: &Fixture,
@@ -880,6 +1206,10 @@ async fn seed_fixture_reusing_installation_helpers(worker: &PgPool) -> Fixture {
     let global_generation = Uuid::new_v4();
     let repository_installation = Uuid::new_v4();
     let repository_generation = Uuid::new_v4();
+    let no_git_repository_installation = Uuid::new_v4();
+    let no_git_repository_generation = Uuid::new_v4();
+    let write_repository_installation = Uuid::new_v4();
+    let write_repository_generation = Uuid::new_v4();
     let managed_installation = Uuid::new_v4();
     let managed_generation = Uuid::new_v4();
     let managed_gateway = Uuid::new_v4();
@@ -1066,13 +1396,30 @@ async fn seed_fixture_reusing_installation_helpers(worker: &PgPool) -> Fixture {
             "repository",
             "iframe",
         ),
+        (
+            "schema-repository-no-git",
+            "schema-repository-no-git",
+            "repository",
+            "iframe",
+        ),
+        (
+            "schema-repository-write",
+            "schema-repository-write",
+            "repository",
+            "iframe",
+        ),
     ] {
         sqlx::query(
             "INSERT INTO release_ui_descriptors
              (release_id, ui_key, scope, label, icon, presentation, route_base,
-              entrypoint, ui_kit_version, cache, content_kind)
+              entrypoint, ui_kit_version, cache, content_kind, repository_git_access)
              VALUES ($1, $2, $5, $3, 'app', $6, $4,
-                     'index.html', 1, 'no_store', 'static')",
+                     'index.html', 1, 'no_store', 'static',
+                     CASE
+                         WHEN $2 = 'schema-repository' THEN 'read'
+                         WHEN $2 = 'schema-repository-write' THEN 'read_write'
+                         ELSE 'none'
+                     END)",
         )
         .bind(release)
         .bind(ui_key)
@@ -1124,7 +1471,10 @@ async fn seed_fixture_reusing_installation_helpers(worker: &PgPool) -> Fixture {
         "INSERT INTO release_ui_static_files
          (release_id, ui_key, route, artifact_id, artifact_kind, artifact_media_type)
          VALUES ($1, 'schema-ui', 'index.html', $2, 'file', 'text/html'),
-                ($1, 'schema-global', 'index.html', $2, 'file', 'text/html')",
+                ($1, 'schema-global', 'index.html', $2, 'file', 'text/html'),
+                ($1, 'schema-repository', 'index.html', $2, 'file', 'text/html'),
+                ($1, 'schema-repository-no-git', 'index.html', $2, 'file', 'text/html'),
+                ($1, 'schema-repository-write', 'index.html', $2, 'file', 'text/html')",
     )
     .bind(release)
     .bind(artifact)
@@ -1234,6 +1584,28 @@ async fn seed_fixture_reusing_installation_helpers(worker: &PgPool) -> Fixture {
         repository,
     )
     .await;
+    seed_repository_installation(
+        worker,
+        no_git_repository_installation,
+        no_git_repository_generation,
+        release,
+        "schema-repository-no-git",
+        actor,
+        source_project,
+        repository,
+    )
+    .await;
+    seed_repository_installation(
+        worker,
+        write_repository_installation,
+        write_repository_generation,
+        release,
+        "schema-repository-write",
+        actor,
+        source_project,
+        repository,
+    )
+    .await;
     seed_project_installation(
         worker,
         other_installation,
@@ -1299,6 +1671,10 @@ async fn seed_fixture_reusing_installation_helpers(worker: &PgPool) -> Fixture {
         global_generation,
         repository_installation,
         repository_generation,
+        no_git_repository_installation,
+        no_git_repository_generation,
+        write_repository_installation,
+        write_repository_generation,
         managed_installation,
         managed_generation,
         managed_gateway,
@@ -1426,6 +1802,11 @@ async fn seed_repository_installation(
     project: Uuid,
     repository: Uuid,
 ) {
+    let repository_git_access = match ui_key {
+        "schema-repository" => "read",
+        "schema-repository-write" => "read_write",
+        _ => "none",
+    };
     let mut tx = worker
         .begin()
         .await
@@ -1447,13 +1828,15 @@ async fn seed_repository_installation(
     .expect("seed repository UI installation");
     sqlx::query(
         "INSERT INTO ui_installation_generations
-         (id, installation_id, generation_no, release_id, ui_key, ui_scope)
-         VALUES ($1, $2, 1, $3, $4, 'repository')",
+         (id, installation_id, generation_no, release_id, ui_key, ui_scope,
+          repository_git_access)
+         VALUES ($1, $2, 1, $3, $4, 'repository', $5)",
     )
     .bind(generation_id)
     .bind(installation_id)
     .bind(release_id)
     .bind(ui_key)
+    .bind(repository_git_access)
     .execute(&mut *tx)
     .await
     .expect("seed repository UI generation");
@@ -2178,6 +2561,47 @@ async fn insert_authenticated_child_for_installation(
     route: &str,
     session_secret: [u8; 32],
 ) -> Uuid {
+    insert_authenticated_child_for_installation_with_expiry(
+        pool,
+        fixture,
+        installation,
+        generation,
+        route,
+        session_secret,
+        false,
+    )
+    .await
+}
+
+async fn insert_expired_authenticated_child_for_installation(
+    pool: &PgPool,
+    fixture: &Fixture,
+    installation: Uuid,
+    generation: Uuid,
+    route: &str,
+    session_secret: [u8; 32],
+) -> Uuid {
+    insert_authenticated_child_for_installation_with_expiry(
+        pool,
+        fixture,
+        installation,
+        generation,
+        route,
+        session_secret,
+        true,
+    )
+    .await
+}
+
+async fn insert_authenticated_child_for_installation_with_expiry(
+    pool: &PgPool,
+    fixture: &Fixture,
+    installation: Uuid,
+    generation: Uuid,
+    route: &str,
+    session_secret: [u8; 32],
+    expired: bool,
+) -> Uuid {
     let handoff = Uuid::new_v4();
     sqlx::query(
         "INSERT INTO ui_browser_handoffs
@@ -2201,27 +2625,37 @@ async fn insert_authenticated_child_for_installation(
     .expect("insert installation-bound authentication handoff");
     let child_id = Uuid::new_v4();
     let mut tx = pool.begin().await.expect("begin installation-bound child");
-    sqlx::query(
+    let child_query = if expired {
+        "INSERT INTO ui_browser_sessions
+         (id, session_digest, request_id, handoff_id, parent_session_id,
+          installation_id, generation_id, organization_id, route, issued_at, expires_at)
+         SELECT $1, $2, $3, handoff.id, handoff.parent_session_id,
+                handoff.installation_id, handoff.generation_id, handoff.organization_id,
+                handoff.route, handoff.issued_at,
+                handoff.issued_at + interval '1 second'
+         FROM ui_browser_handoffs AS handoff WHERE handoff.id = $4"
+    } else {
         "INSERT INTO ui_browser_sessions
          (id, session_digest, request_id, handoff_id, parent_session_id,
           installation_id, generation_id, organization_id, route, issued_at, expires_at)
          SELECT $1, $2, $3, handoff.id, handoff.parent_session_id,
                 handoff.installation_id, handoff.generation_id, handoff.organization_id,
                 handoff.route, handoff.issued_at, handoff.issued_at + interval '1 hour'
-         FROM ui_browser_handoffs AS handoff WHERE handoff.id = $4",
-    )
-    .bind(child_id)
-    .bind(
-        UiBrowserSessionSecret::from_bytes(scoped_secret(fixture.actor, session_secret))
-            .digest()
-            .as_bytes()
-            .to_vec(),
-    )
-    .bind(Uuid::new_v4())
-    .bind(handoff)
-    .execute(&mut *tx)
-    .await
-    .expect("insert installation-bound authentication child");
+         FROM ui_browser_handoffs AS handoff WHERE handoff.id = $4"
+    };
+    sqlx::query(child_query)
+        .bind(child_id)
+        .bind(
+            UiBrowserSessionSecret::from_bytes(scoped_secret(fixture.actor, session_secret))
+                .digest()
+                .as_bytes()
+                .to_vec(),
+        )
+        .bind(Uuid::new_v4())
+        .bind(handoff)
+        .execute(&mut *tx)
+        .await
+        .expect("insert installation-bound authentication child");
     sqlx::query("UPDATE ui_browser_handoffs SET consumed_at = statement_timestamp() WHERE id = $1")
         .bind(handoff)
         .execute(&mut *tx)
@@ -2717,7 +3151,7 @@ async fn ui_browser_issue_binds_current_authority_and_fresh_expiry() {
     sqlx::migrate!("../../migrations")
         .run(&bootstrap)
         .await
-        .expect("apply migrations through 0090");
+        .expect("apply migrations through 0096");
     let worker = role_pool(&database_url, "hephaestus_worker").await;
     let app = role_pool(&database_url, "hephaestus_app").await;
     let fixture = seed_fixture_reusing_installation_helpers(&worker).await;
@@ -3411,7 +3845,7 @@ async fn ui_browser_exchange_is_atomic_generation_bound_and_parent_capped() {
     sqlx::migrate!("../../migrations")
         .run(&bootstrap)
         .await
-        .expect("apply migrations through 0090");
+        .expect("apply migrations through 0096");
     let worker = role_pool(&database_url, "hephaestus_worker").await;
     let app = role_pool(&database_url, "hephaestus_app").await;
     let fixture = seed_fixture_reusing_installation_helpers(&worker).await;

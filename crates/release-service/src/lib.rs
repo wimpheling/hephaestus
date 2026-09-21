@@ -34,9 +34,10 @@ pub use ui_browser_host::{
 };
 pub use ui_browser_serving::{
     ActiveUiGenerationHost, UiBrowserHttpPath, UiBrowserHttpPathError, UiBrowserHttpRequest,
-    UiBrowserHttpServingProjection, UiGatewayRequestKind, UiGatewayRequestProjection,
-    UiGenerationHostResolver, UiHostLookupError, UiServingError, UiServingProjection,
-    UiStaticArtifactProjection,
+    UiBrowserHttpServingProjection, UiBrowserRepositoryGitAuthorization, UiGatewayRequestKind,
+    UiGatewayRequestProjection, UiGenerationHostResolver, UiGitAuthorizationError,
+    UiHostLookupError, UiRepositoryGitAuthorization, UiRepositoryGitOperation, UiServingError,
+    UiServingProjection, UiStaticArtifactProjection,
 };
 pub use ui_installation::{
     ActivateUiInstallation, DisableUiInstallation, InstallStaticUi, InstallStaticUiResult,

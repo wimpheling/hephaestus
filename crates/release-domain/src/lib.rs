@@ -1180,6 +1180,9 @@ pub enum ReleaseValueError {
     /// UI label is empty, oversized, or contains a control character.
     #[error("UI label is invalid")]
     InvalidUiLabel,
+    /// UI repository Git access declaration is not one of the supported values.
+    #[error("invalid UI repository Git access")]
+    InvalidUiRepositoryGitAccess,
     /// UI declaration schema version is unsupported.
     #[error("UI schema version is unsupported")]
     UnsupportedUiSchemaVersion,

@@ -4,6 +4,7 @@
 //! listener or HTTP-cookie code.
 
 use async_trait::async_trait;
+use forge_domain::RepositoryId;
 use identity_domain::{RequestId, UserId};
 use release_domain::{
     ContentHash, ReleaseArtifactId, UiInstallationGenerationId,
@@ -17,9 +18,10 @@ use uuid::Uuid;
 use release_service::ui_browser_host::UiGenerationHost;
 use release_service::ui_browser_serving::{
     ActiveUiGenerationHost, UiBrowserHttpPath, UiBrowserHttpRequest,
-    UiBrowserHttpServingProjection, UiGatewayRequestKind, UiGatewayRequestProjection,
-    UiGenerationHostResolver, UiHostLookupError, UiServingError, UiServingProjection,
-    UiStaticArtifactProjection,
+    UiBrowserHttpServingProjection, UiBrowserRepositoryGitAuthorization, UiGatewayRequestKind,
+    UiGatewayRequestProjection, UiGenerationHostResolver, UiGitAuthorizationError,
+    UiHostLookupError, UiRepositoryGitAuthorization, UiRepositoryGitOperation, UiServingError,
+    UiServingProjection, UiStaticArtifactProjection,
 };
 
 /// App-pool implementation of the metadata-free active-generation host read.
@@ -66,6 +68,57 @@ impl PgUiBrowserServingStore {
     #[must_use]
     pub const fn new(app_pool: PgPool) -> Self {
         Self { app_pool }
+    }
+}
+
+#[derive(Debug, sqlx::FromRow)]
+struct GitAuthorizationRow {
+    actor_id: Uuid,
+    repository_id: Uuid,
+    access: String,
+}
+
+#[async_trait]
+impl UiBrowserRepositoryGitAuthorization for PgUiBrowserServingStore {
+    async fn authorize_repository_git(
+        &self,
+        request_id: RequestId,
+        session_secret: release_domain::ui_browser::UiBrowserSessionSecret,
+        expected_generation_id: UiInstallationGenerationId,
+        repository_id: RepositoryId,
+        operation: UiRepositoryGitOperation,
+    ) -> Result<UiRepositoryGitAuthorization, UiGitAuthorizationError> {
+        let mut transaction = self
+            .app_pool
+            .begin()
+            .await
+            .map_err(|_| UiGitAuthorizationError::Unavailable)?;
+        let row = sqlx::query_as::<_, GitAuthorizationRow>(
+            "SELECT actor_id, repository_id, access
+             FROM public.resolve_ui_browser_repository_git_access($1, $2, $3, $4)",
+        )
+        .bind(session_secret.digest().as_bytes().as_slice())
+        .bind(expected_generation_id.as_uuid())
+        .bind(repository_id.as_uuid())
+        .bind(operation.as_str())
+        .fetch_optional(&mut *transaction)
+        .await
+        .map_err(|_| UiGitAuthorizationError::Unavailable)?
+        .ok_or(UiGitAuthorizationError::Unauthorized)?;
+        let access = release_domain::ui::UiRepositoryGitAccess::parse(row.access)
+            .map_err(|_| UiGitAuthorizationError::Unavailable)?;
+        set_verified_actor_context(&mut transaction, row.actor_id, request_id)
+            .await
+            .map_err(|_| UiGitAuthorizationError::Unavailable)?;
+        transaction
+            .commit()
+            .await
+            .map_err(|_| UiGitAuthorizationError::Unavailable)?;
+        Ok(UiRepositoryGitAuthorization {
+            actor_id: UserId::from_uuid(row.actor_id),
+            repository_id: RepositoryId::from_uuid(row.repository_id),
+            access,
+        })
     }
 }
 

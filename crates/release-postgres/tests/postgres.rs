@@ -1603,6 +1603,7 @@ async fn install_ui_pins_active_gateway_revision_and_exact_published_routes() {
                 release_id,
                 ui_key: release_domain::ui::UiKey::parse("assistant").expect("UI key"),
                 expected_organization_id: None,
+                acknowledge_repository_git_access: false,
             },
         )
         .await
@@ -1667,6 +1668,7 @@ async fn install_ui_pins_active_gateway_revision_and_exact_published_routes() {
                 release_id,
                 ui_key: release_domain::ui::UiKey::parse("assistant").expect("UI key"),
                 expected_organization_id: None,
+                acknowledge_repository_git_access: false,
             },
         )
         .await
@@ -1764,6 +1766,7 @@ async fn install_ui_pins_active_gateway_revision_and_exact_published_routes() {
                 release_id,
                 ui_key: release_domain::ui::UiKey::parse("assistant").expect("UI key"),
                 expected_organization_id: None,
+                acknowledge_repository_git_access: false,
             },
         )
         .await
@@ -1817,6 +1820,7 @@ async fn install_ui_pins_active_gateway_revision_and_exact_published_routes() {
                 release_id: global_release,
                 ui_key: release_domain::ui::UiKey::parse("assistant").expect("UI key"),
                 expected_organization_id: None,
+                acknowledge_repository_git_access: false,
             },
         )
         .await
@@ -1863,6 +1867,7 @@ async fn install_ui_pins_active_gateway_revision_and_exact_published_routes() {
                 release_id: invalid_release,
                 ui_key: release_domain::ui::UiKey::parse("assistant").expect("UI key"),
                 expected_organization_id: None,
+                acknowledge_repository_git_access: false,
             },
         )
         .await;
@@ -2383,6 +2388,7 @@ async fn install_ui_expected_organization_is_checked_before_replay() {
                 release_id,
                 ui_key: release_domain::ui::UiKey::parse("docs").expect("UI key"),
                 expected_organization_id: Some(foreign_organization),
+                acknowledge_repository_git_access: false,
             },
         )
         .await;
@@ -2401,6 +2407,7 @@ async fn install_ui_expected_organization_is_checked_before_replay() {
                 release_id,
                 ui_key: release_domain::ui::UiKey::parse("docs").expect("UI key"),
                 expected_organization_id: Some(fixture.organization),
+                acknowledge_repository_git_access: false,
             },
         )
         .await
@@ -2416,6 +2423,7 @@ async fn install_ui_expected_organization_is_checked_before_replay() {
                 release_id,
                 ui_key: release_domain::ui::UiKey::parse("docs").expect("UI key"),
                 expected_organization_id: Some(fixture.organization),
+                acknowledge_repository_git_access: false,
             },
         )
         .await
@@ -2429,6 +2437,7 @@ async fn install_ui_expected_organization_is_checked_before_replay() {
                 release_id,
                 ui_key: release_domain::ui::UiKey::parse("docs").expect("UI key"),
                 expected_organization_id: Some(foreign_organization),
+                acknowledge_repository_git_access: false,
             },
         )
         .await;
@@ -2600,6 +2609,7 @@ async fn assert_installation_denied_without_receipt_as(
                 release_id,
                 ui_key: release_domain::ui::UiKey::parse("assistant").expect("UI key"),
                 expected_organization_id: None,
+                acknowledge_repository_git_access: false,
             },
         )
         .await;

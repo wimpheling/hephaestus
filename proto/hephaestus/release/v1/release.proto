@@ -220,6 +220,13 @@ enum ReleaseUiCachePolicy {
   RELEASE_UI_CACHE_POLICY_NO_STORE = 1;
 }
 
+enum ReleaseUiRepositoryGitAccess {
+  RELEASE_UI_REPOSITORY_GIT_ACCESS_UNSPECIFIED = 0;
+  RELEASE_UI_REPOSITORY_GIT_ACCESS_NONE = 1;
+  RELEASE_UI_REPOSITORY_GIT_ACCESS_READ = 2;
+  RELEASE_UI_REPOSITORY_GIT_ACCESS_READ_WRITE = 3;
+}
+
 message ReleaseUiDescriptor {
   string key = 1;
   ReleaseUiScope scope = 2;
@@ -237,6 +244,7 @@ message ReleaseUiDescriptor {
     ReleaseUiManagedService managed_service = 11;
   }
   repeated ReleaseUiApiBinding apis = 12;
+  ReleaseUiRepositoryGitAccess repository_git_access = 13;
 }
 
 message ReleaseUiStaticContent {
@@ -306,6 +314,8 @@ message InstallUiRequest {
   hephaestus.common.v1.OpaqueId release_id = 4;
   // Exact published descriptor key within release_id.
   string ui_key = 5;
+  // Required acknowledgement when the descriptor declares repository Git access.
+  bool acknowledge_repository_git_access = 6;
 }
 message InstallUiResponse {
   hephaestus.common.v1.OpaqueId installation_id = 1;

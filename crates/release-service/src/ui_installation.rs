@@ -22,6 +22,8 @@ pub struct InstallUi {
     /// Optional tenant expectation supplied by the external RPC boundary.
     /// Static compatibility callers leave this unset.
     pub expected_organization_id: Option<OrganizationId>,
+    /// Explicitly approves the release-declared repository Git authority.
+    pub acknowledge_repository_git_access: bool,
 }
 
 /// Result of a committed UI installation.

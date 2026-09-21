@@ -3,7 +3,7 @@ use super::{
     RepositoryUisConfig, UI_KIT_VERSION, UiContent,
 };
 use crate::Diagnostic;
-use release_domain::ui::UiRoutePath;
+use release_domain::ui::{UiRepositoryGitAccess, UiRoutePath, UiScope};
 use std::collections::HashSet;
 
 pub(super) fn validate(config: &RepositoryUisConfig) -> Vec<Diagnostic> {
@@ -52,6 +52,16 @@ pub(super) fn validate(config: &RepositoryUisConfig) -> Vec<Diagnostic> {
             );
         }
         validate_scope_duplicates(&mut diagnostics, config, index, ui);
+        if !matches!(ui.scope, UiScope::Repository)
+            && !matches!(ui.repository_git_access, UiRepositoryGitAccess::None)
+        {
+            diagnostic(
+                &mut diagnostics,
+                "repository_git_access_requires_repository_scope",
+                format!("{path}.repository_git_access"),
+                "generic repository Git access requires a repository-scoped UI",
+            );
+        }
         validate_api_bindings(&mut diagnostics, index, ui);
         validate_content(&mut diagnostics, index, ui);
     }

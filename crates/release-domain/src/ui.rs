@@ -207,6 +207,51 @@ pub enum UiScope {
     Global,
 }
 
+/// Generic repository Git authority explicitly declared by a release UI.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum UiRepositoryGitAccess {
+    /// The UI receives no repository Git authority.
+    None,
+    /// The UI may read the explicitly bound repository.
+    Read,
+    /// The UI may read and write the explicitly bound repository.
+    ReadWrite,
+}
+
+impl UiRepositoryGitAccess {
+    /// Returns the stable database and manifest spelling.
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::None => "none",
+            Self::Read => "read",
+            Self::ReadWrite => "read_write",
+        }
+    }
+
+    /// Parses the stable database and manifest spelling.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ReleaseValueError::InvalidUiRepositoryGitAccess`] for an
+    /// unknown value.
+    pub fn parse(value: impl AsRef<str>) -> Result<Self, ReleaseValueError> {
+        match value.as_ref() {
+            "none" => Ok(Self::None),
+            "read" => Ok(Self::Read),
+            "read_write" => Ok(Self::ReadWrite),
+            _ => Err(ReleaseValueError::InvalidUiRepositoryGitAccess),
+        }
+    }
+}
+
+impl Default for UiRepositoryGitAccess {
+    fn default() -> Self {
+        Self::None
+    }
+}
+
 /// Initial host presentation for a release UI.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]

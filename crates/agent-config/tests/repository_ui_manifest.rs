@@ -5,6 +5,7 @@ use agent_config::ui::{
     REPOSITORY_UIS_VERSION, UI_KIT_VERSION,
 };
 use agent_config::{parse_repository_uis, ui::ParsedRepositoryUis};
+use release_domain::ui::UiRepositoryGitAccess;
 use sha2::{Digest, Sha256};
 use std::fmt::Write as _;
 
@@ -65,6 +66,42 @@ fn parses_static_and_managed_service_declarations() {
     let config = parsed.config.expect("valid UI manifest");
     assert_eq!(config.version, REPOSITORY_UIS_VERSION);
     assert_eq!(config.uis.len(), 2);
+}
+
+#[test]
+fn repository_git_access_defaults_for_legacy_manifests_and_parses_explicit_values() {
+    let legacy = parse_repository_uis(VALID_STATIC.as_bytes());
+    let legacy_config = legacy.config.expect("valid legacy UI manifest");
+    assert!(
+        legacy_config
+            .uis
+            .iter()
+            .all(|ui| ui.repository_git_access == UiRepositoryGitAccess::None)
+    );
+
+    let read = VALID_STATIC.replace(
+        "scope = \"project\"\nlabel = \"Assistant\"",
+        "scope = \"repository\"\nlabel = \"Assistant\"\nrepository_git_access = \"read\"",
+    );
+    let read_config = parse_repository_uis(read.as_bytes())
+        .config
+        .expect("valid read-authorized UI manifest");
+    assert_eq!(
+        read_config.uis[0].repository_git_access,
+        UiRepositoryGitAccess::Read
+    );
+
+    let write = read.replace(
+        "repository_git_access = \"read\"",
+        "repository_git_access = \"read_write\"",
+    );
+    let write_config = parse_repository_uis(write.as_bytes())
+        .config
+        .expect("valid write-authorized UI manifest");
+    assert_eq!(
+        write_config.uis[0].repository_git_access,
+        UiRepositoryGitAccess::ReadWrite
+    );
 }
 
 #[test]
