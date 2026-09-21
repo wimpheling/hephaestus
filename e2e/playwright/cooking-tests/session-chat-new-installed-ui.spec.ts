@@ -65,6 +65,9 @@ test("cooking new session chat creates and opens a real Git-backed browser sessi
         return false;
       }
     }, {timeout: 60_000});
+    void documentResponse.catch(() => undefined);
+    void contextResponse.catch(() => undefined);
+    void discoveryResponse.catch(() => undefined);
     await page.getByRole("button", {name: "Create and open chat"}).click();
 
     const document = await documentResponse;
