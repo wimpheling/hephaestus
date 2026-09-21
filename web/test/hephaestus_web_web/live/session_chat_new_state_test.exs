@@ -46,6 +46,16 @@ defmodule HephaestusWebWeb.SessionChatNewStateTest do
     assert effects == [{:flash, :error, "The selected release is no longer available."}]
   end
 
+  test "rejects an invalid instance name before creating a repository" do
+    state = composition_state()
+    attributes = Map.put(composition_attributes(), "instance_name", "Browser session chat")
+
+    assert {:created, {:error, :invalid_instance_name}} =
+             SessionChatNewState.execute(state, {:create, :identity, attributes})
+
+    refute Process.get(:session_chat_fake_calls)
+  end
+
   test "retains IDs created before a later composition step fails" do
     state = SessionChatNewState.new("project-1")
     progress = %{"repository_id" => "repo-1", "instance_id" => "instance-1"}
@@ -81,6 +91,9 @@ defmodule HephaestusWebWeb.SessionChatNewStateTest do
              SessionChatNewState.execute(retry_state, {:create, :identity, attributes})
 
     assert %{"model_rule_id" => model_rule_id} = Process.get(:session_chat_import_parameters)
+
+    assert Process.get(:session_chat_import_release_agent_id) == "release-agent-1"
+    assert Process.get(:session_chat_import_name) == "session-chat"
 
     assert Regex.match?(
              ~r/\A[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}\z/i,
@@ -190,7 +203,7 @@ defmodule HephaestusWebWeb.SessionChatNewStateTest do
     %{
       "repository_name" => "session-chat",
       "default_branch" => "main",
-      "instance_name" => "Session chat",
+      "instance_name" => "session-chat",
       "release_agent_id" => "release-agent-1",
       "model_import_id" => "import-1",
       "acknowledge_repository_git_access" => "true",

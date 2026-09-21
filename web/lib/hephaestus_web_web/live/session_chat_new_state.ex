@@ -5,6 +5,8 @@ defmodule HephaestusWebWeb.SessionChatNewState do
   alias HephaestusWeb.RPC.UUID
   alias HephaestusWeb.UIBrowser
 
+  @instance_name_pattern ~r/\A[a-z0-9][a-z0-9_-]*\z/
+
   @stream_mode :none
   @statuses [
     :initial,
@@ -31,7 +33,7 @@ defmodule HephaestusWebWeb.SessionChatNewState do
             form: %{
               "repository_name" => "session-chat",
               "default_branch" => "main",
-              "instance_name" => "Session chat",
+              "instance_name" => "session-chat",
               "release_agent_id" => "",
               "model_import_id" => "",
               "acknowledge_repository_git_access" => "false",
@@ -58,7 +60,7 @@ defmodule HephaestusWebWeb.SessionChatNewState do
       form: %{
         "repository_name" => "session-chat",
         "default_branch" => "main",
-        "instance_name" => "Session chat",
+        "instance_name" => "session-chat",
         "release_agent_id" => "",
         "model_import_id" => "",
         "acknowledge_repository_git_access" => "false",
@@ -155,7 +157,8 @@ defmodule HephaestusWebWeb.SessionChatNewState do
     model_rule_id =
       Map.get(state.data.progress, "model_rule_id") || Map.fetch!(state.data, :__model_rule_id)
 
-    with :ok <- acknowledge_git?(attributes),
+    with :ok <- valid_instance_name?(attributes),
+         :ok <- acknowledge_git?(attributes),
          :ok <- exact_main_branch?(attributes),
          :ok <- valid_attempt_id?(state, attributes),
          {:ok, release_agent} <-
@@ -256,7 +259,7 @@ defmodule HephaestusWebWeb.SessionChatNewState do
                  identity,
                  state.data.project_id,
                  release_agent["id"],
-                 attributes["instance_name"] || "Session chat",
+                 attributes["instance_name"] || "session-chat",
                  %{"model_rule_id" => model_rule_id},
                  selected_policy(release_agent),
                  rpc_options(state, :import_agent)
@@ -662,7 +665,7 @@ defmodule HephaestusWebWeb.SessionChatNewState do
     %{
       "repository_name" => attributes["repository_name"] || "",
       "default_branch" => "main",
-      "instance_name" => attributes["instance_name"] || "Session chat",
+      "instance_name" => attributes["instance_name"] || "session-chat",
       "release_agent_id" => release_agent["id"],
       "release_id" => release_agent["release_id"],
       "model_rule_id" => model_rule_id,
@@ -717,6 +720,15 @@ defmodule HephaestusWebWeb.SessionChatNewState do
 
   defp acknowledge_git?(%{"acknowledge_repository_git_access" => "true"}), do: :ok
   defp acknowledge_git?(_attributes), do: {:error, :git_acknowledgement_required}
+
+  defp valid_instance_name?(%{"instance_name" => name}) when is_binary(name) do
+    if byte_size(name) in 1..128 and Regex.match?(@instance_name_pattern, name),
+      do: :ok,
+      else: {:error, :invalid_instance_name}
+  end
+
+  defp valid_instance_name?(_attributes), do: {:error, :invalid_instance_name}
+
   defp exact_main_branch?(%{"default_branch" => "main"}), do: :ok
   defp exact_main_branch?(_attributes), do: {:error, :invalid_branch}
 
@@ -748,6 +760,10 @@ defmodule HephaestusWebWeb.SessionChatNewState do
 
   defp present_error(:git_acknowledgement_required),
     do: "Confirm repository Git access before creating the session."
+
+  defp present_error(:invalid_instance_name),
+    do:
+      "Session name must start with a lowercase letter or digit and use only lowercase letters, digits, hyphens, and underscores."
 
   defp present_error(:invalid_branch), do: "Session chat uses the exact main branch."
   defp present_error(:model_import_unavailable), do: "Choose an authorized brokered model import."

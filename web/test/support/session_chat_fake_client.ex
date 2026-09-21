@@ -42,8 +42,10 @@ defmodule HephaestusWebWeb.SessionChatNewStateTest.FakeClient do
     {:ok, %{"repository_id" => "repo-1"}}
   end
 
-  def import_agent(_identity, _project_id, _release_id, _name, parameters, _policy, _options) do
+  def import_agent(_identity, _project_id, release_agent_id, name, parameters, _policy, _options) do
     bump(:import_agent)
+    Process.put(:session_chat_import_release_agent_id, release_agent_id)
+    Process.put(:session_chat_import_name, name)
     Process.put(:session_chat_import_parameters, parameters)
     {:ok, %{"instance_id" => "instance-1", "revision_id" => "revision-1"}}
   end

@@ -31,7 +31,7 @@ test("cooking new session chat creates and opens a real Git-backed browser sessi
     const repositoryName = `session-chat-browser-${testInfo.workerIndex}-${Date.now()}`;
     await page.getByLabel("Repository name").fill(repositoryName);
     await page.getByLabel("Default branch").fill("main");
-    await page.getByLabel("Session name").fill("Browser session chat");
+    await page.getByLabel("Session name").fill("browser-session-chat");
     await page.getByLabel("Reference release").selectOption(session.release_agent_id);
     await page.getByLabel("Authorized model import").selectOption(session.model_import_id);
     const acknowledgement = page.getByLabel(/Allow the release-owned UI to access this repository/);

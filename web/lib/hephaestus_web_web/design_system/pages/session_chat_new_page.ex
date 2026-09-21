@@ -47,7 +47,18 @@ defmodule HephaestusWebWeb.DesignSystem.Pages.SessionChatNewPage do
           <.input field={@form[:setup_attempt_id]} type="hidden" value={@attempt_id} />
           <.input field={@form[:repository_name]} label="Repository name" required autocomplete="off" />
           <.input field={@form[:default_branch]} label="Default branch" required value="main" />
-          <.input field={@form[:instance_name]} label="Session name" required autocomplete="off" />
+          <.input
+            field={@form[:instance_name]}
+            label="Session name"
+            required
+            autocomplete="off"
+            maxlength={128}
+            pattern="[a-z0-9]([a-z0-9_]|-){0,127}"
+            title="Start with a lowercase letter or digit; use only lowercase letters, digits, hyphens, and underscores."
+          />
+          <.text as="small" variant={:muted}>
+            Use 1–128 lowercase letters, digits, hyphens, or underscores; start with a letter or digit.
+          </.text>
           <.input
             field={@form[:release_agent_id]}
             type="select"
