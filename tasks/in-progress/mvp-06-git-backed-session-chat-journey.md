@@ -176,7 +176,7 @@ over repositories and content capabilities later.
 - [x] Run `cargo test --workspace --all-features`.
 - [x] Run `cargo doc --workspace --all-features --no-deps`.
 - [ ] Run applicable UI checks when the reference distribution adapter changes.
-- [ ] Before repository handoff, run `git diff --check` and `cargo dev quality`.
+- [x] Before repository handoff, run `git diff --check` and `cargo dev quality`.
 - [ ] Record acceptance evidence with the released protocol version and source
   revision, browser and real-Git evidence for creation, turns, restart/recovery
   and fork, allowed and denied capability cases, and fake-model placeholder and
@@ -1077,3 +1077,27 @@ Then rerun the lifecycle through recovery and the subsequent concurrency,
 fork, and negative phases. The versioned protocol's
 fork and tombstone warning semantics remain release-owned and do not add a
 platform approval step (lines 1024-1027 above).
+
+### Repository-wide quality gate (2026-09-22)
+
+The corrected full `cargo dev quality` run passed with exit 0 in session
+`52314`. It used disposable PostgreSQL and NATS services, enabled both real
+isolated RPC proofs, and left all VM/Cooking/session-chat execution flags
+unset. The earlier quality attempt that stopped at architecture diagnostics
+(`DB-STATIC-SQL` and the scoped runtime/UI Git HTTP allowlist) is historical
+and superseded by the reviewed narrow fixes; it is not a current gate
+failure. The retained main log is
+`/var/tmp/hephaestus-cargo-dev-quality-final2.log`, with service logs in
+`/var/tmp/hephaestus-cargo-dev-quality-final2-postgres.log` and
+`/var/tmp/hephaestus-cargo-dev-quality-final2-nats.log`.
+
+The passing gate covers workspace formatting, Clippy, tests, documentation,
+the real browser-session RPC lifecycle, the real UI-installation RPC matrix,
+Cooking service checks, pinned Phoenix architecture/tests, and release UI
+kit, installed-UI navigation, bridge, and UI architecture checks. Cleanup
+removed the disposable containers and confirmed
+`examples/session-chat/ui/node_modules` is absent. This is repository quality
+evidence, not acceptance of the Cooking VM/GCP lifecycle or the full MVP-06
+journey: final26 previously proved the initial browser path and two turns,
+while restart/recovery, concurrency, fork, negative-process integration, and
+the final28 browser run remain pending.
