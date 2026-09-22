@@ -520,6 +520,56 @@ methods = ["GET"]
         initial_state.1,
         Some(installed.gateways[0].revision_id.as_uuid())
     );
+    let initial_install_events: i64 = sqlx::query_scalar(
+        "SELECT count(*) FROM application_events
+           WHERE occurrence_id = $1 AND aggregate_type = 'gateway'
+             AND scope_kind = 'project' AND actor_id = $2",
+    )
+    .bind(owner.idempotency_id.as_uuid())
+    .bind(fixture.owner)
+    .fetch_one(&pool)
+    .await
+    .expect("count initial service installation receipt");
+    assert_eq!(
+        initial_install_events, 2,
+        "initial service installation preserves INSERT and desired-assignment events"
+    );
+    let reinstall_identity = AuthenticatedIdentity::new(
+        UserId::from_uuid(fixture.owner),
+        "test",
+        "gateway-service-reinstall",
+        serde_json::json!({}),
+        RequestId::new(),
+    );
+    let reinstalled = installer
+        .install(
+            &reinstall_identity,
+            InstallGatewayManifest {
+                project_id: ProjectId::from_uuid(fixture.project),
+                repository_id: RepositoryId::from_uuid(fixture.repository),
+                release_id: Some(ReleaseId::from_uuid(fixture.release)),
+                manifest: manifest.to_vec(),
+            },
+        )
+        .await
+        .expect("reinstall existing service declaration");
+    assert_eq!(reinstalled, installed);
+    let reinstall_receipt: (i64, i64) = sqlx::query_as(
+        "SELECT count(*), count(*) FILTER (WHERE actor_id = $2)
+           FROM application_events
+           WHERE occurrence_id = $1 AND aggregate_type = 'gateway'
+             AND scope_kind = 'project'",
+    )
+    .bind(reinstall_identity.idempotency_id.as_uuid())
+    .bind(fixture.owner)
+    .fetch_one(&pool)
+    .await
+    .expect("load service reinstall receipt");
+    assert_eq!(
+        reinstall_receipt,
+        (1, 1),
+        "existing service reinstall emits exactly one actor-scoped gateway receipt"
+    );
     let stateless_state: (Option<Uuid>, Option<Uuid>) = sqlx::query_as(
         "SELECT active_revision_id, desired_service_revision_id
            FROM gateways WHERE id = $1",
