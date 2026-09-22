@@ -443,9 +443,11 @@ fn rpc_failure_marker(audience: &str, status: reqwest::StatusCode, body: &[u8]) 
     };
     let code = serde_json::from_slice::<Value>(body)
         .ok()
-        .and_then(|value| match value.get("code").and_then(Value::as_str) {
-            Some(code) => valid_connect_code(code),
-            None => None,
+        .and_then(|value| {
+            value
+                .get("code")
+                .and_then(Value::as_str)
+                .and_then(valid_connect_code)
         })
         .or_else(|| status_connect_code(status))
         .unwrap_or("unknown");
@@ -483,7 +485,7 @@ fn valid_connect_code(value: &str) -> Option<&'static str> {
     }
 }
 
-fn status_connect_code(status: reqwest::StatusCode) -> Option<&'static str> {
+const fn status_connect_code(status: reqwest::StatusCode) -> Option<&'static str> {
     match status {
         reqwest::StatusCode::UNAUTHORIZED => Some("unauthenticated"),
         reqwest::StatusCode::FORBIDDEN => Some("permission_denied"),
@@ -501,38 +503,21 @@ fn status_connect_code(status: reqwest::StatusCode) -> Option<&'static str> {
     }
 }
 
-#[cfg(test)]
-mod tests {
-    use super::rpc_failure_marker;
-
-    #[test]
-    fn rpc_failure_marker_keeps_closed_code_and_drops_error_body() {
-        let body = br#"{"code":"unavailable","message":"password=do-not-retain"}"#;
-        let marker = rpc_failure_marker(
-            "/hephaestus.gateway.v1.GatewayService/GetGateway",
-            reqwest::StatusCode::SERVICE_UNAVAILABLE,
-            body,
-        );
-        assert_eq!(
-            marker,
-            "HEPH_GCP_RUNTIME error_class=unknown reason_class=unavailable operation=get-gateway status=failed rc=503"
-        );
-        assert!(!marker.contains("password"));
-        assert!(!marker.contains("do-not-retain"));
-    }
-
-    #[test]
-    fn rpc_failure_marker_maps_status_and_unknown_method_without_body() {
-        let marker = rpc_failure_marker(
-            "/unknown.Service/Unknown",
-            reqwest::StatusCode::NOT_FOUND,
-            &[],
-        );
-        assert_eq!(
-            marker,
-            "HEPH_GCP_RUNTIME error_class=not-found reason_class=not_found operation=unknown status=failed rc=404"
-        );
-    }
+fn assertion(user: Uuid, audience: &str) -> String {
+    let now = OffsetDateTime::now_utc().unix_timestamp();
+    let signing_key = hephaestus_app::rpc::mediator_signing_key(
+        b"golden-internal-command-token-with-sufficient-entropy",
+    );
+    encode(
+        &Header::new(Algorithm::HS256),
+        &json!({
+            "iss":"hephaestus-web-mediator", "sub":user.to_string(),
+            "aud":audience, "jti":Uuid::new_v4().to_string(),
+            "iat":now, "nbf":now, "exp":now+30,
+        }),
+        &EncodingKey::from_secret(&signing_key),
+    )
+    .expect("sign exact inspection assertion")
 }
 
 async fn approve(
@@ -597,19 +582,36 @@ pub async fn approve_for_test(
     approve(pool, running, &reqwest::Client::new(), owner, run).await;
 }
 
-fn assertion(user: Uuid, audience: &str) -> String {
-    let now = OffsetDateTime::now_utc().unix_timestamp();
-    let signing_key = hephaestus_app::rpc::mediator_signing_key(
-        b"golden-internal-command-token-with-sufficient-entropy",
-    );
-    encode(
-        &Header::new(Algorithm::HS256),
-        &json!({
-            "iss":"hephaestus-web-mediator", "sub":user.to_string(),
-            "aud":audience, "jti":Uuid::new_v4().to_string(),
-            "iat":now, "nbf":now, "exp":now+30,
-        }),
-        &EncodingKey::from_secret(&signing_key),
-    )
-    .expect("sign exact inspection assertion")
+#[cfg(test)]
+mod tests {
+    use super::rpc_failure_marker;
+
+    #[test]
+    fn rpc_failure_marker_keeps_closed_code_and_drops_error_body() {
+        let body = br#"{"code":"unavailable","message":"password=do-not-retain"}"#;
+        let marker = rpc_failure_marker(
+            "/hephaestus.gateway.v1.GatewayService/GetGateway",
+            reqwest::StatusCode::SERVICE_UNAVAILABLE,
+            body,
+        );
+        assert_eq!(
+            marker,
+            "HEPH_GCP_RUNTIME error_class=unknown reason_class=unavailable operation=get-gateway status=failed rc=503"
+        );
+        assert!(!marker.contains("password"));
+        assert!(!marker.contains("do-not-retain"));
+    }
+
+    #[test]
+    fn rpc_failure_marker_maps_status_and_unknown_method_without_body() {
+        let marker = rpc_failure_marker(
+            "/unknown.Service/Unknown",
+            reqwest::StatusCode::NOT_FOUND,
+            &[],
+        );
+        assert_eq!(
+            marker,
+            "HEPH_GCP_RUNTIME error_class=not-found reason_class=not_found operation=unknown status=failed rc=404"
+        );
+    }
 }
