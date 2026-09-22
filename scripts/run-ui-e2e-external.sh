@@ -18,6 +18,27 @@ oidc_client_secret="${HEPHAESTUS_E2E_EXTERNAL_OIDC_CLIENT_SECRET:-development-se
 web_port="${HEPHAESTUS_E2E_EXTERNAL_WEB_PORT:-4000}"
 phase="${HEPHAESTUS_E2E_COOKING_PHASE:-initial}"
 browser_runner="${HEPHAESTUS_E2E_BROWSER_RUNNER:-legacy}"
+failure_marker_emitted="${HEPH_GCP_FAILURE_EMITTED:-0}"
+gcp_failure_marker() {
+    if [[ "${failure_marker_emitted}" == 1 ]]; then
+        return 0
+    fi
+    failure_marker_emitted=1
+    local raw_phase="${HEPH_GCP_FAILURE_PHASE:-${phase}}"
+    local failure_phase
+    case "${raw_phase}" in
+        initial) failure_phase=browser-initial ;;
+        post-operation) failure_phase=browser-post-operation ;;
+        recovery) failure_phase=browser-recovery ;;
+        concurrency) failure_phase=browser-concurrency ;;
+        fork) failure_phase=browser-fork ;;
+        browser-setup|browser-initial|browser-post-operation|browser-recovery|browser-concurrency|browser-fork|unknown)
+            failure_phase="${raw_phase}" ;;
+        *) failure_phase=unknown ;;
+    esac
+    printf 'HEPH_GCP_FAILURE phase=%s command_id=%s exit_code=%s diagnostic_source=%s diagnostic_error=%s\n' \
+        "${failure_phase}" "$1" "$2" "$3" "$4" >&2
+}
 case "${browser_runner}" in
     legacy)
         case "${phase}" in
@@ -236,6 +257,9 @@ PY
         printf 'browser host bridge returned an invalid status\n' >&2
         exit 1
     }
+    if [[ "${status}" != 0 ]]; then
+        gcp_failure_marker playwright-run "${status}" playwright-log playwright-failed
+    fi
     exit "${status}"
 fi
 web_url="http://127.0.0.1:${web_port}"
@@ -374,5 +398,6 @@ then
     browser_status=0
 else
     browser_status="$?"
+    gcp_failure_marker playwright-run "${browser_status}" playwright-log playwright-failed
 fi
 exit "${browser_status}"
