@@ -1306,8 +1306,11 @@ unrestored and unclaimed.
 
 The replacement contains a newer canonical Rust image than the final36 local
 evidence, so fresh cloud runtime acceptance remains pending. The user completed
-the dedicated SDK login, but the upload attempt was denied by
-`storage.objects.get` at the destination; no new cache object is claimed.
-Existing authentication routes are under investigation. No IAM changes or
-promotion to `main` were made. Current cache pins/docs are updated in the
-working tree, and the 11 cleanup tests plus `bash -n` checks passed.
+the dedicated SDK login. Read-only `testIamPermissions` returned HTTP 200 but
+neither `storage.objects.create` nor `storage.objects.get` for the current
+account; an independent upload returned 403 `storage.objects.get`, so no new
+cache object or bucket mutation is claimed. The remaining prerequisite is an
+existing authorized uploader path for the current account; no usable existing
+impersonation path was found. No IAM changes were made. Cache pin updates are
+in commit `2d7ad67` (PR 53); fresh CI and cloud acceptance/merge remain
+pending. The 11 cleanup tests plus `bash -n` checks passed.
