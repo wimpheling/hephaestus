@@ -2,7 +2,7 @@
 
 use super::GatewayGoldenFixture;
 use connectrpc::{client::ClientConfig, error::ErrorCode};
-use identity_domain::UserId;
+use identity_domain::{BrowserSessionSid, UserId};
 use jsonwebtoken::{Algorithm, EncodingKey, Header, encode};
 use rpc_proto::{
     connect::hephaestus::gateway::v1::GatewayServiceClient,
@@ -167,6 +167,7 @@ pub async fn retire_cooking_gateway_grant(
     token_factory: &(dyn Fn(&str) -> String + Send + Sync),
     inbound_credential: &str,
     outsider_id: UserId,
+    outsider_browser_session: BrowserSessionSid,
 ) -> Result<(), AuthorityError> {
     let active_binding: (Uuid, Uuid) = sqlx::query_as(
         "SELECT binding.id, binding_grant.id
@@ -239,7 +240,15 @@ pub async fn retire_cooking_gateway_grant(
             .await?;
     assert_eq!(status, "revoked");
 
-    assert_revoked_gateway_history(pool, running, gateway, token_factory, outsider_id).await?;
+    assert_revoked_gateway_history(
+        pool,
+        running,
+        gateway,
+        token_factory,
+        outsider_id,
+        outsider_browser_session,
+    )
+    .await?;
     assert_revoked_ingress(pool, gateway, inbound_credential).await?;
     Ok(())
 }
@@ -250,6 +259,7 @@ async fn assert_revoked_gateway_history(
     gateway: &GatewayGoldenFixture,
     token_factory: &(dyn Fn(&str) -> String + Send + Sync),
     outsider_id: UserId,
+    outsider_browser_session: BrowserSessionSid,
 ) -> Result<(), AuthorityError> {
     let browser_gateway_id = gateway_id(pool, gateway).await?;
     let current = gateway_client(
@@ -294,6 +304,7 @@ async fn assert_revoked_gateway_history(
         &outsider_token(
             "/hephaestus.gateway.v1.GatewayService/GetGateway",
             outsider_id,
+            outsider_browser_session,
         ),
     )?;
     let outsider_error = outsider
@@ -312,6 +323,7 @@ async fn assert_revoked_gateway_history(
         &outsider_token(
             "/hephaestus.gateway.v1.GatewayService/ListMailboxPublications",
             outsider_id,
+            outsider_browser_session,
         ),
     )?;
     let outsider_history_error = outsider_history
@@ -421,7 +433,11 @@ fn gateway_client_with_token(
     ))
 }
 
-fn outsider_token(audience: &str, outsider_id: UserId) -> String {
+fn outsider_token(
+    audience: &str,
+    outsider_id: UserId,
+    outsider_browser_session: BrowserSessionSid,
+) -> String {
     let now = time::OffsetDateTime::now_utc().unix_timestamp();
     encode(
         &Header::new(Algorithm::HS256),
@@ -432,7 +448,8 @@ fn outsider_token(audience: &str, outsider_id: UserId) -> String {
             "iat": now,
             "nbf": now,
             "exp": now + 25,
-            "jti": Uuid::new_v4().to_string()
+            "jti": Uuid::new_v4().to_string(),
+            "sid": outsider_browser_session.to_protocol_string()
         }),
         &EncodingKey::from_secret(&hephaestus_app::rpc::mediator_signing_key(
             b"golden-internal-command-token-with-sufficient-entropy",
@@ -466,4 +483,38 @@ async fn gateway_id(pool: &PgPool, gateway: &GatewayGoldenFixture) -> Result<Uui
     .bind(gateway.grant_id)
     .fetch_one(pool)
     .await?)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::outsider_token;
+    use identity_domain::{BrowserSessionSid, UserId};
+    use jsonwebtoken::{Algorithm, DecodingKey, Validation, decode};
+
+    #[derive(serde::Deserialize)]
+    struct Claims {
+        sid: String,
+    }
+
+    #[test]
+    fn outsider_token_binds_the_supplied_browser_session_sid() {
+        let sid = BrowserSessionSid::new();
+        let token = outsider_token(
+            "/hephaestus.gateway.v1.GatewayService/GetGateway",
+            UserId::new(),
+            sid,
+        );
+        let mut validation = Validation::new(Algorithm::HS256);
+        validation.validate_aud = false;
+        let claims = decode::<Claims>(
+            &token,
+            &DecodingKey::from_secret(&hephaestus_app::rpc::mediator_signing_key(
+                b"golden-internal-command-token-with-sufficient-entropy",
+            )),
+            &validation,
+        )
+        .expect("decode outsider mediator token")
+        .claims;
+        assert_eq!(claims.sid, sid.to_protocol_string());
+    }
 }

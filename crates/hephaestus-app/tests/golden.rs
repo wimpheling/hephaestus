@@ -7148,6 +7148,7 @@ async fn bearer_push_starts_run_through_production_bootstrap() {
             &rpc_token,
             inbound_credential,
             outsider_id,
+            outsider_browser_session,
         )
         .await
         .expect("retire cooking gateway mailbox grant through RPC");
