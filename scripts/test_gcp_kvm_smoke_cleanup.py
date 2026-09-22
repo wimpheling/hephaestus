@@ -216,8 +216,16 @@ class GcpKvmSmokeCleanupTests(unittest.TestCase):
                 "reason_class=none remaining_seconds=2400 reserve_seconds=300",
                 "gcp-kvm-startup: custom runner image Node executable cannot run as forge",
                 "thread 'cooking::smoke' panicked at crates/foo/src/lib.rs:42:7: Permission denied",
-                "provision prepared service worker VM: VmError::Provider "
-                "{ code: \"cgroup-place-worker\", reason: \"Permission denied\" }",
+                "provision prepared service worker VM: Provider {",
+                " provider: \"libkrun\",",
+                " code: \"cgroup-place-worker\",",
+                " source: Os { code: 13, kind: PermissionDenied, message: \"Permission denied\" },",
+                "}",
+                "thread 'cooking::smoke' panicked at crates/vm-libkrun/src/provider.rs:1057:9",
+                "provision prepared service worker VM: unexpected libkrun provider error "
+                "(runtime-permissions): Permission denied (os error 13)",
+                "thread 'cooking::smoke' panicked at crates/vm-libkrun/src/provider.rs:1184:7",
+                "provision prepared service worker VM: Unavailable { resource: \"worker spawn\", reason: \"Permission denied\" }",
                 "error: Permission denied",
                 "test cooking::smoke ... FAILED",
                 "/opt/hephaestus/scripts/gcp-kvm-startup.sh: line 417: DIAGNOSTICS_OBJECT: unbound variable",
@@ -301,6 +309,20 @@ class GcpKvmSmokeCleanupTests(unittest.TestCase):
         )
         self.assertIn(
             "HEPH_GCP_TEST test=rust-panic operation=cgroup-place-worker "
+            "error_class=permission-denied errno=EACCES",
+            result.stderr,
+        )
+        self.assertIn(
+            "HEPH_GCP_TEST test=rust-panic operation=runtime-permissions "
+            "error_class=permission-denied errno=EACCES",
+            result.stderr,
+        )
+        self.assertIn(
+            "HEPH_GCP_TEST test=rust-panic location=crates/vm-libkrun/src/provider.rs:1184:7",
+            result.stderr,
+        )
+        self.assertIn(
+            "HEPH_GCP_TEST test=rust-panic operation=worker-spawn "
             "error_class=permission-denied errno=EACCES",
             result.stderr,
         )
