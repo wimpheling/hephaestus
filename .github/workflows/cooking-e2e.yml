@@ -1,4 +1,18 @@
-name: Cooking E2E
+name: Heph scenario E2E
+
+run-name: >-
+  ${{ github.event_name == 'workflow_dispatch' && inputs.cloud_mode == 'gcp-cooking'
+      && format('{0} GCP {1}{2}',
+        inputs.cooking_scenario == 'session-chat' && 'MVP-06' || 'MVP-05',
+        inputs.cooking_scenario == 'session-chat' && 'session-chat' || 'Cooking',
+        inputs.pr_number != '' && format(' (PR #{0})', inputs.pr_number) || '')
+      || github.event_name == 'workflow_dispatch' && inputs.cloud_mode == 'cooking'
+      && 'MVP-05 Cooking (self-hosted)'
+      || github.event_name == 'workflow_dispatch'
+      && format('GCP maintenance / {0}', inputs.cloud_mode)
+      || github.event_name == 'pull_request'
+      && format('MVP-05 Cooking (self-hosted PR #{0})', github.event.pull_request.number)
+      || 'MVP-05 Cooking (self-hosted push)' }}
 
 on:
   workflow_dispatch:
