@@ -416,12 +416,123 @@ async fn get_json(
         .send()
         .await
         .expect("authorized provenance query");
-    assert_eq!(
-        response.status(),
-        reqwest::StatusCode::OK,
-        "provenance RPC {audience}"
-    );
+    let status = response.status();
+    if status != reqwest::StatusCode::OK {
+        // Preserve only bounded transport facts before the assertion panic.
+        // The Connect body is parsed and discarded so an application error
+        // cannot put credentials or request data into the workload stream.
+        let body = response.bytes().await.unwrap_or_default();
+        eprintln!("{}", rpc_failure_marker(audience, status, &body));
+        assert_eq!(status, reqwest::StatusCode::OK, "provenance RPC {audience}");
+        unreachable!("the non-OK provenance assertion must panic");
+    }
+    assert_eq!(status, reqwest::StatusCode::OK, "provenance RPC {audience}");
     response.json().await.expect("provenance response")
+}
+
+fn rpc_failure_marker(audience: &str, status: reqwest::StatusCode, body: &[u8]) -> String {
+    let method = match audience {
+        "/hephaestus.gateway.v1.GatewayService/GetGateway" => "get-gateway",
+        "/hephaestus.gateway.v1.GatewayService/ListMailboxPublications" => {
+            "list-mailbox-publications"
+        }
+        "/hephaestus.instance.v1.AgentInstanceService/GetInstance" => "get-instance",
+        "/hephaestus.run.v1.RunService/GetRun" => "get-run",
+        "/hephaestus.run.v1.RunService/GetRunProvenance" => "get-run-provenance",
+        _ => "unknown",
+    };
+    let code = serde_json::from_slice::<Value>(body)
+        .ok()
+        .and_then(|value| match value.get("code").and_then(Value::as_str) {
+            Some(code) => valid_connect_code(code),
+            None => None,
+        })
+        .or_else(|| status_connect_code(status))
+        .unwrap_or("unknown");
+    let error_class = match code {
+        "permission_denied" => "permission-denied",
+        "not_found" => "not-found",
+        "invalid_argument" => "invalid-argument",
+        "deadline_exceeded" => "timeout",
+        _ => "unknown",
+    };
+    format!(
+        "HEPH_GCP_RUNTIME error_class={error_class} reason_class={code} operation={method} status=failed rc={}",
+        status.as_u16()
+    )
+}
+
+fn valid_connect_code(value: &str) -> Option<&'static str> {
+    match value {
+        "unauthenticated" => Some("unauthenticated"),
+        "invalid_argument" => Some("invalid_argument"),
+        "deadline_exceeded" => Some("deadline_exceeded"),
+        "not_found" => Some("not_found"),
+        "already_exists" => Some("already_exists"),
+        "permission_denied" => Some("permission_denied"),
+        "resource_exhausted" => Some("resource_exhausted"),
+        "failed_precondition" => Some("failed_precondition"),
+        "aborted" => Some("aborted"),
+        "out_of_range" => Some("out_of_range"),
+        "unimplemented" => Some("unimplemented"),
+        "internal" => Some("internal"),
+        "unavailable" => Some("unavailable"),
+        "data_loss" => Some("data_loss"),
+        "canceled" => Some("canceled"),
+        _ => None,
+    }
+}
+
+fn status_connect_code(status: reqwest::StatusCode) -> Option<&'static str> {
+    match status {
+        reqwest::StatusCode::UNAUTHORIZED => Some("unauthenticated"),
+        reqwest::StatusCode::FORBIDDEN => Some("permission_denied"),
+        reqwest::StatusCode::BAD_REQUEST => Some("invalid_argument"),
+        reqwest::StatusCode::NOT_FOUND => Some("not_found"),
+        reqwest::StatusCode::REQUEST_TIMEOUT | reqwest::StatusCode::GATEWAY_TIMEOUT => {
+            Some("deadline_exceeded")
+        }
+        reqwest::StatusCode::CONFLICT => Some("already_exists"),
+        reqwest::StatusCode::TOO_MANY_REQUESTS => Some("resource_exhausted"),
+        reqwest::StatusCode::INTERNAL_SERVER_ERROR => Some("internal"),
+        reqwest::StatusCode::NOT_IMPLEMENTED => Some("unimplemented"),
+        reqwest::StatusCode::SERVICE_UNAVAILABLE => Some("unavailable"),
+        _ => None,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::rpc_failure_marker;
+
+    #[test]
+    fn rpc_failure_marker_keeps_closed_code_and_drops_error_body() {
+        let body = br#"{"code":"unavailable","message":"password=do-not-retain"}"#;
+        let marker = rpc_failure_marker(
+            "/hephaestus.gateway.v1.GatewayService/GetGateway",
+            reqwest::StatusCode::SERVICE_UNAVAILABLE,
+            body,
+        );
+        assert_eq!(
+            marker,
+            "HEPH_GCP_RUNTIME error_class=unknown reason_class=unavailable operation=get-gateway status=failed rc=503"
+        );
+        assert!(!marker.contains("password"));
+        assert!(!marker.contains("do-not-retain"));
+    }
+
+    #[test]
+    fn rpc_failure_marker_maps_status_and_unknown_method_without_body() {
+        let marker = rpc_failure_marker(
+            "/unknown.Service/Unknown",
+            reqwest::StatusCode::NOT_FOUND,
+            &[],
+        );
+        assert_eq!(
+            marker,
+            "HEPH_GCP_RUNTIME error_class=not-found reason_class=not_found operation=unknown status=failed rc=404"
+        );
+    }
 }
 
 async fn approve(
