@@ -83,6 +83,13 @@ repo_sha="${HEPH_GCP_IMAGE_BAKE_REPO_SHA:-}"
   printf '%s\n' 'HEPH_GCP_RUNNER_IMAGE bake requires HEPH_GCP_IMAGE_BAKE_REPO_SHA' >&2
   exit 2
 }
+export HEPH_GCP_IMAGE_BAKE_RUN_ID="${HEPH_GCP_IMAGE_BAKE_RUN_ID:-${GITHUB_RUN_ID:-manual}}"
+export HEPH_GCP_IMAGE_BAKE_RUN_ATTEMPT="${HEPH_GCP_IMAGE_BAKE_RUN_ATTEMPT:-${GITHUB_RUN_ATTEMPT:-1}}"
+[[ "$HEPH_GCP_IMAGE_BAKE_RUN_ID" =~ ^(manual|[0-9]+)$ &&
+  "$HEPH_GCP_IMAGE_BAKE_RUN_ATTEMPT" =~ ^[1-9][0-9]*$ ]] || {
+  printf '%s\n' 'HEPH_GCP_RUNNER_IMAGE bake workflow run identifiers are invalid' >&2
+  exit 2
+}
 [[ "$(id -u)" == 0 ]] || { printf '%s\n' 'image bake must run as root' >&2; exit 2; }
 
 install -d -m 0755 /usr/local/libexec/hephaestus /usr/share/hephaestus /etc/hephaestus

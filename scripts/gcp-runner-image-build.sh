@@ -77,7 +77,8 @@ load_contract() {
   bake_sha="$(sha256sum "$script_dir/gcp-runner-image-bake.sh" | awk '{print $1}')"
   manifest_generator_sha="$(sha256sum "$script_dir/gcp-runner-image-manifest.py" | awk '{print $1}')"
   local run_id="${GITHUB_RUN_ID:-manual}" attempt="${GITHUB_RUN_ATTEMPT:-1}"
-  [[ "$run_id" =~ ^[a-z0-9-]+$ && "$attempt" =~ ^[a-z0-9-]+$ ]] || die 'workflow run identifiers are invalid'
+  [[ "$run_id" =~ ^(manual|[0-9]+)$ && "$attempt" =~ ^[1-9][0-9]*$ ]] ||
+    die 'workflow run identifiers are invalid'
   builder_name="${IMAGE_PREFIX}-builder-${run_id}-${attempt}-${repo_sha:0:12}"
   disk_name="${IMAGE_PREFIX}-disk-${run_id}-${attempt}-${repo_sha:0:12}"
   [[ "$builder_name" =~ ^[a-z][a-z0-9-]{0,62}$ ]] || die 'derived builder name is invalid'
@@ -471,14 +472,16 @@ handle_serial_summary() {
 create_startup_bundle() {
   startup_bundle="$(mktemp "${TMPDIR:-/tmp}/gcp-runner-image-startup.XXXXXX.sh")"
   chmod 0700 "$startup_bundle"
-  python3 - "$startup_bundle" "$script_dir" "$GITHUB_SHA" <<'PY'
+  python3 - "$startup_bundle" "$script_dir" "$GITHUB_SHA" \
+    "${GITHUB_RUN_ID:-manual}" "${GITHUB_RUN_ATTEMPT:-1}" <<'PY'
 import base64
 import io
 import pathlib
+import shlex
 import sys
 import tarfile
 
-out, source, repo_sha = sys.argv[1:]
+out, source, repo_sha, run_id, run_attempt = sys.argv[1:]
 source = pathlib.Path(source)
 names = ["gcp-runner-image-bake.sh", "gcp-runner-image-provision.sh",
          "gcp-runner-image-verify.py", "gcp-runner-image-manifest.py",
@@ -509,6 +512,10 @@ with path.open("w", encoding="ascii") as handle:
     handle.write("HEPH_GCP_RUNNER_IMAGE_BUNDLE\n")
     handle.write("tar -xzf \"$bundle_dir/payload.tgz\" -C \"$bundle_dir\"\n")
     handle.write(f"export HEPH_GCP_IMAGE_BAKE=1 HEPH_GCP_IMAGE_BAKE_REPO_SHA={repo_sha!r}\n")
+    handle.write(
+        "export HEPH_GCP_IMAGE_BAKE_RUN_ID="
+        f"{shlex.quote(run_id)} HEPH_GCP_IMAGE_BAKE_RUN_ATTEMPT={shlex.quote(run_attempt)}\n"
+    )
     handle.write('export HEPH_GCP_IMAGE_BAKE_HELPER="$bundle_dir/gcp-runner-image-provision.sh"\n')
     handle.write('export HEPH_GCP_LOCAL_PASST_PREFLIGHT="$bundle_dir/gcp-passt-preflight.sh"\n')
     handle.write('bash "$bundle_dir/gcp-runner-image-bake.sh"\n')

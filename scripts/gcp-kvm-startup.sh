@@ -403,6 +403,14 @@ metadata_value() {
 }
 
 metadata_optional_value() {
+  if [[ "${HEPH_GCP_IMAGE_BAKE:-0}" == 1 ]]; then
+    case "$1" in
+      run-id) printf '%s\n' "${HEPH_GCP_IMAGE_BAKE_RUN_ID:-}" ;;
+      run-attempt) printf '%s\n' "${HEPH_GCP_IMAGE_BAKE_RUN_ATTEMPT:-}" ;;
+      *) return 0 ;;
+    esac
+    return 0
+  fi
   curl --fail --silent --show-error -H 'Metadata-Flavor: Google' \
     "${metadata_root}/instance/attributes/$1" 2>/dev/null || true
 }

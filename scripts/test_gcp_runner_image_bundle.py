@@ -148,6 +148,8 @@ class RunnerImageBundleTests(unittest.TestCase):
             fixture = ("#!/usr/bin/env bash\nset -Eeuo pipefail\n"
                        'fixture_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"\n'
                        f'[[ "${{HEPH_GCP_IMAGE_BAKE_REPO_SHA:-}}" == "{"b" * 40}" ]]\n'
+                       '[[ "${HEPH_GCP_IMAGE_BAKE_RUN_ID:-}" == "123" ]]\n'
+                       '[[ "${HEPH_GCP_IMAGE_BAKE_RUN_ATTEMPT:-}" == "1" ]]\n'
                        f"{checks}\n"
                        "printf 'HEPH_GCP_TEST_BAKE: PASS\\n'\n").encode()
             wrapper = self._wrapper_with_fixture(generated.read_text(encoding="utf-8"), fixture, BUNDLE_NAMES)
@@ -166,6 +168,43 @@ class RunnerImageBundleTests(unittest.TestCase):
                 text=True, capture_output=True, check=False)
             self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
             self.assertIn("HEPH_GCP_TEST_BAKE: PASS", result.stdout)
+
+    def test_bake_metadata_shim_rejects_missing_and_malformed_ids(self) -> None:
+        with tempfile.TemporaryDirectory(prefix="heph-image-bake-metadata-") as raw:
+            directory = Path(raw)
+            generated, _ = self._capture_bundle(directory)
+            payload = self._payload(generated.read_text(encoding="utf-8"))
+            with tarfile.open(fileobj=io.BytesIO(payload), mode="r:gz") as archive:
+                startup = archive.extractfile("gcp-kvm-startup.sh")
+                assert startup is not None
+                startup_path = directory / "gcp-kvm-startup.sh"
+                startup_path.write_bytes(startup.read())
+            startup_path.chmod(0o700)
+            check = (
+                'source "$1"; '
+                'run_id="$(metadata_optional_value run-id)"; '
+                'run_attempt="$(metadata_optional_value run-attempt)"; '
+                '[[ "$run_id" =~ ^(manual|[0-9]+)$ && '
+                '"$run_attempt" =~ ^[1-9][0-9]*$ ]]; '
+                'printf "HEPH_GCP_IMAGE_BUILD phase=metadata\\n"'
+            )
+            base = os.environ | {
+                "HEPH_GCP_STARTUP_LIBRARY": "1",
+                "HEPH_GCP_IMAGE_BAKE": "1",
+                "HEPH_GCP_IMAGE_BAKE_REPO_SHA": "b" * 40,
+                "HEPH_GCP_LOCAL_PASST_PREFLIGHT": "/bin/true",
+            }
+            for run_id, attempt, expected in (("", "", False), ("bad", "1", False), ("123", "2", True)):
+                result = subprocess.run(
+                    ["bash", "-c", check, "metadata-check", str(startup_path)],
+                    env=base | {
+                        "HEPH_GCP_IMAGE_BAKE_RUN_ID": run_id,
+                        "HEPH_GCP_IMAGE_BAKE_RUN_ATTEMPT": attempt,
+                    }, text=True, capture_output=True, check=False,
+                )
+                self.assertEqual(result.returncode == 0, expected, result.stderr)
+                if expected:
+                    self.assertIn("HEPH_GCP_IMAGE_BUILD phase=metadata", result.stdout)
 
     def test_missing_bundle_source_fails_before_mocked_create(self) -> None:
         missing = ROOT / "gcp-runner-image-manifest.py"
