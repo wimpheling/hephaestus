@@ -71,6 +71,10 @@ PHASE_ORDER = (
     "golden-tests",
     "database-tests",
     "browser-initial",
+    "browser-recovery",
+    "browser-concurrency",
+    "browser-fork",
+    "guest-negative-capability",
     "browser-post-operation",
     "evidence-scan",
     "archive",
@@ -145,6 +149,10 @@ WORKLOAD_PHASE_DOMAINS = {
     "golden-tests": {"workload-libkrun"},
     "database-tests": {"workload-libkrun"},
     "browser-initial": {"workload-libkrun"},
+    "browser-recovery": {"workload-libkrun"},
+    "browser-concurrency": {"workload-libkrun"},
+    "browser-fork": {"workload-libkrun"},
+    "guest-negative-capability": {"workload-libkrun"},
     "browser-post-operation": {"workload-libkrun"},
 }
 OUTCOMES = {"passed", "failed", "timed-out", "cancelled", "skipped", "unknown"}

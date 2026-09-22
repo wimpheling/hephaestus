@@ -21,12 +21,12 @@ readonly RUNNER_IMAGE_COMPATIBILITY_RECORDS="$(cd -- "$(dirname -- "${BASH_SOURC
 readonly MACHINE_TYPE="n2-standard-8"
 readonly DISK_SIZE="150GB"
 readonly CACHE_BUCKET="hephaestus-508000-cooking-cache"
-readonly CACHE_OBJECT="cooking/heph-gcp-cooking-cache.tar.zst"
+readonly CACHE_OBJECT="cooking/replacements/02430eca0a4e94ba129c4fdad969233f51486ee1dccdf1ee85e31f580f4d386d/heph-gcp-cooking-cache.tar.zst"
 # These values come from the reviewed local cache archive uploaded for Cooking.
 # The preflight checks object metadata before any VM is created; the helper still
 # verifies the archive SHA-256 after download.
-readonly CACHE_SIZE_BYTES="1783474345"
-readonly CACHE_MD5_BASE64="di95x0b0Yqqt4RTyVUvb6A=="
+readonly CACHE_SIZE_BYTES="1813939981"
+readonly CACHE_MD5_BASE64="wt25yyIq4ikDQzFsaxFsdA=="
 readonly DIAGNOSTICS_BUCKET="hephaestus-508000-cooking-diagnostics"
 readonly DIAGNOSTICS_OBJECT_PREFIX="cooking/runs"
 readonly DIAGNOSTIC_MACHINE_TYPE="e2-small"
@@ -54,8 +54,55 @@ gcloud_json_output=''
 gcloud_json_stderr=''
 controller_phase_timing_path="${HEPH_GCP_CONTROLLER_PHASE_TIMING_PATH:-${RUNNER_TEMP:-/tmp}/gcp-phase-timing-controller-${GITHUB_RUN_ID:-manual}-${GITHUB_RUN_ATTEMPT:-1}-$(date +%s%N)-$$.jsonl}"
 controller_phase_timing_open=''
+phase_timing_workload_required_args=()
 
 die() { printf 'gcp-kvm-smoke: %s\n' "$*" >&2; exit 1; }
+
+validate_cooking_scenario() {
+  case "$1" in
+    cooking|session-chat) ;;
+    *) die 'GCP_COOKING_SCENARIO must be cooking or session-chat' ;;
+  esac
+}
+
+set_phase_timing_workload_requirements() {
+  local scenario="$1"
+  validate_cooking_scenario "$scenario"
+  if [[ "$scenario" == session-chat ]]; then
+    phase_timing_workload_required_args=(
+      --require-workload-phase browser-setup
+      --require-workload-phase runtime-guest-build
+      --require-workload-phase oci-image-materialization
+      --require-workload-phase gateway-services-ready
+      --require-workload-phase runtime-worker-build
+      --require-workload-phase gateway-readiness
+      --require-workload-phase golden-tests
+      --require-workload-phase database-tests
+      --require-workload-phase browser-initial
+      --require-workload-phase browser-recovery
+      --require-workload-phase browser-concurrency
+      --require-workload-phase browser-fork
+      --require-workload-phase guest-negative-capability
+    )
+  else
+    phase_timing_workload_required_args=(
+      --require-workload-phase dependency-setup --require-workload-phase production-project-build
+      --require-workload-phase browser-setup
+      --require-workload-phase runtime-guest-build
+      --require-workload-phase runtime-worker-build
+      --require-workload-phase oci-image-materialization
+      --require-workload-phase gateway-edge-ready
+      --require-workload-phase gateway-services-ready
+      --require-workload-phase gateway-readiness
+      --require-workload-phase oci-builder
+      --require-workload-phase oci-verifier
+      --require-workload-phase golden-tests
+      --require-workload-phase database-tests
+      --require-workload-phase browser-initial
+      --require-workload-phase browser-post-operation
+    )
+  fi
+}
 
 controller_phase_timing_start() {
   local name="$1" source_sha="${GCP_WORKLOAD_SHA:-${validated_source_sha:-${GITHUB_SHA:-}}}"
@@ -422,6 +469,9 @@ _download_diagnostics() {
   local status_path="${GCP_DIAGNOSTICS_STATUS:-${RUNNER_TEMP:-/tmp}/gcp-diagnostics-status.json}"
   local extract_root="${destination}.extract" output digest archive_bytes download_timeout
   local phase_timing_status='not-applicable' phase_timing_error='' phase_timing_object phase_timing_destination phase_timing_staging
+  local session_chat_negative_status='not-applicable'
+  local cooking_scenario="${GCP_COOKING_SCENARIO:-cooking}"
+  validate_cooking_scenario "$cooking_scenario"
   local expected_mode="${GCP_DIAGNOSTICS_EXPECT_MODE:-}"
   local expected_gate_script_sha256="${GCP_DIAGNOSTICS_EXPECT_GATE_SCRIPT_SHA256:-}"
   local expectation_file="${RUNNER_TEMP:-/tmp}/gcp-diagnostics-gate-expectation"
@@ -607,7 +657,53 @@ PYGATE
       "$DIAGNOSTICS_BUCKET" "$object" "$archive_bytes" "$digest" "$extract_root/cooking-diagnostics/manifest.json" >"$status_path"
     return 1
   fi
+  if [[ "$cooking_scenario" == session-chat ]]; then
+    session_chat_negative_status='passed'
+    if ! python3 - "$extract_root/cooking-diagnostics" "$DIAGNOSTICS_COLLECTOR_SCRIPT" <<'PYNEG'
+import importlib.util
+import json
+from pathlib import Path
+import sys
+
+root = Path(sys.argv[1])
+collector_path = Path(sys.argv[2])
+spec = importlib.util.spec_from_file_location("session_chat_collector", collector_path)
+if spec is None or spec.loader is None:
+    raise SystemExit("session-chat negative summary validator is unavailable")
+collector = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(collector)
+with (root / "manifest.json").open(encoding="utf-8") as stream:
+    manifest = json.load(stream, object_pairs_hook=collector._reject_duplicate_json_keys)
+records = [
+    record
+    for record in manifest.get("sources", [])
+    if isinstance(record, dict) and record.get("label") == "session-chat-negative-summary"
+]
+if len(records) != 1:
+    raise SystemExit("session-chat negative summary source is duplicated or missing")
+record = records[0]
+if not isinstance(record, dict):
+    raise SystemExit("session-chat negative summary source is missing")
+relative = record.get("path")
+if not isinstance(relative, str) or relative.startswith("/") or ".." in Path(relative).parts:
+    raise SystemExit("session-chat negative summary source path is unsafe")
+source = root / relative
+if not source.is_file() or source.is_symlink():
+    raise SystemExit("session-chat negative summary source is unavailable")
+with source.open(encoding="utf-8") as stream:
+    value = json.load(stream, object_pairs_hook=collector._reject_duplicate_json_keys)
+validated = collector._validate_session_chat_negative_summary(value)
+if validated.get("status") != "passed":
+    raise SystemExit("session-chat negative summary is not a typed passed result")
+PYNEG
+    then
+      session_chat_negative_status='failed'
+      diagnostics_download_error='session-chat-negative-summary-failed'
+      diagnostics_triage_state='failed'
+    fi
+  fi
   if [[ "$expected_mode" == gcp-cooking && "${GCP_EXPECT_PHASE_TIMING:-false}" == true ]]; then
+    set_phase_timing_workload_requirements "$cooking_scenario"
     # Timing is required for acceptance, but a missing or invalid projection
     # must not discard the archive scan and triage already completed above.
     phase_timing_object="${object%.tar.gz}.phase-timing.json"
@@ -637,14 +733,7 @@ PYGATE
         --expected-source-sha "$diagnostics_source_sha" \
         --require-supervisor-phase archive --require-supervisor-phase evidence-scan \
         --require-supervisor-phase upload \
-        --require-workload-phase dependency-setup --require-workload-phase production-project-build \
-        --require-workload-phase browser-setup --require-workload-phase runtime-guest-build \
-        --require-workload-phase runtime-worker-build --require-workload-phase oci-image-materialization \
-        --require-workload-phase gateway-edge-ready --require-workload-phase gateway-services-ready \
-        --require-workload-phase gateway-readiness --require-workload-phase oci-builder \
-        --require-workload-phase oci-verifier --require-workload-phase golden-tests \
-        --require-workload-phase database-tests --require-workload-phase browser-initial \
-        --require-workload-phase browser-post-operation >/dev/null; then
+        "${phase_timing_workload_required_args[@]}" >/dev/null; then
       diagnostics_download_error='phase-timing-invalid'
       phase_timing_status='unavailable'
       phase_timing_error="$diagnostics_download_error"
@@ -658,12 +747,12 @@ PYGATE
       phase_timing_status='passed'
     fi
   fi
-  if ! python3 - "$status_path" "$triage_path" "$DIAGNOSTICS_BUCKET" "$object" "$archive_bytes" "$digest" "$extract_root/cooking-diagnostics/manifest.json" "$phase_timing_status" "$phase_timing_error" <<'PY'
+  if ! python3 - "$status_path" "$triage_path" "$DIAGNOSTICS_BUCKET" "$object" "$archive_bytes" "$digest" "$extract_root/cooking-diagnostics/manifest.json" "$phase_timing_status" "$phase_timing_error" "$session_chat_negative_status" <<'PY'
 import json
 from pathlib import Path
 import sys
 
-status_path, triage_path, bucket, object_name, archive_bytes, digest, manifest, phase_timing, phase_timing_error = sys.argv[1:]
+status_path, triage_path, bucket, object_name, archive_bytes, digest, manifest, phase_timing, phase_timing_error, session_chat_negative = sys.argv[1:]
 triage = json.loads(Path(triage_path).read_text(encoding="utf-8"))
 if not isinstance(triage, dict) or triage.get("schema") != 1:
     raise SystemExit("triage projection has an invalid schema")
@@ -684,6 +773,10 @@ if phase_timing != "not-applicable":
 if phase_timing_error:
     status["error"] = phase_timing_error
     status["timingAcceptance"] = "failed"
+if session_chat_negative != "not-applicable":
+    status["sessionChatNegative"] = session_chat_negative
+    if session_chat_negative != "passed" and "error" not in status:
+        status["error"] = "session-chat-negative-summary-failed"
 Path(status_path).write_text(json.dumps(status, separators=(",", ":")) + "\n", encoding="utf-8")
 PY
   then
@@ -751,6 +844,9 @@ PYGATE_ACCEPT
   fi
   if [[ -n "$phase_timing_error" ]]; then
     # The detailed status is already durable; keep the timing gate failed.
+    return 1
+  fi
+  if [[ "$session_chat_negative_status" != not-applicable && "$session_chat_negative_status" != passed ]]; then
     return 1
   fi
   diagnostics_triage_state='passed'
@@ -1073,10 +1169,14 @@ if any(labels.get(k)!=v for k,v in expected.items()): raise SystemExit("ownershi
 
 smoke() {
   local mode="${1:-smoke}"
+  local cooking_scenario="${GCP_COOKING_SCENARIO:-cooking}"
   case "$mode" in
     smoke|gcp-cooking|diagnostic) ;;
     *) die "unsupported test mode: $mode" ;;
   esac
+  validate_cooking_scenario "$cooking_scenario"
+  [[ "$mode" == gcp-cooking || "$cooking_scenario" == cooking ]] ||
+    die 'GCP_COOKING_SCENARIO is supported only for gcp-cooking'
   [[ -f "$STARTUP_SCRIPT" && ! -L "$STARTUP_SCRIPT" ]] || die "startup script is unavailable or symlinked: $STARTUP_SCRIPT"
   [[ -f "$PASST_PREFLIGHT_SCRIPT" && ! -L "$PASST_PREFLIGHT_SCRIPT" ]] || die "passthrough preflight script is unavailable or symlinked: $PASST_PREFLIGHT_SCRIPT"
   if [[ "$mode" == smoke || "$mode" == gcp-cooking || "$mode" == diagnostic ]]; then
@@ -1203,6 +1303,7 @@ smoke() {
   if [[ "$mode" == gcp-cooking ]]; then
     [[ "$cache_generation" =~ ^[1-9][0-9]*$ ]] ||
       die 'cache preflight generation is unavailable for gcp-cooking'
+    metadata_values+=",cooking-scenario=${cooking_scenario}"
     metadata_values+=",cooking-runtime-script-sha256=${cooking_runtime_script_sha256},cooking-browser-summary-script-sha256=${cooking_browser_summary_script_sha256},phase-timing-script-sha256=${phase_timing_script_sha256}"
     metadata_values+=",cache-generation=${cache_generation}"
     if [[ "$pr_workload_mode" == true ]]; then

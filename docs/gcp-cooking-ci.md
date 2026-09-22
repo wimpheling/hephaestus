@@ -548,9 +548,10 @@ diagnostics object. The scope is used only with those bucket-scoped roles.
 | `gs://hephaestus-508000-cooking-diagnostics` | `europe-west1`, STANDARD, uniform bucket-level access, public access prevention enforced, versioning disabled, soft delete `0`, Delete lifecycle at object age 1 day | `storage.objectCreator` only | `storage.objectViewer` |
 
 The cache object is
-`gs://hephaestus-508000-cooking-cache/cooking/heph-gcp-cooking-cache.tar.zst`.
-The reviewed immutable archive SHA-256 is
-`0ed20efcc1aa019b79405d1eed626b13d4702019e9ceeba2bdde54e45ae29296`.
+`gs://hephaestus-508000-cooking-cache/cooking/replacements/02430eca0a4e94ba129c4fdad969233f51486ee1dccdf1ee85e31f580f4d386d/heph-gcp-cooking-cache.tar.zst`.
+The reviewed immutable archive size is `1813939981` bytes and its base64 MD5 is
+`wt25yyIq4ikDQzFsaxFsdA==`. Its SHA-256 is
+`02430eca0a4e94ba129c4fdad969233f51486ee1dccdf1ee85e31f580f4d386d`.
 The diagnostics object key is
 `cooking/runs/{github_run_id}/{github_run_attempt}/{github_sha}.tar.gz`.
 The runtime uses a unique key and cannot read or delete previous bundles.

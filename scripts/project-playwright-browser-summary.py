@@ -49,6 +49,49 @@ MATCHER_RE = re.compile(r"\b(to[A-Z][A-Za-z0-9_]*)\s*\(")
 ANSI_RE = re.compile(r"\x1b\[[0-?]*[ -/]*[@-~]")
 ERROR_CLASSES = frozenset({"assertion", "timeout", "hook", "runtime", "unknown"})
 REPORT_STATUSES = frozenset({"passed", "failed", "timedOut", "skipped"})
+SAFE_REPORT_STATUSES = frozenset({"passed", "failed", "skipped", "interrupted", "timed_out"})
+SESSION_CHAT_TEST_ID = "session_chat_new"
+SESSION_CHAT_STAGES = (
+    "session_chat_initialize",
+    "session_chat_send",
+    "session_chat_response",
+    "session_chat_second_send",
+    "session_chat_second_response",
+    "session_chat_reconnect",
+)
+SESSION_CHAT_RECOVERY_TEST_ID = "session_chat_ui"
+SESSION_CHAT_RECOVERY_STAGES = (
+    "session_chat_initialize",
+    "session_chat_send",
+    "session_chat_response",
+    "session_chat_reconnect",
+)
+SESSION_CHAT_CONCURRENT_TEST_ID = "session_chat_concurrent"
+SESSION_CHAT_CONCURRENT_STAGES = (
+    "session_chat_concurrent_initialize",
+    "session_chat_concurrent_race",
+    "session_chat_concurrent_stale_retry",
+    "session_chat_concurrent_reconnect",
+)
+SESSION_CHAT_FORK_TEST_ID = "session_chat_fork"
+SESSION_CHAT_FORK_STAGES = (
+    "session_chat_fork_initialize",
+    "session_chat_fork_send",
+    "session_chat_fork_response",
+    "session_chat_fork_reconnect",
+)
+SESSION_CHAT_PHASES = {
+    "initial": (SESSION_CHAT_TEST_ID, SESSION_CHAT_STAGES),
+    "recovery": (SESSION_CHAT_RECOVERY_TEST_ID, SESSION_CHAT_RECOVERY_STAGES),
+    "concurrency": (SESSION_CHAT_CONCURRENT_TEST_ID, SESSION_CHAT_CONCURRENT_STAGES),
+    "fork": (SESSION_CHAT_FORK_TEST_ID, SESSION_CHAT_FORK_STAGES),
+}
+SAFE_EVENT_KEYS = {
+    "run_started": frozenset({"event", "test_count"}),
+    "stage": frozenset({"event", "stage_id", "status"}),
+    "test": frozenset({"event", "test_id", "status", "duration_ms", "retry"}),
+    "run_finished": frozenset({"event", "status", "counts"}),
+}
 
 
 def _bounded_int(value: Any, maximum: int) -> int | None:
@@ -197,7 +240,241 @@ def _read_report(path: Path) -> tuple[dict[str, Any] | None, str]:
     return value, "complete"
 
 
-def project(root: Path) -> dict[str, Any]:
+def _read_safe_report(path: Path) -> tuple[list[dict[str, Any]] | None, str]:
+    """Read only the fixed-field JSONL stream emitted by the installed UI reporter."""
+    fd = -1
+    try:
+        if path.is_symlink() or not path.is_file() or path.parent.is_symlink():
+            return None, "malformed"
+        fd = os.open(path, os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0))
+        metadata = os.fstat(fd)
+        if not stat.S_ISREG(metadata.st_mode):
+            return None, "truncated"
+        if metadata.st_size > MAX_REPORT_BYTES:
+            return None, "truncated"
+        raw = os.read(fd, MAX_REPORT_BYTES + 1)
+        if len(raw) > MAX_REPORT_BYTES:
+            return None, "truncated"
+        text = raw.decode("utf-8")
+    except (OSError, UnicodeDecodeError):
+        return None, "malformed"
+    finally:
+        if fd >= 0:
+            os.close(fd)
+    records: list[dict[str, Any]] = []
+    if not text or text.endswith("\n") is False:
+        return None, "malformed"
+    for line in text.splitlines():
+        if len(records) >= MAX_TESTS:
+            return None, "truncated"
+        try:
+            value = json.loads(line)
+        except json.JSONDecodeError:
+            return None, "malformed"
+        if not isinstance(value, dict):
+            return None, "malformed"
+        event = value.get("event")
+        if event not in SAFE_EVENT_KEYS or set(value) != SAFE_EVENT_KEYS[event]:
+            return None, "malformed"
+        records.append(value)
+    return records, "complete"
+
+
+def _safe_summary(
+    records: list[dict[str, Any]],
+    *,
+    phase: str,
+    expected_test_id: str,
+    expected_stages: tuple[str, ...],
+) -> dict[str, Any] | None:
+    """Project one complete session-chat reporter stream without retaining its text."""
+    if not records or records[0].get("event") != "run_started" or records[-1].get("event") != "run_finished":
+        return None
+    if type(records[0].get("test_count")) is not int or records[0]["test_count"] != 1:
+        return None
+
+    stage_records = [record for record in records if record.get("event") == "stage"]
+    test_records = [record for record in records if record.get("event") == "test"]
+    if len(test_records) != 1 or not stage_records or len(stage_records) > len(expected_stages) * 2:
+        return None
+    stage_ids = [record.get("stage_id") for record in stage_records]
+    expected_stage_ids = [stage for stage in expected_stages for _ in (0, 1)]
+    if stage_ids != expected_stage_ids[: len(stage_records)] or len(stage_records) % 2:
+        return None
+    failed_stage = False
+    for index in range(0, len(stage_records), 2):
+        pending, terminal = stage_records[index : index + 2]
+        if pending.get("status") != "pending":
+            return None
+        if terminal.get("status") == "passed":
+            continue
+        if terminal.get("status") == "failed" and index + 2 == len(stage_records):
+            failed_stage = True
+            continue
+        return None
+    if not failed_stage and len(stage_records) != len(expected_stage_ids):
+        return None
+    expected_events = ["run_started", *(["stage"] * len(stage_records)), "test", "run_finished"]
+    if [record.get("event") for record in records] != expected_events:
+        return None
+
+    test = test_records[0]
+    if test.get("test_id") != expected_test_id:
+        return None
+    if test.get("status") not in SAFE_REPORT_STATUSES:
+        return None
+    if failed_stage and test["status"] not in {"failed", "timed_out"}:
+        return None
+    if type(test.get("duration_ms")) is not int or test["duration_ms"] < 0:
+        return None
+    if type(test.get("retry")) is not int or test["retry"] != 0:
+        return None
+    finished = records[-1]
+    finished_status = finished.get("status")
+    if finished_status not in SAFE_REPORT_STATUSES:
+        return None
+    counts = finished.get("counts")
+    if not isinstance(counts, dict) or set(counts) != {"passed", "failed", "skipped", "other"}:
+        return None
+    if any(type(value) is not int or value < 0 for value in counts.values()):
+        return None
+    expected_counts = {"passed": 0, "failed": 0, "skipped": 0, "other": 0}
+    if test["status"] == "passed":
+        expected_counts["passed"] = 1
+    elif test["status"] == "failed":
+        expected_counts["failed"] = 1
+    elif test["status"] == "skipped":
+        expected_counts["skipped"] = 1
+    else:
+        expected_counts["other"] = 1
+    # Playwright's safe reporter records a timed-out test as ``timed_out`` but
+    # closes the run as ``failed`` with the result in ``other``.  Accept only
+    # that exact terminal combination; all other status/count mismatches stay
+    # fail-closed.
+    terminal_status_matches = finished_status == test["status"] or (
+        test["status"] == "timed_out"
+        and finished_status == "failed"
+        and counts == {"passed": 0, "failed": 0, "skipped": 0, "other": 1}
+    )
+    if counts != expected_counts or not terminal_status_matches:
+        return None
+
+    projected_counts = {
+        "passed": counts["passed"],
+        "failed": counts["failed"],
+        "skipped": counts["skipped"],
+        "timed_out": 0,
+    }
+    if test["status"] == "timed_out":
+        projected_counts["timed_out"] = 1
+    status = "passed" if test["status"] == "passed" else "failed"
+    if test["status"] == "timed_out":
+        status = "timed_out"
+    elif test["status"] not in {"passed", "failed"}:
+        status = "unknown"
+    passed_phases = [phase] if status == "passed" else []
+    return {
+        "status": status,
+        "suite": "cooking-playwright",
+        "test": "browser-journey",
+        "phase": "browser",
+        "component": "browser-e2e",
+        # Keep the established projection enum so the existing collector can
+        # consume both the JSON and safe installed-UI reporter paths.
+        "result_origin": "playwright-report",
+        "report_state": "complete",
+        "counts": projected_counts,
+        "observed_phases": [phase],
+        "passed_phases": passed_phases,
+        "failure_metadata": [],
+    }
+
+
+def _project_session_chat(root: Path) -> dict[str, Any]:
+    if root.is_symlink() or not root.is_dir():
+        return _unknown("malformed")
+    phase_dirs = sorted(
+        path for path in root.glob("browser.*") if path.is_dir() and not path.is_symlink()
+    )
+    if len(phase_dirs) > MAX_REPORTS:
+        return _unknown("truncated")
+    expected_phase_names = tuple(SESSION_CHAT_PHASES)
+    if not phase_dirs:
+        return _unknown("missing")
+    summaries: dict[str, dict[str, Any]] = {}
+    for phase_dir in phase_dirs:
+        log = phase_dir / "playwright.log"
+        # A JSON report, missing log, retry, or duplicate phase is ambiguous.
+        if (phase_dir / "playwright-report.json").exists() or not log.exists():
+            return _unknown("partial")
+        records, state = _read_safe_report(log)
+        if records is None:
+            return _unknown(state)
+        test_records = [record for record in records if record.get("event") == "test"]
+        if len(test_records) != 1:
+            return _unknown("partial")
+        test_id = test_records[0].get("test_id")
+        matched = [
+            (phase, expected_id, stages)
+            for phase, (expected_id, stages) in SESSION_CHAT_PHASES.items()
+            if test_id == expected_id
+        ]
+        if len(matched) != 1:
+            return _unknown("partial")
+        phase, expected_id, stages = matched[0]
+        if phase in summaries:
+            return _unknown("partial")
+        summary = _safe_summary(
+            records,
+            phase=phase,
+            expected_test_id=expected_id,
+            expected_stages=stages,
+        )
+        if summary is None:
+            return _unknown("partial")
+        summaries[phase] = summary
+    if not summaries:
+        return _unknown("partial")
+
+    counts = {"passed": 0, "failed": 0, "skipped": 0, "timed_out": 0}
+    passed_phases: list[str] = []
+    for phase in expected_phase_names:
+        if phase not in summaries:
+            continue
+        summary = summaries[phase]
+        for name, value in summary["counts"].items():
+            counts[name] += value
+        if summary["status"] == "passed":
+            passed_phases.append(phase)
+    complete = set(summaries) == set(expected_phase_names)
+    if counts["timed_out"]:
+        status = "timed_out"
+    elif counts["failed"]:
+        status = "failed"
+    elif complete and counts["passed"] == len(summaries):
+        status = "passed"
+    else:
+        status = "unknown"
+    return {
+        "status": status,
+        "suite": "cooking-playwright",
+        "test": "browser-journey",
+        "phase": "browser",
+        "component": "browser-e2e",
+        "result_origin": "playwright-report",
+        "report_state": "complete" if complete else "partial",
+        "counts": counts,
+        "observed_phases": [phase for phase in expected_phase_names if phase in summaries],
+        "passed_phases": passed_phases,
+        "failure_metadata": [],
+    }
+
+
+def project(root: Path, scenario: str = "cooking") -> dict[str, Any]:
+    if scenario == "session-chat":
+        return _project_session_chat(root)
+    if scenario != "cooking":
+        return _unknown("malformed")
     if root.is_symlink() or not root.is_dir():
         return _unknown("malformed")
     reports = sorted(root.glob("browser.*/playwright-report.json"))
@@ -296,9 +573,10 @@ def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("evidence_root", type=Path)
     parser.add_argument("output", type=Path)
+    parser.add_argument("--scenario", choices=("cooking", "session-chat"), default="cooking")
     parser.add_argument("--require-complete-journey", action="store_true")
     args = parser.parse_args()
-    summary = project(args.evidence_root)
+    summary = project(args.evidence_root, args.scenario)
     encoded = (json.dumps(summary, sort_keys=True, separators=(",", ":")) + "\n").encode("utf-8")
     if len(encoded) > 64 * 1024:
         raise SystemExit("projected browser summary exceeds limit")
@@ -308,9 +586,14 @@ def main() -> int:
         return 0
     if summary["report_state"] != "complete":
         return 2
-    if summary["observed_phases"] != ["initial", "post-operation"]:
+    expected_phases = (
+        list(SESSION_CHAT_PHASES)
+        if args.scenario == "session-chat"
+        else ["initial", "post-operation"]
+    )
+    if summary["observed_phases"] != expected_phases:
         return 3
-    if summary["passed_phases"] != ["initial", "post-operation"] or summary["status"] != "passed":
+    if summary["passed_phases"] != expected_phases or summary["status"] != "passed":
         return 4
     return 0
 

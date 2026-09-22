@@ -48,6 +48,7 @@ ALLOWED_LABELS = frozenset(
         "runtime-log",
         "runtime-structured",
         "browser-summary",
+        "session-chat-negative-summary",
         "test-output",
         "evidence-scan",
         "gate-results",
@@ -58,6 +59,45 @@ ALLOWED_LABELS = frozenset(
         "lineage-status",
     }
 )
+
+SESSION_CHAT_NEGATIVE_SUMMARY_SCENARIO = "session-chat-negative-capability"
+SESSION_CHAT_NEGATIVE_SUMMARY_GOLDEN_TEST = "bearer_push_starts_run_through_production_bootstrap"
+SESSION_CHAT_NEGATIVE_SUMMARY_FAILURE_REASONS = frozenset(
+    {
+        "runner_nonzero",
+        "private_log_unreadable",
+        "invalid_exit_status",
+        "truncated_log",
+        "marker_missing",
+        "marker_duplicate",
+        "marker_malformed",
+        "golden_test_missing",
+        "golden_test_duplicate",
+        "golden_test_failed",
+        "golden_test_skipped",
+        "golden_test_zero_tests",
+        "golden_harness_missing",
+        "golden_harness_duplicate",
+        "golden_harness_wrong_count",
+        "marker_outside_harness",
+        "golden_result_missing",
+        "golden_result_duplicate",
+        "golden_result_malformed",
+    }
+)
+
+
+def _reject_duplicate_json_keys(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
+    """Reject duplicate metadata keys before JSON object normalization."""
+
+    value: dict[str, Any] = {}
+    for key, item in pairs:
+        if key in value:
+            raise CollectionError("negative summary contains duplicate fields")
+        value[key] = item
+    return value
+
+
 FORBIDDEN_BASENAME = re.compile(
     r"(?:trace|har|storage|cookie|screenshot|request|response|network|credential|secret)",
     re.IGNORECASE,
@@ -281,7 +321,7 @@ PHASE_TIMING_PHASE_ORDER = (
     "project-build", "production-project-build", "runtime-guest-build", "runtime-worker-build", "runtime-smoke",
     "gateway-edge-ready", "gateway-services-ready", "gateway-readiness", "oci-image-materialization",
     "oci-builder", "oci-verifier", "golden-tests", "database-tests", "browser-initial",
-    "browser-post-operation", "evidence-scan", "archive", "upload", "vm-delete",
+    "browser-recovery", "browser-concurrency", "browser-fork", "guest-negative-capability", "browser-post-operation", "evidence-scan", "archive", "upload", "vm-delete",
     "post-delete-download", "cleanup-verification",
 )
 PHASE_TIMING_PHASES = frozenset(PHASE_TIMING_PHASE_ORDER)
@@ -397,7 +437,7 @@ BROWSER_REPORT_STATES = frozenset(
     {"complete", "missing", "partial", "malformed", "truncated", "report-error"}
 )
 BROWSER_COUNT_FIELDS = frozenset({"passed", "failed", "skipped", "timed_out"})
-BROWSER_PHASE_VALUES = frozenset({"initial", "post-operation"})
+BROWSER_PHASE_VALUES = frozenset({"initial", "post-operation", "recovery", "concurrency", "fork"})
 BROWSER_FAILURE_FIELDS = frozenset(
     {
         "test_id", "phase", "status", "error_class", "matcher", "source_file",
@@ -405,7 +445,8 @@ BROWSER_FAILURE_FIELDS = frozenset(
     }
 )
 BROWSER_TEST_IDS = frozenset({"cooking-live-review", "cooking-post-operation"})
-BROWSER_PHASES = frozenset({"initial", "post-operation"})
+BROWSER_PHASES = frozenset({"initial", "post-operation", "recovery", "concurrency", "fork"})
+BROWSER_PHASE_ORDER = ("initial", "post-operation", "recovery", "concurrency", "fork")
 BROWSER_FAILURE_STATUSES = frozenset({"failed", "timed_out"})
 BROWSER_ERROR_CLASSES = frozenset({"assertion", "timeout", "hook", "runtime", "unknown"})
 BROWSER_MATCHERS = frozenset(
@@ -1035,6 +1076,85 @@ def _project_text(source: Path, destination: Path) -> tuple[int, str]:
     return retained, digest.hexdigest()
 
 
+def _validate_session_chat_negative_summary(value: Any) -> dict[str, Any]:
+    """Validate the projector's closed sidecar contract without retaining input text."""
+
+    if type(value) is not dict:
+        raise CollectionError("negative summary must be one JSON object")
+    common = {"schema", "scenario", "status", "reason"}
+    if not common.issubset(value):
+        raise CollectionError("negative summary fields are incomplete")
+    if (
+        type(value.get("schema")) is not int
+        or value["schema"] != 1
+        or value.get("scenario") != SESSION_CHAT_NEGATIVE_SUMMARY_SCENARIO
+    ):
+        raise CollectionError("negative summary identity is invalid")
+    status = value.get("status")
+    reason = value.get("reason")
+    if status == "passed":
+        expected = common | {
+            "validated_checks",
+            "refs",
+            "receives",
+            "golden_test",
+            "golden_test_passes",
+            "runner_exit_status",
+        }
+        if set(value) != expected:
+            raise CollectionError("negative summary success fields are not allowlisted")
+        if (
+            reason != "validated"
+            or type(value["validated_checks"]) is not int
+            or value["validated_checks"] != 10
+            or value["refs"] != "unchanged"
+            or value["receives"] != "unchanged"
+            or value["golden_test"] != SESSION_CHAT_NEGATIVE_SUMMARY_GOLDEN_TEST
+            or type(value["golden_test_passes"]) is not int
+            or value["golden_test_passes"] != 1
+            or type(value["runner_exit_status"]) is not int
+            or value["runner_exit_status"] != 0
+        ):
+            raise CollectionError("negative summary success values are invalid")
+    elif status == "failed":
+        expected = common | {"runner_exit_status"}
+        expected_fields = common if reason == "invalid_exit_status" else expected
+        if set(value) != expected_fields:
+            raise CollectionError("negative summary failure fields are not allowlisted")
+        if not isinstance(reason, str) or reason not in SESSION_CHAT_NEGATIVE_SUMMARY_FAILURE_REASONS:
+            raise CollectionError("negative summary failure reason is invalid")
+        if "runner_exit_status" in value and (
+            type(value["runner_exit_status"]) is not int or not 0 <= value["runner_exit_status"] <= 255
+        ):
+            raise CollectionError("negative summary failure exit status is invalid")
+        if reason == "runner_nonzero" and value["runner_exit_status"] == 0:
+            raise CollectionError("negative summary runner status is invalid")
+    else:
+        raise CollectionError("negative summary status is invalid")
+    return dict(value)
+
+
+def _project_session_chat_negative_summary(source: Path, destination: Path) -> tuple[int, str]:
+    """Retain only the projector's fixed, metadata-only sidecar."""
+
+    source = _safe_input(source)
+    try:
+        with _open_safe(source) as input_file:
+            raw = input_file.read(MAX_LINE_BYTES + 1)
+        if len(raw) > MAX_LINE_BYTES:
+            raise CollectionError("negative summary exceeds its retention limit")
+        EVIDENCE.check_bytes(raw, str(source))
+        _reject_secret_assignments(raw)
+        value = json.loads(raw.decode("utf-8"), object_pairs_hook=_reject_duplicate_json_keys)
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError) as error:
+        raise CollectionError("negative summary must be one JSON object") from error
+    safe = _validate_session_chat_negative_summary(value)
+    encoded = (json.dumps(safe, sort_keys=True, separators=(",", ":")) + "\n").encode("utf-8")
+    destination.write_bytes(encoded)
+    destination.chmod(0o600)
+    return len(encoded), hashlib.sha256(encoded).hexdigest()
+
+
 def _project_browser_summary(source: Path, destination: Path) -> tuple[int, str]:
     source = _safe_input(source)
     try:
@@ -1081,8 +1201,8 @@ def _project_browser_summary(source: Path, destination: Path) -> tuple[int, str]
         elif field == "observed_phases":
             if (
                 not isinstance(item, list)
-                or len(item) > 2
-                or item != sorted(item)
+                or len(item) > len(BROWSER_PHASE_VALUES)
+                or item != [phase for phase in BROWSER_PHASE_ORDER if phase in item]
                 or any(phase not in BROWSER_PHASE_VALUES for phase in item)
                 or len(set(item)) != len(item)
             ):
@@ -1092,8 +1212,8 @@ def _project_browser_summary(source: Path, destination: Path) -> tuple[int, str]
         elif field == "passed_phases":
             if (
                 not isinstance(item, list)
-                or len(item) > 2
-                or item != sorted(item)
+                or len(item) > len(BROWSER_PHASE_VALUES)
+                or item != [phase for phase in BROWSER_PHASE_ORDER if phase in item]
                 or any(phase not in BROWSER_PHASE_VALUES for phase in item)
                 or len(set(item)) != len(item)
             ):
@@ -1618,6 +1738,8 @@ def collect(
                 destination = sources_dir / label
                 if label == "browser-summary":
                     size, digest = _project_browser_summary(source_path, destination)
+                elif label == "session-chat-negative-summary":
+                    size, digest = _project_session_chat_negative_summary(source_path, destination)
                 elif label == "evidence-scan":
                     size, digest = _project_evidence_scan(source_path, destination)
                 elif label == "gate-results":

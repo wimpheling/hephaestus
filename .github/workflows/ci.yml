@@ -110,6 +110,10 @@ jobs:
         run: python3 check.py
       - name: Test browser evidence scanner
         run: python3 -m unittest discover -s scripts -p test_browser_evidence.py
+      - name: Test trusted GCP controller evidence contracts
+        run: |
+          bash -n scripts/gcp-cooking-run.sh scripts/gcp-kvm-smoke.sh scripts/gcp-kvm-startup.sh
+          python3 -m unittest scripts.test_gcp_browser_summary scripts.test_gcp_kvm_smoke_cleanup scripts.test_gcp_phase_timing
 
   live-review-browser:
     runs-on: ubuntu-latest

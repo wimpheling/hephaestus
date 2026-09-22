@@ -55,6 +55,7 @@ vm_start_epoch=0
 trial_deadline_epoch=0
 collection_deadline_epoch=0
 test_mode='smoke'
+cooking_scenario='cooking'
 workload_trust='trusted'
 diagnostics_collection_status=0
 diagnostics_uploaded=false
@@ -545,6 +546,8 @@ collect_diagnostics() {
   local phase_timing_source phase_timing_supervisor_source phase_timing_combined phase_timing_input
   local phase_timing_final_combined
   local phase_timing_required_args=()
+  local phase_timing_workload_required_args=()
+  local selected_cooking_scenario required_workload_phases
   local object token encoded_object upload_status phase_timing_sidecar phase_timing_sidecar_object_name encoded_sidecar
   local phase_timing_projection_ready=false
   object="$(diagnostics_object)" || return 1
@@ -620,11 +623,30 @@ collect_diagnostics() {
   phase_timing_supervisor_source="$supervisor_phase_timing_path"
   phase_timing_combined="$input_root/phase-timing-workload.jsonl"
   phase_timing_input="$input_root/phase-timing.json"
-  for required_phase in \
-    dependency-setup production-project-build browser-setup runtime-guest-build runtime-worker-build \
-    oci-image-materialization gateway-edge-ready gateway-services-ready gateway-readiness \
-    oci-builder oci-verifier golden-tests database-tests browser-initial browser-post-operation; do
+  selected_cooking_scenario="${cooking_scenario:-cooking}"
+  required_workload_phases=()
+  phase_timing_workload_required_args=()
+  if [[ "$selected_cooking_scenario" == session-chat ]]; then
+    # The standalone session-chat runner does not execute Cooking's gateway
+    # workload or browser-post-operation phase. Its browser phases are the
+    # initial creation, post-restart recovery, concurrency, and fork journeys.
+    required_workload_phases=(
+      browser-setup runtime-guest-build oci-image-materialization
+      gateway-services-ready runtime-worker-build gateway-readiness
+      golden-tests database-tests browser-initial browser-recovery browser-concurrency browser-fork
+      guest-negative-capability
+    )
+  else
+    required_workload_phases=(
+      dependency-setup production-project-build browser-setup runtime-guest-build
+      runtime-worker-build oci-image-materialization gateway-edge-ready
+      gateway-services-ready gateway-readiness oci-builder oci-verifier golden-tests
+      database-tests browser-initial browser-post-operation
+    )
+  fi
+  for required_phase in "${required_workload_phases[@]}"; do
     phase_timing_required_args+=(--require-phase "$required_phase")
+    phase_timing_workload_required_args+=(--require-workload-phase "$required_phase")
   done
   if [[ "$test_mode" == gcp-cooking &&
     ("$workload_trust" == untrusted-pr || -f "$phase_timing_source" || -f "$phase_timing_supervisor_source") ]]; then
@@ -704,6 +726,9 @@ collect_diagnostics() {
   fi
   if [[ -f "$phase_timing_input" ]]; then
     collector_args+=(--source "phase-timing=$phase_timing_input")
+  fi
+  if [[ "$selected_cooking_scenario" == session-chat ]]; then
+    collector_args+=(--source "session-chat-negative-summary=${cooking_evidence_root}/session-chat-negative-summary.json")
   fi
   local snapshot_args=()
   if [[ "$test_mode" == diagnostic ]]; then
@@ -906,14 +931,7 @@ PY
       --path "$phase_timing_final_combined" --output "$phase_timing_sidecar" \
       --require-supervisor-phase archive --require-supervisor-phase evidence-scan \
       --require-supervisor-phase upload \
-      --require-workload-phase dependency-setup --require-workload-phase production-project-build \
-      --require-workload-phase browser-setup --require-workload-phase runtime-guest-build \
-      --require-workload-phase runtime-worker-build --require-workload-phase oci-image-materialization \
-      --require-workload-phase gateway-edge-ready --require-workload-phase gateway-services-ready \
-      --require-workload-phase gateway-readiness --require-workload-phase oci-builder \
-      --require-workload-phase oci-verifier --require-workload-phase golden-tests \
-      --require-workload-phase database-tests --require-workload-phase browser-initial \
-      --require-workload-phase browser-post-operation \
+      "${phase_timing_workload_required_args[@]}" \
       --expected-run-id "$run_id" --expected-attempt "$run_attempt" \
       --expected-source-sha "$revision" --expected-image-fingerprint "$timing_image_fingerprint" || {
         phase_timing_emit_failure final-projection "$phase_timing_final_combined" '' true
@@ -1122,6 +1140,14 @@ case "$test_mode" in
   smoke|gcp-cooking|diagnostic) ;;
   *) die 'test-mode must be smoke, diagnostic, or gcp-cooking' ;;
 esac
+cooking_scenario="$(metadata_optional_value cooking-scenario)"
+[[ -n "$cooking_scenario" ]] || cooking_scenario='cooking'
+case "$cooking_scenario" in
+  cooking|session-chat) ;;
+  *) die 'cooking-scenario metadata must be cooking or session-chat' ;;
+esac
+[[ "$test_mode" == gcp-cooking || "$cooking_scenario" == cooking ]] ||
+  die 'session-chat cooking-scenario requires gcp-cooking test mode'
 workload_trust="$(metadata_optional_value workload-trust)"
 case "$workload_trust" in
   ''|trusted) workload_trust=trusted ;;
@@ -1773,6 +1799,7 @@ if [[ "$test_mode" == gcp-cooking ]]; then
   cooking_deadline_epoch=$(( $(date +%s) + $(remaining_seconds) ))
   run_with_deadline env \
     HEPH_GCP_COOKING_DEADLINE_EPOCH="$cooking_deadline_epoch" \
+    HEPH_GCP_COOKING_SCENARIO="$cooking_scenario" \
     HEPH_GCP_RUN_ID="${GITHUB_RUN_ID:-manual}" \
     HEPH_GCP_RUNNER_IMAGE_VERIFIED="$runner_image_ready" \
     HEPH_GCP_RUNNER_IMAGE_MANIFEST_SHA256="$runner_image_manifest_sha" \

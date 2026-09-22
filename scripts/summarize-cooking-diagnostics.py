@@ -35,12 +35,12 @@ LINEAGE_FIELDS = COLLECTOR.SNAPSHOT_FIELDS
 LINEAGE_STATUS_FIELDS = COLLECTOR.SNAPSHOT_STATUS_FIELDS | {"rows"}
 SOURCE_LABELS = {
     "serial", "host-journal", "runtime-log", "runtime-structured",
-    "browser-summary", "test-output", "evidence-scan", "gate-results", "phase-timing", "lineage", "lineage-status",
+    "browser-summary", "session-chat-negative-summary", "test-output", "evidence-scan", "gate-results", "phase-timing", "lineage", "lineage-status",
 }
 SAFE_STATUS = COLLECTOR.SNAPSHOT_STATUS_VALUES
 TRIAGE_FIELDS = {
     "schema", "collectionStatus", "rejectedSources", "denial", "attempts", "snapshotStatus", "retry", "sources", "failures",
-    "browserObservations", "browser", "evidenceScan", "gateResults", "runtimeResults", "technicalContext", "phaseTiming",
+    "browserObservations", "browser", "sessionChatNegativeSummary", "evidenceScan", "gateResults", "runtimeResults", "technicalContext", "phaseTiming",
 }
 DENIAL_FIELDS = {"denial_stage", "denial_class", "run_id"}
 DENIAL_STAGES = {
@@ -245,7 +245,8 @@ BROWSER_SUMMARY_STATES = {
     "complete", "missing", "partial", "malformed", "truncated", "report-error", "unknown",
 }
 BROWSER_SUMMARY_COUNT_FIELDS = {"passed", "failed", "skipped", "timed_out"}
-BROWSER_SUMMARY_PHASE_VALUES = {"initial", "post-operation"}
+BROWSER_SUMMARY_PHASE_VALUES = {"initial", "post-operation", "recovery", "concurrency", "fork"}
+BROWSER_SUMMARY_PHASE_ORDER = ("initial", "post-operation", "recovery", "concurrency", "fork")
 BROWSER_SUMMARY_REASON_CLASSES = {
     "browser-tests-not-passed", "browser-tests-failed", "clean-exit", "complete",
     "incomplete-phases", "invalid-report", "report-validation-failed", "timeout",
@@ -302,6 +303,39 @@ def _unknown_browser_summary(state: str) -> dict[str, Any]:
         "observed_phases": [],
         "failure_metadata": [],
     }
+
+
+def _unknown_session_chat_negative_summary(reason: str) -> dict[str, str]:
+    """Return a fixed state for an absent or rejected private sidecar."""
+
+    if reason not in {"missing", "rejected", "malformed"}:
+        reason = "malformed"
+    return {"status": "unknown", "reason": reason}
+
+
+def _project_session_chat_negative_summary(
+    root: Path,
+    source_records: list[dict[str, Any]],
+    collection_errors: list[dict[str, Any]],
+    rejected_sources: list[dict[str, Any]],
+) -> dict[str, str]:
+    """Project the closed negative-capability sidecar into status and reason only."""
+
+    records = [record for record in source_records if record.get("label") == "session-chat-negative-summary"]
+    if len(records) > 1:
+        return _unknown_session_chat_negative_summary("malformed")
+    if not records:
+        if any(item.get("label") == "session-chat-negative-summary" for item in rejected_sources):
+            return _unknown_session_chat_negative_summary("rejected")
+        if any(item.get("label") == "session-chat-negative-summary" for item in collection_errors):
+            return _unknown_session_chat_negative_summary("missing")
+        return _unknown_session_chat_negative_summary("missing")
+    try:
+        value = json.loads(_safe_path(root, records[0]["path"]).read_text(encoding="utf-8"))
+        safe = COLLECTOR._validate_session_chat_negative_summary(value)
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError, ValueError, COLLECTOR.CollectionError):
+        return _unknown_session_chat_negative_summary("malformed")
+    return {"status": safe["status"], "reason": safe["reason"]}
 
 
 def _project_browser_summary(
@@ -378,7 +412,7 @@ def _project_browser_summary(
             if (
                 not isinstance(item, list)
                 or len(item) > len(BROWSER_SUMMARY_PHASE_VALUES)
-                or item != sorted(item)
+                or item != [phase for phase in BROWSER_SUMMARY_PHASE_ORDER if phase in item]
                 or any(phase not in BROWSER_SUMMARY_PHASE_VALUES for phase in item)
                 or len(set(item)) != len(item)
             ):
@@ -388,7 +422,7 @@ def _project_browser_summary(
             if (
                 not isinstance(item, list)
                 or len(item) > len(BROWSER_SUMMARY_PHASE_VALUES)
-                or item != sorted(item)
+                or item != [phase for phase in BROWSER_SUMMARY_PHASE_ORDER if phase in item]
                 or any(phase not in BROWSER_SUMMARY_PHASE_VALUES for phase in item)
                 or len(set(item)) != len(item)
             ):
@@ -1384,7 +1418,7 @@ def summarize(bundle: Path) -> dict[str, Any]:
         if label == "phase-timing":
             _validate_phase_timing(source_path)
         available.append(label)
-        source = (bundle / record["path"]).read_text(encoding="utf-8")
+        source = "" if label == "session-chat-negative-summary" else source_path.read_text(encoding="utf-8")
         # The collector intentionally projects only the status field from
         # bounded-copy records; the enclosing manifest label supplies source
         # identity without retaining the original log text.
@@ -1411,6 +1445,9 @@ def summarize(bundle: Path) -> dict[str, Any]:
         "retry": _project_retry(bundle, records, attempts),
         "browserObservations": _project_browser_observations(bundle, records),
         "browser": _project_browser_summary(bundle, records),
+        "sessionChatNegativeSummary": _project_session_chat_negative_summary(
+            bundle, records, errors, rejected_sources
+        ),
         "evidenceScan": _project_evidence_scan(bundle, records),
         "gateResults": _project_gate_results(bundle, records),
         "runtimeResults": _project_runtime_results(bundle, records),
