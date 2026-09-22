@@ -288,6 +288,91 @@ print_readiness_error() {
     fi
 }
 
+emit_browser_failure_summary() {
+    local summary_path="$1" exit_code="$2"
+    local browser_phase="${phase}"
+    case "${browser_phase}" in
+        initial) browser_phase=initial ;;
+        post-operation|recovery|concurrency|fork) ;;
+        *) browser_phase=unknown ;;
+    esac
+    if [[ -s "${summary_path}" ]]; then
+        python3 - "${summary_path}" "${browser_phase}" "${exit_code}" <<'PY'
+import json
+import sys
+
+summary_path, fallback_phase, exit_code = sys.argv[1:]
+fallback = {
+    "phase": fallback_phase,
+    "test_id": "unknown",
+    "error_class": "unknown",
+    "matcher": "unknown",
+    "source_file": "unknown",
+    "source_line": "0",
+    "source_column": "0",
+    "exit_code": exit_code,
+}
+known_tests = {
+    "cooking-live-review": (
+        "initial",
+        "e2e/playwright/cooking-tests/cooking-live-review.spec.ts",
+    ),
+    "cooking-post-operation": (
+        "post-operation",
+        "e2e/playwright/cooking-tests/cooking-post-operation.spec.ts",
+    ),
+}
+try:
+    value = json.loads(open(summary_path, encoding="utf-8").read())
+    failures = value.get("failure_metadata") if isinstance(value, dict) else None
+    failure = failures[0] if isinstance(failures, list) and failures else None
+    if not isinstance(failure, dict):
+        raise ValueError
+    phase = failure.get("phase")
+    test_id = failure.get("test_id")
+    error_class = failure.get("error_class")
+    matcher = failure.get("matcher")
+    source_file = failure.get("source_file")
+    source_line = failure.get("source_line")
+    source_column = failure.get("source_column")
+    if (
+        not isinstance(test_id, str)
+        or test_id not in known_tests
+        or phase != known_tests[test_id][0]
+        or error_class not in {"assertion", "timeout", "hook", "runtime", "unknown"}
+        or matcher not in {"toBe", "toBeEmpty", "toBeVisible", "toContainText", "toHaveCount", "toHaveURL", "toMatch", "unknown"}
+        or source_file != known_tests[test_id][1]
+        or type(source_line) is not int
+        or not 1 <= source_line <= 100_000
+        or type(source_column) is not int
+        or not 1 <= source_column <= 10_000
+    ):
+        raise ValueError
+    fallback.update(
+        phase=phase,
+        test_id=test_id,
+        error_class=error_class,
+        matcher=matcher,
+        source_file=source_file,
+        source_line=str(source_line),
+        source_column=str(source_column),
+    )
+except (OSError, ValueError, TypeError, json.JSONDecodeError):
+    pass
+print(
+    "HEPH_GCP_BROWSER_FAILURE "
+    + " ".join(f"{key}={fallback[key]}" for key in (
+        "phase", "test_id", "error_class", "matcher", "source_file",
+        "source_line", "source_column", "exit_code",
+    ))
+)
+PY
+        return 0
+    fi
+    printf 'HEPH_GCP_BROWSER_FAILURE phase=%s test_id=unknown error_class=unknown matcher=unknown source_file=unknown source_line=0 source_column=0 exit_code=%s\n' \
+        "${browser_phase}" "${exit_code}"
+}
+
 cleanup() {
     local status="$?"
     # Stop the service before collecting its final logs, then check the same
@@ -295,9 +380,24 @@ cleanup() {
     podman stop --time 5 "${web_container}" >/dev/null 2>&1 || true
     podman logs "${web_container}" >"${fixture_root}/web-service.log" 2>&1 || true
     podman rm --force "${web_container}" >/dev/null 2>&1 || true
+    if [[ ! -s "${fixture_root}/browser-summary.json" && -f "${fixture_root}/playwright-report.json" ]]; then
+        # The projector consumes a root containing phase directories.  Isolate
+        # this phase so an earlier retained phase cannot turn a valid report
+        # into a misleading partial summary.
+        summary_input="${fixture_root}/.browser-summary-input"
+        mkdir -m 700 -p -- "${summary_input}/browser.current"
+        if cp -- "${fixture_root}/playwright-report.json" \
+            "${summary_input}/browser.current/playwright-report.json" &&
+            python3 "${repo_root}/scripts/project-playwright-browser-summary.py" \
+                "${summary_input}" "${fixture_root}/browser-summary.json" \
+                --scenario cooking >/dev/null 2>&1; then
+            :
+        fi
+        rm -rf -- "${summary_input}"
+    fi
     if python3 "${repo_root}/scripts/check-browser-evidence.py" "${fixture_root}"; then
-        if [[ "${status}" -ne 0 && -f "${fixture_root}/playwright.log" ]]; then
-            cat "${fixture_root}/playwright.log" >&2
+        if [[ "${status}" -ne 0 ]]; then
+            emit_browser_failure_summary "${fixture_root}/browser-summary.json" "${status}"
         fi
     else
         status=1

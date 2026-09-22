@@ -285,6 +285,7 @@ mkdir -p -- "${readiness_repo}/scripts" "${readiness_repo}/e2e/playwright" \
     "${readiness_bin}" "${readiness_diag}"
 cp -- "${script_dir}/run-ui-e2e-external.sh" "${readiness_repo}/scripts/"
 cp -- "${script_dir}/check-browser-evidence.py" "${readiness_repo}/scripts/"
+cp -- "${script_dir}/project-playwright-browser-summary.py" "${readiness_repo}/scripts/"
 cat >"${readiness_root}/fixture.json" <<'JSON'
 {"project_id":"project","release_id":"release","release_agent_id":"agent","instance_id":"instance","mailbox_id":"mailbox","gateway_id":"gateway"}
 JSON
@@ -321,6 +322,12 @@ exit 0
 SH
 cat >"${readiness_bin}/npx" <<'SH'
 #!/usr/bin/env bash
+if [[ "${MOCK_NPX_WRITE_SUMMARY:-0}" == 1 && -n "${PLAYWRIGHT_JSON_OUTPUT_FILE:-}" ]]; then
+    cat >"${PLAYWRIGHT_JSON_OUTPUT_FILE}" <<'JSON'
+{"config":{"rootDir":"/repo/e2e/playwright"},"suites":[{"file":"cooking-tests/cooking-live-review.spec.ts","specs":[{"file":"cooking-tests/cooking-live-review.spec.ts","title":"cooking release install, mailbox, gateway configure, and binding","tests":[{"results":[{"status":"failed","error":{"message":"expect(locator).toContainText()"},"errorLocation":{"file":"/repo/e2e/playwright/cooking-tests/cooking-live-review.spec.ts","line":36,"column":41}}]}]}]}]}
+JSON
+fi
+printf '%s\n' 'secret=private-only-output'
 exit "${MOCK_NPX_STATUS:-0}"
 SH
 chmod 700 -- "${readiness_bin}/podman" "${readiness_bin}/curl" \
@@ -358,6 +365,8 @@ run_readiness_case delayed delayed running "$(( $(date +%s) + 10 ))" 0
 grep -q -- '--connect-timeout 2 --max-time 2' "${readiness_root}/delayed.args"
 run_readiness_case dead fail exited "$(( $(date +%s) + 10 ))" 1
 grep -q 'browser web container stopped state=exited 0 status=7' "${readiness_root}/dead.log"
+grep -q 'HEPH_GCP_BROWSER_FAILURE phase=initial test_id=unknown error_class=unknown matcher=unknown source_file=unknown source_line=0 source_column=0 exit_code=1' \
+    "${readiness_root}/dead.log"
 run_readiness_case timeout fail running "$(( $(date +%s) + 1 ))" 124
 grep -q 'browser web readiness deadline elapsed' "${readiness_root}/timeout.log"
 grep -q -- '--connect-timeout 1 --max-time 1' "${readiness_root}/timeout.args"
@@ -373,6 +382,7 @@ MOCK_CURL_MODE=delayed \
 MOCK_CURL_COUNT_FILE="${readiness_root}/playwright-failure.count" \
 MOCK_CURL_ARG_LOG="${readiness_root}/playwright-failure.args" \
 MOCK_NPX_STATUS=17 \
+MOCK_NPX_WRITE_SUMMARY=1 \
 HEPHAESTUS_E2E_COOKING_FIXTURE="${readiness_root}/fixture.json" \
 HEPHAESTUS_E2E_EXTERNAL_DATABASE_URL='postgres://bridge-smoke.invalid/test' \
 HEPHAESTUS_E2E_EXTERNAL_RPC_ENDPOINT='http://127.0.0.1:1' \
@@ -392,4 +402,10 @@ set -e
 grep -q 'HEPH_GCP_FAILURE phase=browser-initial command_id=playwright-run exit_code=17 diagnostic_source=playwright-log diagnostic_error=playwright-failed' \
     "${readiness_root}/playwright-failure.log"
 [[ "$(grep -c 'HEPH_GCP_FAILURE ' "${readiness_root}/playwright-failure.log")" -eq 1 ]]
+grep -q 'HEPH_GCP_BROWSER_FAILURE phase=initial test_id=cooking-live-review error_class=assertion matcher=toContainText source_file=e2e/playwright/cooking-tests/cooking-live-review.spec.ts source_line=36 source_column=41 exit_code=17' \
+    "${readiness_root}/playwright-failure.log"
+! grep -q 'secret=private-only-output' "${readiness_root}/playwright-failure.log"
+raw_playwright_log="$(find "${readiness_diag}" -path '*/playwright.log' -type f -print -quit)"
+[[ -n "${raw_playwright_log}" ]]
+grep -q 'secret=private-only-output' "${raw_playwright_log}"
 printf 'direct browser failure attribution smoke passed\n'
