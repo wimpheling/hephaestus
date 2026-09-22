@@ -322,19 +322,50 @@ RUST_PANIC_VM_CODE_RE = re.compile(
 RUST_PANIC_VM_RESOURCE_RE = re.compile(
     r'\bresource\s*:\s*"(?P<resource>[A-Za-z0-9][A-Za-z0-9 -]{0,63})"'
 )
+RUST_PANIC_VM_DISPLAY_CODE_RE = re.compile(
+    r"\bprovider error \((?P<code>[A-Za-z0-9-]{1,64})\):"
+)
+RUST_PANIC_VM_DISPLAY_RESOURCE_RE = re.compile(
+    r'\bresource "(?P<resource>[A-Za-z0-9][A-Za-z0-9 -]{0,63})" is unavailable:'
+)
 RUST_PANIC_VM_OPERATIONS = frozenset(
     {
-        "runtime-create", "runtime-permissions", "worker-binary",
+        "private-http-response", "worker-control-task", "ready-channel", "terminal-channel",
+        "start-channel", "runtime-create", "runtime-permissions", "runtime-cleanup",
+        "worker-binary", "worker-configuration", "worker-io", "worker-ipc-closed",
         "cgroup-create", "cgroup-cpu-limit", "cgroup-memory-limit", "cgroup-pids-limit",
-        "cgroup-io-format", "cgroup-io-limit", "cgroup-place-worker",
-        "worker-listener", "worker-accept", "worker-write", "worker-response",
-        "private-service-broker",
+        "cgroup-io-format", "cgroup-io-limit", "cgroup-place-worker", "cgroup-kill",
+        "cgroup-cleanup", "cgroup-events", "worker-listener", "worker-accept",
+        "worker-write", "worker-response", "worker-status", "worker-kill",
+        "worker-exit-channel", "worker-spawn", "worker-startup", "worker-process",
+        "worker-ipc", "worker-cleanup", "private-service-broker", "private-service-connection",
+        "guest-control", "passt", "kvm", "guest-readiness",
     }
 )
 RUST_PANIC_VM_RESOURCES = {
     "worker binary": "worker-binary",
+    "worker configuration": "worker-configuration",
+    "worker spawn": "worker-spawn",
+    "worker startup": "worker-startup",
+    "worker process": "worker-process",
+    "worker IPC": "worker-ipc",
+    "worker cleanup": "worker-cleanup",
+    "worker-configuration": "worker-configuration",
     "private service broker": "private-service-broker",
+    "private service connection": "private-service-connection",
+    "guest readiness": "guest-readiness",
+    "KVM": "kvm",
 }
+RUST_PANIC_VM_CONTEXT_FIELD_RE = re.compile(
+    r"^(?:provider|code|source|resource|reason|kind|message)\s*:"
+)
+
+
+def _is_rust_panic_context_line(line: str) -> bool:
+    """Recognize only the panic's known prefix or Debug fields."""
+
+    stripped = line.strip()
+    return stripped.startswith(RUST_PANIC_VM_CONTEXT_PREFIX) or RUST_PANIC_VM_CONTEXT_FIELD_RE.match(stripped) is not None
 
 
 def _project_rust_panic(match: re.Match[str], line: str) -> str:
@@ -365,9 +396,13 @@ def _project_rust_panic_context_fields(line: str) -> str | None:
         return None
     _, errno, error_class = reason
     code = RUST_PANIC_VM_CODE_RE.search(line)
+    if code is None:
+        code = RUST_PANIC_VM_DISPLAY_CODE_RE.search(line)
     operation = code.group("code") if code is not None else None
     if operation not in RUST_PANIC_VM_OPERATIONS:
         resource = RUST_PANIC_VM_RESOURCE_RE.search(line)
+        if resource is None:
+            resource = RUST_PANIC_VM_DISPLAY_RESOURCE_RE.search(line)
         operation = RUST_PANIC_VM_RESOURCES.get(resource.group("resource")) if resource is not None else None
     if operation is None:
         return None
@@ -1108,6 +1143,7 @@ def _project_text(source: Path, destination: Path) -> tuple[int, str]:
     total = 0
     digest = hashlib.sha256()
     panic_context_pending = False
+    panic_context_lines: list[str] = []
     with _open_safe(source) as input_file, destination.open("wb") as output:
         for raw in input_file:
             total += len(raw)
@@ -1119,7 +1155,26 @@ def _project_text(source: Path, destination: Path) -> tuple[int, str]:
                 panic_context_pending = False
                 continue
             line = ANSI_RE.sub(b"", raw).decode("utf-8", errors="replace").rstrip("\r\n")
-            panic_location = None
+            stripped = line.strip()
+            panic_location = RUST_PANIC_LOCATION_RE.fullmatch(stripped)
+            if panic_context_pending and panic_location is None and not stripped.startswith(("HEPH_", "HEPHAESTUS_")) and _is_rust_panic_context_line(stripped):
+                panic_context_lines.append(stripped)
+                panic_context = _project_rust_panic_context("\n".join(panic_context_lines))
+                if panic_context is not None:
+                    panic_context_pending = False
+                    panic_context_lines.clear()
+                    encoded = (panic_context + "\n").encode()
+                    output.write(encoded)
+                    digest.update(encoded)
+                    retained += len(encoded)
+                    continue
+                if len(panic_context_lines) < 8:
+                    continue
+                panic_context_pending = False
+                panic_context_lines.clear()
+            elif panic_context_pending:
+                panic_context_pending = False
+                panic_context_lines.clear()
             readiness = classify_readiness_error(line)
             if readiness is not None:
                 projected = readiness
@@ -1136,12 +1191,10 @@ def _project_text(source: Path, destination: Path) -> tuple[int, str]:
                 continue
             else:
                 marker = RUNTIME_MARKER_RE.search(line)
-                stripped = line.strip()
                 stack_match = SAFE_STACK_RE.fullmatch(stripped)
                 assertion_match = ASSERTION_LINE_RE.fullmatch(stripped)
                 error_match = ERROR_LINE_RE.fullmatch(stripped)
                 rust_test = RUST_TEST_RESULT_RE.fullmatch(stripped)
-                panic_location = RUST_PANIC_LOCATION_RE.fullmatch(stripped)
                 panic_context = _project_rust_panic_context(stripped) if panic_context_pending else None
                 if panic_context is not None:
                     projected = panic_context

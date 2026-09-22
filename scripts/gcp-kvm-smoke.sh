@@ -1127,7 +1127,7 @@ def normalize(raw: str) -> str:
     return line
 
 
-def project(raw: str, context_for_panic: bool = False) -> str | None:
+def project(raw: str, context_lines: list[str] | None = None) -> str | None:
     line = normalize(raw)
     readiness = collector.classify_readiness_error(line)
     if readiness is not None:
@@ -1138,9 +1138,8 @@ def project(raw: str, context_for_panic: bool = False) -> str | None:
     panic = rust_panic.match(line)
     if panic is not None:
         return collector._project_rust_panic(panic, line)
-    context = collector._project_rust_panic_context(line) if context_for_panic else None
-    if context is not None:
-        return context
+    if context_lines is not None:
+        return collector._project_rust_panic_context("\n".join([*context_lines, line]))
     test_failure = rust_test_failure.fullmatch(line)
     if test_failure is not None:
         return f"HEPH_GCP_TEST test={test_failure.group('test')} status=failed"
@@ -1185,10 +1184,26 @@ def project(raw: str, context_for_panic: bool = False) -> str | None:
 lines = []
 seen = set()
 panic_context_pending = False
+panic_context_lines = []
 for raw in pathlib.Path(serial_path).read_text(encoding="utf-8", errors="replace").splitlines():
     normalized = normalize(raw)
-    safe_line = project(raw, panic_context_pending)
-    panic_context_pending = rust_panic.match(normalized) is not None
+    panic = rust_panic.match(normalized)
+    if panic is not None:
+        panic_context_pending = True
+        panic_context_lines = []
+        safe_line = project(raw)
+    elif panic_context_pending and collector._is_rust_panic_context_line(normalized):
+        panic_context_lines.append(normalized)
+        safe_line = project(raw, panic_context_lines)
+        if safe_line is not None or len(panic_context_lines) >= 8:
+            panic_context_pending = False
+            panic_context_lines = []
+        else:
+            safe_line = None
+    else:
+        panic_context_pending = False
+        panic_context_lines = []
+        safe_line = project(raw)
     if safe_line is not None and safe_line not in seen:
         seen.add(safe_line)
         lines.append(safe_line)
