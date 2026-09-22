@@ -1444,3 +1444,21 @@ actual proven SHAs and complete artifacts, commit these documentation updates,
 then run the final session-chat acceptance against that exact final head. Add
 that final rerun and its complete evidence to the PR body; make no repository
 edits after that exact-head run.
+
+### Current candidate follow-up (2026-09-22)
+
+Replacement candidate build [35730639382](https://github.com/wimpheling/hephaestus/actions/runs/35730639382)
+failed during the installed-UI browser image build at the rootless `crun`/DBus
+boundary. Owned builder cleanup was confirmed and the regional quota check
+returned zero remaining allocations. This does not establish workload or
+MVP-06 acceptance.
+
+Controller `8b42715` adds rootless `cgroupfs` configuration and
+credential-scanned serial artifact/summary reporting; its focused image suite
+passed 62 tests. Quality passed for `068c4b1`, with no application delta. The
+ordinary CI audit failure for `10b2627` remains under investigation and is not
+counted as passing validation.
+
+Candidate build [35733508154](https://github.com/wimpheling/hephaestus/actions/runs/35733508154)
+is pending. MVP-06 remains in progress pending candidate, diagnostic, smoke,
+and exact-final-head session-chat evidence.

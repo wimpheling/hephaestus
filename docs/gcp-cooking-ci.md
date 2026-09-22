@@ -1297,3 +1297,20 @@ tested in 52 checks, merged to the feature at `068c4b1`, and promoted on
 is in progress; it is not evidence of a READY image or of candidate/full
 scenario acceptance until its result and subsequent diagnostic, smoke and
 full scenario artifacts are reviewed.
+
+### Current candidate follow-up (2026-09-22)
+
+Replacement candidate build [35730639382](https://github.com/wimpheling/hephaestus/actions/runs/35730639382)
+failed during the installed-UI browser image build at the rootless `crun`/DBus
+boundary. Owned builder cleanup was confirmed and the regional quota check
+returned zero remaining allocations. This is image-build diagnosis, not
+workload or MVP-06 acceptance evidence.
+
+Controller `8b42715` adds rootless `cgroupfs` configuration plus
+credential-scanned serial artifact retention and a safe image-build summary;
+the focused image/controller suite passed 62 tests. Quality passed for
+`068c4b1`, with no application delta. The ordinary CI audit failure for
+`10b2627` remains under investigation and is not treated as a passing check.
+
+Candidate build [35733508154](https://github.com/wimpheling/hephaestus/actions/runs/35733508154)
+is pending. MVP-06 and final exact-head cloud acceptance remain pending.
