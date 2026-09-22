@@ -1267,3 +1267,23 @@ provider credential; the optional real OpenRouter smoke test was not run.
 This closes the local MVP-06 journey and initial transition audit. A fresh GCP
 workflow acceptance run and its retained artifact review remain pending. The final-quality3 gate also passed as recorded above; cloud acceptance is
 not inferred from these local results.
+
+### GCP cache and quota preflight (2026-09-22)
+
+The current-main quota preflight on revision `7d5d228` passed without creating
+VMs in [run 35672341049](https://github.com/wimpheling/hephaestus/actions/runs/35672341049).
+The cache preflight in [run 35672382880](https://github.com/wimpheling/hephaestus/actions/runs/35672382880)
+failed with metadata HTTP 404 before workload execution; the designated
+existing bucket was empty. Existing read IAM access worked, so these results do
+not establish a missing IAM grant or require bootstrap. The cache key matches
+the [GCP Cooking runbook](../../docs/gcp-cooking-ci.md), which documents a seven-day
+cache lifecycle. Expiry is plausible, but the deletion cause is not proven.
+
+The reviewed archive with SHA-256
+`0ed20efcc1aa019b79405d1eed626b13d4702019e9ceeba2bdde54e45ae29296`
+was not found in the checked workspace and artifact locations. No local `gcloud`/`gsutil` or GCP upload
+access is available to restore it here. The next operator action is to restore
+the reviewed cache archive to the existing documented destination, then rerun
+cache preflight and the diagnostic. Trusted-controller promotion to `main`
+still separately requires merge authorization; no GCP workload acceptance is
+claimed from these preflights.
