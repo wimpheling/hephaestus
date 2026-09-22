@@ -286,6 +286,7 @@ class PhaseTimingTests(unittest.TestCase):
             "timing file contains an incomplete phase": "unclosed-start",
             "phase end has no matching start": "unmatched-end",
             "phase end precedes phase start": "end-before-start",
+            "required phase trust is missing": "missing-phase",
         }
         for message, expected in cases.items():
             with self.subTest(message=message):

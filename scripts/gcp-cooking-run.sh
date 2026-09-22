@@ -579,6 +579,18 @@ phases = {
     "browser-concurrency": ("playwright-run", "playwright-log", "playwright-failed"),
     "browser-fork": ("playwright-run", "playwright-log", "playwright-failed"),
 }
+# These are workload phases whose failed supervisor timing records can
+# identify a workload failure. Keep startup, supervisor, evidence, and
+# cleanup phases out of first-failure attribution.
+workload_timing_phases = {
+    "dependency-setup", "cache-download", "cache-extract", "workflow-images",
+    "browser-setup", "metadata-guard", "project-build", "production-project-build",
+    "runtime-guest-build", "runtime-worker-build", "runtime-smoke", "gateway-edge-ready",
+    "gateway-services-ready", "gateway-readiness", "oci-image-materialization",
+    "oci-builder", "oci-verifier", "golden-tests", "database-tests", "browser-initial",
+    "browser-recovery", "browser-concurrency", "browser-fork", "guest-negative-capability",
+    "browser-post-operation",
+}
 failure_phases = []
 try:
     with open(timing_path, encoding="utf-8") as stream:
@@ -591,7 +603,7 @@ try:
                 isinstance(value, dict)
                 and value.get("record") == "end"
                 and value.get("outcome") not in {"passed", "none"}
-                and value.get("phase") in phases
+                and value.get("phase") in workload_timing_phases
             ):
                 failure_phases.append(value["phase"])
 except (OSError, UnicodeError):
@@ -732,7 +744,8 @@ try:
                     or event["stage"] not in workload_stages
                 ):
                     continue
-                candidate = ("cooking", "cooking-workload", exit_code, "runtime-log", "phase-failed")
+                phase = failure_phases[0] if failure_phases else "cooking-supervisor"
+                candidate = (phase, "cooking-workload", exit_code, "runtime-log", "phase-failed")
                 break
 
             event = fields(
@@ -771,6 +784,8 @@ try:
                     phase = failure_phases[0] if failure_phases else "cooking-supervisor"
                     if phase in phases:
                         command, source, error = phases[phase]
+                    elif phase in workload_timing_phases:
+                        command, source, error = "cooking-workload", "runtime-log", "phase-failed"
                     else:
                         phase, command, source, error = "cooking-supervisor", "cooking-workload", "runtime-log", "phase-failed"
                     candidate = (phase, command, exit_code, source, error)
@@ -1458,6 +1473,7 @@ else
     workload_scenario_env=(
         "--setenv=HEPHAESTUS_APP_COOKING_E2E=1"
         "--setenv=HEPHAESTUS_APP_COOKING_BUILD_PROOF=1"
+        "--setenv=HEPHAESTUS_APP_COOKING_SERVICE_BUILD_PROOF=1"
         "--setenv=HEPHAESTUS_COOKING_UPDATE_E2E=1"
         "--setenv=HEPHAESTUS_COOKING_OCI_BASE_IMPORT_DIAGNOSTIC=0"
         "--setenv=HEPHAESTUS_APP_UPDATE_ADMISSION_E2E=0"
