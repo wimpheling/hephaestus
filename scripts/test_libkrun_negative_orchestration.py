@@ -64,6 +64,7 @@ class LibkrunNegativeOrchestrationTests(unittest.TestCase):
             fake_bin = root / "bin"
             fake_bin.mkdir()
             capture_env = root / "cargo-env"
+            parent_env = root / "parent-env"
             capture_args = root / "cargo-args"
             timing = root / "timing"
             evidence_root = root / "evidence"
@@ -129,6 +130,7 @@ class LibkrunNegativeOrchestrationTests(unittest.TestCase):
                 "cleanup() {\n"
                 "  local status=$?\n"
                 "  trap - EXIT\n"
+                f"  env >{parent_env!s}\n"
                 "  phase_timing_finish_open \"$status\"\n"
                 "  exit \"$status\"\n"
                 "}\n"
@@ -145,6 +147,27 @@ class LibkrunNegativeOrchestrationTests(unittest.TestCase):
                 "HEPHAESTUS_APP_SESSION_CHAT_FORK_E2E=1\n"
                 "HEPHAESTUS_COOKING_BROWSER_E2E=1\n"
                 "HEPHAESTUS_COOKING_INSTALLED_UI_FIXTURE=1\n"
+                "HEPHAESTUS_CADDY_TEST_TLS=1\n"
+                "HEPHAESTUS_CADDY_TEST_ADMIN_URL=http://caddy-admin.invalid\n"
+                "HEPHAESTUS_CADDY_TEST_PUBLIC_URL=https://caddy.invalid\n"
+                "HEPHAESTUS_CADDY_TEST_LISTEN=127.0.0.1:4443\n"
+                "HEPHAESTUS_CADDY_TEST_PUBLIC_PORT=4443\n"
+                "HEPHAESTUS_CADDY_TEST_CA_CERT=/private/caddy-ca.pem\n"
+                "HEPHAESTUS_CADDY_TEST_IMAGE=private/caddy-image\n"
+                "HEPHAESTUS_PLATFORM_HTTPS_ORIGIN=https://platform.invalid\n"
+                "HEPHAESTUS_COOKING_BROWSER_OIDC_ISSUER=http://oidc.invalid\n"
+                "HEPHAESTUS_COOKING_BROWSER_FIXTURE_OUTPUT=/private/browser-fixture.json\n"
+                "HEPHAESTUS_COOKING_BROWSER_BRIDGE_DIR=/private/browser-bridge\n"
+                "HEPHAESTUS_COOKING_BROWSER_DEADLINE_EPOCH=1234567890\n"
+                "HEPHAESTUS_COOKING_BRIDGE_DEADLINE_EPOCH=1234567890\n"
+                "HEPHAESTUS_E2E_EXTERNAL_OIDC_ISSUER=http://external-oidc.invalid\n"
+                "HEPHAESTUS_E2E_EXTERNAL_WEB_PORT=4000\n"
+                "HEPHAESTUS_E2E_OIDC_ISSUER=http://oidc.invalid\n"
+                "HEPHAESTUS_E2E_OIDC_PORT=5556\n"
+                "HEPHAESTUS_E2E_WEB_URL=http://127.0.0.1:4000\n"
+                "HEPHAESTUS_E2E_OIDC_REVIEWER_SUBJECT=golden-subject\n"
+                "HEPHAESTUS_E2E_BROWSER_RUNNER=installed-ui\n"
+                "HEPHAESTUS_INSTALLED_UI_BROWSER_GREP=session-chat\n"
                 "HEPH_GCP_PHASE_TIMING_PATH=/private/timing.jsonl\n"
                 "HEPH_GCP_PHASE_TIMING_SOURCE_SHA=source\n"
                 "HEPH_GCP_PHASE_TIMING_RUN_ID=run\n"
@@ -155,6 +178,17 @@ class LibkrunNegativeOrchestrationTests(unittest.TestCase):
                 "export HEPHAESTUS_APP_SESSION_CHAT_BROWSER_E2E HEPHAESTUS_APP_SESSION_CHAT_RESTART_E2E\n"
                 "export HEPHAESTUS_APP_SESSION_CHAT_CONCURRENT_E2E HEPHAESTUS_APP_SESSION_CHAT_FORK_E2E\n"
                 "export HEPHAESTUS_COOKING_BROWSER_E2E HEPHAESTUS_COOKING_INSTALLED_UI_FIXTURE\n"
+                "export HEPHAESTUS_CADDY_TEST_TLS HEPHAESTUS_CADDY_TEST_ADMIN_URL\n"
+                "export HEPHAESTUS_CADDY_TEST_PUBLIC_URL HEPHAESTUS_CADDY_TEST_LISTEN\n"
+                "export HEPHAESTUS_CADDY_TEST_PUBLIC_PORT HEPHAESTUS_CADDY_TEST_CA_CERT\n"
+                "export HEPHAESTUS_CADDY_TEST_IMAGE HEPHAESTUS_PLATFORM_HTTPS_ORIGIN\n"
+                "export HEPHAESTUS_COOKING_BROWSER_OIDC_ISSUER HEPHAESTUS_COOKING_BROWSER_FIXTURE_OUTPUT\n"
+                "export HEPHAESTUS_COOKING_BROWSER_BRIDGE_DIR HEPHAESTUS_COOKING_BROWSER_DEADLINE_EPOCH\n"
+                "export HEPHAESTUS_COOKING_BRIDGE_DEADLINE_EPOCH HEPHAESTUS_E2E_EXTERNAL_OIDC_ISSUER\n"
+                "export HEPHAESTUS_E2E_EXTERNAL_WEB_PORT HEPHAESTUS_E2E_OIDC_ISSUER\n"
+                "export HEPHAESTUS_E2E_OIDC_PORT HEPHAESTUS_E2E_WEB_URL\n"
+                "export HEPHAESTUS_E2E_OIDC_REVIEWER_SUBJECT HEPHAESTUS_E2E_BROWSER_RUNNER\n"
+                "export HEPHAESTUS_INSTALLED_UI_BROWSER_GREP\n"
                 "export HEPH_GCP_PHASE_TIMING_PATH HEPH_GCP_PHASE_TIMING_SOURCE_SHA HEPH_GCP_PHASE_TIMING_RUN_ID\n"
                 "export HEPH_GCP_PHASE_TIMING_ATTEMPT HEPH_GCP_PHASE_TIMING_IMAGE_FINGERPRINT\n"
                 "export HEPHAESTUS_GIT_PRE_RECEIVE_HOOK\n"
@@ -191,11 +225,49 @@ class LibkrunNegativeOrchestrationTests(unittest.TestCase):
             )
             if not capture_env.exists():
                 raise AssertionError(f"harness failed before fake cargo: {completed.stderr}")
+            if not parent_env.exists():
+                raise AssertionError(f"harness did not capture its post-child environment: {completed.stderr}")
             env_values = {}
             for line in capture_env.read_text(encoding="utf-8").splitlines():
                 key, separator, value = line.partition("=")
                 if separator:
                     env_values[key] = value
+            parent_values = {}
+            for line in parent_env.read_text(encoding="utf-8").splitlines():
+                key, separator, value = line.partition("=")
+                if separator:
+                    parent_values[key] = value
+            parent_expected = {
+                "HEPHAESTUS_APP_SESSION_CHAT_BROWSER_E2E": "1",
+                "HEPHAESTUS_APP_SESSION_CHAT_RESTART_E2E": "1",
+                "HEPHAESTUS_APP_SESSION_CHAT_CONCURRENT_E2E": "1",
+                "HEPHAESTUS_APP_SESSION_CHAT_FORK_E2E": "1",
+                "HEPHAESTUS_COOKING_BROWSER_E2E": "1",
+                "HEPHAESTUS_COOKING_INSTALLED_UI_FIXTURE": "1",
+                "HEPHAESTUS_CADDY_TEST_TLS": "1",
+                "HEPHAESTUS_CADDY_TEST_ADMIN_URL": "http://caddy-admin.invalid",
+                "HEPHAESTUS_CADDY_TEST_PUBLIC_URL": "https://caddy.invalid",
+                "HEPHAESTUS_CADDY_TEST_LISTEN": "127.0.0.1:4443",
+                "HEPHAESTUS_CADDY_TEST_PUBLIC_PORT": "4443",
+                "HEPHAESTUS_CADDY_TEST_CA_CERT": "/private/caddy-ca.pem",
+                "HEPHAESTUS_CADDY_TEST_IMAGE": "private/caddy-image",
+                "HEPHAESTUS_PLATFORM_HTTPS_ORIGIN": "https://platform.invalid",
+                "HEPHAESTUS_COOKING_BROWSER_OIDC_ISSUER": "http://oidc.invalid",
+                "HEPHAESTUS_COOKING_BROWSER_FIXTURE_OUTPUT": "/private/browser-fixture.json",
+                "HEPHAESTUS_COOKING_BROWSER_BRIDGE_DIR": "/private/browser-bridge",
+                "HEPHAESTUS_COOKING_BROWSER_DEADLINE_EPOCH": "1234567890",
+                "HEPHAESTUS_COOKING_BRIDGE_DEADLINE_EPOCH": "1234567890",
+                "HEPHAESTUS_E2E_EXTERNAL_OIDC_ISSUER": "http://external-oidc.invalid",
+                "HEPHAESTUS_E2E_EXTERNAL_WEB_PORT": "4000",
+                "HEPHAESTUS_E2E_OIDC_ISSUER": "http://oidc.invalid",
+                "HEPHAESTUS_E2E_OIDC_PORT": "5556",
+                "HEPHAESTUS_E2E_WEB_URL": "http://127.0.0.1:4000",
+                "HEPHAESTUS_E2E_OIDC_REVIEWER_SUBJECT": "golden-subject",
+                "HEPHAESTUS_E2E_BROWSER_RUNNER": "installed-ui",
+                "HEPHAESTUS_INSTALLED_UI_BROWSER_GREP": "session-chat",
+            }
+            for key, expected in parent_expected.items():
+                self.assertEqual(parent_values.get(key), expected, f"parent environment changed: {key}")
             args = capture_args.read_text(encoding="utf-8").splitlines()
             phases = timing.read_text(encoding="utf-8").splitlines()
             private_logs = list(evidence_root.glob("session-chat-negative.*.log"))
@@ -253,6 +325,27 @@ class LibkrunNegativeOrchestrationTests(unittest.TestCase):
             "HEPHAESTUS_APP_SESSION_CHAT_FORK_E2E",
             "HEPHAESTUS_COOKING_BROWSER_E2E",
             "HEPHAESTUS_COOKING_INSTALLED_UI_FIXTURE",
+            "HEPHAESTUS_CADDY_TEST_TLS",
+            "HEPHAESTUS_CADDY_TEST_ADMIN_URL",
+            "HEPHAESTUS_CADDY_TEST_PUBLIC_URL",
+            "HEPHAESTUS_CADDY_TEST_LISTEN",
+            "HEPHAESTUS_CADDY_TEST_PUBLIC_PORT",
+            "HEPHAESTUS_CADDY_TEST_CA_CERT",
+            "HEPHAESTUS_CADDY_TEST_IMAGE",
+            "HEPHAESTUS_PLATFORM_HTTPS_ORIGIN",
+            "HEPHAESTUS_COOKING_BROWSER_OIDC_ISSUER",
+            "HEPHAESTUS_COOKING_BROWSER_FIXTURE_OUTPUT",
+            "HEPHAESTUS_COOKING_BROWSER_BRIDGE_DIR",
+            "HEPHAESTUS_COOKING_BROWSER_DEADLINE_EPOCH",
+            "HEPHAESTUS_COOKING_BRIDGE_DEADLINE_EPOCH",
+            "HEPHAESTUS_E2E_EXTERNAL_OIDC_ISSUER",
+            "HEPHAESTUS_E2E_EXTERNAL_WEB_PORT",
+            "HEPHAESTUS_E2E_OIDC_ISSUER",
+            "HEPHAESTUS_E2E_OIDC_PORT",
+            "HEPHAESTUS_E2E_WEB_URL",
+            "HEPHAESTUS_E2E_OIDC_REVIEWER_SUBJECT",
+            "HEPHAESTUS_E2E_BROWSER_RUNNER",
+            "HEPHAESTUS_INSTALLED_UI_BROWSER_GREP",
             "HEPH_GCP_PHASE_TIMING_PATH",
             "HEPH_GCP_PHASE_TIMING_SOURCE_SHA",
             "HEPH_GCP_PHASE_TIMING_RUN_ID",
