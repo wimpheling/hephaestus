@@ -260,6 +260,18 @@ class RunnerImageBuildTests(unittest.TestCase):
             self.assertFalse((state / "vm").exists())
             self.assertFalse((state / "disk").exists())
 
+    def test_invalid_workflow_run_identifiers_fail_before_cloud_resources(self):
+        with tempfile.TemporaryDirectory(prefix="heph-runner-image-invalid-run-") as directory:
+            root = Path(directory)
+            env = self._setup(root) | {"GITHUB_RUN_ID": "invalid/run"}
+            result = subprocess.run(
+                [str(ROOT / "gcp-runner-image-build.sh"), "build"],
+                env=env, text=True, capture_output=True, check=False,
+            )
+            self.assertNotEqual(result.returncode, 0)
+            self.assertIn("workflow run identifiers are invalid", result.stderr)
+            self.assertFalse((root / "state").exists())
+
     def test_cleanup_command_recovers_strict_building_state_and_owned_disk(self):
         with tempfile.TemporaryDirectory(prefix="heph-runner-image-recover-") as directory:
             root = Path(directory)
