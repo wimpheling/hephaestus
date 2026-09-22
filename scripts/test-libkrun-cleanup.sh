@@ -25,6 +25,7 @@ postgres_container_name=fake-service
 nats_container_name=''
 zot_container_name=''
 fixture_root=''
+runtime_root=''
 diagnostics_body
 SCRIPT
 } >"${diagnostics_body}"
@@ -119,6 +120,7 @@ postgres_container_name=postgres
 builder_image_loaded=false
 verifier_image_loaded=false
 fixture_root=''
+runtime_root=''
 diagnostics_dir=''
 phase_timing_finish_open() { :; }
 heph_shell_failure_on_exit() { :; }

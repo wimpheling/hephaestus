@@ -193,6 +193,7 @@ class LibkrunNegativeOrchestrationTests(unittest.TestCase):
                 "export HEPH_GCP_PHASE_TIMING_ATTEMPT HEPH_GCP_PHASE_TIMING_IMAGE_FINGERPRINT\n"
                 "export HEPHAESTUS_GIT_PRE_RECEIVE_HOOK\n"
                 "fixture_root=/fixture\n"
+                "runtime_root=/fixture/runtime\n"
                 "postgres_url=postgres://fixture\n"
                 "nats_url=nats://fixture\n"
                 "cgroup_root=/cgroup\n"
