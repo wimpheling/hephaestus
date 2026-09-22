@@ -1127,7 +1127,7 @@ def normalize(raw: str) -> str:
     return line
 
 
-def project(raw: str) -> str | None:
+def project(raw: str, context_for_panic: bool = False) -> str | None:
     line = normalize(raw)
     readiness = collector.classify_readiness_error(line)
     if readiness is not None:
@@ -1137,7 +1137,10 @@ def project(raw: str) -> str | None:
         return None
     panic = rust_panic.match(line)
     if panic is not None:
-        return f"HEPH_GCP_TEST test=rust-panic location={panic.group('location')}"
+        return collector._project_rust_panic(panic, line)
+    context = collector._project_rust_panic_context(line) if context_for_panic else None
+    if context is not None:
+        return context
     test_failure = rust_test_failure.fullmatch(line)
     if test_failure is not None:
         return f"HEPH_GCP_TEST test={test_failure.group('test')} status=failed"
@@ -1181,8 +1184,11 @@ def project(raw: str) -> str | None:
 
 lines = []
 seen = set()
+panic_context_pending = False
 for raw in pathlib.Path(serial_path).read_text(encoding="utf-8", errors="replace").splitlines():
-    safe_line = project(raw)
+    normalized = normalize(raw)
+    safe_line = project(raw, panic_context_pending)
+    panic_context_pending = rust_panic.match(normalized) is not None
     if safe_line is not None and safe_line not in seen:
         seen.add(safe_line)
         lines.append(safe_line)

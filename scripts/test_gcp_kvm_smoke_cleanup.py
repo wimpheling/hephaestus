@@ -216,6 +216,8 @@ class GcpKvmSmokeCleanupTests(unittest.TestCase):
                 "reason_class=none remaining_seconds=2400 reserve_seconds=300",
                 "gcp-kvm-startup: custom runner image Node executable cannot run as forge",
                 "thread 'cooking::smoke' panicked at crates/foo/src/lib.rs:42:7: Permission denied",
+                "provision prepared service worker VM: VmError::Provider "
+                "{ code: \"cgroup-place-worker\", reason: \"Permission denied\" }",
                 "error: Permission denied",
                 "test cooking::smoke ... FAILED",
                 "/opt/hephaestus/scripts/gcp-kvm-startup.sh: line 417: DIAGNOSTICS_OBJECT: unbound variable",
@@ -292,7 +294,16 @@ class GcpKvmSmokeCleanupTests(unittest.TestCase):
             "reason_class=none remaining_seconds=2400 reserve_seconds=300",
             result.stderr,
         )
-        self.assertIn("HEPH_GCP_TEST test=rust-panic location=crates/foo/src/lib.rs:42:7", result.stderr)
+        self.assertIn(
+            "HEPH_GCP_TEST test=rust-panic location=crates/foo/src/lib.rs:42:7 "
+            "error_class=permission-denied errno=EACCES",
+            result.stderr,
+        )
+        self.assertIn(
+            "HEPH_GCP_TEST test=rust-panic operation=cgroup-place-worker "
+            "error_class=permission-denied errno=EACCES",
+            result.stderr,
+        )
         self.assertIn("HEPH_GCP_RUNTIME error=permission-denied errno=EACCES", result.stderr)
         self.assertIn("HEPH_GCP_TEST test=cooking::smoke status=failed", result.stderr)
         self.assertIn(
