@@ -22507,6 +22507,10 @@ var SessionGitClient = class extends GitSessionAdapter {
 // src/response-refresh.js
 var DEFAULT_POLL_INTERVAL_MS = 1e3;
 var DEFAULT_RESPONSE_TIMEOUT_MS = 3e4;
+var RETRYABLE_REFRESH_STATUS_CODES = /* @__PURE__ */ new Set([502, 503, 504]);
+function isRetryableRefreshError(error) {
+  return error?.code === "HttpError" && RETRYABLE_REFRESH_STATUS_CODES.has(error.data?.statusCode);
+}
 var ResponseRefreshController = class {
   constructor({
     client: client2,
@@ -22611,6 +22615,11 @@ var ResponseRefreshController = class {
       if (abortController?.signal.aborted) {
         this.pending.clear();
         this.onStatus?.("The assistant response timed out; reconnect to check again", "timeout");
+        return;
+      }
+      if (isRetryableRefreshError(error)) {
+        this.onStatus?.("Waiting for the assistant response\u2026", "waiting");
+        this.schedulePoll(this.pollIntervalMs);
         return;
       }
       this.pending.clear();

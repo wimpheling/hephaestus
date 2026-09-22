@@ -39,6 +39,13 @@ function session(records = []) {
   return { records, transcript: records, actorId: HUMAN };
 }
 
+function httpError(statusCode) {
+  return Object.assign(new Error(`HTTP Error: ${statusCode}`), {
+    code: "HttpError",
+    data: { statusCode },
+  });
+}
+
 test("polling refreshes the current checkout and completes on the correlated response", async () => {
   const timers = timerHarness();
   const statuses = [];
@@ -173,6 +180,115 @@ test("a failed refresh reports an error and does not schedule another poll", asy
   await timers.runNext();
   assert.equal(statuses.at(-1).state, "error");
   assert.equal(timers.timers.filter((timer) => !timer.cancelled).length, 0);
+});
+
+test("a transient unavailable refresh keeps polling until the correlated response arrives", async () => {
+  const timers = timerHarness();
+  const statuses = [];
+  let refreshes = 0;
+  const controller = new ResponseRefreshController({
+    client: {
+      async appendHuman(value) { return value; },
+      async readSession() { return session([]); },
+      async fetch() {
+        refreshes += 1;
+        if (refreshes === 1) throw httpError(503);
+        return session([record(), { kind: "assistant_message", in_reply_to: RECORD_ID }]);
+      },
+    },
+    onStatus: (message, state) => statuses.push({ message, state }),
+    pollIntervalMs: 10,
+    responseTimeoutMs: 100,
+    setTimer: timers.setTimer,
+    clearTimer: timers.clearTimer,
+  });
+
+  await controller.publish(record());
+  await timers.runNext();
+  assert.equal(controller.pending.size, 1);
+  assert.equal(statuses.at(-1).state, "waiting");
+  await timers.runNext();
+  assert.equal(controller.pending.size, 0);
+  assert.equal(statuses.at(-1).state, "completed");
+});
+
+test("repeated transient unavailable refreshes preserve the original response deadline", async () => {
+  const timers = timerHarness();
+  const statuses = [];
+  let now = 0;
+  let refreshes = 0;
+  const controller = new ResponseRefreshController({
+    client: {
+      async appendHuman(value) { return value; },
+      async readSession() { return session([]); },
+      async fetch() { refreshes += 1; throw httpError(503); },
+    },
+    onStatus: (message, state) => statuses.push({ message, state }),
+    pollIntervalMs: 10,
+    responseTimeoutMs: 20,
+    now: () => now,
+    setTimer: timers.setTimer,
+    clearTimer: timers.clearTimer,
+  });
+
+  await controller.publish(record());
+  await timers.runNext();
+  now = 10;
+  await timers.runNext();
+  assert.equal(refreshes, 2);
+  assert.equal(controller.pending.size, 1);
+  now = 20;
+  await timers.runNext();
+  assert.equal(statuses.at(-1).state, "timeout");
+  assert.equal(controller.pending.size, 0);
+  assert.equal(timers.timers.filter((timer) => !timer.cancelled).length, 0);
+});
+
+test("authentication and protocol refresh failures remain terminal", async () => {
+  for (const failure of [
+    httpError(401),
+    Object.assign(new Error("invalid session history"), { code: "ProtocolError" }),
+  ]) {
+    const timers = timerHarness();
+    const statuses = [];
+    const controller = new ResponseRefreshController({
+      client: {
+        async appendHuman(value) { return value; },
+        async readSession() { return session([]); },
+        async fetch() { throw failure; },
+      },
+      onStatus: (message, state) => statuses.push({ message, state }),
+      setTimer: timers.setTimer,
+      clearTimer: timers.clearTimer,
+    });
+    await controller.publish(record());
+    await timers.runNext();
+    assert.equal(statuses.at(-1).state, "error");
+    assert.equal(controller.pending.size, 0);
+    assert.equal(timers.timers.filter((timer) => !timer.cancelled).length, 0);
+  }
+});
+
+test("disposing after a transient refresh failure cancels its retry", async () => {
+  const timers = timerHarness();
+  const statuses = [];
+  const controller = new ResponseRefreshController({
+    client: {
+      async appendHuman(value) { return value; },
+      async readSession() { return session([]); },
+      async fetch() { throw httpError(503); },
+    },
+    onStatus: (message, state) => statuses.push({ message, state }),
+    setTimer: timers.setTimer,
+    clearTimer: timers.clearTimer,
+  });
+
+  await controller.publish(record());
+  await timers.runNext();
+  controller.dispose();
+  assert.equal(controller.pending.size, 0);
+  assert.equal(timers.timers.filter((timer) => !timer.cancelled).length, 0);
+  assert.equal(statuses.some(({ state }) => state === "error" || state === "timeout"), false);
 });
 
 test("default timers do not require the controller as their receiver", async () => {

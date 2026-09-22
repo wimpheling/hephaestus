@@ -1,5 +1,11 @@
 const DEFAULT_POLL_INTERVAL_MS = 1_000;
 const DEFAULT_RESPONSE_TIMEOUT_MS = 30_000;
+const RETRYABLE_REFRESH_STATUS_CODES = new Set([502, 503, 504]);
+
+function isRetryableRefreshError(error) {
+  return error?.code === "HttpError" &&
+    RETRYABLE_REFRESH_STATUS_CODES.has(error.data?.statusCode);
+}
 
 /**
  * Serializes local Git operations and waits for release-owned responses.
@@ -123,6 +129,11 @@ export class ResponseRefreshController {
       if (abortController?.signal.aborted) {
         this.pending.clear();
         this.onStatus?.("The assistant response timed out; reconnect to check again", "timeout");
+        return;
+      }
+      if (isRetryableRefreshError(error)) {
+        this.onStatus?.("Waiting for the assistant response…", "waiting");
+        this.schedulePoll(this.pollIntervalMs);
         return;
       }
       this.pending.clear();
