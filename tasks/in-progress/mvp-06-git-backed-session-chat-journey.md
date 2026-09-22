@@ -1306,11 +1306,21 @@ unrestored and unclaimed.
 
 The replacement contains a newer canonical Rust image than the final36 local
 evidence, so fresh cloud runtime acceptance remains pending. The user completed
-the dedicated SDK login. Read-only `testIamPermissions` returned HTTP 200 but
-neither `storage.objects.create` nor `storage.objects.get` for the current
-account; an independent upload returned 403 `storage.objects.get`, so no new
-cache object or bucket mutation is claimed. The remaining prerequisite is an
-existing authorized uploader path for the current account; no usable existing
-impersonation path was found. No IAM changes were made. Cache pin updates are
-in commit `2d7ad67` (PR 53); fresh CI and cloud acceptance/merge remain
-pending. The 11 cleanup tests plus `bash -n` checks passed.
+the dedicated SDK login. An earlier read-only permission probe returned HTTP
+200 without create/get permission for that account, and an independent upload
+returned 403 `storage.objects.get`; that failed-account result is superseded by
+the later successful upload. The replacement object was then uploaded with an
+immutable generation-0 precondition to
+`gs://hephaestus-508000-cooking-cache/cooking/replacements/02430eca0a4e94ba129c4fdad969233f51486ee1dccdf1ee85e31f580f4d386d/heph-gcp-cooking-cache.tar.zst`
+as generation `1790041388884214`, size `1813939981` bytes, content type
+`application/zstd`, and base64 MD5 `wt25yyIq4ikDQzFsaxFsdA==`. A same-generation
+roundtrip download matched SHA-256
+`02430eca0a4e94ba129c4fdad969233f51486ee1dccdf1ee85e31f580f4d386d`.
+No overwrite or IAM change occurred; the safe upload metadata is retained in
+the [dated reproduction evidence](../../docs/experiments/gcp-cache-replacement-20260922/upload-verification.json).
+The three CI jobs passed for exact source SHA
+`d0f96f72adfceac53b95d5f6cb8dbaa3e452252e` in [run 35675627526](https://github.com/wimpheling/hephaestus/actions/runs/35675627526);
+this does not claim that a new documentation commit was tested. The original
+cache SHA remains unrecovered. Fresh cache preflight, diagnostic, session-chat
+GCP acceptance, and `main` merge approval remain pending. The 11 cleanup tests
+plus `bash -n` checks passed.
