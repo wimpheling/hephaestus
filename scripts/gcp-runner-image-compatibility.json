@@ -2,7 +2,7 @@
   "kind": "hephaestus-gcp-runner-compatibility",
   "records": [
     {
-      "allowed_runtime_startup_sha256": "6ec8867132fe566562d19a442ab6131a22cadaf3aa477600f192283d90dd4156",
+      "allowed_runtime_startup_sha256": "ab5303a50b21f23a8fc62350033fc3f737c1ef4dac79302b5e37bf12dfe548c8",
       "baked_recipe_sha256": "9c0459a8ed044f8c529b8df50abb7024f80ef52551a3428dfa12d09f6545986a",
       "baked_startup_sha256": "0340c8d96daa7fcba0398ebee8c9d437feb07c396c8a538b591b6424220712fe",
       "baked_verifier_sha256": "121ced2b04ca8b3aec786d6e66aa46fc3cf534981e4baca852f16aefaeaee4eb",

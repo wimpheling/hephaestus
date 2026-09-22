@@ -230,12 +230,13 @@ jobs:
           GCP_WORKLOAD_SHA: ${{ inputs.pr_head_sha || github.sha }}
           GCP_DIAGNOSTICS_ARCHIVE: ${{ runner.temp }}/gcp-diagnostics.tar.gz
           GCP_DIAGNOSTICS_STATUS: ${{ runner.temp }}/gcp-diagnostics-status.json
+          GCP_DIAGNOSTIC_FAILURE: ${{ inputs.diagnostic_failure || 'none' }}
           GCP_EXPECT_PHASE_TIMING: ${{ inputs.cloud_mode == 'gcp-cooking' && 'true' || 'false' }}
           GCP_PHASE_TIMING_PROJECTION: ${{ runner.temp }}/gcp-cooking-phase-timing.json
           HEPH_GCP_CONTROLLER_PHASE_TIMING_PATH: ${{ runner.temp }}/gcp-phase-timing-controller.jsonl
         run: bash scripts/gcp-kvm-smoke.sh download-diagnostics
       - name: Retain safe Cooking phase timing projection
-        if: ${{ always() && inputs.cloud_mode == 'gcp-cooking' }}
+        if: ${{ always() && (inputs.cloud_mode == 'diagnostic' || inputs.cloud_mode == 'gcp-cooking') }}
         uses: actions/upload-artifact@v4
         with:
           name: gcp-cooking-phase-timings-${{ github.run_id }}-${{ github.run_attempt }}
@@ -280,7 +281,7 @@ jobs:
         if: ${{ always() && (inputs.cloud_mode == 'diagnostic' || inputs.cloud_mode == 'smoke' || inputs.cloud_mode == 'gcp-cooking') }}
         env:
           GCP_DIAGNOSTICS_STATUS: ${{ runner.temp }}/gcp-diagnostics-status.json
-          GCP_CONTROLLER_TIMING: ${{ runner.temp }}/gcp-controller-phase-timings-${{ github.run_id }}-${{ github.run_attempt }}.json
+          GCP_CONTROLLER_TIMING: ${{ runner.temp }}/gcp-phase-timing-controller.json
           GCP_MODE: ${{ inputs.cloud_mode }}
           GCP_SCENARIO: ${{ inputs.cooking_scenario || 'cooking' }}
           GCP_WORKLOAD_SHA: ${{ inputs.pr_head_sha || github.sha }}
@@ -300,6 +301,7 @@ jobs:
                   return {}
 
           status = load(os.environ['GCP_DIAGNOSTICS_STATUS'])
+          controller_timing = load(os.environ.get('GCP_CONTROLLER_TIMING', ''))
           triage = status.get('triage') if isinstance(status.get('triage'), dict) else {}
           first = triage.get('firstFailure') if isinstance(triage.get('firstFailure'), dict) else {}
           timing = triage.get('phaseTiming') if isinstance(triage.get('phaseTiming'), dict) else {}
@@ -322,6 +324,12 @@ jobs:
                   for item in durations[:32]:
                       if isinstance(item, dict):
                           lines.append(f"  - `{item.get('phase', 'unknown')}`: `{item.get('durationMs', 'unknown')} ms` ({item.get('outcome', 'unknown')})")
+          controller_phases = controller_timing.get('phases', []) if isinstance(controller_timing, dict) else []
+          if isinstance(controller_phases, list) and controller_phases:
+              lines.append(f"- Controller timing: `{controller_timing.get('completeness', 'complete')}`")
+              for item in controller_phases[:32]:
+                  if isinstance(item, dict):
+                      lines.append(f"  - controller `{item.get('phase', 'unknown')}`: `{item.get('duration_ms', 'unknown')} ms` ({item.get('outcome', 'unknown')})")
           lines.extend([
               '',
               f"- Safe artifacts: [diagnostics manifest]({os.environ['GCP_RUN_URL']}), [controller timings]({os.environ['GCP_RUN_URL']}), and [Cooking timings]({os.environ['GCP_RUN_URL']}) when produced.",

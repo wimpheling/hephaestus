@@ -333,6 +333,7 @@ class RunnerImageManifestTests(unittest.TestCase):
 
     def test_early_image_failure_can_stage_metadata_collector_before_finish(self) -> None:
         startup = SCRIPT.with_name("gcp-kvm-startup.sh")
+        timing_source = SCRIPT.with_name("gcp_phase_timing.py")
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             metadata_root = root / "metadata"
@@ -346,10 +347,13 @@ test_mode=diagnostic
 trap - EXIT
 collector_path="$3"
 scanner_path="$4"
+timing_path="$5"
 metadata_value() {
   case "$1" in
     diagnostics-collector-script) cat "$collector_path" ;;
     diagnostics-scanner-script) cat "$scanner_path" ;;
+    phase-timing-script) cat "$timing_path" ;;
+    phase-timing-script-sha256) sha256sum "$timing_path" | awk '{print $1}' ;;
     *) return 1 ;;
   esac
 }
@@ -360,7 +364,7 @@ test -s "$diagnostics_metadata_root/check-browser-evidence.py"
             result = subprocess.run(
                 [
                     "bash", "-Eeuo", "pipefail", "-c", command, "metadata-stage-test",
-                    str(startup), str(metadata_root), str(collector), str(scanner),
+                    str(startup), str(metadata_root), str(collector), str(scanner), str(timing_source),
                 ],
                 env={
                     **os.environ,
@@ -380,6 +384,7 @@ test -s "$diagnostics_metadata_root/check-browser-evidence.py"
         startup = SCRIPT.with_name("gcp-kvm-startup.sh")
         collector_source = SCRIPT.with_name("collect-cooking-diagnostics.py")
         scanner_source = SCRIPT.with_name("check-browser-evidence.py")
+        timing_source = SCRIPT.with_name("gcp_phase_timing.py")
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             work = root / "work"
@@ -407,10 +412,13 @@ source "$1"
 trap - EXIT
 collector_path="$3"
 scanner_path="$4"
+timing_path="$5"
 metadata_value() {
   case "$1" in
     diagnostics-collector-script) cat "$collector_path" ;;
     diagnostics-scanner-script) cat "$scanner_path" ;;
+    phase-timing-script) cat "$timing_path" ;;
+    phase-timing-script-sha256) sha256sum "$timing_path" | awk '{print $1}' ;;
     diagnostics-object) printf '%s\n' 'cooking/runs/1/1/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.tar.gz' ;;
     *) return 1 ;;
   esac
@@ -436,7 +444,7 @@ finish
             result = subprocess.run(
                 [
                     "bash", "-Eeuo", "pipefail", "-c", command, "early-image-failure-test",
-                    str(startup), str(metadata_root), str(collector), str(scanner),
+                    str(startup), str(metadata_root), str(collector), str(scanner), str(timing_source),
                 ],
                 env=env,
                 text=True,

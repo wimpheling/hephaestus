@@ -416,30 +416,34 @@ stage_diagnostics_metadata() {
   install -d -m 0700 "$diagnostics_metadata_root"
   metadata_value diagnostics-collector-script >"$diagnostics_metadata_root/collect-cooking-diagnostics.py"
   metadata_value diagnostics-scanner-script >"$diagnostics_metadata_root/check-browser-evidence.py"
+  if [[ "$test_mode" == diagnostic || "$test_mode" == gcp-cooking ]]; then
+    trusted_phase_timing_script="$diagnostics_metadata_root/gcp_phase_timing.py"
+    metadata_value phase-timing-script >"$trusted_phase_timing_script"
+    chmod 0700 "$trusted_phase_timing_script"
+    local expected_timing_hash
+    expected_timing_hash="$(metadata_value phase-timing-script-sha256)"
+    [[ "$expected_timing_hash" =~ ^[0-9a-f]{64}$ ]] ||
+      die 'phase timing helper hash metadata is invalid'
+    [[ "$(sha256sum "$trusted_phase_timing_script" | awk '{print $1}')" == "$expected_timing_hash" ]] ||
+      die 'phase timing helper hash does not match metadata'
+  fi
   if [[ "$test_mode" == gcp-cooking ]]; then
     trusted_cooking_runtime_script="$diagnostics_metadata_root/gcp-cooking-run.sh"
     trusted_browser_summary_script="$diagnostics_metadata_root/project-playwright-browser-summary.py"
-    trusted_phase_timing_script="$diagnostics_metadata_root/gcp_phase_timing.py"
     metadata_value cooking-runtime-script >"$trusted_cooking_runtime_script"
     metadata_value cooking-browser-summary-script >"$trusted_browser_summary_script"
-    metadata_value phase-timing-script >"$trusted_phase_timing_script"
-    chmod 0700 "$trusted_cooking_runtime_script" "$trusted_browser_summary_script" "$trusted_phase_timing_script"
-    local expected_runtime_hash expected_browser_hash expected_timing_hash
+    chmod 0700 "$trusted_cooking_runtime_script" "$trusted_browser_summary_script"
+    local expected_runtime_hash expected_browser_hash
     expected_runtime_hash="$(metadata_value cooking-runtime-script-sha256)"
     expected_browser_hash="$(metadata_value cooking-browser-summary-script-sha256)"
-    expected_timing_hash="$(metadata_value phase-timing-script-sha256)"
     [[ "$expected_runtime_hash" =~ ^[0-9a-f]{64}$ ]] ||
       die 'cooking runtime helper hash metadata is invalid'
     [[ "$expected_browser_hash" =~ ^[0-9a-f]{64}$ ]] ||
       die 'browser summary helper hash metadata is invalid'
-    [[ "$expected_timing_hash" =~ ^[0-9a-f]{64}$ ]] ||
-      die 'phase timing helper hash metadata is invalid'
     [[ "$(sha256sum "$trusted_cooking_runtime_script" | awk '{print $1}')" == "$expected_runtime_hash" ]] ||
       die 'cooking runtime helper hash does not match metadata'
     [[ "$(sha256sum "$trusted_browser_summary_script" | awk '{print $1}')" == "$expected_browser_hash" ]] ||
       die 'browser summary helper hash does not match metadata'
-    [[ "$(sha256sum "$trusted_phase_timing_script" | awk '{print $1}')" == "$expected_timing_hash" ]] ||
-      die 'phase timing helper hash does not match metadata'
   fi
   # The root-owned sidecar writer is supplied through the same immutable
   # metadata channel as the collector.  This is needed before checkout so an
@@ -650,6 +654,7 @@ collect_diagnostics() {
   local phase_timing_final_combined
   local phase_timing_required_args=()
   local phase_timing_workload_required_args=()
+  local phase_timing_diagnostic_required_args=()
   local selected_cooking_scenario required_workload_phases
   local object token encoded_object upload_status phase_timing_sidecar phase_timing_sidecar_object_name encoded_sidecar
   local phase_timing_projection_ready=false
@@ -726,6 +731,9 @@ collect_diagnostics() {
   phase_timing_supervisor_source="$supervisor_phase_timing_path"
   phase_timing_combined="$input_root/phase-timing-workload.jsonl"
   phase_timing_input="$input_root/phase-timing.json"
+  if [[ "$test_mode" == diagnostic && "$diagnostic_failure" == setup ]]; then
+    phase_timing_diagnostic_required_args=(--require-phase browser-setup --require-phase browser-initial)
+  fi
   selected_cooking_scenario="${cooking_scenario:-cooking}"
   required_workload_phases=()
   phase_timing_workload_required_args=()
@@ -766,7 +774,7 @@ collect_diagnostics() {
         --path "$phase_timing_combined" --output "$phase_timing_input" \
         --expected-run-id "$run_id" --expected-attempt "$run_attempt" \
         --expected-source-sha "$revision" --expected-image-fingerprint "$timing_image_fingerprint" \
-        --require-phase browser-setup --require-phase browser-initial; then
+        "${phase_timing_diagnostic_required_args[@]}"; then
       phase_timing_failed_stage=projection
       phase_timing_failure_path="$phase_timing_combined"
     else
@@ -1120,62 +1128,90 @@ PY
   supervisor_phase_timing_end passed
   printf 'HEPH_GCP_DIAGNOSTICS event=upload status=pass object=gs://%s/%s bytes=%s\n' \
     "$diagnostics_bucket" "$object" "$(stat -c '%s' "$archive")"
-  if [[ "$test_mode" == gcp-cooking && "$phase_timing_projection_ready" == true ]]; then
-    # The archive was built before archive/evidence-scan/upload completed.
-    # Publish a second bounded safe projection after the raw archive upload so
-    # those terminal trusted timings are retained without rewriting the
-    # private diagnostics object.
+  if [[ ("$test_mode" == diagnostic || "$test_mode" == gcp-cooking) &&
+    "$phase_timing_projection_ready" == true ]]; then
+    # Publish a bounded timing sidecar after archive/evidence-scan/upload have
+    # closed their intervals. Diagnostic mode has no workload timing file: its
+    # partial projection contains the real controller browser-setup failure and
+    # the terminal trusted collection phases only.
     phase_timing_sidecar="${temporary_root}/phase-timing-final.json"
     phase_timing_final_combined="${temporary_root}/phase-timing-final.jsonl"
     rm -f -- "$phase_timing_final_combined"
-    # Rebuild after archive/evidence-scan/upload have closed their intervals.
-    # The earlier combined file is intentionally only the archive snapshot.
-    if ! install -m 0600 "$phase_timing_source" "$phase_timing_final_combined"; then
-      phase_timing_emit_failure final-projection "$phase_timing_source" '' true
-      rm -f -- "$phase_timing_sidecar"
-      return 1
-    fi
-    run_with_collection_deadline python3 "$trusted_phase_timing_script" validate \
-      --path "$phase_timing_source" --require-trust workload \
-      --expected-run-id "$run_id" --expected-attempt "$run_attempt" \
-      --expected-source-sha "$revision" --expected-image-fingerprint "$timing_image_fingerprint" || {
-        phase_timing_emit_failure final-projection "$phase_timing_source" workload false
-        rm -f -- "$phase_timing_sidecar"
-        return 1
-      }
-    run_with_collection_deadline python3 "$trusted_phase_timing_script" validate \
-      --path "$phase_timing_supervisor_source" --require-trust supervisor \
-      --expected-run-id "$run_id" --expected-attempt "$run_attempt" \
-      --expected-source-sha "$revision" --expected-image-fingerprint "$timing_image_fingerprint" || {
+    if [[ "$test_mode" == diagnostic ]]; then
+      if ! install -m 0600 "$phase_timing_supervisor_source" "$phase_timing_final_combined"; then
         phase_timing_emit_failure final-projection "$phase_timing_supervisor_source" supervisor false
         rm -f -- "$phase_timing_sidecar"
         return 1
-      }
-    run_with_collection_deadline python3 "$trusted_phase_timing_script" import-markers \
-      --input "$input_root/serial.log" --output "$phase_timing_final_combined" \
-      --source-sha "$revision" --run-id "$run_id" --attempt "$run_attempt" \
-      --clock-domain workload-libkrun --image-fingerprint "$timing_image_fingerprint" || {
-        phase_timing_emit_failure final-projection "$phase_timing_final_combined" '' false
+      fi
+      run_with_collection_deadline python3 "$trusted_phase_timing_script" validate \
+        --path "$phase_timing_supervisor_source" --require-trust supervisor \
+        --expected-run-id "$run_id" --expected-attempt "$run_attempt" \
+        --expected-source-sha "$revision" --expected-image-fingerprint "$timing_image_fingerprint" || {
+          phase_timing_emit_failure final-projection "$phase_timing_supervisor_source" supervisor false
+          rm -f -- "$phase_timing_sidecar"
+          return 1
+        }
+      run_with_collection_deadline python3 "$trusted_phase_timing_script" project --allow-partial \
+        --path "$phase_timing_final_combined" --output "$phase_timing_sidecar" \
+        --require-supervisor-phase archive --require-supervisor-phase evidence-scan \
+        --require-supervisor-phase upload "${phase_timing_diagnostic_required_args[@]}" \
+        --expected-run-id "$run_id" --expected-attempt "$run_attempt" \
+        --expected-source-sha "$revision" --expected-image-fingerprint "$timing_image_fingerprint" || {
+          phase_timing_emit_failure final-projection "$phase_timing_final_combined" '' true
+          rm -f -- "$phase_timing_sidecar"
+          printf 'HEPH_GCP_DIAGNOSTICS event=phase-timing-sidecar status=invalid\n'
+          return 1
+        }
+    else
+      # Full Cooking combines the workload stream, imported markers, and the
+      # trusted terminal controller intervals, then applies strict requirements.
+      if ! install -m 0600 "$phase_timing_source" "$phase_timing_final_combined"; then
+        phase_timing_emit_failure final-projection "$phase_timing_source" '' true
         rm -f -- "$phase_timing_sidecar"
         return 1
-      }
-    if ! cat -- "$phase_timing_supervisor_source" >>"$phase_timing_final_combined"; then
-      phase_timing_emit_failure final-projection "$phase_timing_supervisor_source" '' false
-      rm -f -- "$phase_timing_sidecar"
-      return 1
+      fi
+      run_with_collection_deadline python3 "$trusted_phase_timing_script" validate \
+        --path "$phase_timing_source" --require-trust workload \
+        --expected-run-id "$run_id" --expected-attempt "$run_attempt" \
+        --expected-source-sha "$revision" --expected-image-fingerprint "$timing_image_fingerprint" || {
+          phase_timing_emit_failure final-projection "$phase_timing_source" workload false
+          rm -f -- "$phase_timing_sidecar"
+          return 1
+        }
+      run_with_collection_deadline python3 "$trusted_phase_timing_script" validate \
+        --path "$phase_timing_supervisor_source" --require-trust supervisor \
+        --expected-run-id "$run_id" --expected-attempt "$run_attempt" \
+        --expected-source-sha "$revision" --expected-image-fingerprint "$timing_image_fingerprint" || {
+          phase_timing_emit_failure final-projection "$phase_timing_supervisor_source" supervisor false
+          rm -f -- "$phase_timing_sidecar"
+          return 1
+        }
+      run_with_collection_deadline python3 "$trusted_phase_timing_script" import-markers \
+        --input "$input_root/serial.log" --output "$phase_timing_final_combined" \
+        --source-sha "$revision" --run-id "$run_id" --attempt "$run_attempt" \
+        --clock-domain workload-libkrun --image-fingerprint "$timing_image_fingerprint" || {
+          phase_timing_emit_failure final-projection "$phase_timing_final_combined" '' false
+          rm -f -- "$phase_timing_sidecar"
+          return 1
+        }
+      if ! cat -- "$phase_timing_supervisor_source" >>"$phase_timing_final_combined"; then
+        phase_timing_emit_failure final-projection "$phase_timing_supervisor_source" '' false
+        rm -f -- "$phase_timing_sidecar"
+        return 1
+      fi
+      run_with_collection_deadline python3 "$trusted_phase_timing_script" project \
+        --path "$phase_timing_final_combined" --output "$phase_timing_sidecar" \
+        --require-supervisor-phase archive --require-supervisor-phase evidence-scan \
+        --require-supervisor-phase upload \
+        "${phase_timing_workload_required_args[@]}" \
+        --expected-run-id "$run_id" --expected-attempt "$run_attempt" \
+        --expected-source-sha "$revision" --expected-image-fingerprint "$timing_image_fingerprint" || {
+          phase_timing_emit_failure final-projection "$phase_timing_final_combined" '' true
+          rm -f -- "$phase_timing_sidecar"
+          printf 'HEPH_GCP_DIAGNOSTICS event=phase-timing-sidecar status=invalid\n'
+          return 1
+        }
     fi
-    run_with_collection_deadline python3 "$trusted_phase_timing_script" project \
-      --path "$phase_timing_final_combined" --output "$phase_timing_sidecar" \
-      --require-supervisor-phase archive --require-supervisor-phase evidence-scan \
-      --require-supervisor-phase upload \
-      "${phase_timing_workload_required_args[@]}" \
-      --expected-run-id "$run_id" --expected-attempt "$run_attempt" \
-      --expected-source-sha "$revision" --expected-image-fingerprint "$timing_image_fingerprint" || {
-        phase_timing_emit_failure final-projection "$phase_timing_final_combined" '' true
-        rm -f -- "$phase_timing_sidecar"
-        printf 'HEPH_GCP_DIAGNOSTICS event=phase-timing-sidecar status=invalid\n'
-        return 1
-      }
     phase_timing_sidecar_object_name="$(phase_timing_sidecar_object)" || return 1
     encoded_sidecar="$(python3 -c 'from urllib.parse import quote; import sys; print(quote(sys.argv[1], safe=""))' "$phase_timing_sidecar_object_name")"
     run_with_collection_deadline curl --fail --silent --show-error --retry 2 --retry-all-errors \
@@ -1424,7 +1460,7 @@ else
   fi
 fi
 stage_diagnostics_metadata
-if [[ "$test_mode" == gcp-cooking ]]; then
+if [[ "$test_mode" == diagnostic || "$test_mode" == gcp-cooking ]]; then
   install -m 0600 /dev/null "$supervisor_phase_timing_path"
   # The timing helper itself is delivered through the trusted metadata path,
   # so the initial legacy metadata marker cannot be timed before that helper is

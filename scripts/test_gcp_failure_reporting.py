@@ -148,6 +148,10 @@ bash -Eeuo pipefail -c 'exit 78'
 status=$?
 set -e
 supervisor_phase_timing_end failed
+for timing_phase in archive evidence-scan upload; do
+  supervisor_phase_timing_start "$timing_phase"
+  supervisor_phase_timing_end passed
+done
 test "$status" -eq 78
 test -s "$first_failure_path"
 '''
@@ -174,7 +178,9 @@ test -s "$first_failure_path"
                     [sys.executable, str(TIMING), "project", "--allow-partial", "--path", str(timing),
                      "--output", str(projection), "--expected-run-id", "12345", "--expected-attempt", "1",
                      "--expected-source-sha", "a" * 40, "--expected-image-fingerprint", "b" * 32,
-                     "--require-phase", "browser-setup", "--require-phase", "browser-initial"],
+                     "--require-phase", "browser-setup", "--require-phase", "browser-initial",
+                     "--require-supervisor-phase", "archive", "--require-supervisor-phase", "evidence-scan",
+                     "--require-supervisor-phase", "upload"],
                     check=False,
                 ).returncode,
                 0,
@@ -258,7 +264,13 @@ test -s "$first_failure_path"
                 "GCP_MODE": "gcp-cooking", "GCP_SCENARIO": "session-chat",
                 "GCP_WORKLOAD_SHA": "a" * 40, "GCP_CONTROLLER_SHA": "b" * 40,
                 "GCP_RUN_URL": "https://github.example/run/1",
+                "GCP_CONTROLLER_TIMING": str(root / "controller-timing.json"),
             }
+            (root / "controller-timing.json").write_text(json.dumps({
+                "schema": 1,
+                "completeness": "complete",
+                "phases": [{"phase": "archive", "duration_ms": 23, "outcome": "passed"}],
+            }), encoding="utf-8")
             for timing_status in ("partial", "complete"):
                 base["triage"]["phaseTiming"]["status"] = timing_status
                 status.write_text(json.dumps(base), encoding="utf-8")
@@ -268,6 +280,86 @@ test -s "$first_failure_path"
                 self.assertIn(f"`{timing_status}`", rendered)
                 self.assertIn("browser-setup", rendered)
                 self.assertIn("controller timings", rendered)
+                self.assertIn("controller `archive`", rendered)
+
+    def test_diagnostic_gate_acceptance_binds_42_and_78_expectations(self) -> None:
+        source = (ROOT / "gcp-kvm-smoke.sh").read_text(encoding="utf-8")
+        body = source.split("<<'PYGATE_ACCEPT' || gate_acceptance_status=$?\n", 1)[1].split("\nPYGATE_ACCEPT", 1)[0]
+        with tempfile.TemporaryDirectory(prefix="heph-diagnostic-gate-") as raw:
+            root = Path(raw)
+            evidence = root / "sources" / "evidence-scan"
+            evidence.parent.mkdir()
+            evidence.write_text(json.dumps({"status": "failed", "rule": "browser-secret-org"}), encoding="utf-8")
+            (root / "manifest.json").write_text(json.dumps({
+                "rejectedSources": [{"label": "runtime-log", "reason": "credential-scan-rejected"}],
+            }), encoding="utf-8")
+            gate = {
+                "test_mode": "diagnostic", "overall_exit_code": 42, "supervisor_exit_code": 42,
+                "gates": {
+                    "workload": {"state": "failed", "exit_code": 42},
+                    "evidence-scan": {"state": "failed", "exit_code": 1, "reason_class": "evidence-scan-failed"},
+                    "browser-validation": {"state": "failed", "exit_code": 42},
+                },
+            }
+            # The embedded acceptance projection only reads these gate fields;
+            # the collector has already validated the complete sidecar schema.
+            (root / "sources" / "gate-results").write_text(json.dumps(gate), encoding="utf-8")
+            for expected, overall, wanted in (("none", 42, 0), ("setup", 78, 0), ("none", 78, 1)):
+                gate["overall_exit_code"] = overall
+                gate["supervisor_exit_code"] = overall
+                for name in ("workload", "browser-validation"):
+                    gate["gates"][name]["exit_code"] = overall
+                (root / "sources" / "gate-results").write_text(json.dumps(gate), encoding="utf-8")
+                status = root / f"status-{expected}-{overall}.json"
+                status.write_text(json.dumps({}), encoding="utf-8")
+                result = subprocess.run(
+                    [sys.executable, "-c", body, str(status), str(root), "diagnostic", "passed", expected],
+                    text=True, capture_output=True, check=False,
+                )
+                self.assertEqual(result.returncode, wanted, result.stderr)
+                value = json.loads(status.read_text(encoding="utf-8"))
+                self.assertEqual(value["gateAcceptance"], "passed" if wanted == 0 else "failed")
+
+    def test_diagnostic_stages_real_trusted_timing_helper(self) -> None:
+        with tempfile.TemporaryDirectory(prefix="heph-diagnostic-staging-") as raw:
+            root = Path(raw)
+            staging = root / "metadata"
+            collector = ROOT / "collect-cooking-diagnostics.py"
+            scanner = ROOT / "check-browser-evidence.py"
+            gate = ROOT / "cooking-gate-results.py"
+            capture = r'''
+source "$1"
+test_mode=diagnostic
+diagnostics_enabled=true
+collector_source="$3"
+scanner_source="$4"
+timing_source="$5"
+gate_source="$6"
+metadata_value() {
+  case "$1" in
+    diagnostics-collector-script) cat "$collector_source" ;;
+    diagnostics-scanner-script) cat "$scanner_source" ;;
+    phase-timing-script) cat "$timing_source" ;;
+    phase-timing-script-sha256) sha256sum "$timing_source" | awk '{print $1}' ;;
+    cooking-gate-results-helper) cat "$gate_source" ;;
+    cooking-gate-results-script-sha256) sha256sum "$gate_source" | awk '{print $1}' ;;
+    *) return 1 ;;
+  esac
+}
+stage_diagnostics_metadata
+diagnostics_enabled=false
+test_mode=smoke
+test -f "$trusted_phase_timing_script"
+cmp -s "$trusted_phase_timing_script" "$timing_source"
+'''
+            result = subprocess.run(
+                ["bash", "-Eeuo", "pipefail", "-c", capture, "stage", str(ROOT / "gcp-kvm-startup.sh"), str(staging),
+                 str(collector), str(scanner), str(TIMING), str(gate)],
+                env={**__import__("os").environ, "HEPH_GCP_STARTUP_LIBRARY": "1",
+                     "HEPH_GCP_DIAGNOSTICS_METADATA_ROOT": str(staging)},
+                text=True, capture_output=True, check=False,
+            )
+            self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
 
 
 if __name__ == "__main__":
