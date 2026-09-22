@@ -786,7 +786,7 @@ mod tests {
         sqlx::migrate!("../../migrations")
             .run(&bootstrap)
             .await
-            .expect("apply migrations through 0099");
+            .expect("apply migrations through 0100");
         let worker = role_pool(&database_url, "hephaestus_worker").await;
         let app_pool = role_pool(&database_url, "hephaestus_app").await;
         let fixture = resource_fixture::seed_fixture_reusing_installation_helpers(&worker).await;

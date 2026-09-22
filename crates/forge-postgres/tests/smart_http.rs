@@ -190,7 +190,7 @@ async fn clone_fetch_push_audit_and_run_request() {
             .await
             .expect("latest applied migration");
     assert_eq!(
-        latest_migration, 99,
+        latest_migration, 100,
         "focused matrix must use current schema"
     );
     let temporary = tempfile::tempdir().expect("temporary directory");
