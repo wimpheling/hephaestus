@@ -1517,6 +1517,9 @@ finish
         with tempfile.TemporaryDirectory(prefix="heph-gcp-gate-finalize-") as directory:
             root = Path(directory)
             sidecar = root / "cooking-gate-results.json"
+            metadata = root / "metadata"
+            metadata.mkdir()
+            shutil.copy2(ROOT / "check-browser-evidence.py", metadata / "check-browser-evidence.py")
             command = r'''
 export HEPH_GCP_COOKING_GATE_RESULTS_PATH="$2"
 source "$1"
@@ -1611,6 +1614,7 @@ PY
                 "HEPH_GCP_WORK_ROOT": str(root / "tmp"),
                 "HEPH_GCP_DIAGNOSTICS_METADATA_ROOT": str(metadata),
                 "HEPH_GCP_COOKING_GATE_RESULTS_PATH": str(sidecar),
+                "HEPH_GCP_FIRST_FAILURE_PATH": str(root / "first-failure.json"),
                 "HEPH_GCP_EVIDENCE_SCAN_STATUS_PATH": str(root / "evidence-scan-status.json"),
             }
             result = subprocess.run(
@@ -1621,6 +1625,42 @@ PY
             report = json.loads((root / "evidence-scan-status.json").read_text(encoding="utf-8"))
             self.assertEqual(report["status"], "failed")
             self.assertEqual(report["rule"], "browser-secret-org")
+
+    def test_diagnostic_gate_writer_accepts_controller_setup_exit_78(self):
+        startup = ROOT / "gcp-kvm-startup.sh"
+        helper = ROOT / "cooking-gate-results.py"
+        with tempfile.TemporaryDirectory(prefix="heph-gcp-diagnostic-setup-gate-") as directory:
+            root = Path(directory)
+            sidecar = root / "cooking-gate-results.json"
+            metadata = root / "metadata"
+            metadata.mkdir()
+            shutil.copy2(ROOT / "check-browser-evidence.py", metadata / "check-browser-evidence.py")
+            command = "\n".join([
+                "source \"$1\"", "trap - EXIT || true", "test_mode=diagnostic", "diagnostic_failure=setup",
+                "revision=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "diagnostics_gate_helper=\"$3\"",
+                "diagnostics_gate_script_sha256=\"$(sha256sum \"$diagnostics_gate_helper\" | awk '{print $1}')\"",
+                "trial_deadline_epoch=$(( $(date +%s) + 30 ))", "collection_deadline_epoch=$(( $(date +%s) + 30 ))", "initialize_cooking_gate_results",
+                "complete_diagnostic_gate_results", "finalize_cooking_gate_results 78",
+                "python3 - \"$cooking_gate_results_path\" - <<'PY'",
+                "import json, sys", "value = json.load(open(sys.argv[1], encoding=\"utf-8\"))",
+                "assert value[\"overall_exit_code\"] == 78", "assert value[\"supervisor_exit_code\"] == 78",
+                "assert value[\"gates\"][\"workload\"][\"exit_code\"] == 78",
+                "assert value[\"gates\"][\"browser-validation\"][\"exit_code\"] == 78", "PY",
+            ])
+            env = {
+                **os.environ,
+                "HEPH_GCP_STARTUP_LIBRARY": "1",
+                "HEPH_GCP_WORK_ROOT": str(root / "tmp"),
+                "HEPH_GCP_DIAGNOSTICS_METADATA_ROOT": str(metadata),
+                "HEPH_GCP_COOKING_GATE_RESULTS_PATH": str(sidecar),
+                "HEPH_GCP_FIRST_FAILURE_PATH": str(root / "first-failure.json"),
+                "HEPH_GCP_EVIDENCE_SCAN_STATUS_PATH": str(root / "setup-evidence-scan-status.json"),
+            }
+            result = subprocess.run(
+                ["bash", "-Eeuo", "pipefail", "-c", command, "diagnostic-setup-gate", str(startup), str(sidecar), str(helper)],
+                env=env, text=True, capture_output=True, check=False,
+            )
+            self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
 
     def test_cooking_failure_diagnostics_do_not_retain_systemd_process_arguments(self):
         runner = (ROOT / "gcp-cooking-run.sh").read_text(encoding="utf-8")
@@ -1698,9 +1738,13 @@ PY
             args_file = root / "create.args"
             fake_bin.joinpath("gcloud").write_text(
                 "#!/usr/bin/env bash\nset -Eeuo pipefail\n"
-                "if [[ \"$1 $2 $3\" == \"compute regions describe\" ]]; then\n"
-                "  printf '{\"quotas\":[{\"metric\":\"INSTANCES\",\"limit\":24,\"usage\":0}]}\\n'; exit 0\n"
+                "if [[ \"$1 $2 $3\" == \"compute project-info describe\" ]]; then\n"
+                "  printf '{\"quotas\":[{\"metric\":\"CPUS_ALL_REGIONS\",\"limit\":32,\"usage\":0}]}\\n'; exit 0\n"
                 "fi\n"
+                "if [[ \"$1 $2 $3\" == \"compute regions describe\" ]]; then\n"
+                "  printf '{\"quotas\":[{\"metric\":\"CPUS\",\"limit\":32,\"usage\":0},{\"metric\":\"N2_CPUS\",\"limit\":32,\"usage\":0},{\"metric\":\"SSD_TOTAL_GB\",\"limit\":1000,\"usage\":0},{\"metric\":\"INSTANCES\",\"limit\":8,\"usage\":0},{\"metric\":\"IN_USE_ADDRESSES\",\"limit\":8,\"usage\":0}]}\\n'; exit 0\n"
+                "fi\n"
+                "if [[ \"$1 $2 $3\" == \"compute instances list\" || \"$1 $2 $3\" == \"compute disks list\" ]]; then printf '[]\\n'; exit 0; fi\n"
                 "if [[ \"$1 $2 $3\" == \"compute instances create\" ]]; then\n"
                 "  printf '%q ' \"$@\" >\"$GCP_FAKE_ARGS\"; touch \"$GCP_FAKE_STATE\"; exit 0\n"
                 "fi\n"

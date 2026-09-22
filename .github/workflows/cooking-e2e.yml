@@ -81,6 +81,12 @@ on:
         type: choice
         options: [cooking, session-chat]
         default: cooking
+      diagnostic_failure:
+        description: 'Controller-owned diagnostic failure fixture (diagnostic mode only)'
+        required: false
+        type: choice
+        options: [none, setup]
+        default: none
   pull_request:
   push:
     branches: [main]
@@ -89,7 +95,7 @@ permissions:
   contents: read
 
 concurrency:
-  group: ${{ (github.event_name == 'workflow_dispatch' && inputs.cloud_mode != 'cooking') && format('gcp-kvm-smoke-{0}', github.repository) || format('cooking-kvm-{0}', github.repository) }}
+  group: ${{ github.event_name == 'workflow_dispatch' && inputs.cloud_mode == 'gcp-cooking' && format('gcp-kvm-full-{0}-{1}', github.repository, inputs.cooking_scenario) || github.event_name == 'workflow_dispatch' && inputs.cloud_mode != 'cooking' && format('gcp-kvm-maintenance-{0}', github.repository) || format('cooking-kvm-{0}', github.repository) }}
   cancel-in-progress: false
 
 jobs:
@@ -138,6 +144,7 @@ jobs:
           GCP_PR_HEAD_SHA: ${{ inputs.pr_head_sha }}
           GCP_WORKLOAD_SHA: ${{ inputs.pr_head_sha || github.sha }}
           GCP_COOKING_SCENARIO: ${{ inputs.cooking_scenario || 'cooking' }}
+          GCP_DIAGNOSTIC_FAILURE: ${{ inputs.diagnostic_failure || 'none' }}
           GCP_SMOKE_LOG: ${{ runner.temp }}/gcp-kvm-smoke.log
           GCP_DIAGNOSTICS_STATUS: ${{ runner.temp }}/gcp-diagnostics-status.json
           HEPH_GCP_CONTROLLER_PHASE_TIMING_PATH: ${{ runner.temp }}/gcp-phase-timing-controller.jsonl
@@ -269,6 +276,58 @@ jobs:
           path: ${{ runner.temp }}/gcp-diagnostics-status.json
           if-no-files-found: error
           retention-days: 1
+      - name: Publish safe GCP failure summary
+        if: ${{ always() && (inputs.cloud_mode == 'diagnostic' || inputs.cloud_mode == 'smoke' || inputs.cloud_mode == 'gcp-cooking') }}
+        env:
+          GCP_DIAGNOSTICS_STATUS: ${{ runner.temp }}/gcp-diagnostics-status.json
+          GCP_CONTROLLER_TIMING: ${{ runner.temp }}/gcp-controller-phase-timings-${{ github.run_id }}-${{ github.run_attempt }}.json
+          GCP_MODE: ${{ inputs.cloud_mode }}
+          GCP_SCENARIO: ${{ inputs.cooking_scenario || 'cooking' }}
+          GCP_WORKLOAD_SHA: ${{ inputs.pr_head_sha || github.sha }}
+          GCP_CONTROLLER_SHA: ${{ github.sha }}
+          GCP_RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          set -Eeuo pipefail
+          python3 - <<'PY'
+          import json
+          import os
+          from pathlib import Path
+
+          def load(path):
+              try:
+                  return json.loads(Path(path).read_text(encoding='utf-8'))
+              except (OSError, ValueError, UnicodeError):
+                  return {}
+
+          status = load(os.environ['GCP_DIAGNOSTICS_STATUS'])
+          triage = status.get('triage') if isinstance(status.get('triage'), dict) else {}
+          first = triage.get('firstFailure') if isinstance(triage.get('firstFailure'), dict) else {}
+          timing = triage.get('phaseTiming') if isinstance(triage.get('phaseTiming'), dict) else {}
+          lines = [
+              '## GCP Cooking result',
+              '',
+              f"- Mode/scenario: `{os.environ['GCP_MODE']}` / `{os.environ['GCP_SCENARIO']}`",
+              f"- Controller/workload: `{os.environ['GCP_CONTROLLER_SHA']}` / `{os.environ['GCP_WORKLOAD_SHA']}`",
+              f"- Run: [{os.environ['GCP_RUN_URL']}]({os.environ['GCP_RUN_URL']})",
+              f"- Diagnostics: cleanup `{status.get('cleanup', 'unknown')}`, upload `{status.get('upload', 'unknown')}`, download `{status.get('download', 'unknown')}`, scan `{status.get('scan', 'unknown')}`",
+          ]
+          if first:
+              lines.append(
+                  f"- Primary failure: phase `{first.get('phase', 'unknown')}`, command `{first.get('command_id', 'unknown')}`, exit `{first.get('exit_code', 'unknown')}`, diagnostic `{first.get('diagnostic_error', 'unknown')}`"
+              )
+          if timing:
+              lines.append(f"- Timing: `{timing.get('status', 'unknown')}`; primary `{timing.get('primaryFailurePhase', 'unknown')}`; downstream missing `{', '.join(timing.get('downstreamMissingPhases', [])) or 'none'}`")
+              durations = timing.get('durations', [])
+              if isinstance(durations, list):
+                  for item in durations[:32]:
+                      if isinstance(item, dict):
+                          lines.append(f"  - `{item.get('phase', 'unknown')}`: `{item.get('durationMs', 'unknown')} ms` ({item.get('outcome', 'unknown')})")
+          lines.extend([
+              '',
+              f"- Safe artifacts: [diagnostics manifest]({os.environ['GCP_RUN_URL']}), [controller timings]({os.environ['GCP_RUN_URL']}), and [Cooking timings]({os.environ['GCP_RUN_URL']}) when produced.",
+          ])
+          Path(os.environ['GITHUB_STEP_SUMMARY']).write_text('\n'.join(lines) + '\n', encoding='utf-8')
+          PY
 
   provider-metrics:
     if: ${{ github.repository == 'wimpheling/hephaestus' && github.ref == 'refs/heads/main' && github.event_name == 'workflow_dispatch' && inputs.cloud_mode == 'provider-metrics' }}

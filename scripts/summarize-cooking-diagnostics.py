@@ -35,11 +35,11 @@ LINEAGE_FIELDS = COLLECTOR.SNAPSHOT_FIELDS
 LINEAGE_STATUS_FIELDS = COLLECTOR.SNAPSHOT_STATUS_FIELDS | {"rows"}
 SOURCE_LABELS = {
     "serial", "host-journal", "runtime-log", "runtime-structured",
-    "browser-summary", "session-chat-negative-summary", "test-output", "evidence-scan", "gate-results", "phase-timing", "lineage", "lineage-status",
+    "browser-summary", "session-chat-negative-summary", "test-output", "evidence-scan", "gate-results", "phase-timing", "first-failure", "setup-log", "image-build-log", "npm-log", "playwright-log", "browser-container-log", "lineage", "lineage-status",
 }
 SAFE_STATUS = COLLECTOR.SNAPSHOT_STATUS_VALUES
 TRIAGE_FIELDS = {
-    "schema", "collectionStatus", "rejectedSources", "denial", "attempts", "snapshotStatus", "retry", "sources", "failures",
+    "schema", "collectionStatus", "rejectedSources", "denial", "attempts", "snapshotStatus", "retry", "sources", "failures", "firstFailure",
     "browserObservations", "browser", "sessionChatNegativeSummary", "evidenceScan", "gateResults", "runtimeResults", "technicalContext", "phaseTiming",
 }
 DENIAL_FIELDS = {"denial_stage", "denial_class", "run_id"}
@@ -64,7 +64,7 @@ ATTEMPT_FIELDS = {
 }
 FAILURE_SOURCE_LABELS = {
     "serial", "host-journal", "runtime-log", "runtime-structured",
-    "browser-summary", "test-output",
+    "browser-summary", "test-output", "setup-log", "image-build-log", "npm-log", "playwright-log", "browser-container-log",
 }
 FAILURE_MARKERS = {
     "HEPH_GCP_TEST",
@@ -627,6 +627,38 @@ def _project_gate_results(
         raise ValueError("gate results source is invalid") from error
 
 
+def _project_first_failure(
+    root: Path,
+    source_records: list[dict[str, Any]],
+) -> dict[str, Any] | None:
+    """Project the trusted first-failure sidecar without source paths."""
+
+    records = [record for record in source_records if record.get("label") == "first-failure"]
+    if not records:
+        return None
+    if len(records) != 1:
+        raise ValueError("first failure source is duplicated")
+    try:
+        value = json.loads(_safe_path(root, records[0]["path"]).read_text(encoding="utf-8"))
+        if not isinstance(value, dict) or set(value) != COLLECTOR.FIRST_FAILURE_FIELDS:
+            raise ValueError("first failure fields are invalid")
+        if value.get("schema") != 1:
+            raise ValueError("first failure schema is invalid")
+        if value.get("phase") not in COLLECTOR.FIRST_FAILURE_PHASES:
+            raise ValueError("first failure phase is invalid")
+        if value.get("command_id") not in COLLECTOR.FIRST_FAILURE_COMMANDS:
+            raise ValueError("first failure command is invalid")
+        if type(value.get("exit_code")) is not int or not 1 <= value["exit_code"] <= 255:
+            raise ValueError("first failure exit code is invalid")
+        if value.get("diagnostic_source") not in COLLECTOR.FIRST_FAILURE_SOURCES:
+            raise ValueError("first failure source is invalid")
+        if value.get("diagnostic_error") not in COLLECTOR.FIRST_FAILURE_ERRORS:
+            raise ValueError("first failure error is invalid")
+        return {field: value[field] for field in sorted(value)}
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError) as error:
+        raise ValueError("first failure source is not valid JSON") from error
+
+
 def _project_runtime_results(
     root: Path,
     source_records: list[dict[str, Any]],
@@ -690,6 +722,32 @@ def _project_phase_timing_diagnostic(
     source_records: list[dict[str, Any]],
 ) -> dict[str, Any] | None:
     """Retain the controller's bounded timing failure summary."""
+
+    timing_records = [record for record in source_records if record.get("label") == "phase-timing"]
+    if timing_records:
+        if len(timing_records) != 1:
+            raise ValueError("phase timing source is duplicated")
+        source = _safe_path(root, timing_records[0]["path"])
+        _validate_phase_timing(source)
+        value = json.loads(source.read_text(encoding="utf-8"))
+        available = [item["phase"] for item in value["phases"]]
+        return {
+            "status": value.get("completeness", "complete"),
+            "requiredPhases": list(value.get("required_phases", [])),
+            "availablePhases": available,
+            "missingPhases": list(value.get("missing_phases", [])),
+            "availableCount": len(available),
+            "missingCount": len(value.get("missing_phases", [])),
+            "durations": [
+                {
+                    "phase": item["phase"],
+                    "trust": item["trust"],
+                    "durationMs": item["duration_ms"],
+                    "outcome": item["outcome"],
+                }
+                for item in value["phases"]
+            ],
+        }
 
     candidates: list[dict[str, Any]] = []
     for record in source_records:
@@ -1435,6 +1493,17 @@ def summarize(bundle: Path) -> dict[str, Any]:
     status_record = next((record for record in records if record["label"] == "lineage-status"), None)
     attempts = _latest_attempts(_load_lineage(_safe_path(bundle, lineage_record["path"]))) if lineage_record else []
     snapshot_status = _load_snapshot_status(_safe_path(bundle, status_record["path"])) if status_record else None
+    first_failure = _project_first_failure(bundle, records)
+    phase_timing = _project_phase_timing_diagnostic(bundle, records)
+    if first_failure is not None and phase_timing is not None:
+        primary = first_failure["phase"]
+        missing = phase_timing.get("missingPhases", [])
+        ordered = phase_timing.get("requiredPhases", []) or missing
+        primary_index = ordered.index(primary) if primary in ordered else -1
+        phase_timing["primaryFailurePhase"] = primary
+        phase_timing["downstreamMissingPhases"] = [
+            phase for phase in missing if phase in ordered and ordered.index(phase) > primary_index
+        ]
     result: dict[str, Any] = {
         "schema": 1,
         "collectionStatus": collection_status,
@@ -1450,8 +1519,9 @@ def summarize(bundle: Path) -> dict[str, Any]:
         ),
         "evidenceScan": _project_evidence_scan(bundle, records),
         "gateResults": _project_gate_results(bundle, records),
+        "firstFailure": first_failure,
         "runtimeResults": _project_runtime_results(bundle, records),
-        "phaseTiming": _project_phase_timing_diagnostic(bundle, records),
+        "phaseTiming": phase_timing,
         "technicalContext": _project_technical_context(bundle, records, attempts),
         "failures": _project_failures(bundle, records, attempts),
         "sources": {

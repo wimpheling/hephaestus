@@ -44,6 +44,7 @@ readonly diagnostics_bucket='hephaestus-508000-cooking-diagnostics'
 readonly diagnostics_max_archive_bytes=67108864
 readonly diagnostics_metadata_root="${HEPH_GCP_DIAGNOSTICS_METADATA_ROOT:-/run/hephaestus/diagnostics}"
 readonly runner_image_compatibility_root="${HEPH_GCP_RUNNER_IMAGE_COMPATIBILITY_ROOT:-/run/hephaestus/runner-image-compatibility}"
+readonly first_failure_path="${HEPH_GCP_FIRST_FAILURE_PATH:-/var/log/hephaestus/first-failure.json}"
 
 phase='initializing'
 revision='unknown'
@@ -65,6 +66,7 @@ diagnostics_journal_unit=''
 diagnostic_timeout_log=''
 diagnostic_probe_completed=false
 diagnostic_quarantine_validated=false
+diagnostic_failure='none'
 diagnostics_token_json=''
 diagnostics_header_file=''
 diagnostics_gate_helper=''
@@ -87,8 +89,95 @@ runner_image_runtime_startup_sha=''
 runner_image_compatibility_validator=''
 runner_image_compatibility_records=''
 runtime_startup_script_path="${BASH_SOURCE[0]}"
+first_failure_recorded=false
+failure_capture_disabled=false
+first_failure_diagnostic_source='none'
 
 die() { printf 'gcp-kvm-startup: %s\n' "$*" >&2; return 1; }
+
+first_failure_command_id() {
+  case "${phase:-initializing}" in
+    metadata) printf '%s\n' metadata-fetch ;;
+    runner-image-runtime) printf '%s\n' runner-image-runtime ;;
+    diagnostic-bootstrap|diagnostic-synthetic|browser-setup) printf '%s\n' diagnostic-setup ;;
+    gcp-cooking) printf '%s\n' cooking-workload ;;
+    evidence-scan) printf '%s\n' evidence-scan ;;
+    *) printf '%s\n' phase-failure ;;
+  esac
+}
+
+first_failure_phase() {
+  case "${phase:-initializing}" in
+    metadata) printf '%s\n' startup-metadata ;;
+    host-packages) printf '%s\n' startup-host-packages ;;
+    accounts) printf '%s\n' startup-accounts ;;
+    passt-compat|passt-preflight) printf '%s\n' startup-passt ;;
+    cgroup-podman) printf '%s\n' startup-cgroup ;;
+    passt-apparmor) printf '%s\n' startup-apparmor ;;
+    rust-toolchain) printf '%s\n' startup-rust-toolchain ;;
+    libkrunfw) printf '%s\n' startup-libkrunfw ;;
+    libkrun) printf '%s\n' startup-libkrun ;;
+    checkout) printf '%s\n' startup-checkout ;;
+    gcp-cooking) printf '%s\n' cooking-supervisor ;;
+    browser-setup) printf '%s\n' browser-setup ;;
+    real-libkrun-smoke) printf '%s\n' runtime-smoke ;;
+    *) printf '%s\n' "${phase:-initializing}" ;;
+  esac
+}
+
+first_failure_error_class() {
+  case "${phase:-initializing}" in
+    diagnostic-bootstrap|diagnostic-synthetic|browser-setup) printf '%s\n' setup-failed ;;
+    runner-image-runtime) printf '%s\n' image-build-failed ;;
+    *) printf '%s\n' phase-failed ;;
+  esac
+}
+
+record_first_failure() {
+  local status="${1:-1}" command_id error_class temporary failure_phase
+  [[ "$failure_capture_disabled" == true || "$first_failure_recorded" == true ]] && return 0
+  [[ "$status" =~ ^[1-9][0-9]*$ ]] || status=1
+  ((status <= 255)) || status=255
+  command_id="$(first_failure_command_id)"
+  error_class="$(first_failure_error_class)"
+  failure_phase="$(first_failure_phase)"
+  install -d -m 0700 "$(dirname -- "$first_failure_path")" 2>/dev/null || return 0
+  temporary="${first_failure_path}.tmp-$$"
+  python3 - "$first_failure_path" "$temporary" "$failure_phase" "$command_id" "$status" "$first_failure_diagnostic_source" "$error_class" <<'PY' 2>/dev/null || true
+import json
+import os
+import sys
+
+destination, temporary, phase, command_id, status, diagnostic_source, error_class = sys.argv[1:]
+value = {
+    "schema": 1,
+    "phase": phase,
+    "command_id": command_id,
+    "exit_code": int(status),
+    "diagnostic_source": diagnostic_source,
+    "diagnostic_error": error_class,
+}
+try:
+    descriptor = os.open(temporary, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+    with os.fdopen(descriptor, "w", encoding="utf-8") as stream:
+        json.dump(value, stream, sort_keys=True, separators=(",", ":"))
+        stream.write("\n")
+    os.link(temporary, destination)
+except FileExistsError:
+    pass
+finally:
+    try:
+        os.unlink(temporary)
+    except FileNotFoundError:
+        pass
+PY
+  [[ -f "$first_failure_path" ]] && first_failure_recorded=true
+}
+
+startup_error_capture() {
+  record_first_failure "$1"
+}
+trap 'startup_error_capture "$?"' ERR
 
 supervisor_phase_timing_outcome() {
   case "$1" in
@@ -125,6 +214,7 @@ retain_passt_host_audit() {
 if [[ "${HEPH_GCP_STARTUP_LIBRARY:-0}" != 1 ]]; then
   install -d -m 0700 "$(dirname -- "$log_file")"
   install -m 0600 /dev/null "$log_file"
+  rm -f -- "$first_failure_path" "$first_failure_path.tmp-$$"
   [[ -w /dev/ttyS0 ]] || die 'GCE serial console /dev/ttyS0 is unavailable'
   # The caller writes this immediately before the Compute create request. It is
   # conservative for startup delays and is the single deadline anchor.
@@ -134,6 +224,10 @@ fi
 finish() {
   local status=$?
   trap - EXIT
+  if ((status != 0)); then
+    record_first_failure "$status"
+  fi
+  failure_capture_disabled=true
   if ((status != 0)) && [[ "$test_mode" == smoke ]]; then
     retain_passt_host_audit
   fi
@@ -177,6 +271,12 @@ finish() {
   if [[ "$test_mode" == diagnostic ]]; then
     local expected_fixture=false diagnostic_result
     if ((diagnostics_collection_status == 0)) &&
+        [[ "$diagnostic_probe_completed" == true ]] &&
+        [[ "$diagnostic_quarantine_validated" == true ]] &&
+        ((status == 78)) && [[ "$diagnostic_failure" == setup ]] &&
+        [[ "$phase" == browser-setup ]] && [[ -f "$first_failure_path" ]]; then
+      expected_fixture=true
+    elif ((diagnostics_collection_status == 0)) &&
         [[ "$diagnostic_probe_completed" == true ]] &&
         [[ "$diagnostic_quarantine_validated" == true ]] &&
         ((status == 42)) && [[ "$phase" == diagnostic-synthetic ]]; then
@@ -235,6 +335,7 @@ supervisor_phase_name() {
     libkrun) printf '%s\n' startup-libkrun ;;
     checkout) printf '%s\n' startup-checkout ;;
     gcp-cooking) printf '%s\n' cooking-supervisor ;;
+    browser-setup) printf '%s\n' browser-setup ;;
     real-libkrun-smoke) printf '%s\n' runtime-smoke ;;
     archive) printf '%s\n' archive ;;
     evidence-scan) printf '%s\n' evidence-scan ;;
@@ -463,11 +564,13 @@ with open(sys.argv[1], encoding="utf-8") as stream:
 if report.get("status") != "failed" or report.get("rule") != "browser-secret-org":
     raise SystemExit("diagnostic scanner did not report the expected typed fixture rule")
 PY
+  local expected_setup_exit=42
+  [[ "$diagnostic_failure" == setup ]] && expected_setup_exit=78
   run_with_collection_deadline python3 "$diagnostics_gate_helper" \
     --path "$cooking_gate_results_path" begin workload
   run_with_collection_deadline python3 "$diagnostics_gate_helper" \
     --path "$cooking_gate_results_path" complete workload \
-    --state failed --exit-code 42 --reason-class workload-failed
+    --state failed --exit-code "$expected_setup_exit" --reason-class workload-failed
   run_with_collection_deadline python3 "$diagnostics_gate_helper" \
     --path "$cooking_gate_results_path" begin evidence-scan
   run_with_collection_deadline python3 "$diagnostics_gate_helper" \
@@ -477,7 +580,7 @@ PY
     --path "$cooking_gate_results_path" begin browser-validation
   run_with_collection_deadline python3 "$diagnostics_gate_helper" \
     --path "$cooking_gate_results_path" complete browser-validation \
-    --state failed --exit-code 42 --reason-class browser-validation-failed
+    --state failed --exit-code "$expected_setup_exit" --reason-class browser-validation-failed
 }
 
 diagnostics_object() {
@@ -648,7 +751,35 @@ collect_diagnostics() {
     phase_timing_required_args+=(--require-phase "$required_phase")
     phase_timing_workload_required_args+=(--require-workload-phase "$required_phase")
   done
-  if [[ "$test_mode" == gcp-cooking &&
+  if [[ "$test_mode" == diagnostic && -f "$phase_timing_supervisor_source" &&
+    ! -L "$phase_timing_supervisor_source" ]]; then
+    # The controller-owned injected setup failure still travels through the
+    # normal timing projector. Require one downstream workload phase so the
+    # retained result is explicitly partial while preserving browser-setup's
+    # real start/end duration.
+    phase_timing_failed_stage=''
+    phase_timing_failure_path=''
+    if ! install -m 0600 "$phase_timing_supervisor_source" "$phase_timing_combined"; then
+      phase_timing_failed_stage=supervisor-source
+      phase_timing_failure_path="$phase_timing_supervisor_source"
+    elif ! run_with_collection_deadline python3 "$trusted_phase_timing_script" project --allow-partial \
+        --path "$phase_timing_combined" --output "$phase_timing_input" \
+        --expected-run-id "$run_id" --expected-attempt "$run_attempt" \
+        --expected-source-sha "$revision" --expected-image-fingerprint "$timing_image_fingerprint" \
+        --require-phase browser-setup --require-phase browser-initial; then
+      phase_timing_failed_stage=projection
+      phase_timing_failure_path="$phase_timing_combined"
+    else
+      phase_timing_projection_ready=true
+      printf 'HEPH_GCP_DIAGNOSTICS source=phase-timing status=projected\n' >>"$status_json"
+    fi
+    if [[ -n "$phase_timing_failed_stage" ]]; then
+      case "$phase_timing_failed_stage" in
+        projection) phase_timing_emit_failure "$phase_timing_failed_stage" "$phase_timing_failure_path" '' true ;;
+        *) phase_timing_emit_failure "$phase_timing_failed_stage" "$phase_timing_failure_path" supervisor false ;;
+      esac
+    fi
+  elif [[ "$test_mode" == gcp-cooking &&
     ("$workload_trust" == untrusted-pr || -f "$phase_timing_source" || -f "$phase_timing_supervisor_source") ]]; then
     phase_timing_failed_stage=''
     phase_timing_failure_path=''
@@ -682,7 +813,7 @@ collect_diagnostics() {
     elif ! cat -- "$phase_timing_supervisor_source" >>"$phase_timing_combined"; then
       phase_timing_failed_stage=supervisor-source
       phase_timing_failure_path="$phase_timing_supervisor_source"
-    elif ! run_with_collection_deadline python3 "$trusted_phase_timing_script" project \
+    elif ! run_with_collection_deadline python3 "$trusted_phase_timing_script" project --allow-partial \
         --path "$phase_timing_combined" --output "$phase_timing_input" \
         --expected-run-id "$run_id" --expected-attempt "$run_attempt" \
         --expected-source-sha "$revision" --expected-image-fingerprint "$timing_image_fingerprint" \
@@ -718,6 +849,12 @@ collect_diagnostics() {
     --source "host-journal=$input_root/host-journal.log"
     --source "runtime-structured=$status_json"
   )
+  if [[ -f "$first_failure_path" && ! -L "$first_failure_path" ]]; then
+    bounded_copy "$first_failure_path" "$input_root/first-failure.json"
+    collector_args+=(--source "first-failure=$input_root/first-failure.json")
+  else
+    printf 'HEPH_GCP_DIAGNOSTICS source=first-failure status=missing\n' >>"$status_json"
+  fi
   if [[ -f "$gate_results_input" ]]; then
     collector_args+=(--source "gate-results=$gate_results_input")
   fi
@@ -784,6 +921,22 @@ PY
       --source "browser-summary=$input_root/browser-summary.json"
       --source "test-output=$input_root/test-output.log"
     )
+    diagnostic_setup_root="${evidence_root}/diagnostic-setup"
+    for diagnostic_source in setup-log image-build-log npm-log playwright-log browser-container-log; do
+      case "$diagnostic_source" in
+        setup-log) diagnostic_file="$diagnostic_setup_root/setup.log" ;;
+        image-build-log) diagnostic_file="$diagnostic_setup_root/image-build.log" ;;
+        npm-log) diagnostic_file="$diagnostic_setup_root/npm.log" ;;
+        playwright-log) diagnostic_file="$diagnostic_setup_root/playwright.log" ;;
+        browser-container-log) diagnostic_file="$diagnostic_setup_root/browser-container.log" ;;
+      esac
+      diagnostic_input="$input_root/$diagnostic_source"
+      if bounded_copy "$diagnostic_file" "$diagnostic_input"; then
+        collector_args+=(--source "$diagnostic_source=$diagnostic_input")
+      else
+        printf 'HEPH_GCP_DIAGNOSTICS source=%s status=missing\n' "$diagnostic_source" >>"$status_json"
+      fi
+    done
   else
     if [[ "$test_mode" == smoke && -n "${smoke_output_log:-}" &&
       -f "$smoke_output_log" && ! -L "$smoke_output_log" ]]; then
@@ -810,6 +963,90 @@ PY
         "$test_status" >"$input_root/browser-summary.json"
     fi
     collector_args+=(--source "browser-summary=$input_root/browser-summary.json")
+    for diagnostic_source in setup-log image-build-log npm-log playwright-log browser-container-log; do
+      diagnostic_file=''
+      case "$diagnostic_source" in
+        setup-log)
+          for candidate in \
+            "$cooking_evidence_root"/browser.*/readiness-curl.log \
+            "$cooking_evidence_root"/browser-prerequisite.*/browser.log \
+            "$cooking_evidence_root"/browser-prerequisite.*/probe-*.log; do
+            [[ -f "$candidate" && ! -L "$candidate" ]] || continue
+            diagnostic_file+="${candidate}"$'\n'
+          done
+          ;;
+        browser-container-log)
+          for candidate in \
+            "$cooking_evidence_root"/browser.*/browser-container.log \
+            "$cooking_evidence_root"/browser-prerequisite.*/browser-container.log \
+            "$cooking_evidence_root"/browser-prerequisite.*/probe-*.log; do
+            [[ -f "$candidate" && ! -L "$candidate" ]] || continue
+            diagnostic_file+="${candidate}"$'\n'
+          done
+          ;;
+        image-build-log)
+          for candidate in \
+            "$cooking_evidence_root"/installed-ui-browser-image.*/build.log \
+            "$cooking_evidence_root"/installed-ui-browser-image-load/podman.log \
+            "$cooking_evidence_root"/installed-ui-browser-image-load/*.log; do
+            [[ -f "$candidate" && ! -L "$candidate" ]] || continue
+            diagnostic_file+="${candidate}"$'\n'
+          done
+          ;;
+        npm-log)
+          for candidate in \
+            "$cooking_evidence_root"/browser.*/browser-npm.log \
+            "$cooking_evidence_root"/browser-prerequisite.*/npm*.log; do
+            [[ -f "$candidate" && ! -L "$candidate" ]] || continue
+            diagnostic_file+="${candidate}"$'\n'
+          done
+          ;;
+        playwright-log)
+          for candidate in \
+            "$cooking_evidence_root"/browser.*/playwright.log \
+            "$cooking_evidence_root"/browser-prerequisite.*/playwright.log; do
+            [[ -f "$candidate" && ! -L "$candidate" ]] || continue
+            diagnostic_file+="${candidate}"$'\n'
+          done
+          ;;
+      esac
+      diagnostic_input="$input_root/$diagnostic_source"
+      if [[ -n "$diagnostic_file" ]]; then
+        : >"$diagnostic_input"
+        diagnostic_count=0
+        while IFS= read -r candidate; do
+          [[ -n "$candidate" ]] || continue
+          diagnostic_count=$((diagnostic_count + 1))
+          diagnostic_segment="$input_root/.${diagnostic_source}.${diagnostic_count}"
+          if bounded_copy "$candidate" "$diagnostic_segment"; then
+            printf 'HEPH_GCP_DIAGNOSTICS source=%s segment=%s\n' "$diagnostic_source" "$diagnostic_count" >>"$diagnostic_input"
+            cat "$diagnostic_segment" >>"$diagnostic_input"
+          fi
+          rm -f -- "$diagnostic_segment"
+        done <<<"$diagnostic_file"
+        if ((diagnostic_count > 0)); then
+          diagnostic_compacted="$input_root/.${diagnostic_source}.compact"
+          diagnostic_bytes="$(stat -c '%s' -- "$diagnostic_input")"
+          if ((diagnostic_bytes > 8388608)); then
+            # Keep the first bounded segment, where the first actual command
+            # failure is normally emitted, and the tail with cleanup context.
+            head -c 4194304 -- "$diagnostic_input" >"$diagnostic_compacted"
+            tail -c 4194304 -- "$diagnostic_input" >>"$diagnostic_compacted"
+          else
+            cp -- "$diagnostic_input" "$diagnostic_compacted"
+          fi
+          mv -- "$diagnostic_compacted" "$diagnostic_input"
+        else
+          rm -f -- "$diagnostic_input"
+        fi
+      fi
+      if [[ -s "$diagnostic_input" ]]; then
+        collector_args+=(--source "$diagnostic_source=$diagnostic_input")
+        printf 'HEPH_GCP_DIAGNOSTICS source=%s status=retained segments=%s\n' "$diagnostic_source" "$diagnostic_count" >>"$status_json"
+      else
+        printf 'HEPH_GCP_DIAGNOSTICS source=%s status=missing\n' "$diagnostic_source" >>"$status_json"
+      fi
+    done
   fi
   chmod 0600 "$input_root"/*
   local collector_status=0
@@ -1148,6 +1385,12 @@ case "$cooking_scenario" in
 esac
 [[ "$test_mode" == gcp-cooking || "$cooking_scenario" == cooking ]] ||
   die 'session-chat cooking-scenario requires gcp-cooking test mode'
+diagnostic_failure="$(metadata_optional_value diagnostic-failure)"
+case "$diagnostic_failure" in
+  ''|none) diagnostic_failure=none ;;
+  setup) [[ "$test_mode" == diagnostic ]] || die 'diagnostic-failure requires diagnostic test mode' ;;
+  *) die 'diagnostic-failure metadata is invalid' ;;
+esac
 workload_trust="$(metadata_optional_value workload-trust)"
 case "$workload_trust" in
   ''|trusted) workload_trust=trusted ;;
@@ -1334,6 +1577,37 @@ if [[ "$test_mode" == diagnostic ]]; then
   phase_pass
   phase_start diagnostic-synthetic
   printf 'HEPH_GCP_DIAGNOSTIC synthetic browser report; no request, response, cookie, trace, or credential data\n' >&2
+  if [[ "$diagnostic_failure" == setup ]]; then
+    phase='browser-setup'
+    diagnostic_setup_root="${evidence_root}/diagnostic-setup"
+    install -d -m 0700 "$diagnostic_setup_root"
+    setup_failure_command="${temporary_root}/diagnostic-setup-failure.sh"
+    cat >"$setup_failure_command" <<'SH'
+#!/usr/bin/env bash
+set -Eeuo pipefail
+setup_root="$1"
+printf 'HEPH_GCP_DIAGNOSTIC event=setup phase=browser-setup status=failed exit_code=78\n' >"$setup_root/setup.log"
+printf 'HEPH_GCP_DIAGNOSTIC event=image-build status=not-run reason=downstream\n' >"$setup_root/image-build.log"
+printf 'HEPH_GCP_DIAGNOSTIC event=npm status=not-run reason=downstream\n' >"$setup_root/npm.log"
+printf 'HEPH_GCP_DIAGNOSTIC event=playwright status=not-run reason=downstream\n' >"$setup_root/playwright.log"
+printf 'HEPH_GCP_DIAGNOSTIC event=browser-container status=not-run reason=downstream\n' >"$setup_root/browser-container.log"
+exit 78
+SH
+    chmod 0700 "$setup_failure_command"
+    first_failure_diagnostic_source='setup-log'
+    supervisor_phase_timing_start browser-setup
+    set +e
+    run_with_deadline bash "$setup_failure_command" "$diagnostic_setup_root"
+    diagnostic_setup_status=$?
+    set -e
+    supervisor_phase_timing_end failed
+    ((diagnostic_setup_status == 78)) || die "diagnostic setup fixture returned ${diagnostic_setup_status}"
+    chmod 0600 "$diagnostic_setup_root"/*
+    printf 'HEPH_GCP_DIAGNOSTIC event=injected-setup-failure phase=browser-setup command_id=diagnostic-setup exit_code=%s\n' \
+      "$diagnostic_setup_status" >&2
+    diagnostic_probe_completed=true
+    exit 78
+  fi
   diagnostic_timeout_log="${temporary_root}/diagnostic-timeout.log"
   set +e
   timeout --kill-after=1s 3s bash -Eeuo pipefail -c 'sleep 30' >"$diagnostic_timeout_log" 2>&1

@@ -31,6 +31,7 @@ readonly DIAGNOSTICS_BUCKET="hephaestus-508000-cooking-diagnostics"
 readonly DIAGNOSTICS_OBJECT_PREFIX="cooking/runs"
 readonly DIAGNOSTIC_MACHINE_TYPE="e2-small"
 readonly DIAGNOSTIC_DISK_SIZE="20GB"
+readonly QUOTA_CONTRACT_SCRIPT="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)/gcp_quota_contract.py"
 smoke_created=false
 smoke_name=""
 smoke_zone=""
@@ -175,25 +176,56 @@ require_commands() {
 }
 
 quota_preflight() {
-  local mode="${1:-full}" quota_json
-  if run_json_gcloud compute regions describe "$REGION" --project="$PROJECT_ID" --format=json; then
-    quota_json="$gcloud_json_output"
-    report_gcloud_json_stderr
-  else
-    printf '%s\n' "$gcloud_json_stderr" >&2
+  local mode="${1:-full}" snapshot_dir result diagnostic_disk_gb=20
+  [[ -f "$QUOTA_CONTRACT_SCRIPT" && ! -L "$QUOTA_CONTRACT_SCRIPT" ]] ||
+    die "quota contract helper is unavailable or symlinked: $QUOTA_CONTRACT_SCRIPT"
+  [[ "$mode" == full || "$mode" == diagnostic ]] || die "unsupported quota mode: $mode"
+  if [[ "$mode" == diagnostic && -n "${GCP_RUNNER_IMAGE:-}" ]]; then
+    # gcp-kvm-smoke uses a 150 GB boot disk when diagnostic boots a custom image.
+    diagnostic_disk_gb=150
+  fi
+  snapshot_dir="$(mktemp -d "${RUNNER_TEMP:-/tmp}/gcp-quota-contract.XXXXXX")"
+  chmod 700 "$snapshot_dir"
+  if ! run_json_gcloud compute project-info describe --project="$PROJECT_ID" --format=json; then
+    printf 'HEPH_GCP_QUOTA event=preflight status=failed reason=project-quota-unavailable\n' >&2
+    rm -rf -- "$snapshot_dir"
+    die 'cannot read global project quota'
+  fi
+  printf '%s' "$gcloud_json_output" >"$snapshot_dir/project-info.json"
+  report_gcloud_json_stderr
+  if ! run_json_gcloud compute regions describe "$REGION" --project="$PROJECT_ID" --format=json; then
+    printf 'HEPH_GCP_QUOTA event=preflight status=failed reason=regional-quota-unavailable\n' >&2
+    rm -rf -- "$snapshot_dir"
     die "cannot read regional quota for $REGION"
   fi
-  python3 -c 'import json,sys
-quotas={q.get("metric"):q for q in json.load(sys.stdin).get("quotas",[])}
-required={"INSTANCES":1}
-if sys.argv[1] == "full": required["N2_CPUS"] = 8
-for metric,need in required.items():
-    q=quotas.get(metric)
-    if not q: raise SystemExit(f"missing quota metric {metric}")
-    available=float(q.get("limit",0))-float(q.get("usage",0))
-    print("{}: usage={} limit={} available={:g}".format(metric, q.get("usage",0), q.get("limit",0), available))
-    if available < need: raise SystemExit(f"{metric} available quota {available:g} is below required {need}")' "$mode" <<<"$quota_json" ||
-    die 'regional quota is insufficient for the disposable smoke VM'
+  printf '%s' "$gcloud_json_output" >"$snapshot_dir/regional-info.json"
+  report_gcloud_json_stderr
+  if ! run_json_gcloud compute instances list --project="$PROJECT_ID" --format=json; then
+    printf 'HEPH_GCP_QUOTA event=preflight status=failed reason=instance-snapshot-unavailable\n' >&2
+    rm -rf -- "$snapshot_dir"
+    die 'cannot read active instance allocations'
+  fi
+  printf '%s' "$gcloud_json_output" >"$snapshot_dir/instances.json"
+  report_gcloud_json_stderr
+  if ! run_json_gcloud compute disks list --project="$PROJECT_ID" --format=json; then
+    printf 'HEPH_GCP_QUOTA event=preflight status=failed reason=disk-snapshot-unavailable\n' >&2
+    rm -rf -- "$snapshot_dir"
+    die 'cannot read active disk allocations'
+  fi
+  printf '%s' "$gcloud_json_output" >"$snapshot_dir/disks.json"
+  report_gcloud_json_stderr
+  if ! result="$(python3 "$QUOTA_CONTRACT_SCRIPT" \
+      --mode "$mode" --region "$REGION" \
+      --project-info "$snapshot_dir/project-info.json" \
+      --regional-info "$snapshot_dir/regional-info.json" \
+      --instances "$snapshot_dir/instances.json" --disks "$snapshot_dir/disks.json" \
+      --diagnostic-disk-gb "$diagnostic_disk_gb")"; then
+    printf 'Quota preflight rejected: %s\n' "$result" >&2
+    rm -rf -- "$snapshot_dir"
+    die 'quota or runner admission contract rejected the disposable VM'
+  fi
+  printf '%s\n' "$result"
+  rm -rf -- "$snapshot_dir"
   if [[ "$mode" == full ]]; then
     printf 'Quota preflight passed for %s in %s; capacity is not guaranteed.\n' "$MACHINE_TYPE" "$REGION"
   else
@@ -504,7 +536,7 @@ _download_diagnostics() {
     controller_phase_timing_finish_open 1
     printf '{"schema":1,"object":"gs://%s/%s","download":"failed","error":"provider download failed"}\n' \
       "$DIAGNOSTICS_BUCKET" "$object" >"$status_path"
-    printf '%s\n' "$output" >&2
+    printf 'HEPH_GCP_DIAGNOSTICS event=download status=failed reason=provider-download-failed\n' >&2
     return 1
   fi
   controller_phase_timing_end passed
@@ -730,21 +762,36 @@ PYNEG
         --path "$phase_timing_staging" \
         --expected-run-id "$diagnostics_source_run_id" \
         --expected-attempt "$diagnostics_source_attempt" \
-        --expected-source-sha "$diagnostics_source_sha" \
-        --require-supervisor-phase archive --require-supervisor-phase evidence-scan \
-        --require-supervisor-phase upload \
-        "${phase_timing_workload_required_args[@]}" >/dev/null; then
+        --expected-source-sha "$diagnostics_source_sha" >/dev/null; then
       diagnostics_download_error='phase-timing-invalid'
       phase_timing_status='unavailable'
       phase_timing_error="$diagnostics_download_error"
       rm -f -- "$phase_timing_destination" "$phase_timing_staging"
+    elif python3 -B "$PHASE_TIMING_SCRIPT" validate-projection \
+        --path "$phase_timing_staging" \
+        --expected-run-id "$diagnostics_source_run_id" \
+        --expected-attempt "$diagnostics_source_attempt" \
+        --expected-source-sha "$diagnostics_source_sha" \
+        --require-supervisor-phase archive --require-supervisor-phase evidence-scan \
+        --require-supervisor-phase upload \
+        "${phase_timing_workload_required_args[@]}" >/dev/null; then
+      if ! mv -- "$phase_timing_staging" "$phase_timing_destination"; then
+        diagnostics_download_error='phase-timing-invalid'
+        phase_timing_status='unavailable'
+        phase_timing_error="$diagnostics_download_error"
+        rm -f -- "$phase_timing_destination" "$phase_timing_staging"
+      else
+        phase_timing_status='passed'
+      fi
     elif ! mv -- "$phase_timing_staging" "$phase_timing_destination"; then
       diagnostics_download_error='phase-timing-invalid'
       phase_timing_status='unavailable'
       phase_timing_error="$diagnostics_download_error"
       rm -f -- "$phase_timing_destination" "$phase_timing_staging"
     else
-      phase_timing_status='passed'
+      diagnostics_download_error='phase-timing-incomplete'
+      phase_timing_status='partial'
+      phase_timing_error="$diagnostics_download_error"
     fi
   fi
   if ! python3 - "$status_path" "$triage_path" "$DIAGNOSTICS_BUCKET" "$object" "$archive_bytes" "$digest" "$extract_root/cooking-diagnostics/manifest.json" "$phase_timing_status" "$phase_timing_error" "$session_chat_negative_status" <<'PY'
@@ -926,8 +973,9 @@ if os.environ.get("GCP_EXPECT_PHASE_TIMING") == "true" and value.get("phaseTimin
         "phase-timing-download-failed",
         "phase-timing-too-large",
         "phase-timing-invalid",
+        "phase-timing-incomplete",
     }
-    if value.get("phaseTiming") != "unavailable" or value.get("error") not in timing_failure:
+    if value.get("phaseTiming") not in {"partial", "unavailable"} or value.get("error") not in timing_failure:
         raise SystemExit(1)
 triage = value.get("triage")
 if isinstance(triage, dict):
@@ -1170,11 +1218,16 @@ if any(labels.get(k)!=v for k,v in expected.items()): raise SystemExit("ownershi
 smoke() {
   local mode="${1:-smoke}"
   local cooking_scenario="${GCP_COOKING_SCENARIO:-cooking}"
+  local diagnostic_failure="${GCP_DIAGNOSTIC_FAILURE:-none}"
   case "$mode" in
     smoke|gcp-cooking|diagnostic) ;;
     *) die "unsupported test mode: $mode" ;;
   esac
   validate_cooking_scenario "$cooking_scenario"
+  [[ "$diagnostic_failure" == none || "$diagnostic_failure" == setup ]] ||
+    die 'GCP_DIAGNOSTIC_FAILURE must be none or setup'
+  [[ "$mode" == diagnostic || "$diagnostic_failure" == none ]] ||
+    die 'GCP_DIAGNOSTIC_FAILURE is supported only for diagnostic mode'
   [[ "$mode" == gcp-cooking || "$cooking_scenario" == cooking ]] ||
     die 'GCP_COOKING_SCENARIO is supported only for gcp-cooking'
   [[ -f "$STARTUP_SCRIPT" && ! -L "$STARTUP_SCRIPT" ]] || die "startup script is unavailable or symlinked: $STARTUP_SCRIPT"
@@ -1309,6 +1362,9 @@ smoke() {
     if [[ "$pr_workload_mode" == true ]]; then
       metadata_values+=",workload-trust=untrusted-pr"
     fi
+  fi
+  if [[ "$mode" == diagnostic && "$diagnostic_failure" == setup ]]; then
+    metadata_values+=",diagnostic-failure=setup"
   fi
   local metadata_value_item
   local metadata_file_values="startup-script=$STARTUP_SCRIPT,passt-preflight-script=$PASST_PREFLIGHT_SCRIPT"

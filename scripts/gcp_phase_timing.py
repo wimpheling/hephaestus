@@ -126,6 +126,9 @@ TIMING_DIAGNOSTIC_REASONS = {
     "unknown",
 }
 SUPERVISOR_PHASE_DOMAINS = {
+    # Controller-owned browser prerequisite setup runs before the untrusted
+    # workload and is measured on the guest-startup clock.
+    "browser-setup": {"guest-startup"},
     "archive": {"guest-startup"},
     "evidence-scan": {"guest-startup", "guest-runtime"},
     "upload": {"guest-startup"},
@@ -646,6 +649,21 @@ def validate_projection(
 ) -> dict[str, Any]:
     if not isinstance(value, dict) or value.get("schema") != SCHEMA or not isinstance(value.get("phases"), list):
         fail("timing projection schema is invalid")
+    optional = set(value) - {"schema", "phases"}
+    if optional - {"completeness", "required_phases", "missing_phases"}:
+        fail("timing projection contains unsupported metadata")
+    if "completeness" in value and value["completeness"] not in {"complete", "partial"}:
+        fail("timing projection completeness is invalid")
+    for field in ("required_phases", "missing_phases"):
+        if field in value:
+            phases_value = value[field]
+            if (
+                not isinstance(phases_value, list)
+                or len(phases_value) > len(PHASE_ORDER)
+                or any(item not in PHASES for item in phases_value)
+                or phases_value != sorted(set(phases_value), key=PHASE_ORDER.index)
+            ):
+                fail("timing projection phase metadata is invalid")
     phases = value["phases"]
     if len(phases) > MAX_RECORDS // 2:
         fail("timing projection count exceeds the bound")
@@ -737,6 +755,17 @@ def projection(complete: list[dict[str, Any]]) -> dict[str, Any]:
                 safe[name] = item[name]
         phases.append(safe)
     return {"schema": SCHEMA, "phases": phases}
+
+
+def partial_projection(complete: list[dict[str, Any]], required: set[str]) -> dict[str, Any]:
+    """Project valid completed records while retaining safe missing-phase data."""
+
+    result = projection(complete)
+    available = {item["phase"] for item in complete}
+    result["completeness"] = "complete" if required <= available else "partial"
+    result["required_phases"] = [phase for phase in PHASE_ORDER if phase in required]
+    result["missing_phases"] = [phase for phase in PHASE_ORDER if phase in required - available]
+    return result
 
 
 def import_markers(args: argparse.Namespace) -> int:
@@ -863,6 +892,7 @@ def parser() -> argparse.ArgumentParser:
     project.add_argument("--expected-attempt", type=int)
     project.add_argument("--expected-source-sha")
     project.add_argument("--expected-image-fingerprint")
+    project.add_argument("--allow-partial", action="store_true")
     projection_parser = sub.add_parser("validate-projection")
     projection_parser.add_argument("--path", required=True)
     projection_parser.add_argument("--require-phase", action="append", choices=sorted(PHASES), default=[])
@@ -919,14 +949,24 @@ def run(args: argparse.Namespace) -> int:
     if args.command == "project":
         path = path_for(args.path)
         output = path_for(args.output)
-        result = projection(
-            validate_pairs(
-                read_records(path), required=set(args.require_phase), required_trust=args.require_trust,
+        records = read_records(path)
+        required = set(args.require_phase)
+        if args.allow_partial:
+            complete = validate_pairs(
+                records, required_trust=args.require_trust,
                 expected_run_id=args.expected_run_id, expected_attempt=args.expected_attempt,
                 expected_source_sha=args.expected_source_sha, expected_image_fingerprint=args.expected_image_fingerprint,
-                required_supervisor=set(args.require_supervisor_phase), required_workload=set(args.require_workload_phase),
             )
-        )
+            result = partial_projection(complete, required)
+        else:
+            result = projection(
+                validate_pairs(
+                    records, required=required, required_trust=args.require_trust,
+                    expected_run_id=args.expected_run_id, expected_attempt=args.expected_attempt,
+                    expected_source_sha=args.expected_source_sha, expected_image_fingerprint=args.expected_image_fingerprint,
+                    required_supervisor=set(args.require_supervisor_phase), required_workload=set(args.require_workload_phase),
+                )
+            )
         encoded = json.dumps(result, sort_keys=True, separators=(",", ":")) + "\n"
         if len(encoded.encode("utf-8")) > MAX_RECORD_BYTES * 4:
             fail("timing projection exceeds the size bound")

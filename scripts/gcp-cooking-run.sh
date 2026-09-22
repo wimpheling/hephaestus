@@ -42,6 +42,8 @@ readonly pr_npm_cache="${pr_state_root}/npm-cache"
 readonly pr_runtime="${pr_state_root}/runtime"
 readonly pr_tmp_root="${pr_state_root}/tmp"
 readonly pr_var_tmp_root="${pr_state_root}/var-tmp"
+readonly first_failure_path="${HEPH_GCP_FIRST_FAILURE_PATH:-/var/log/hephaestus/first-failure.json}"
+readonly runner_image_manifest_path='/usr/share/hephaestus/runner-image-manifest.json'
 readonly rust_toolchain="${HEPH_GCP_RUST_TOOLCHAIN:-}"
 
 phase='initializing'
@@ -57,6 +59,16 @@ runner_image_verified="${HEPH_GCP_RUNNER_IMAGE_VERIFIED:-false}"
 runner_image_browser_lock_sha="${HEPH_GCP_RUNNER_IMAGE_BROWSER_LOCK_SHA256:-}"
 runner_image_browser_version="${HEPH_GCP_RUNNER_IMAGE_BROWSER_VERSION:-}"
 runner_image_node_version="${HEPH_GCP_RUNNER_IMAGE_NODE_VERSION:-}"
+runner_image_manifest_sha="${HEPH_GCP_RUNNER_IMAGE_MANIFEST_SHA256:-}"
+installed_ui_archive=''
+installed_ui_archive_sha=''
+installed_ui_image_tag=''
+installed_ui_image_digest=''
+installed_ui_image_id=''
+installed_ui_build_sha=''
+installed_ui_dockerfile_sha=''
+installed_ui_browser_version=''
+installed_ui_workload_env=()
 workload_trust="${HEPH_GCP_WORKLOAD_TRUST:-trusted}"
 pr_sandbox_args=()
 pr_sandbox_filesystem_args=()
@@ -73,6 +85,8 @@ gate_results_write_failed=false
 runtime_phase_timing_script="${HEPH_GCP_PHASE_TIMING_SCRIPT:-}"
 runtime_phase_timing_path="${HEPH_GCP_SUPERVISOR_PHASE_TIMING_PATH:-}"
 runtime_phase_timing_open=''
+runtime_failure_recorded=false
+workload_phase_timing_path=''
 runtime_phase_timing_cache_state=''
 runtime_phase_timing_cache_sha256=''
 runtime_phase_timing_cache_generation=''
@@ -82,6 +96,139 @@ cooking_scenario="${HEPH_GCP_COOKING_SCENARIO:-cooking}"
 declare -A runtime_phase_timing_occurrence=()
 
 fail() { printf 'gcp-cooking-run: %s\n' "$*" >&2; return 1; }
+
+validate_runner_image_manifest() {
+    local manifest_root="${1:-/}" manifest_path manifest_output
+    [[ "$manifest_root" = /* && ! -L "$manifest_root" && -d "$manifest_root" ]] ||
+        fail 'runner image manifest root is invalid'
+    manifest_path="${manifest_root%/}${runner_image_manifest_path}"
+    [[ -f "$manifest_path" && ! -L "$manifest_path" ]] ||
+        fail 'verified runner image manifest is unavailable or symlinked'
+    if ! manifest_output="$(python3 - "$manifest_path" "$runner_image_manifest_sha" "$manifest_root" 2>/dev/null <<'PYMANIFEST'
+import hashlib
+import json
+import re
+import stat
+import sys
+from pathlib import Path
+
+manifest_path, expected_fingerprint, root_name = sys.argv[1:]
+root = Path(root_name)
+require_root_owner = root_name == "/"
+path = Path(manifest_path)
+try:
+    manifest_stat = path.lstat()
+    if not stat.S_ISREG(manifest_stat.st_mode) or stat.S_ISLNK(manifest_stat.st_mode):
+        raise ValueError("manifest is not a regular file")
+    if (require_root_owner and manifest_stat.st_uid != 0) or manifest_stat.st_mode & 0o022:
+        raise ValueError("manifest ownership or mode is invalid")
+    document = json.loads(path.read_text(encoding="utf-8"))
+except (OSError, UnicodeError, ValueError, json.JSONDecodeError) as error:
+    raise SystemExit(f"manifest is invalid: {error}") from error
+if not isinstance(document, dict) or document.get("schema") != 1 or document.get("kind") != "hephaestus-gcp-runner":
+    raise SystemExit("manifest identity is invalid")
+fingerprint = document.get("manifest_sha256")
+if (
+    not isinstance(fingerprint, str)
+    or re.fullmatch(r"[0-9a-f]{64}", fingerprint) is None
+    or re.fullmatch(r"[0-9a-f]{64}", expected_fingerprint or "") is None
+    or fingerprint != expected_fingerprint
+):
+    raise SystemExit("manifest fingerprint is invalid")
+unsigned = dict(document)
+del unsigned["manifest_sha256"]
+canonical = json.dumps(unsigned, sort_keys=True, separators=(",", ":"), ensure_ascii=True).encode()
+if hashlib.sha256(canonical).hexdigest() != fingerprint:
+    raise SystemExit("manifest fingerprint does not match its contents")
+installed = document.get("installed_ui_image")
+if installed is None:
+    raise SystemExit(0)
+if not isinstance(installed, dict):
+    raise SystemExit("installed UI image metadata is invalid")
+expected_fields = {
+    "archive_path", "build_path", "dockerfile_path", "archive_sha256", "image_tag",
+    "image_digest", "image_id", "build_sha256", "dockerfile_sha256", "browser_version",
+}
+if set(installed) != expected_fields:
+    raise SystemExit("installed UI image metadata fields are invalid")
+if installed["archive_path"] != "/usr/share/hephaestus/installed-ui-browser-image.oci":
+    raise SystemExit("installed UI image archive path is invalid")
+if installed["build_path"] != "/usr/local/libexec/hephaestus/installed-ui-browser-image-build.sh":
+    raise SystemExit("installed UI image build path is invalid")
+if installed["dockerfile_path"] != "/usr/local/libexec/hephaestus/installed-ui-browser-image.Dockerfile":
+    raise SystemExit("installed UI image Dockerfile path is invalid")
+required_paths = document.get("required_paths")
+if not isinstance(required_paths, list) or any(path not in required_paths for path in (
+    installed["archive_path"], installed["build_path"], installed["dockerfile_path"]
+)):
+    raise SystemExit("installed UI image paths are not required by the manifest")
+if installed["image_tag"] != "localhost/hephestus-playwright:1.62.0-certutil":
+    raise SystemExit("installed UI image tag is not the reviewed tag")
+for field in ("archive_sha256", "build_sha256", "dockerfile_sha256"):
+    if re.fullmatch(r"[0-9a-f]{64}", installed[field] or "") is None:
+        raise SystemExit(f"installed UI image {field} is invalid")
+for field in ("image_digest", "image_id"):
+    if re.fullmatch(r"sha256:[0-9a-f]{64}", installed[field] or "") is None:
+        raise SystemExit(f"installed UI image {field} is invalid")
+if not isinstance(installed["browser_version"], str) or re.fullmatch(r"Chromium [^\r\n\x00]+", installed["browser_version"]) is None:
+    raise SystemExit("installed UI browser version is invalid")
+for field, expected_path in (
+    ("archive_sha256", installed["archive_path"]),
+    ("build_sha256", installed["build_path"]),
+    ("dockerfile_sha256", installed["dockerfile_path"]),
+):
+    target = root / expected_path.lstrip("/")
+    try:
+        target_stat = target.lstat()
+        if not stat.S_ISREG(target_stat.st_mode) or stat.S_ISLNK(target_stat.st_mode):
+            raise ValueError("target is not a regular file")
+        if (require_root_owner and target_stat.st_uid != 0) or target_stat.st_mode & 0o022:
+            raise ValueError("target ownership or mode is invalid")
+        digest = hashlib.sha256()
+        with target.open("rb") as stream:
+            for chunk in iter(lambda: stream.read(1024 * 1024), b""):
+                digest.update(chunk)
+        actual = digest.hexdigest()
+    except (OSError, ValueError) as error:
+        raise SystemExit(f"installed UI image file is invalid: {error}") from error
+    if actual != installed[field]:
+        raise SystemExit(f"installed UI image {field} does not match its file")
+for field in (
+    "archive_path", "archive_sha256", "image_tag", "image_digest", "image_id",
+    "build_sha256", "dockerfile_sha256", "browser_version",
+):
+    print(installed[field])
+PYMANIFEST
+)"; then
+        fail 'verified runner image installed UI metadata is invalid'
+    fi
+    if [[ -z "$manifest_output" ]]; then
+        # Older baked images intentionally omit the archive section. The
+        # workload keeps its reviewed source-build fallback in that case.
+        return 0
+    fi
+    mapfile -t installed_ui_manifest_values <<<"$manifest_output"
+    ((${#installed_ui_manifest_values[@]} == 8)) ||
+        fail 'verified runner image installed UI metadata is incomplete'
+    installed_ui_archive="${installed_ui_manifest_values[0]}"
+    installed_ui_archive_sha="${installed_ui_manifest_values[1]}"
+    installed_ui_image_tag="${installed_ui_manifest_values[2]}"
+    installed_ui_image_digest="${installed_ui_manifest_values[3]}"
+    installed_ui_image_id="${installed_ui_manifest_values[4]}"
+    installed_ui_build_sha="${installed_ui_manifest_values[5]}"
+    installed_ui_dockerfile_sha="${installed_ui_manifest_values[6]}"
+    installed_ui_browser_version="${installed_ui_manifest_values[7]}"
+    installed_ui_workload_env=(
+        "--setenv=HEPHAESTUS_PLAYWRIGHT_IMAGE_ARCHIVE=$installed_ui_archive"
+        "--setenv=HEPHAESTUS_PLAYWRIGHT_IMAGE_ARCHIVE_SHA256=$installed_ui_archive_sha"
+        "--setenv=HEPH_GCP_INSTALLED_UI_IMAGE_TAG=$installed_ui_image_tag"
+        "--setenv=HEPH_GCP_INSTALLED_UI_IMAGE_DIGEST=$installed_ui_image_digest"
+        "--setenv=HEPH_GCP_INSTALLED_UI_IMAGE_ID=$installed_ui_image_id"
+        "--setenv=HEPH_GCP_INSTALLED_UI_BUILD_SHA256=$installed_ui_build_sha"
+        "--setenv=HEPH_GCP_INSTALLED_UI_DOCKERFILE_SHA256=$installed_ui_dockerfile_sha"
+        "--setenv=HEPH_GCP_INSTALLED_UI_BROWSER_VERSION=$installed_ui_browser_version"
+    )
+}
 
 case "$cooking_scenario" in
     cooking|session-chat) ;;
@@ -401,6 +548,289 @@ phase_complete() {
             "$phase" "$outcome" "$exit_code"
     fi
 }
+
+record_workload_first_failure() {
+    local status="$1" timing_path="$2" runtime_log_path="${3:-$log_file}" \
+        failure_phase='cooking-supervisor' command_id='cooking-workload' source='runtime-log' \
+        error_class='phase-failed' failure_exit temporary
+    failure_exit="$status"
+    ((status != 0)) || return 0
+    [[ -f "$first_failure_path" || -L "$first_failure_path" ]] && return 0
+    if [[ -f "$runtime_log_path" && ! -L "$runtime_log_path" ]]; then
+        # Prefer the first closed, typed runtime boundary.  The outer systemd
+        # status and cleanup traps are deliberately ignored; timing is only a
+        # fallback when no typed boundary survived the stream.
+        read -r failure_phase command_id failure_exit source error_class < <(python3 - "$runtime_log_path" "$timing_path" "$status" <<'PY'
+import json
+import re
+import sys
+
+runtime_path, timing_path, wrapper_status = sys.argv[1:]
+wrapper_status = int(wrapper_status)
+phases = {
+    "browser-setup": ("browser-setup", "setup-log", "setup-failed"),
+    "oci-image-materialization": ("cooking-workload", "runtime-log", "phase-failed"),
+    "browser-initial": ("playwright-run", "playwright-log", "playwright-failed"),
+    "browser-recovery": ("playwright-run", "playwright-log", "playwright-failed"),
+    "browser-concurrency": ("playwright-run", "playwright-log", "playwright-failed"),
+    "browser-fork": ("playwright-run", "playwright-log", "playwright-failed"),
+}
+failure_phases = []
+try:
+    with open(timing_path, encoding="utf-8") as stream:
+        for raw in stream:
+            try:
+                value = json.loads(raw)
+            except (TypeError, ValueError):
+                continue
+            if (
+                isinstance(value, dict)
+                and value.get("record") == "end"
+                and value.get("outcome") not in {"passed", "none"}
+                and value.get("phase") in phases
+            ):
+                failure_phases.append(value["phase"])
+except (OSError, UnicodeError):
+    pass
+
+pair = re.compile(r"(?P<key>[a-z_-]+)=(?P<value>[A-Za-z0-9_.:/-]+)")
+safe_tokens = re.compile(r"^[A-Za-z0-9_.:/-]+$")
+image_labels = {"python-ubuntu", "rust-ubuntu", "oci-builder-ubuntu", "oci-verifier-ubuntu"}
+image_commands = {"podman-image-exists", "skopeo-copy", "skopeo-inspect"}
+workload_stages = {"timing-helper-start", "preflight-command-checks", "rustup-target", "cargo-build", "timing-helper-end", "gateway-invocation", "dependency-setup", "project-build", "gateway-e2e"}
+shell_operations = {"preflight", "command", "cgroup-events", "runtime-cleanup", "cgroup-cleanup", "network-integrity", "gateway-cleanup", "cooking-cleanup"}
+shell_reasons = {"command-failed", "missing-input", "assertion-mismatch", "network-mismatch", "read-failed", "signal", "process-exit", "timeout"}
+canonical_failure_contract = {
+    ("browser-setup", "installed-ui-image-build"): {("image-build-log", "image-build-failed")},
+    ("browser-setup", "browser-setup"): {("setup-log", "setup-failed")},
+    # The cooking feature uses setup-log for its own npm boundary. The
+    # installed UI launcher uses npm-log and may report the browser phase.
+    ("browser-setup", "npm-install"): {
+        ("setup-log", "setup-failed"),
+        ("npm-log", "npm-failed"),
+    },
+    ("browser-initial", "npm-install"): {("npm-log", "npm-failed")},
+    ("browser-recovery", "npm-install"): {("npm-log", "npm-failed")},
+    ("browser-concurrency", "npm-install"): {("npm-log", "npm-failed")},
+    ("browser-fork", "npm-install"): {("npm-log", "npm-failed")},
+    # The cooking feature emits every canonical browser failure with the
+    # browser-setup phase. Resolve the actual browser phase from the first
+    # failed timing record when it is available; otherwise retain unknown.
+    ("browser-setup", "playwright-run"): {("playwright-log", "playwright-failed")},
+    ("browser-initial", "playwright-run"): {("playwright-log", "playwright-failed")},
+    ("browser-recovery", "playwright-run"): {("playwright-log", "playwright-failed")},
+    ("browser-concurrency", "playwright-run"): {("playwright-log", "playwright-failed")},
+    ("browser-fork", "playwright-run"): {("playwright-log", "playwright-failed")},
+}
+
+def fields(line, required, allowed):
+    if not line.startswith("HEPH_"):
+        return None
+    tokens = line.rstrip("\n").split()
+    found = {}
+    for token in tokens[1:]:
+        match = pair.fullmatch(token)
+        if match is None or match.group("key") in found or not safe_tokens.fullmatch(match.group("value")):
+            return None
+        found[match.group("key")] = match.group("value")
+    if set(found) != allowed or not required.issubset(found):
+        return None
+    return found
+
+candidate = None
+try:
+    with open(runtime_path, encoding="utf-8") as stream:
+        for raw in stream:
+            line = raw.strip()
+            event = fields(
+                line,
+                {"event", "status", "exit_code", "scan_exit_code", "log_exit_code"},
+                {"event", "status", "exit_code", "scan_exit_code", "log_exit_code"},
+            )
+            if line.startswith("HEPH_GCP_COOKING ") and event and event["event"] == "installed-ui-image" and event["status"] == "build-failed":
+                try:
+                    build_exit, scan_exit, log_exit = (
+                        int(event[field]) for field in ("exit_code", "scan_exit_code", "log_exit_code")
+                    )
+                except ValueError:
+                    continue
+                if not all(0 <= value <= 255 for value in (build_exit, scan_exit, log_exit)):
+                    continue
+                failure_exit = next((value for value in (build_exit, scan_exit, log_exit) if value), 0)
+                if failure_exit:
+                    candidate = ("browser-setup", "installed-ui-image-build", failure_exit, "image-build-log", "image-build-failed")
+                    break
+
+            event = fields(
+                line,
+                {"phase", "command_id", "exit_code", "diagnostic_source", "diagnostic_error"},
+                {"phase", "command_id", "exit_code", "diagnostic_source", "diagnostic_error"},
+            )
+            if line.startswith("HEPH_GCP_FAILURE ") and event:
+                contract = canonical_failure_contract.get((event["phase"], event["command_id"]))
+                try:
+                    exit_code = int(event["exit_code"])
+                except ValueError:
+                    continue
+                if (
+                    contract is not None
+                    and 1 <= exit_code <= 255
+                    and (event["diagnostic_source"], event["diagnostic_error"]) in contract
+                ):
+                    phase = event["phase"]
+                    if phase == "browser-setup" and event["command_id"] == "playwright-run":
+                        phase = failure_phases[0] if failure_phases else "unknown"
+                    candidate = (
+                        phase,
+                        event["command_id"],
+                        exit_code,
+                        event["diagnostic_source"],
+                        event["diagnostic_error"],
+                    )
+                    break
+
+            event = fields(
+                line,
+                {"event", "phase", "command", "status", "exit"},
+                {"event", "phase", "command", "image", "status", "exit"},
+            )
+            if event and event["event"] == "image-step" and event["status"] == "fail":
+                try:
+                    exit_code = int(event["exit"])
+                except ValueError:
+                    continue
+                if (
+                    not 1 <= exit_code <= 255
+                    or event["phase"] != "workflow-images"
+                    or event["command"] not in image_commands
+                    or event["image"] not in image_labels
+                ):
+                    continue
+                # These are runtime OCI imports.  They must not be mislabeled
+                # as the installed browser image build.
+                candidate = ("workflow-images", "cooking-workload", exit_code, "runtime-log", "phase-failed")
+                break
+
+            event = fields(
+                line,
+                {"event", "operation", "phase", "stage", "status", "exit_code"},
+                {"event", "operation", "phase", "stage", "status", "exit_code"},
+            )
+            if event and event["event"] == "workload-step" and event["status"] == "failed":
+                try:
+                    exit_code = int(event["exit_code"])
+                except ValueError:
+                    continue
+                if (
+                    not 1 <= exit_code <= 255
+                    or event["operation"] != "cooking-workload"
+                    or event["phase"] != "cooking"
+                    or event["stage"] not in workload_stages
+                ):
+                    continue
+                candidate = ("cooking", "cooking-workload", exit_code, "runtime-log", "phase-failed")
+                break
+
+            event = fields(
+                line,
+                {"event", "status", "diagnostics-scan"},
+                {"event", "status", "diagnostics-scan"},
+            )
+            if event and event["event"] == "external-failure" and event["status"].isdigit():
+                exit_code = int(event["status"])
+                if 1 <= exit_code <= 255 and event["diagnostics-scan"] in {"0", "1"}:
+                    if failure_phases:
+                        phase = failure_phases[0]
+                        command, source, error = phases[phase]
+                    else:
+                        phase, command, source, error = "unknown", "playwright-run", "playwright-log", "playwright-failed"
+                    candidate = (phase, command, exit_code, source, error)
+                    break
+
+            event = fields(
+                line,
+                {"script", "component", "operation", "reason", "exit_code", "line"},
+                {"script", "component", "operation", "reason", "exit_code", "line"},
+            )
+            if event and event["script"] == "cooking-run" and event["component"] == "cooking":
+                if event["operation"] in {"runtime-cleanup", "cooking-cleanup"}:
+                    continue
+                try:
+                    exit_code = int(event["exit_code"])
+                except ValueError:
+                    continue
+                if (
+                    1 <= exit_code <= 255
+                    and event["operation"] in shell_operations
+                    and event["reason"] in shell_reasons
+                ):
+                    phase = failure_phases[0] if failure_phases else "cooking-supervisor"
+                    if phase in phases:
+                        command, source, error = phases[phase]
+                    else:
+                        phase, command, source, error = "cooking-supervisor", "cooking-workload", "runtime-log", "phase-failed"
+                    candidate = (phase, command, exit_code, source, error)
+                    break
+except (OSError, UnicodeError):
+    pass
+
+if candidate is None:
+    # Timing is diagnostic only.  Keep a complete fallback when its record is
+    # malformed, empty, or unrecognized rather than emitting blank fields.
+    try:
+        with open(timing_path, encoding="utf-8") as stream:
+            for raw in stream:
+                value = json.loads(raw)
+                if not isinstance(value, dict) or value.get("record") != "end" or value.get("outcome") in {"passed", "none"}:
+                    continue
+                phase = value.get("phase")
+                if phase in phases:
+                    command, source, error = phases[phase]
+                    candidate = (phase, command, wrapper_status, source, error)
+                    break
+    except (OSError, UnicodeError, ValueError, TypeError):
+        pass
+
+if candidate is None:
+    candidate = ("cooking-supervisor", "cooking-workload", wrapper_status, "runtime-log", "phase-failed")
+print(" ".join(str(value) for value in candidate))
+PY
+        ) || true
+        if [[ "$failure_phase" == '' || "$command_id" == '' || "$failure_exit" == '' || "$source" == '' || "$error_class" == '' ]]; then
+            failure_phase='cooking-supervisor'
+            command_id='cooking-workload'
+            failure_exit="$status"
+            source='runtime-log'
+            error_class='phase-failed'
+        fi
+    else
+        failure_exit="$status"
+    fi
+    temporary="${first_failure_path}.tmp-$$"
+    install -d -m 0700 "$(dirname -- "$first_failure_path")"
+    python3 - "$first_failure_path" "$temporary" "$failure_phase" "$command_id" "$failure_exit" "$source" "$error_class" <<'PY' 2>/dev/null || true
+import json
+import os
+import sys
+
+destination, temporary, phase, command_id, status, source, error_class = sys.argv[1:]
+value = {"schema": 1, "phase": phase, "command_id": command_id, "exit_code": min(int(status), 255), "diagnostic_source": source, "diagnostic_error": error_class}
+try:
+    descriptor = os.open(temporary, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+    with os.fdopen(descriptor, "w", encoding="utf-8") as stream:
+        json.dump(value, stream, sort_keys=True, separators=(",", ":"))
+        stream.write("\n")
+    os.link(temporary, destination)
+except FileExistsError:
+    pass
+finally:
+    try:
+        os.unlink(temporary)
+    except FileNotFoundError:
+        pass
+PY
+    [[ -f "$first_failure_path" ]] && runtime_failure_recorded=true
+}
 require_command() { command -v "$1" >/dev/null 2>&1 || fail "missing command: $1"; }
 
 if [[ -z "$deadline_epoch" ]]; then
@@ -440,6 +870,10 @@ if ! python3 -B "$gate_results_helper" --path "$gate_results_path" \
     fail 'cooking gate sidecar initialization failed'
 fi
 gate_results_initialized=true
+
+if [[ "$runner_image_verified" == true ]]; then
+    validate_runner_image_manifest
+fi
 
 phase_start host-tools
 validate_sha256 cache_sha256 "$cache_sha256"
@@ -617,6 +1051,14 @@ rm -f -- "$archive_path"
 python3 - "$stage_root" <<'PY'
 import hashlib, json, pathlib, re, sys
 root=pathlib.Path(sys.argv[1])
+
+def sha256_file(path):
+    digest = hashlib.sha256()
+    with path.open('rb') as stream:
+        for chunk in iter(lambda: stream.read(1024 * 1024), b''):
+            digest.update(chunk)
+    return digest.hexdigest()
+
 m=json.loads((root/'cache-manifest.json').read_text())
 required={'python-ubuntu','rust-ubuntu','typescript-node-ubuntu','ubuntu-native','oci-builder-ubuntu','oci-verifier-ubuntu'}
 if m.get('platform_revision') != '581b939d5ad5e5a81e77ad01ad8931487a8d2bcf': raise SystemExit('unexpected platform revision')
@@ -651,7 +1093,7 @@ for name, workflow_key in (('oci-builder-ubuntu','builder_vm_image'), ('oci-veri
         raise SystemExit(f'release input digest mismatch: {name}')
 guest=m.get('guest_images',{}).get('rust-ubuntu-profile',{})
 archive=root/guest.get('archive','')
-if not archive.is_file() or hashlib.sha256(archive.read_bytes()).hexdigest()!=guest.get('archive_sha256'):
+if not archive.is_file() or sha256_file(archive)!=guest.get('archive_sha256'):
     raise SystemExit('profile Rust archive inventory mismatch')
 if guest.get('manifest_digest') != refs['HEPHAESTUS_LIBKRUN_RUST_BUILDER_IMAGE'].split('@',1)[1]:
     raise SystemExit('profile Rust archive manifest does not match runtime reference')
@@ -982,7 +1424,8 @@ run_cooking_workload() {
 if [[ "$workload_started" != true ]]; then
     return 124
 fi
-local phase_timing_path="$evidence_root/phase-timing-workload.jsonl"
+workload_phase_timing_path="$evidence_root/phase-timing-workload.jsonl"
+local phase_timing_path="$workload_phase_timing_path"
 local workload_trust_value="${workload_trust:-trusted}"
 local workload_home_value="${workload_home:-/home/forge}"
 local workload_cargo_home_value="${workload_cargo_home:-/home/forge/.cargo}"
@@ -1049,6 +1492,7 @@ timeout --kill-after=30s "${cooking_remaining}s" systemd-run \
     --setenv=HEPHAESTUS_COOKING_TIMEOUT_SECONDS="$cooking_timeout" \
     --setenv=HEPHAESTUS_COOKING_DIAGNOSTICS_DIR="$evidence_root" \
     "${workload_scenario_env[@]}" \
+    "${installed_ui_workload_env[@]}" \
     --setenv=PLAYWRIGHT_BROWSERS_PATH="$browser_root" \
     --setenv=HEPH_GCP_PHASE_TIMING_PATH="$phase_timing_path" \
     --setenv=HEPH_GCP_PHASE_TIMING_SOURCE_SHA="${gate_results_revision:-unknown}" \
@@ -1076,6 +1520,7 @@ set +e
 run_cooking_workload
 status=$?
 set -e
+record_workload_first_failure "$status" "$workload_phase_timing_path" "$log_file"
 workload_result='passed'
 ((status == 0)) || workload_result='failed'
 printf 'HEPH_GCP_COOKING event=workload-result operation=cooking-workload phase=cooking status=%s exit_code=%s\n' \
