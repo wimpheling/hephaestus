@@ -1085,23 +1085,26 @@ handoff projection has a passing positive and mutation-negative test (lines
 final30 document-URL failure was therefore a browser assertion mismatch,
 not a platform contract failure.
 
-The smallest next step is a fresh GCP acceptance run. The
+The smallest next step is user-authorized promotion of the reviewed trusted
+controller/workflow changes to `main`; after the whole PR is merged, the
+workflow's no-PR-input path can dispatch a fresh GCP acceptance run. No merge
+authorization or GCP acceptance is claimed here. The
 versioned protocol's
 fork and tombstone warning semantics remain release-owned and do not add a
 platform approval step (lines 1024-1027 above).
 
 ### Repository-wide quality gate (2026-09-22)
 
-The corrected full `cargo dev quality` run passed with exit 0 in session
-`52314`. It used disposable PostgreSQL and NATS services, enabled both real
-isolated RPC proofs, and left all VM/Cooking/session-chat execution flags
-unset. The earlier quality attempt that stopped at architecture diagnostics
-(`DB-STATIC-SQL` and the scoped runtime/UI Git HTTP allowlist) is historical
-and superseded by the reviewed narrow fixes; it is not a current gate
-failure. The retained main log is
-`/var/tmp/hephaestus-cargo-dev-quality-final2.log`, with service logs in
-`/var/tmp/hephaestus-cargo-dev-quality-final2-postgres.log` and
-`/var/tmp/hephaestus-cargo-dev-quality-final2-nats.log`.
+The corrected full `cargo dev quality` run final3 passed with exit 0 in session
+`70984`, superseding the earlier final2 run. It used disposable PostgreSQL and
+NATS services, enabled both real isolated RPC proofs, and left all
+VM/Cooking/session-chat execution flags unset. The earlier attempt that
+stopped at architecture diagnostics (`DB-STATIC-SQL` and the scoped runtime/UI
+Git HTTP allowlist) remains historical and is superseded by the reviewed narrow
+fixes. The retained logs are
+`/var/tmp/hephaestus-cargo-dev-quality-final3.log`,
+`/var/tmp/hephaestus-cargo-dev-quality-final3-postgres.log`, and
+`/var/tmp/hephaestus-cargo-dev-quality-final3-nats.log`.
 
 The passing gate covers workspace formatting, Clippy, tests, documentation,
 the real browser-session RPC lifecycle, the real UI-installation RPC matrix,
@@ -1262,6 +1265,5 @@ uses the non-secret `heph-placeholder:v1:<rule-id>` request value and no
 provider credential; the optional real OpenRouter smoke test was not run.
 
 This closes the local MVP-06 journey and initial transition audit. A fresh GCP
-workflow acceptance run and its retained artifact review remain pending. The
-current final-quality3 run remains in progress and is intentionally not marked
-complete by this local evidence.
+workflow acceptance run and its retained artifact review remain pending. The final-quality3 gate also passed as recorded above; cloud acceptance is
+not inferred from these local results.
