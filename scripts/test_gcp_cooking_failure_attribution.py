@@ -172,6 +172,66 @@ class CookingFailureAttributionTests(unittest.TestCase):
             },
         )
 
+    def test_libkrun_leaf_exit_overrides_golden_wrapper_and_cleanup(self) -> None:
+        log = "\n".join(
+            [
+                "HEPH_GCP_SHELL_FAILURE script=libkrun-integration component=libkrun operation=runtime-cleanup reason=read-failed exit_code=1 line=300",
+                "HEPH_GCP_SHELL_FAILURE script=libkrun-integration component=libkrun operation=command reason=command-failed exit_code=101 line=260",
+                "HEPH_GCP_COOKING event=workload-step operation=cooking-workload phase=cooking stage=gateway-e2e status=failed exit_code=1",
+                "HEPH_GCP_SHELL_FAILURE script=gateway-libkrun-e2e component=gateway operation=command reason=command-failed exit_code=1 line=224",
+                "HEPH_GCP_SHELL_FAILURE script=cooking-run component=cooking operation=command reason=process-exit exit_code=1 line=670",
+            ]
+        )
+        timing = json.dumps({"record": "end", "phase": "golden-tests", "outcome": "failed"}) + "\n"
+        value = self.run_attribution(log, timing, wrapper_status=1)
+        self.assertEqual(
+            value,
+            {
+                "schema": 1,
+                "phase": "golden-tests",
+                "command_id": "cooking-workload",
+                "exit_code": 101,
+                "diagnostic_source": "runtime-log",
+                "diagnostic_error": "phase-failed",
+            },
+        )
+        self.assertEqual(self.project_with_collector(value), value)
+
+    def test_libkrun_leaf_marker_is_ignored_when_malformed_or_unallowlisted(self) -> None:
+        log = "\n".join(
+            [
+                "HEPH_GCP_SHELL_FAILURE script=libkrun-integration component=libkrun operation=command reason=command-failed exit_code=0 line=260",
+                "HEPH_GCP_SHELL_FAILURE script=unknown component=libkrun operation=command reason=command-failed exit_code=101 line=260",
+            ]
+        )
+        value = self.run_attribution(log, "", wrapper_status=1)
+        self.assertEqual(value["phase"], "cooking-supervisor")
+        self.assertEqual(value["command_id"], "cooking-workload")
+        self.assertEqual(value["exit_code"], 1)
+
+    def test_libkrun_leaf_does_not_displace_earlier_oci_or_later_browser_failure(self) -> None:
+        oci_log = "\n".join(
+            [
+                "HEPH_GCP_COOKING event=image-step phase=workflow-images command=skopeo-copy image=python-ubuntu status=fail exit=23",
+                "HEPH_GCP_SHELL_FAILURE script=libkrun-integration component=libkrun operation=command reason=command-failed exit_code=101 line=260",
+            ]
+        )
+        oci = self.run_attribution(oci_log, "", wrapper_status=1)
+        self.assertEqual(oci["phase"], "workflow-images")
+        self.assertEqual(oci["exit_code"], 23)
+
+        browser_log = "\n".join(
+            [
+                "HEPH_GCP_SHELL_FAILURE script=libkrun-integration component=libkrun operation=command reason=command-failed exit_code=101 line=260",
+                self.marker("browser-initial", "playwright-run", 17, "playwright-log", "playwright-failed"),
+            ]
+        )
+        browser_timing = json.dumps({"record": "end", "phase": "browser-initial", "outcome": "failed"}) + "\n"
+        browser = self.run_attribution(browser_log, browser_timing, wrapper_status=1)
+        self.assertEqual(browser["phase"], "browser-initial")
+        self.assertEqual(browser["command_id"], "playwright-run")
+        self.assertEqual(browser["exit_code"], 17)
+
     def test_workload_failure_uses_first_timing_phase_and_projects(self) -> None:
         log = (
             "HEPH_GCP_COOKING event=workload-step operation=cooking-workload "

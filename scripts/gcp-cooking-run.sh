@@ -864,6 +864,27 @@ try:
                 {"script", "component", "operation", "reason", "exit_code", "line"},
                 {"script", "component", "operation", "reason", "exit_code", "line"},
             )
+            if event and event["script"] == "libkrun-integration" and event["component"] == "libkrun":
+                if event["operation"] in {"runtime-cleanup", "cooking-cleanup"}:
+                    continue
+                try:
+                    exit_code = int(event["exit_code"])
+                except ValueError:
+                    continue
+                if (
+                    1 <= exit_code <= 255
+                    and event["operation"] in shell_operations
+                    and event["reason"] in shell_reasons
+                ):
+                    # libkrun is the leaf command inside the golden-test
+                    # wrapper.  Preserve its status before the outer
+                    # cooking/gateway wrappers can report their own status;
+                    # a later typed browser boundary may still supersede it.
+                    phase = selected_failure_phase() or "cooking-supervisor"
+                    if candidate is None:
+                        candidate = (phase, "cooking-workload", exit_code, "runtime-log", "phase-failed")
+                    continue
+
             if event and event["script"] == "cooking-run" and event["component"] == "cooking":
                 if event["operation"] in {"runtime-cleanup", "cooking-cleanup"}:
                     continue
