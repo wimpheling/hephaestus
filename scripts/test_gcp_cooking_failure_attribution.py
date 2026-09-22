@@ -320,6 +320,123 @@ class CookingFailureAttributionTests(unittest.TestCase):
         self.assertEqual(unknown["command_id"], "playwright-run")
         self.assertEqual(unknown["exit_code"], 7)
 
+    def test_browser_leaf_failure_wins_outer_golden_timing_failure(self) -> None:
+        marker = self.marker(
+            "browser-setup", "playwright-run", 1, "playwright-log", "playwright-failed"
+        )
+        # Exercise the actual ordering where the outer golden wrapper is
+        # logged before the launcher boundary is flushed.
+        log = (
+            "HEPH_GCP_COOKING event=workload-step operation=cooking-workload "
+            "phase=cooking stage=gateway-e2e status=failed exit_code=101\n"
+            + marker
+            + "HEPH_GCP_COOKING event=browser-report-validation operation=browser-report-validation "
+            "phase=evidence status=failed report_state=missing reason=invalid-report exit_code=2\n"
+        )
+        timing = "".join(
+            json.dumps({"record": "end", "phase": phase, "outcome": "failed"}) + "\n"
+            for phase in ("golden-tests", "browser-initial")
+        )
+        value = self.run_attribution(log, timing, wrapper_status=101)
+        self.assertEqual(
+            value,
+            {
+                "schema": 1,
+                "phase": "browser-initial",
+                "command_id": "playwright-run",
+                "exit_code": 1,
+                "diagnostic_source": "playwright-log",
+                "diagnostic_error": "playwright-failed",
+            },
+        )
+        self.assertEqual(self.project_with_collector(value), value)
+
+    def test_external_failure_with_golden_timing_uses_safe_workload_contract(self) -> None:
+        log = "HEPH_BROWSER_BRIDGE event=external-failure status=101 diagnostics-scan=0\n"
+        timing = json.dumps({"record": "end", "phase": "golden-tests", "outcome": "failed"}) + "\n"
+        value = self.run_attribution(log, timing, wrapper_status=101)
+        self.assertEqual(value["phase"], "golden-tests")
+        self.assertEqual(value["command_id"], "cooking-workload")
+        self.assertEqual(value["exit_code"], 101)
+        self.assertEqual(value["diagnostic_source"], "runtime-log")
+        self.assertEqual(value["diagnostic_error"], "phase-failed")
+        self.assertEqual(self.project_with_collector(value), value)
+
+    def test_external_failure_accepts_every_valid_workload_timing_phase(self) -> None:
+        phases = (
+            "dependency-setup", "cache-download", "cache-extract", "workflow-images",
+            "browser-setup", "metadata-guard", "project-build", "production-project-build",
+            "runtime-guest-build", "runtime-worker-build", "runtime-smoke", "gateway-edge-ready",
+            "gateway-services-ready", "gateway-readiness", "oci-image-materialization", "oci-builder",
+            "oci-verifier", "golden-tests", "database-tests", "browser-initial", "browser-recovery",
+            "browser-concurrency", "browser-fork", "guest-negative-capability", "browser-post-operation",
+        )
+        browser_contracts = {
+            "browser-setup": ("browser-setup", "setup-log", "setup-failed"),
+            "browser-initial": ("playwright-run", "playwright-log", "playwright-failed"),
+            "browser-recovery": ("playwright-run", "playwright-log", "playwright-failed"),
+            "browser-concurrency": ("playwright-run", "playwright-log", "playwright-failed"),
+            "browser-fork": ("playwright-run", "playwright-log", "playwright-failed"),
+            "browser-post-operation": ("playwright-run", "playwright-log", "playwright-failed"),
+        }
+        for phase in phases:
+            with self.subTest(phase=phase):
+                timing = json.dumps({"record": "end", "phase": phase, "outcome": "failed"}) + "\n"
+                value = self.run_attribution(
+                    "HEPH_BROWSER_BRIDGE event=external-failure status=101 diagnostics-scan=0\n",
+                    timing,
+                    wrapper_status=101,
+                )
+                self.assertEqual(value["phase"], phase)
+                expected_command, expected_source, expected_error = browser_contracts.get(
+                    phase, ("cooking-workload", "runtime-log", "phase-failed")
+                )
+                self.assertEqual(value["command_id"], expected_command)
+                self.assertEqual(value["diagnostic_source"], expected_source)
+                self.assertEqual(value["diagnostic_error"], expected_error)
+                self.assertEqual(self.project_with_collector(value), value)
+
+    def test_browser_post_operation_typed_exit_wins_wrapper_and_roundtrips(self) -> None:
+        marker = self.marker(
+            "browser-post-operation", "playwright-run", 17, "playwright-log", "playwright-failed"
+        )
+        log = (
+            "HEPH_GCP_COOKING event=workload-step operation=cooking-workload "
+            "phase=cooking stage=gateway-e2e status=failed exit_code=101\n"
+            + marker
+        )
+        timing = "".join(
+            json.dumps({"record": "end", "phase": phase, "outcome": "failed"}) + "\n"
+            for phase in ("golden-tests", "browser-post-operation")
+        )
+        value = self.run_attribution(log, timing, wrapper_status=101)
+        self.assertEqual(
+            value,
+            {
+                "schema": 1,
+                "phase": "browser-post-operation",
+                "command_id": "playwright-run",
+                "exit_code": 17,
+                "diagnostic_source": "playwright-log",
+                "diagnostic_error": "playwright-failed",
+            },
+        )
+        self.assertEqual(self.project_with_collector(value), value)
+
+    def test_earlier_production_failure_remains_primary_over_later_browser(self) -> None:
+        timing = "".join(
+            json.dumps({"record": "end", "phase": phase, "outcome": "failed"}) + "\n"
+            for phase in ("production-project-build", "browser-initial")
+        )
+        value = self.run_attribution(
+            "HEPH_BROWSER_BRIDGE event=external-failure status=101 diagnostics-scan=0\n",
+            timing,
+            wrapper_status=101,
+        )
+        self.assertEqual(value["phase"], "production-project-build")
+        self.assertEqual(value["command_id"], "cooking-workload")
+        self.assertEqual(value["exit_code"], 101)
+
     def test_empty_or_malformed_runtime_stream_has_complete_timing_fallback(self) -> None:
         timing = json.dumps({"record": "end", "phase": "browser-recovery", "outcome": "failed"}) + "\n"
         value = self.run_attribution("", timing, wrapper_status=101)
