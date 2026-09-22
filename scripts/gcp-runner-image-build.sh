@@ -32,6 +32,7 @@ gcloud_json_output=''
 gcloud_json_stderr=''
 serial_log=''
 serial_tail_log=''
+first_failure_log=''
 
 die() { printf 'gcp-runner-image-build: %s\n' "$*" >&2; exit 1; }
 
@@ -326,6 +327,12 @@ report_serial_diagnostics() {
   else
     printf 'Bounded runner serial error tail unavailable\n' >&2
   fi
+  if [[ -f "$first_failure_log" && ! -L "$first_failure_log" ]]; then
+    printf 'Bounded runner image first failure: %s\n' "$first_failure_log" >&2
+    cat "$first_failure_log" >&2 || true
+  else
+    printf 'Bounded runner image first failure unavailable\n' >&2
+  fi
 }
 
 prepare_diagnostics_file() {
@@ -354,10 +361,13 @@ import pathlib
 import re
 import sys
 import importlib.util
+import json
+import os
 
 phase_path = pathlib.Path(sys.argv[1])
 tail_path = pathlib.Path(sys.argv[2])
 evidence_path = pathlib.Path(sys.argv[3])
+failure_path = pathlib.Path(sys.argv[4])
 text = sys.stdin.read()
 credential = re.compile(r"(?i)(?:authorization\s*:\s*bearer|bearer\s+[A-Za-z0-9._-]{16,}|(?:\x22|\x27)?[A-Za-z0-9_-]*(?:password|passwd|secret|token|credential|api[_ -]?key|private[_ -]?key)[A-Za-z0-9_-]*(?:\x22|\x27)?\s*[:=]|BEGIN [A-Z ]*PRIVATE KEY)")
 generic_credential = re.compile(
@@ -382,6 +392,20 @@ safe = []
 safe_tail = []
 normalized = []
 terminal = None
+typed_failure = None
+failure_commands = {
+    "metadata": "image-bake-metadata",
+    "host-packages": "image-bake-host-packages",
+    "accounts": "image-bake-accounts",
+    "passt-compat": "image-bake-passt-compat",
+    "passt-preflight": "image-bake-passt-preflight",
+    "passt-apparmor": "image-bake-passt-apparmor",
+    "cgroup-podman": "image-bake-cgroup-podman",
+    "rust-toolchain": "image-bake-rust-toolchain",
+    "libkrunfw": "image-bake-libkrunfw",
+    "libkrun": "image-bake-libkrun",
+    "image-bake-ready": "image-bake-finalize",
+}
 for raw in text.splitlines():
     line = prefix.sub("", raw.strip())
     if "startup-script:" in line:
@@ -394,6 +418,41 @@ for raw in text.splitlines():
     image_phase = re.fullmatch(r"HEPH_GCP_RUNNER_IMAGE phase=([a-z0-9-]+) status=(prebuilt|deferred-to-boot)", line)
     if image_phase and image_phase.group(1) in phases:
         safe.append(f"HEPH_GCP_IMAGE_BUILD phase={image_phase.group(1)} status={image_phase.group(2)}")
+        continue
+    build_error = re.fullmatch(r"HEPH_GCP_KVM_BUILD_ERROR phase=([a-z0-9-]+) status=([0-9]+) log=\S+", line)
+    if build_error and typed_failure is None and 1 <= int(build_error.group(2)) <= 255:
+        failure_phase = build_error.group(1)
+        typed_failure = {
+            "phase": failure_phase if failure_phase in failure_commands else "unknown",
+            "command_id": failure_commands.get(failure_phase, "image-bake-command"),
+            "exit_code": int(build_error.group(2)),
+            "diagnostic_error": "image-build-failed",
+            "diagnostic_source": "scanned-serial",
+        }
+        safe.append(
+            "HEPH_GCP_IMAGE_BUILD failure phase=%s command=%s exit=%s"
+            % (typed_failure["phase"], typed_failure["command_id"], typed_failure["exit_code"])
+        )
+        continue
+    installed_ui_failure = re.fullmatch(
+        r"HEPH_GCP_COOKING event=installed-ui-image status=build-failed exit_code=([0-9]+) "
+        r"scan_exit_code=([0-9]+) log_exit_code=([0-9]+)", line
+    )
+    if installed_ui_failure and typed_failure is None:
+        exits = [int(item) for item in installed_ui_failure.groups()]
+        failure_exit = next((item for item in exits if item), 0)
+        if 1 <= failure_exit <= 255:
+            typed_failure = {
+                "phase": "browser-setup",
+                "command_id": "installed-ui-image-build",
+                "exit_code": failure_exit,
+                "diagnostic_error": "image-build-failed",
+                "diagnostic_source": "scanned-serial",
+            }
+            safe.append(
+                "HEPH_GCP_IMAGE_BUILD failure phase=browser-setup command=installed-ui-image-build exit=%s"
+                % failure_exit
+            )
         continue
     ready = re.fullmatch(r"HEPH_GCP_RUNNER_IMAGE: READY fingerprint=([0-9a-f]{64})", line)
     if ready:
@@ -439,13 +498,52 @@ if rejected:
     # above remain safe because they are parsed into fixed schemas.
     with phase_path.open("a", encoding="utf-8") as handle:
         handle.write("HEPH_GCP_IMAGE_BUILD serial_diagnostics=rejected reason=credential-scan\n")
+
+existing_failure = None
+if failure_path.exists() and not failure_path.is_symlink():
+    try:
+        candidate = json.loads(failure_path.read_text(encoding="utf-8"))
+        if isinstance(candidate, dict) and candidate.get("command_id"):
+            existing_failure = candidate
+    except (OSError, ValueError, UnicodeError):
+        pass
+if typed_failure is None and terminal is not None and terminal.startswith("fail exit="):
+    typed_failure = {
+        "phase": "unknown",
+        "command_id": "runner-image-bake-wrapper",
+        "exit_code": int(terminal.split("=", 1)[1]),
+        "diagnostic_error": "wrapped-terminal-failure",
+        "diagnostic_source": "scanned-serial",
+    }
+if typed_failure is not None and (existing_failure is None or existing_failure.get("diagnostic_error") == "wrapped-terminal-failure"):
+    temporary = failure_path.with_name(f"{failure_path.name}.tmp")
+    try:
+        failure_path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+        with temporary.open("x", encoding="utf-8") as handle:
+            json.dump(typed_failure, handle, sort_keys=True, separators=(",", ":"))
+            handle.write("\n")
+        os.link(temporary, failure_path)
+    except FileExistsError:
+        if existing_failure is not None and existing_failure.get("diagnostic_error") == "wrapped-terminal-failure":
+            try:
+                failure_path.unlink()
+                os.link(temporary, failure_path)
+            except OSError:
+                pass
+    except OSError:
+        pass
+    finally:
+        try:
+            temporary.unlink()
+        except FileNotFoundError:
+            pass
 for line in safe:
     if line not in existing:
         print(line)
         existing.add(line)
 if terminal is not None:
     print(f"__CONTROL__ terminal={terminal}")
-' "$serial_log" "$serial_tail_log" "$script_dir/check-browser-evidence.py" <<<"$value")"; then
+' "$serial_log" "$serial_tail_log" "$script_dir/check-browser-evidence.py" "$first_failure_log" <<<"$value")"; then
     return 1
   fi
   printf '%s\n' "$summary"
@@ -652,8 +750,11 @@ validate_zone
 load_contract
 serial_log="${GCP_RUNNER_IMAGE_SERIAL_LOG:-${RUNNER_TEMP:-/tmp}/gcp-runner-image-serial-${GITHUB_RUN_ID:-manual}-${GITHUB_RUN_ATTEMPT:-1}.log}"
 serial_tail_log="${GCP_RUNNER_IMAGE_SERIAL_TAIL_LOG:-${serial_log}.tail}"
+first_failure_log="${GCP_RUNNER_IMAGE_FIRST_FAILURE:-${serial_log}.first-failure.json}"
 if [[ "${1:-build}" == build ]]; then
   prepare_serial_logs
+  prepare_diagnostics_file "$first_failure_log"
+  rm -f -- "$first_failure_log"
 fi
 load_recovery_state
 trap cleanup_on_exit EXIT

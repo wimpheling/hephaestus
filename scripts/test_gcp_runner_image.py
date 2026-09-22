@@ -4,6 +4,7 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -638,6 +639,86 @@ emit_kvm_evidence
             self.assertEqual((destination / "bin/node").stat().st_mode & 0o777, 0o555)
             self.assertEqual((destination / "share/LICENSE").stat().st_mode & 0o777, 0o444)
             self.assertTrue(os.access(destination / "bin/node", os.X_OK))
+
+    def test_bake_configures_rootless_podman_without_a_user_session(self) -> None:
+        bake = Path(__file__).with_name("gcp-runner-image-bake.sh")
+        with tempfile.TemporaryDirectory(prefix="heph-image-podman-config-") as raw:
+            config = Path(raw) / "containers.conf"
+            config.parent.chmod(0o755)
+            result = subprocess.run(
+                ["bash", str(bake), str(config)],
+                env={**os.environ, "HEPH_GCP_IMAGE_PODMAN_CONFIG_TEST": "1"},
+                text=True,
+                capture_output=True,
+            )
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertEqual(config.parent.stat().st_mode & 0o777, 0o755)
+            self.assertEqual(
+                config.read_text(encoding="utf-8"),
+                "# The bake runs as forge without a systemd user session.  cgroupfs keeps\n"
+                "# rootless Podman independent of the unavailable user-session DBus.\n"
+                "[engine]\n"
+                "cgroup_manager = \"cgroupfs\"\n",
+            )
+            if shutil.which("podman") is None:
+                self.skipTest("podman is unavailable on this test host")
+            info = subprocess.run(
+                ["podman", "info", "--format", "{{.Host.CgroupManager}}"],
+                env={**os.environ, "CONTAINERS_CONF": str(config)},
+                text=True,
+                capture_output=True,
+            )
+            self.assertEqual(info.returncode, 0, info.stderr)
+            self.assertEqual(info.stdout.strip(), "cgroupfs")
+
+    def test_bake_emits_typed_installed_ui_build_failure_and_preserves_exit(self) -> None:
+        bake = Path(__file__).with_name("gcp-runner-image-bake.sh")
+        with tempfile.TemporaryDirectory(prefix="heph-image-build-failure-") as raw:
+            build = Path(raw) / "build.sh"
+            build.write_text(
+                "#!/usr/bin/env bash\n[[ \"$1\" == expected-argument ]]\nexit 17\n",
+                encoding="utf-8",
+            )
+            build.chmod(0o700)
+            result = subprocess.run(
+                ["bash", str(bake), str(build)],
+                env={
+                    **os.environ,
+                    "HEPH_GCP_IMAGE_BUILD_FAILURE_TEST": "1",
+                    "HEPH_GCP_IMAGE_BUILD_TEST_ARG": "expected-argument",
+                },
+                text=True,
+                capture_output=True,
+            )
+            self.assertEqual(result.returncode, 17)
+            self.assertIn(
+                "HEPH_GCP_COOKING event=installed-ui-image status=build-failed "
+                "exit_code=17 scan_exit_code=0 log_exit_code=0",
+                result.stdout,
+            )
+
+    def test_bake_build_wrapper_preserves_success_and_arguments(self) -> None:
+        bake = Path(__file__).with_name("gcp-runner-image-bake.sh")
+        with tempfile.TemporaryDirectory(prefix="heph-image-build-success-") as raw:
+            build = Path(raw) / "build.sh"
+            build.write_text(
+                "#!/usr/bin/env bash\n[[ \"$1\" == expected-argument ]]\nprintf build-ok\n",
+                encoding="utf-8",
+            )
+            build.chmod(0o700)
+            result = subprocess.run(
+                ["bash", str(bake), str(build)],
+                env={
+                    **os.environ,
+                    "HEPH_GCP_IMAGE_BUILD_FAILURE_TEST": "1",
+                    "HEPH_GCP_IMAGE_BUILD_TEST_ARG": "expected-argument",
+                },
+                text=True,
+                capture_output=True,
+            )
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertIn("build-ok", result.stdout)
+            self.assertNotIn("status=build-failed", result.stdout)
 
     def test_bake_generalizes_identity_and_preserves_nextboot_services(self) -> None:
         bake = Path(__file__).with_name("gcp-runner-image-bake.sh")

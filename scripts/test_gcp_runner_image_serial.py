@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+import json
 import subprocess
 import tempfile
 import time
@@ -61,6 +62,96 @@ class RunnerImageSerialTests(unittest.TestCase):
             self.assertIn("Bounded runner serial phase diagnostics:", result.stderr)
             self.assertIn("Bounded runner serial error tail:", result.stderr)
             self.assertEqual(result.stdout.count("phase=accounts"), 1)
+
+    def test_earliest_typed_build_failure_is_projected_with_closed_command_id(self) -> None:
+        serial = (
+            f"HEPH_GCP_KVM_STARTUP event=phase-start phase=libkrun revision={REVISION}\n"
+            "HEPH_GCP_KVM_BUILD_ERROR phase=libkrun status=23 log=/srv/hephaestus/libkrun.log\n"
+            "HEPH_GCP_KVM_FIRST_ERROR make: *** [target] Error 23\n"
+            "HEPH_GCP_KVM_BUILD_ERROR phase=rust-toolchain status=24 log=/srv/hephaestus/rust.log\n"
+            "HEPH_GCP_RUNNER_IMAGE: FAIL exit=23\n"
+        )
+        with tempfile.TemporaryDirectory(prefix="heph-runner-image-serial-first-") as raw:
+            root = Path(raw)
+            result, serial_log = self._run(root, serial)
+            self.assertNotEqual(result.returncode, 0)
+            failure_path = root / "serial.log.first-failure.json"
+            failure = json.loads(failure_path.read_text(encoding="utf-8"))
+            self.assertEqual(
+                failure,
+                {
+                    "command_id": "image-bake-libkrun",
+                    "diagnostic_error": "image-build-failed",
+                    "diagnostic_source": "scanned-serial",
+                    "exit_code": 23,
+                    "phase": "libkrun",
+                },
+            )
+            self.assertIn("failure phase=libkrun command=image-bake-libkrun exit=23", serial_log.read_text(encoding="utf-8"))
+            self.assertNotIn("rust-toolchain", (root / "serial.log.first-failure.json").read_text(encoding="utf-8"))
+
+    def test_wrapper_failure_without_typed_marker_is_not_attributed_to_a_phase(self) -> None:
+        serial = "HEPH_GCP_RUNNER_IMAGE: FAIL exit=17\n"
+        with tempfile.TemporaryDirectory(prefix="heph-runner-image-serial-wrapper-") as raw:
+            root = Path(raw)
+            result, _ = self._run(root, serial)
+            self.assertNotEqual(result.returncode, 0)
+            failure = json.loads((root / "serial.log.first-failure.json").read_text(encoding="utf-8"))
+            self.assertEqual(failure["phase"], "unknown")
+            self.assertEqual(failure["command_id"], "runner-image-bake-wrapper")
+            self.assertEqual(failure["diagnostic_error"], "wrapped-terminal-failure")
+            self.assertEqual(failure["exit_code"], 17)
+
+    def test_typed_installed_ui_build_failure_is_reported_as_browser_setup(self) -> None:
+        serial = (
+            f"[ 4.0] google_metadata_script_runner[123]: startup-script: HEPH_GCP_KVM_STARTUP event=phase-start phase=image-bake-ready revision={REVISION}\n"
+            "HEPH_GCP_COOKING event=installed-ui-image status=build-failed "
+            "exit_code=17 scan_exit_code=0 log_exit_code=0\n"
+            "HEPH_GCP_KVM_FIRST_ERROR podman build failed\n"
+            "HEPH_GCP_RUNNER_IMAGE: FAIL exit=101\n"
+        )
+        with tempfile.TemporaryDirectory(prefix="heph-runner-image-serial-browser-") as raw:
+            root = Path(raw)
+            result, serial_log = self._run(root, serial)
+            self.assertNotEqual(result.returncode, 0)
+            failure_path = root / "serial.log.first-failure.json"
+            failure = json.loads(failure_path.read_text(encoding="utf-8"))
+            self.assertEqual(failure["phase"], "browser-setup")
+            self.assertEqual(failure["command_id"], "installed-ui-image-build")
+            self.assertEqual(failure["exit_code"], 17)
+            self.assertIn("command=installed-ui-image-build", serial_log.read_text(encoding="utf-8"))
+            self.assertEqual(failure_path.stat().st_mode & 0o777, 0o600)
+
+    def test_zero_exit_typed_build_failure_is_ignored(self) -> None:
+        serial = (
+            "HEPH_GCP_KVM_BUILD_ERROR phase=libkrun status=0 log=/srv/hephaestus/libkrun.log\n"
+            "HEPH_GCP_RUNNER_IMAGE: FAIL exit=17\n"
+        )
+        with tempfile.TemporaryDirectory(prefix="heph-runner-image-serial-invalid-") as raw:
+            root = Path(raw)
+            result, _ = self._run(root, serial)
+            self.assertNotEqual(result.returncode, 0)
+            failure = json.loads((root / "serial.log.first-failure.json").read_text(encoding="utf-8"))
+            self.assertEqual(failure["phase"], "unknown")
+            self.assertEqual(failure["command_id"], "runner-image-bake-wrapper")
+            self.assertEqual(failure["exit_code"], 17)
+
+    def test_typed_failure_survives_credential_rejection_without_secret(self) -> None:
+        secret = "fixture-secret-value"
+        serial = (
+            "HEPH_GCP_KVM_BUILD_ERROR phase=libkrun status=23 log=/srv/hephaestus/libkrun.log\n"
+            f"HEPH_GCP_KVM_FIRST_ERROR token={secret}\n"
+            "HEPH_GCP_RUNNER_IMAGE: FAIL exit=23\n"
+        )
+        with tempfile.TemporaryDirectory(prefix="heph-runner-image-serial-first-secret-") as raw:
+            root = Path(raw)
+            result, serial_log = self._run(root, serial)
+            self.assertNotEqual(result.returncode, 0)
+            failure_text = (root / "serial.log.first-failure.json").read_text(encoding="utf-8")
+            self.assertIn('"phase":"libkrun"', failure_text)
+            self.assertNotIn(secret, failure_text)
+            self.assertNotIn(secret, serial_log.read_text(encoding="utf-8"))
+            self.assertIn("serial_diagnostics=rejected reason=credential-scan", serial_log.read_text(encoding="utf-8"))
 
     def test_safe_builder_error_tail_is_retained_and_bounded(self) -> None:
         serial = (

@@ -374,6 +374,10 @@ class RunnerImageBuildTests(unittest.TestCase):
         self.assertIn("inputs.cloud_mode == 'image-build'", workflow)
         self.assertIn("gcp-runner-image-build.sh build", workflow)
         self.assertIn("gcp-runner-image-build.sh cleanup", workflow)
+        self.assertIn("Retain scanned runner image serial evidence", workflow)
+        self.assertIn("Publish safe runner image failure summary", workflow)
+        self.assertIn("GCP_RUNNER_IMAGE_FIRST_FAILURE", workflow)
+        self.assertIn("gcp-runner-image-serial-${{ github.run_id }}-${{ github.run_attempt }}", workflow)
         self.assertIn("GCP_RUNNER_IMAGE: ${{ inputs.runner_image || vars.GCP_RUNNER_IMAGE }}", workflow)
         self.assertIn("GCP_USE_STOCK_IMAGE: ${{ inputs.use_stock_image }}", workflow)
 
