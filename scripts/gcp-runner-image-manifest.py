@@ -20,6 +20,13 @@ def main() -> int:
     parser.add_argument("--bake-sha256", required=True)
     parser.add_argument("--verifier-sha256", required=True)
     parser.add_argument("--manifest-generator-sha256", required=True)
+    parser.add_argument("--installed-ui-archive-sha256")
+    parser.add_argument("--installed-ui-image-tag")
+    parser.add_argument("--installed-ui-image-digest")
+    parser.add_argument("--installed-ui-image-id")
+    parser.add_argument("--installed-ui-build-sha256")
+    parser.add_argument("--installed-ui-dockerfile-sha256")
+    parser.add_argument("--installed-ui-browser-version")
     args = parser.parse_args()
     pins = {
         "rust_version": os.environ["HEPH_IMAGE_RUST_VERSION"],
@@ -59,6 +66,28 @@ def main() -> int:
             "/usr/local/libexec/hephaestus/gcp-runner-image-manifest.py",
         ],
     }
+    installed = {
+        "archive_path": "/usr/share/hephaestus/installed-ui-browser-image.oci",
+        "build_path": "/usr/local/libexec/hephaestus/installed-ui-browser-image-build.sh",
+        "dockerfile_path": "/usr/local/libexec/hephaestus/installed-ui-browser-image.Dockerfile",
+        "archive_sha256": args.installed_ui_archive_sha256,
+        "image_tag": args.installed_ui_image_tag,
+        "image_digest": args.installed_ui_image_digest,
+        "image_id": args.installed_ui_image_id,
+        "build_sha256": args.installed_ui_build_sha256,
+        "dockerfile_sha256": args.installed_ui_dockerfile_sha256,
+        "browser_version": args.installed_ui_browser_version,
+    }
+    installed_values = list(installed.values())
+    if any(value is not None for value in installed_values) and not all(
+        value is not None for value in installed_values
+    ):
+        parser.error("installed UI image metadata must be supplied together")
+    if all(value is not None for value in installed_values):
+        document["installed_ui_image"] = installed
+        document["required_paths"].extend(
+            [installed["archive_path"], installed["build_path"], installed["dockerfile_path"]]
+        )
     canonical = json.dumps(document, sort_keys=True, separators=(",", ":"), ensure_ascii=True).encode()
     document["manifest_sha256"] = hashlib.sha256(canonical).hexdigest()
     args.output.write_text(json.dumps(document, sort_keys=True, indent=2) + "\n", encoding="utf-8")

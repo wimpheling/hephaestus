@@ -47,6 +47,12 @@ ALLOWED_LABELS = frozenset(
         "host-journal",
         "runtime-log",
         "runtime-structured",
+        "first-failure",
+        "setup-log",
+        "image-build-log",
+        "npm-log",
+        "playwright-log",
+        "browser-container-log",
         "browser-summary",
         "session-chat-negative-summary",
         "test-output",
@@ -327,6 +333,26 @@ PHASE_TIMING_PHASE_ORDER = (
 PHASE_TIMING_PHASES = frozenset(PHASE_TIMING_PHASE_ORDER)
 PHASE_TIMING_CLOCK_DOMAINS = frozenset(
     {"none", "controller", "guest-startup", "guest-runtime", "workload", "workload-libkrun", "workload-gateway", "collection"}
+)
+FIRST_FAILURE_FIELDS = frozenset(
+    {"schema", "phase", "command_id", "exit_code", "diagnostic_source", "diagnostic_error"}
+)
+FIRST_FAILURE_PHASES = frozenset(PHASE_TIMING_PHASE_ORDER) | {
+    "initializing", "diagnostic-bootstrap", "diagnostic-synthetic", "unknown"
+}
+FIRST_FAILURE_COMMANDS = frozenset(
+    {
+        "phase-failure", "metadata-fetch", "runner-image-runtime", "diagnostic-setup",
+        "installed-ui-image-build", "browser-setup", "npm-install", "playwright-run",
+        "cooking-workload", "evidence-scan", "diagnostics-collection", "diagnostics-upload",
+        "cleanup", "download", "unknown",
+    }
+)
+FIRST_FAILURE_SOURCES = frozenset(
+    {"none", "setup-log", "image-build-log", "npm-log", "playwright-log", "serial", "runtime-log"}
+)
+FIRST_FAILURE_ERRORS = frozenset(
+    {"none", "setup-failed", "image-build-failed", "npm-failed", "playwright-failed", "phase-failed", "unknown"}
 )
 SAFE_ERROR_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9 _.,:;/'()\[\]-]{0,1023}$")
 STACK_LINE_RE = re.compile(r"^\s*(?:at\s+|File\s+|[A-Za-z0-9_.-]+\.\w+:\d+)")
@@ -1076,6 +1102,41 @@ def _project_text(source: Path, destination: Path) -> tuple[int, str]:
     return retained, digest.hexdigest()
 
 
+def _project_first_failure(source: Path, destination: Path) -> tuple[int, str]:
+    """Retain the earliest trusted failure as a closed, path-free record."""
+
+    source = _safe_input(source)
+    try:
+        with _open_safe(source) as input_file:
+            raw = input_file.read(MAX_LINE_BYTES + 1)
+        if len(raw) > MAX_LINE_BYTES:
+            raise CollectionError("first failure exceeds its retention limit")
+        EVIDENCE.check_bytes(raw, str(source))
+        _reject_secret_assignments(raw)
+        value = json.loads(raw.decode("utf-8"))
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError) as error:
+        raise CollectionError("first failure must be one JSON object") from error
+    if not isinstance(value, dict) or set(value) != FIRST_FAILURE_FIELDS:
+        raise CollectionError("first failure contains an unallowlisted field")
+    if value.get("schema") != 1:
+        raise CollectionError("first failure schema is invalid")
+    if value.get("phase") not in FIRST_FAILURE_PHASES:
+        raise CollectionError("first failure phase is invalid")
+    if value.get("command_id") not in FIRST_FAILURE_COMMANDS:
+        raise CollectionError("first failure command is invalid")
+    exit_code = value.get("exit_code")
+    if type(exit_code) is not int or not 1 <= exit_code <= 255:
+        raise CollectionError("first failure exit code is invalid")
+    if value.get("diagnostic_source") not in FIRST_FAILURE_SOURCES:
+        raise CollectionError("first failure diagnostic source is invalid")
+    if value.get("diagnostic_error") not in FIRST_FAILURE_ERRORS:
+        raise CollectionError("first failure diagnostic error is invalid")
+    encoded = (json.dumps(value, sort_keys=True, separators=(",", ":")) + "\n").encode("utf-8")
+    destination.write_bytes(encoded)
+    destination.chmod(0o600)
+    return len(encoded), hashlib.sha256(encoded).hexdigest()
+
+
 def _validate_session_chat_negative_summary(value: Any) -> dict[str, Any]:
     """Validate the projector's closed sidecar contract without retaining input text."""
 
@@ -1736,7 +1797,9 @@ def collect(
                     continue
                 label, source_path = _parse_source(raw)
                 destination = sources_dir / label
-                if label == "browser-summary":
+                if label == "first-failure":
+                    size, digest = _project_first_failure(source_path, destination)
+                elif label == "browser-summary":
                     size, digest = _project_browser_summary(source_path, destination)
                 elif label == "session-chat-negative-summary":
                     size, digest = _project_session_chat_negative_summary(source_path, destination)

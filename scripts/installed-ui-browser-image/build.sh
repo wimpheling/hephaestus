@@ -19,7 +19,10 @@ podman run --rm --entrypoint sh "${image_tag}" -c '
     browser="$(find /ms-playwright -type f \( -name chrome -o -name chrome-headless-shell \) -perm -0100 -print -quit)"
     test -n "$browser"
     "$browser" --version
-    certutil -H >/dev/null
+    nss_dir="$(mktemp -d)"
+    certutil -N -d "sql:$nss_dir" --empty-password >/dev/null 2>&1
+    certutil -L -d "sql:$nss_dir" >/dev/null 2>&1
+    rm -rf "$nss_dir"
 '
 
 printf 'HEPHAESTUS_PLAYWRIGHT_IMAGE=%s\n' "${image_tag}"

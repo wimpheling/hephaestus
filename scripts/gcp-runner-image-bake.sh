@@ -103,6 +103,8 @@ bash "$script_dir/gcp-kvm-startup.sh"
 work_root=/srv/hephaestus
 checkout="$work_root/image-browser-checkout"
 browser_root="$work_root/playwright-browsers"
+installed_ui_archive_tmp="$work_root/installed-ui-browser-image.oci"
+installed_ui_archive="/usr/share/hephaestus/installed-ui-browser-image.oci"
 node_version="$HEPH_IMAGE_NODE_VERSION"
 node_sha256="$HEPH_IMAGE_NODE_SHA256"
 oras_version=1.3.3
@@ -143,6 +145,54 @@ browser_executable="$(find "$browser_root" -type f \( -name chrome-headless-shel
 browser_version="$($browser_executable --version 2>/dev/null || true)"
 [[ -n "$browser_version" ]] || { printf '%s\n' 'Chromium executable cannot report its version' >&2; exit 1; }
 
+# Build the reviewed installed-UI browser image once as forge and preserve it
+# as an immutable OCI archive. The Cooking workload later imports this archive
+# into its actual forge rootless store, including PR sandboxes with a relocated
+# HOME, so the runner never depends on a mutable shared Podman graphroot.
+installed_ui_build="$checkout/scripts/installed-ui-browser-image/build.sh"
+installed_ui_dockerfile="$checkout/scripts/installed-ui-browser-image/Dockerfile"
+[[ -f "$installed_ui_build" && ! -L "$installed_ui_build" ]] ||
+  { printf '%s\n' 'installed UI browser image build recipe is missing' >&2; exit 1; }
+[[ -f "$installed_ui_dockerfile" && ! -L "$installed_ui_dockerfile" ]] ||
+  { printf '%s\n' 'installed UI browser image Dockerfile is missing' >&2; exit 1; }
+installed_ui_build_sha="$(sha256sum "$installed_ui_build" | awk '{print $1}')"
+installed_ui_dockerfile_sha="$(sha256sum "$installed_ui_dockerfile" | awk '{print $1}')"
+install -m 0555 "$installed_ui_build" /usr/local/libexec/hephaestus/installed-ui-browser-image-build.sh
+install -m 0444 "$installed_ui_dockerfile" /usr/local/libexec/hephaestus/installed-ui-browser-image.Dockerfile
+runuser -u forge -- env HOME=/home/forge XDG_RUNTIME_DIR=/run/user/10001 \
+  PATH=/opt/hephaestus/node-${node_version}/bin:/usr/local/bin:/usr/bin:/bin \
+  bash "$installed_ui_build"
+installed_ui_image_tag='localhost/hephestus-playwright:1.62.0-certutil'
+installed_ui_image_id="$(runuser -u forge -- env HOME=/home/forge XDG_RUNTIME_DIR=/run/user/10001 \
+  podman image inspect --format '{{.Id}}' "$installed_ui_image_tag")"
+installed_ui_image_digest="$(runuser -u forge -- env HOME=/home/forge XDG_RUNTIME_DIR=/run/user/10001 \
+  podman image inspect --format '{{.Digest}}' "$installed_ui_image_tag")"
+if [[ "$installed_ui_image_id" =~ ^[0-9a-f]{64}$ ]]; then
+  installed_ui_image_id="sha256:$installed_ui_image_id"
+fi
+[[ "$installed_ui_image_id" =~ ^sha256:[0-9a-f]{64}$ ]] ||
+  { printf '%s\n' 'installed UI browser image ID is invalid' >&2; exit 1; }
+[[ "$installed_ui_image_digest" =~ ^sha256:[0-9a-f]{64}$ ]] ||
+  { printf '%s\n' 'installed UI browser image digest is invalid' >&2; exit 1; }
+installed_ui_browser_version="$(runuser -u forge -- env HOME=/home/forge XDG_RUNTIME_DIR=/run/user/10001 \
+  podman run --rm --entrypoint sh "$installed_ui_image_tag" -c '
+    set -eu
+    browser="$(find /ms-playwright -type f \( -name chrome -o -name chrome-headless-shell \) -perm -0100 -print -quit)"
+    test -n "$browser"
+    "$browser" --version
+  ')"
+case "$installed_ui_browser_version" in
+  Chromium\ *) ;;
+  *) printf '%s\n' 'installed UI browser image cannot report a Chromium version' >&2; exit 1 ;;
+esac
+rm -f -- "$installed_ui_archive_tmp"
+runuser -u forge -- env HOME=/home/forge XDG_RUNTIME_DIR=/run/user/10001 \
+  podman save --format oci-archive --output "$installed_ui_archive_tmp" "$installed_ui_image_tag"
+install -m 0644 -o root -g root "$installed_ui_archive_tmp" "$installed_ui_archive"
+installed_ui_archive_sha="$(sha256sum "$installed_ui_archive" | awk '{print $1}')"
+[[ "$installed_ui_archive_sha" =~ ^[0-9a-f]{64}$ ]] ||
+  { printf '%s\n' 'installed UI browser image archive hash is invalid' >&2; exit 1; }
+
 oras_archive="$work_root/oras-${oras_version}.tar.gz"
 oras_stage="$work_root/oras-stage"
 curl --fail --location --silent --show-error --retry 3 \
@@ -169,7 +219,14 @@ python3 "$script_dir/gcp-runner-image-manifest.py" \
   --browser-version "$browser_version" \
   --recipe-sha256 "$recipe_sha" --startup-sha256 "$startup_sha" \
   --bake-sha256 "$bake_sha" --verifier-sha256 "$verifier_sha" \
-  --manifest-generator-sha256 "$manifest_generator_sha"
+  --manifest-generator-sha256 "$manifest_generator_sha" \
+  --installed-ui-archive-sha256 "$installed_ui_archive_sha" \
+  --installed-ui-image-tag "$installed_ui_image_tag" \
+  --installed-ui-image-digest "$installed_ui_image_digest" \
+  --installed-ui-image-id "$installed_ui_image_id" \
+  --installed-ui-build-sha256 "$installed_ui_build_sha" \
+  --installed-ui-dockerfile-sha256 "$installed_ui_dockerfile_sha" \
+  --installed-ui-browser-version "$installed_ui_browser_version"
 install -m 0644 /dev/null /etc/hephaestus/runner-image-required
 python3 /usr/local/libexec/hephaestus/gcp-runner-image-verify.py /usr/share/hephaestus/runner-image-manifest.json \
   --rust-version "$HEPH_IMAGE_RUST_VERSION" --libkrun-tag "$HEPH_IMAGE_LIBKRUN_TAG" \
@@ -181,7 +238,7 @@ fingerprint="$(python3 -c 'import json; print(json.load(open("/usr/share/hephaes
 
 # Keep installed host tools and browser binaries; remove checkout, sources,
 # downloads, transient build state, package indexes, and user cache.
-rm -rf -- "$checkout" "$stage" "$archive" "$oras_stage" "$oras_archive" /srv/hephaestus/src /srv/hephaestus/tmp
+rm -rf -- "$checkout" "$stage" "$archive" "$oras_stage" "$oras_archive" "$installed_ui_archive_tmp" /srv/hephaestus/src /srv/hephaestus/tmp
 rm -rf -- /var/lib/apt/lists/* /root/.cache /home/forge/.cache/npm \
   /home/forge/.npm /home/forge/.cargo/registry /home/forge/.cargo/git
 rm -rf -- /var/log/hephaestus/* /tmp/hephaestus-libkrun/*
