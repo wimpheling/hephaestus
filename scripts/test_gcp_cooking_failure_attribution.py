@@ -34,7 +34,13 @@ class CookingFailureAttributionTests(unittest.TestCase):
             f"diagnostic_source={source} diagnostic_error={error}\n"
         )
 
-    def write_manifest(self, root: Path, *, installed: bool = True) -> str:
+    def write_manifest(
+        self,
+        root: Path,
+        *,
+        installed: bool = True,
+        browser_version: str = "Chromium 151.0.7922.34",
+    ) -> str:
         paths = {
             "archive_path": "/usr/share/hephaestus/installed-ui-browser-image.oci",
             "build_path": "/usr/local/libexec/hephaestus/installed-ui-browser-image-build.sh",
@@ -64,7 +70,7 @@ class CookingFailureAttributionTests(unittest.TestCase):
                 "image_id": "sha256:" + "2" * 64,
                 "build_sha256": hashlib.sha256(contents[paths["build_path"]]).hexdigest(),
                 "dockerfile_sha256": hashlib.sha256(contents[paths["dockerfile_path"]]).hexdigest(),
-                "browser_version": "Chromium 151.0.7922.34",
+                "browser_version": browser_version,
             }
         canonical = json.dumps(document, sort_keys=True, separators=(",", ":"), ensure_ascii=True).encode()
         fingerprint = hashlib.sha256(canonical).hexdigest()
@@ -308,6 +314,36 @@ class CookingFailureAttributionTests(unittest.TestCase):
             systemd_end = self.source.index("/bin/bash -Eeuo pipefail -c", systemd_start)
             self.assertIn('"${installed_ui_workload_env[@]}"', self.source[systemd_start:systemd_end])
             self.assertTrue((root / "expensive-work").is_file())
+
+    def test_reviewed_chrome_for_testing_metadata_reaches_forge_workload(self) -> None:
+        """Exercise the production validator with the baked candidate's browser identity."""
+        for browser_version in (
+            "Chromium 151.0.7922.34",
+            "Google Chrome for Testing 151.0.7922.34",
+        ):
+            with self.subTest(browser_version=browser_version), tempfile.TemporaryDirectory(
+                prefix="heph-installed-ui-browser-version-"
+            ) as raw:
+                root = Path(raw)
+                fingerprint = self.write_manifest(root, browser_version=browser_version)
+                result = self.run_manifest_validation(root, fingerprint)
+                self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+                values = (root / "workload-env").read_text(encoding="utf-8").splitlines()
+                self.assertIn(
+                    f"--setenv=HEPH_GCP_INSTALLED_UI_BROWSER_VERSION={browser_version}",
+                    values,
+                )
+
+    def test_unreviewed_browser_version_remains_rejected_by_production_validator(self) -> None:
+        with tempfile.TemporaryDirectory(prefix="heph-installed-ui-browser-version-invalid-") as raw:
+            root = Path(raw)
+            fingerprint = self.write_manifest(
+                root,
+                browser_version="Google Chrome for Testing 151.0.7922.35",
+            )
+            result = self.run_manifest_validation(root, fingerprint)
+            self.assertNotEqual(result.returncode, 0, result.stdout + result.stderr)
+            self.assertFalse((root / "expensive-work").exists())
 
     def test_old_manifest_without_archive_keeps_source_build_fallback(self) -> None:
         with tempfile.TemporaryDirectory(prefix="heph-installed-ui-old-manifest-") as raw:

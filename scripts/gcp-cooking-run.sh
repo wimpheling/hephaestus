@@ -170,7 +170,11 @@ for field in ("archive_sha256", "build_sha256", "dockerfile_sha256"):
 for field in ("image_digest", "image_id"):
     if re.fullmatch(r"sha256:[0-9a-f]{64}", installed[field] or "") is None:
         raise SystemExit(f"installed UI image {field} is invalid")
-if not isinstance(installed["browser_version"], str) or re.fullmatch(r"Chromium [^\r\n\x00]+", installed["browser_version"]) is None:
+reviewed_browser_versions = {
+    "Chromium 151.0.7922.34",
+    "Google Chrome for Testing 151.0.7922.34",
+}
+if not isinstance(installed["browser_version"], str) or installed["browser_version"] not in reviewed_browser_versions:
     raise SystemExit("installed UI browser version is invalid")
 for field, expected_path in (
     ("archive_sha256", installed["archive_path"]),
