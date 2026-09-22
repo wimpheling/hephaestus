@@ -8,7 +8,7 @@ use brokered_egress_domain::{
     BrokeredSecretRule, BrokeredSecretRuleId, ExactHttpsOrigin, HeaderName, HttpInjectionLocation,
 };
 use forge_domain::{OrganizationId, ProjectId};
-use identity_domain::{AuthenticatedIdentity, RequestId, UserId};
+use identity_domain::{AuthenticatedIdentity, BrowserSessionSid, RequestId, UserId};
 use secret_application::{
     BindSecret, CreateSecret, DeclareBrokeredHttpsRule, GrantAndAcceptSecretImport, RotateSecret,
 };
@@ -2114,6 +2114,9 @@ pub async fn exercise_follow_up(
     input_commit: &str,
     checkpoint: CookingCheckpoint,
     _upstream: &BrokeredTlsUpstream,
+    owner_browser_session: BrowserSessionSid,
+    outsider: UserId,
+    outsider_browser_session: BrowserSessionSid,
 ) -> String {
     let CookingCheckpoint { alice, bob } = checkpoint;
     let public = env::var("HEPHAESTUS_CADDY_TEST_PUBLIC_URL").expect("public Caddy URL");
@@ -2237,6 +2240,9 @@ pub async fn exercise_follow_up(
         bob.run_id.as_uuid(),
         bob.event_id,
         false,
+        owner_browser_session,
+        outsider.as_uuid(),
+        outsider_browser_session,
     )
     .await;
     super::cooking_inspection::inspect(
@@ -2245,6 +2251,9 @@ pub async fn exercise_follow_up(
         follow_up.run_id.as_uuid(),
         follow_up.event_id,
         false,
+        owner_browser_session,
+        outsider.as_uuid(),
+        outsider_browser_session,
     )
     .await;
     assert_eq!(
@@ -2255,7 +2264,17 @@ pub async fn exercise_follow_up(
     let evidence:(uuid::Uuid,uuid::Uuid,i64)=sqlx::query_as("SELECT run.instance_revision_id,lease.id,delivery.dispatch_sequence FROM runs run JOIN agent_instance_volume_leases lease ON lease.run_id=run.id JOIN mailbox_delivery_attempts attempt ON attempt.run_id=run.id JOIN mailbox_deliveries delivery ON delivery.event_id=attempt.event_id WHERE run.id=$1").bind(run_id.as_uuid()).fetch_one(pool).await.expect("revision/state lease/dispatch provenance");
     assert_ne!(evidence.0, instance.revision, "run uses bound revision");
     assert!(evidence.2 > 0);
-    super::cooking_inspection::inspect(pool, running, run_id.as_uuid(), alice.event_id, true).await;
+    super::cooking_inspection::inspect(
+        pool,
+        running,
+        run_id.as_uuid(),
+        alice.event_id,
+        true,
+        owner_browser_session,
+        outsider.as_uuid(),
+        outsider_browser_session,
+    )
+    .await;
     assert_eq!(
         super::git_output_bare(&bare, &["rev-parse", "refs/heads/main"]).await,
         result_commit,
@@ -2264,7 +2283,8 @@ pub async fn exercise_follow_up(
     // Bob's proposal was created against the frozen input commit. Once Alice
     // advances canonical main, approving Bob must settle as a Git conflict and
     // retain the competing proposal history without moving the canonical ref.
-    super::cooking_inspection::approve_for_test(pool, running, &bob_view).await;
+    super::cooking_inspection::approve_for_test(pool, running, &bob_view, owner_browser_session)
+        .await;
     let bob_proposal: uuid::Uuid =
         sqlx::query_scalar("SELECT id FROM review_proposals WHERE run_id = $1")
             .bind(bob.run_id.as_uuid())
@@ -2325,6 +2345,9 @@ pub async fn exercise_follow_up(
         model_fault.event_id,
         false,
         4,
+        owner_browser_session,
+        outsider.as_uuid(),
+        outsider_browser_session,
     )
     .await;
     let relay_fault = deliver_request(
@@ -2345,6 +2368,9 @@ pub async fn exercise_follow_up(
         relay_fault.event_id,
         false,
         2,
+        owner_browser_session,
+        outsider.as_uuid(),
+        outsider_browser_session,
     )
     .await;
     // Update 42 has two deliberate duplicate publications: the response-loss

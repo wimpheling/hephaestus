@@ -1,24 +1,44 @@
 //! Authenticated HTTP inspection of the real mailbox cooking run.
 
+use identity_domain::BrowserSessionSid;
 use jsonwebtoken::{Algorithm, EncodingKey, Header, encode};
 use serde_json::{Value, json};
 use sqlx::PgPool;
 use time::OffsetDateTime;
 use uuid::Uuid;
 
+// Keep the owner and outsider identities explicit at this boundary so each
+// negative probe uses a real, independently seeded browser session.
+#[allow(clippy::too_many_arguments)]
 pub async fn inspect(
     pool: &PgPool,
     running: &hephaestus_app::RunningHephaestus,
     run_id: Uuid,
     event_id: Uuid,
     approve_result: bool,
+    owner_browser_session: BrowserSessionSid,
+    outsider: Uuid,
+    outsider_browser_session: BrowserSessionSid,
 ) -> Value {
-    inspect_with_https_uses(pool, running, run_id, event_id, approve_result, 4).await
+    inspect_with_https_uses(
+        pool,
+        running,
+        run_id,
+        event_id,
+        approve_result,
+        4,
+        owner_browser_session,
+        outsider,
+        outsider_browser_session,
+    )
+    .await
 }
 
 /// Inspects a run whose controlled fault path may repeat one broker call.
 /// The expected count remains explicit so the happy path keeps its exact
 /// four-use assertion while retries prove their additional physical use.
+// Explicit owner/outsider sessions keep the authorization probes independent.
+#[allow(clippy::too_many_arguments)]
 pub async fn inspect_with_https_uses(
     pool: &PgPool,
     running: &hephaestus_app::RunningHephaestus,
@@ -26,6 +46,9 @@ pub async fn inspect_with_https_uses(
     event_id: Uuid,
     approve_result: bool,
     expected_https_uses: usize,
+    owner_browser_session: BrowserSessionSid,
+    outsider: Uuid,
+    outsider_browser_session: BrowserSessionSid,
 ) -> Value {
     let owner: Uuid = sqlx::query_scalar(
         "SELECT user_id FROM external_identities WHERE issuer = $1 AND subject = 'golden-subject'",
@@ -37,14 +60,23 @@ pub async fn inspect_with_https_uses(
     let client = reqwest::Client::new();
     let mut provenance = Value::Null;
     let mut result_run = Value::Null;
-    inspect_source(pool, running, &client, owner, run_id, event_id).await;
+    inspect_source(
+        pool,
+        running,
+        &client,
+        owner,
+        run_id,
+        event_id,
+        owner_browser_session,
+    )
+    .await;
     for method in ["GetRun", "GetRunProvenance"] {
         let audience = format!("/hephaestus.run.v1.RunService/{method}");
         let url = format!("http://{}{audience}", running.http_addr());
         let request = json!({"runId":{"value":run_id.to_string()}});
         let response = client
             .post(&url)
-            .bearer_auth(assertion(owner, &audience))
+            .bearer_auth(assertion(owner, &audience, owner_browser_session))
             .json(&request)
             .send()
             .await
@@ -66,7 +98,7 @@ pub async fn inspect_with_https_uses(
         }
         let outsider = client
             .post(&url)
-            .bearer_auth(assertion(Uuid::new_v4(), &audience))
+            .bearer_auth(assertion(outsider, &audience, outsider_browser_session))
             .json(&request)
             .send()
             .await
@@ -74,7 +106,7 @@ pub async fn inspect_with_https_uses(
         assert_eq!(outsider.status(), reqwest::StatusCode::NOT_FOUND);
         let wrong_audience = client
             .post(&url)
-            .bearer_auth(assertion(owner, "/wrong-audience"))
+            .bearer_auth(assertion(owner, "/wrong-audience", owner_browser_session))
             .json(&request)
             .send()
             .await
@@ -95,7 +127,15 @@ pub async fn inspect_with_https_uses(
     );
     super::cooking::assert_no_credentials(&provenance.to_string());
     if approve_result {
-        approve(pool, running, &client, owner, &result_run).await;
+        approve(
+            pool,
+            running,
+            &client,
+            owner,
+            owner_browser_session,
+            &result_run,
+        )
+        .await;
     }
     result_run
 }
@@ -150,6 +190,7 @@ async fn inspect_source(
     owner: Uuid,
     run_id: Uuid,
     event_id: Uuid,
+    owner_browser_session: BrowserSessionSid,
 ) {
     let source: (Uuid, Uuid, Uuid, Uuid) = sqlx::query_as(
         "SELECT run.instance_id,delivery.event_id,revision.gateway_id,lease.id
@@ -172,6 +213,7 @@ async fn inspect_source(
         owner,
         "/hephaestus.gateway.v1.GatewayService/GetGateway",
         json!({"gatewayId":{"value":source.2.to_string()}}),
+        owner_browser_session,
     )
     .await;
     assert!(
@@ -192,6 +234,7 @@ async fn inspect_source(
         owner,
         "/hephaestus.gateway.v1.GatewayService/ListMailboxPublications",
         json!({"gatewayId":{"value":source.2.to_string()}}),
+        owner_browser_session,
     )
     .await;
     let publication = publications
@@ -214,6 +257,7 @@ async fn inspect_source(
         owner,
         "/hephaestus.instance.v1.AgentInstanceService/GetInstance",
         json!({"instanceId":{"value":source.0.to_string()}}),
+        owner_browser_session,
     )
     .await;
     let delivery = instance["instance"]["mailboxDeliveries"]
@@ -408,10 +452,11 @@ async fn get_json(
     owner: Uuid,
     audience: &str,
     request: Value,
+    owner_browser_session: BrowserSessionSid,
 ) -> Value {
     let response = client
         .post(format!("http://{}{audience}", running.http_addr()))
-        .bearer_auth(assertion(owner, audience))
+        .bearer_auth(assertion(owner, audience, owner_browser_session))
         .json(&request)
         .send()
         .await
@@ -503,7 +548,7 @@ const fn status_connect_code(status: reqwest::StatusCode) -> Option<&'static str
     }
 }
 
-fn assertion(user: Uuid, audience: &str) -> String {
+fn assertion(user: Uuid, audience: &str, owner_browser_session: BrowserSessionSid) -> String {
     let now = OffsetDateTime::now_utc().unix_timestamp();
     let signing_key = hephaestus_app::rpc::mediator_signing_key(
         b"golden-internal-command-token-with-sufficient-entropy",
@@ -514,6 +559,7 @@ fn assertion(user: Uuid, audience: &str) -> String {
             "iss":"hephaestus-web-mediator", "sub":user.to_string(),
             "aud":audience, "jti":Uuid::new_v4().to_string(),
             "iat":now, "nbf":now, "exp":now+30,
+            "sid":owner_browser_session.to_protocol_string(),
         }),
         &EncodingKey::from_secret(&signing_key),
     )
@@ -525,6 +571,7 @@ async fn approve(
     running: &hephaestus_app::RunningHephaestus,
     client: &reqwest::Client,
     owner: Uuid,
+    owner_browser_session: BrowserSessionSid,
     run: &Value,
 ) {
     let audience = "/hephaestus.run.v1.RunService/RequestControl";
@@ -532,7 +579,7 @@ async fn approve(
         .as_str()
         .expect("proposal ID");
     let response = client.post(format!("http://{}{audience}", running.http_addr()))
-        .bearer_auth(assertion(owner, audience))
+        .bearer_auth(assertion(owner, audience, owner_browser_session))
         .json(&json!({
             "context":{"requestId":{"value":Uuid::new_v4().to_string()}, "idempotencyKey":format!("cooking-approve-{proposal}")},
             "kind":"RUN_CONTROL_KIND_APPROVE_RESULT", "repositoryId":run["repositoryId"],
@@ -571,6 +618,7 @@ pub async fn approve_for_test(
     pool: &PgPool,
     running: &hephaestus_app::RunningHephaestus,
     run: &Value,
+    owner_browser_session: BrowserSessionSid,
 ) {
     let owner: Uuid = sqlx::query_scalar(
         "SELECT user_id FROM external_identities WHERE issuer = $1 AND subject = 'golden-subject'",
@@ -579,12 +627,22 @@ pub async fn approve_for_test(
     .fetch_one(pool)
     .await
     .expect("golden approval owner");
-    approve(pool, running, &reqwest::Client::new(), owner, run).await;
+    approve(
+        pool,
+        running,
+        &reqwest::Client::new(),
+        owner,
+        owner_browser_session,
+        run,
+    )
+    .await;
 }
 
 #[cfg(test)]
 mod tests {
-    use super::rpc_failure_marker;
+    use super::{assertion, rpc_failure_marker};
+    use identity_domain::BrowserSessionSid;
+    use uuid::Uuid;
 
     #[test]
     fn rpc_failure_marker_keeps_closed_code_and_drops_error_body() {
@@ -613,5 +671,27 @@ mod tests {
             marker,
             "HEPH_GCP_RUNTIME error_class=not-found reason_class=not_found operation=unknown status=failed rc=404"
         );
+    }
+
+    #[test]
+    fn inspection_assertion_round_trips_the_supplied_session_sid() {
+        use http::{HeaderMap, HeaderValue, header::AUTHORIZATION};
+
+        let audience = "/hephaestus.gateway.v1.GatewayService/GetGateway";
+        let session_sid = BrowserSessionSid::new();
+        let token = assertion(Uuid::new_v4(), audience, session_sid);
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            AUTHORIZATION,
+            HeaderValue::from_str(&format!("Bearer {token}")).expect("inspection assertion header"),
+        );
+        let principal = hephaestus_app::rpc::MediatorAuthenticator::new(
+            &hephaestus_app::rpc::mediator_signing_key(
+                b"golden-internal-command-token-with-sufficient-entropy",
+            ),
+        )
+        .authenticate(&headers, audience)
+        .expect("inspection assertion with the supplied SID authenticates");
+        assert_eq!(principal.sid, session_sid);
     }
 }

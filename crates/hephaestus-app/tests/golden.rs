@@ -4867,7 +4867,6 @@ async fn bearer_push_starts_run_through_production_bootstrap() {
         "golden-subject",
     )
     .await;
-    #[cfg(feature = "test-fixtures")]
     let outsider_browser_session =
         seed_golden_browser_session(&pool, outsider_id, &browser_oidc_issuer, "outsider").await;
     let project = fixture_repository
@@ -6699,6 +6698,9 @@ async fn bearer_push_starts_run_through_production_bootstrap() {
             &blog_repository.source_commit,
             checkpoint,
             &actual_brokered.upstream,
+            owner_browser_session,
+            outsider_id,
+            outsider_browser_session,
         )
         .await;
         let blog_artifact = cooking_blog_artifact::build_publish_and_verify(
@@ -7326,9 +7328,11 @@ async fn bearer_push_starts_run_through_production_bootstrap() {
             .await
             .expect("cooking daemon startup recovery shutdown");
         let running = Box::pin(restart_application(app_config.clone())).await;
-        let checkpoint =
-            cooking::exercise_initial(&pool, &gateway_edge.as_ref().expect("cooking gateway").1)
-                .await;
+        let checkpoint = cooking::exercise_initial(
+            &pool,
+            &gateway_edge.as_ref().expect("cooking gateway").1,
+        )
+        .await;
         running
             .shutdown()
             .await
@@ -7344,6 +7348,9 @@ async fn bearer_push_starts_run_through_production_bootstrap() {
             &input_commit,
             checkpoint,
             &brokered_fixture.as_ref().expect("cooking broker").upstream,
+            owner_browser_session,
+            outsider_id,
+            outsider_browser_session,
         )
         .await;
         brokered_fixture
