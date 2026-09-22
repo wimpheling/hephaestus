@@ -1118,6 +1118,7 @@ errno_markers = (
     ("Connection reset by peer", "ECONNRESET", "connection-reset"),
     ("Address already in use", "EADDRINUSE", "address-in-use"),
 )
+socket_path_limit = "path must be shorter than SUN_LEN"
 
 
 def normalize(raw: str) -> str:
@@ -1157,6 +1158,8 @@ def project(raw: str, context_lines: list[str] | None = None) -> str | None:
     for phrase, errno, error_class in errno_markers:
         if phrase in line:
             return f"HEPH_GCP_RUNTIME error={error_class} errno={errno}"
+    if socket_path_limit in line:
+        return "HEPH_GCP_RUNTIME error=path-too-long reason_class=unix-socket-path-limit"
     if not line.startswith(("HEPH_", "HEPHAESTUS_")):
         return None
     head, separator, body = line.partition(" ")

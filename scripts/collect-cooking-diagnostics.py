@@ -315,6 +315,7 @@ RUST_PANIC_ERROR_MARKERS = (
     ("Connection reset by peer", "ECONNRESET", "connection-reset"),
     ("Address already in use", "EADDRINUSE", "address-in-use"),
 )
+RUST_PANIC_SOCKET_PATH_LIMIT = "path must be shorter than SUN_LEN"
 RUST_PANIC_VM_CONTEXT_PREFIX = "provision prepared service worker VM:"
 RUST_PANIC_VM_CODE_RE = re.compile(
     r'\bcode\s*:\s*"(?P<code>[A-Za-z0-9-]{1,64})"'
@@ -376,6 +377,8 @@ def _project_rust_panic(match: re.Match[str], line: str) -> str:
     context = _project_rust_panic_context_fields(suffix.lstrip(": "))
     if context is not None:
         return f"{projected} {context}"
+    if RUST_PANIC_SOCKET_PATH_LIMIT in suffix:
+        return f"{projected} error_class=path-too-long reason_class=unix-socket-path-limit"
     for phrase, errno, error_class in RUST_PANIC_ERROR_MARKERS:
         if phrase in suffix:
             return f"{projected} error_class={error_class} errno={errno}"
@@ -387,14 +390,20 @@ def _project_rust_panic_context_fields(line: str) -> str | None:
 
     if not line.startswith(RUST_PANIC_VM_CONTEXT_PREFIX):
         return None
-    reason: tuple[str, str, str] | None = None
-    for marker in RUST_PANIC_ERROR_MARKERS:
-        if marker[0] in line:
-            reason = marker
-            break
-    if reason is None:
+    if RUST_PANIC_SOCKET_PATH_LIMIT in line:
+        error_class = "path-too-long"
+        reason_class = "unix-socket-path-limit"
+        errno = None
+    else:
+        error_class = None
+        reason_class = None
+        errno = None
+        for marker in RUST_PANIC_ERROR_MARKERS:
+            if marker[0] in line:
+                _, errno, error_class = marker
+                break
+    if error_class is None:
         return None
-    _, errno, error_class = reason
     code = RUST_PANIC_VM_CODE_RE.search(line)
     if code is None:
         code = RUST_PANIC_VM_DISPLAY_CODE_RE.search(line)
@@ -406,7 +415,12 @@ def _project_rust_panic_context_fields(line: str) -> str | None:
         operation = RUST_PANIC_VM_RESOURCES.get(resource.group("resource")) if resource is not None else None
     if operation is None:
         return None
-    return f"operation={operation} error_class={error_class} errno={errno}"
+    fields = f"operation={operation} error_class={error_class}"
+    if reason_class is not None:
+        fields += f" reason_class={reason_class}"
+    else:
+        fields += f" errno={errno}"
+    return fields
 
 
 def _project_rust_panic_context(line: str) -> str | None:

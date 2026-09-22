@@ -464,7 +464,9 @@ finish
                 "(runtime-permissions): Permission denied (os error 13)\n"
                 "thread 'prepared-worker' panicked at crates/foo/src/provider.rs:1437:9\n"
                 "provision prepared service worker VM: resource \"private service broker\" "
-                "is unavailable: Permission denied (os error 13)\n",
+                "is unavailable: Permission denied (os error 13)\n"
+                "thread 'prepared-worker' panicked at crates/foo/src/provider.rs:174:9\n"
+                "provision prepared service worker VM: Unavailable { resource: \"private service broker\", reason: \"private service transport I/O failed: path must be shorter than SUN_LEN\" }\n",
                 encoding="utf-8",
             )
             safe_bundle = root / "safe-bundle"
@@ -496,7 +498,10 @@ finish
                 "error_class=permission-denied errno=EACCES\n"
                 "HEPH_GCP_TEST test=rust-panic location=crates/foo/src/provider.rs:1437:9\n"
                 "HEPH_GCP_TEST test=rust-panic operation=private-service-broker "
-                "error_class=permission-denied errno=EACCES\n",
+                "error_class=permission-denied errno=EACCES\n"
+                "HEPH_GCP_TEST test=rust-panic location=crates/foo/src/provider.rs:174:9\n"
+                "HEPH_GCP_TEST test=rust-panic operation=private-service-broker "
+                "error_class=path-too-long reason_class=unix-socket-path-limit\n",
             )
 
             first_failure = root / "first-failure.json"
