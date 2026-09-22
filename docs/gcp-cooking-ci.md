@@ -59,6 +59,25 @@ This is the latest accepted baseline. The newer user-requested infrastructure
 changes remain in progress; their updated head needs fresh cloud proof before
 merge.
 
+### Accepted diagnostic infrastructure proof (2026-09-22)
+
+The corrected diagnostic run [35728835480](https://github.com/wimpheling/hephaestus/actions/runs/35728835480)
+tested head `2c336b401ef5cd0615a41b53124760515f8b0cea`. Its injected setup
+failure recorded `browser-setup` / `diagnostic-setup`, exit `78`, and retained
+partial trusted timing: `browser-setup` failed after `147 ms`, with
+`browser-initial` explicitly downstream-missing. The [Cooking timing artifact
+10694044487](https://github.com/wimpheling/hephaestus/actions/runs/35728835480/artifacts/10694044487)
+was retained after upload and VM deletion. Diagnostics upload/download and
+scan passed, gate validation and acceptance passed, and cleanup verified the VM
+absent. This proves the corrected diagnostic infrastructure contract only; it
+does not establish a full Cooking or MVP-06 workload result.
+
+The preceding diagnostic [35726448348](https://github.com/wimpheling/hephaestus/actions/runs/35726448348)
+exposed the missing partial-timing and setup-exit contract; the corrected run
+above is the retained proof of that fix. Feature head `251d54e` and candidate
+image build [35729371490](https://github.com/wimpheling/hephaestus/actions/runs/35729371490)
+remain pending candidate validation and parallel MVP-05/MVP-06 acceptance.
+
 The optional encrypted `diagnostics-triage` export is published at source
 `87399f8` with 9 export tests and 90 diagnostics/collector tests; it
 revalidates the fixed private bundle before producing a one-day CMS ciphertext
@@ -1249,3 +1268,22 @@ Cloud Shell artifacts and their configuration are described in the operator
 README at `/home/a/.local/share/hephaestus-gcp/README.md`.
 
 The subsequent full session-chat run [35718227620](https://github.com/wimpheling/hephaestus/actions/runs/35718227620), using workload SHA `6e8d84ce012e48d524eaf2cf7eb07c31b1820bb7`, failed during setup before browser execution. Diagnostics upload, authenticated download and credential scanning passed, and cleanup verified the VM absent. A local replay reproduced the setup boundary: the digest-pinned builder pulled the reviewed image, completed its build and tool checks, then `certutil -H` exited 1. The follow-up replaces that help probe with actual NSS database create/list validation; the fixed builder replay exited 0 in `/var/tmp/heph-installed-ui-build-replay-fixed-35718227620.log`. Fifteen scenario tests plus startup/bridge smokes and `bash -n` pass, and scanned build output is now collected from the runtime stream. This local replay explains the observed setup failure but does not establish the cloud root cause; acceptance remains pending.
+
+## Current bounded infrastructure status (2026-09-22)
+
+The trusted controller pin `cb2033` is promoted and merged with the feature
+baseline `4bf9527`. The latest feature head, `b5f0490`, contains only focused
+failure-status test coverage. Repository quality passed at `4bf9527`; the
+private log is `/var/tmp/heph-cargo-dev-quality-20260922-132023-3804474.log`,
+and disposable-service cleanup was verified. The 204-test controller union
+and the corrected status-17 shell branches also pass.
+
+Injected run [35726448348](https://github.com/wimpheling/hephaestus/actions/runs/35726448348)
+preserved the `browser-setup`/`diagnostic-setup` boundary: setup exited 78,
+the setup log was retained, the archive uploaded and downloaded, credential
+scanning passed, and the VM was absent after cleanup. This is not accepted
+cloud proof: the controller still expected status 42 while the workload
+reported 78, and the diagnostic timing helper was not staged, leaving timing
+partial. The bounded follow-up is to align that status contract and stage the
+helper in diagnostic before the next cloud run; full MVP-06 cloud acceptance
+remains pending.

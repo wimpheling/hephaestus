@@ -1407,3 +1407,21 @@ and `lineage-status` were missing. Typed gates still passed; complete source
 collection is not claimed. This is the latest successful cloud baseline, while
 the newer user-requested infrastructure remains in progress and needs updated
 head cloud proof before merge. MVP-06 remains in progress.
+
+### Corrected diagnostic infrastructure proof (2026-09-22)
+
+The corrected diagnostic run [35728835480](https://github.com/wimpheling/hephaestus/actions/runs/35728835480)
+tested head `2c336b401ef5cd0615a41b53124760515f8b0cea`. The injected setup
+boundary recorded `browser-setup` / `diagnostic-setup`, exit `78`, with a
+trusted partial timing of `147 ms` and `browser-initial` explicitly missing
+downstream. [Cooking timing artifact
+10694044487](https://github.com/wimpheling/hephaestus/actions/runs/35728835480/artifacts/10694044487)
+was retained after upload and VM deletion; diagnostics upload/download/scan,
+gate validation/acceptance, and cleanup verification passed. This is
+infrastructure proof only and does not complete MVP-06 cloud journey
+acceptance.
+
+The earlier [35726448348](https://github.com/wimpheling/hephaestus/actions/runs/35726448348)
+record remains the failed pre-fix diagnostic. Feature head `251d54e` and
+candidate image build [35729371490](https://github.com/wimpheling/hephaestus/actions/runs/35729371490)
+still require candidate validation and parallel MVP-05/MVP-06 acceptance.

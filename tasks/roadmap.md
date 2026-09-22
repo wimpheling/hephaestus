@@ -59,6 +59,16 @@ is not claimed. This is a baseline for the current cloud path; newer
 user-requested infrastructure remains in progress and needs updated-head cloud
 proof before merge. MVP-06 stays in progress.
 
+The corrected diagnostic infrastructure proof [35728835480](https://github.com/wimpheling/hephaestus/actions/runs/35728835480)
+tested head `2c336b401ef5cd0615a41b53124760515f8b0cea`: the injected setup
+boundary failed at `browser-setup` after `147 ms` with exit `78`, and the
+retained timing projection marked `browser-initial` downstream-missing. Its
+safe timing artifact is [10694044487](https://github.com/wimpheling/hephaestus/actions/runs/35728835480/artifacts/10694044487);
+upload/download, scan, gate acceptance and VM cleanup all passed. This is
+infrastructure evidence, not MVP-06 completion. Feature head `251d54e` and
+candidate image build [35729371490](https://github.com/wimpheling/hephaestus/actions/runs/35729371490)
+remain pending candidate validation and parallel MVP-05/MVP-06 acceptance.
+
 - [x] Jointly review the MVP-06 plan with the user before starting or resuming
   implementation. Confirm the intended scope, dependency order and acceptance
   evidence in [the MVP-06 task](in-progress/mvp-06-git-backed-session-chat-journey.md)
