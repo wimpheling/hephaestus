@@ -351,6 +351,65 @@ class CookingFailureAttributionTests(unittest.TestCase):
         )
         self.assertEqual(self.project_with_collector(value), value)
 
+    def test_retained_bare_browser_boundary_wins_golden_wrapper(self) -> None:
+        # This is the shape retained by Cooking 35775999828: the launcher
+        # emitted a minimal phase/exit boundary and the outer golden wrapper
+        # was also reported as failed.  The previous parser ignored that
+        # bounded browser marker.
+        log = "\n".join(
+            [
+                "HEPH_GCP_COOKING event=workload-step operation=cooking-workload "
+                "phase=cooking stage=gateway-e2e status=failed exit_code=101",
+                "HEPH_BROWSER_BRIDGE event=external-failure status=1 diagnostics-scan=0",
+                "HEPH_GCP_FAILURE phase=browser-initial exit_code=1",
+            ]
+        ) + "\n"
+        timing = "".join(
+            json.dumps({"record": "end", "phase": phase, "outcome": "failed"}) + "\n"
+            for phase in ("golden-tests", "browser-initial")
+        )
+        value = self.run_attribution(log, timing, wrapper_status=101)
+        self.assertEqual(
+            value,
+            {
+                "schema": 1,
+                "phase": "browser-initial",
+                "command_id": "playwright-run",
+                "exit_code": 1,
+                "diagnostic_source": "playwright-log",
+                "diagnostic_error": "playwright-failed",
+            },
+        )
+        self.assertEqual(self.project_with_collector(value), value)
+
+    def test_retained_bare_browser_boundary_does_not_displace_production_failure(self) -> None:
+        log = (
+            "HEPH_GCP_COOKING event=workload-step operation=cooking-workload "
+            "phase=cooking stage=project-build status=failed exit_code=101\n"
+            "HEPH_GCP_FAILURE phase=browser-initial exit_code=1\n"
+        )
+        timing = "".join(
+            json.dumps({"record": "end", "phase": phase, "outcome": "failed"}) + "\n"
+            for phase in ("production-project-build", "browser-initial")
+        )
+        value = self.run_attribution(log, timing, wrapper_status=101)
+        self.assertEqual(value["phase"], "production-project-build")
+        self.assertEqual(value["command_id"], "cooking-workload")
+        self.assertEqual(value["exit_code"], 101)
+
+    def test_bare_browser_boundary_requires_known_phase_and_exit(self) -> None:
+        log = "\n".join(
+            [
+                "HEPH_GCP_FAILURE phase=browser-unknown exit_code=1",
+                "HEPH_GCP_FAILURE phase=browser-initial exit_code=0",
+                "HEPH_GCP_FAILURE phase=browser-initial exit_code=256",
+            ]
+        ) + "\n"
+        value = self.run_attribution(log, "", wrapper_status=101)
+        self.assertEqual(value["phase"], "cooking-supervisor")
+        self.assertEqual(value["command_id"], "cooking-workload")
+        self.assertEqual(value["exit_code"], 101)
+
     def test_external_failure_with_golden_timing_uses_safe_workload_contract(self) -> None:
         log = "HEPH_BROWSER_BRIDGE event=external-failure status=101 diagnostics-scan=0\n"
         timing = json.dumps({"record": "end", "phase": "golden-tests", "outcome": "failed"}) + "\n"

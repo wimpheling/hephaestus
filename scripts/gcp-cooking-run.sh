@@ -738,6 +738,37 @@ try:
                     )
                     break
 
+            # Some browser launcher paths emit only a phase/exit boundary.
+            # Accept this smaller boundary only for a
+            # known browser phase, and only when it cannot displace an earlier
+            # production/OCI failure.  Map it to the closed Playwright
+            # contract; never copy arbitrary text from the line into the
+            # sidecar.
+            event = fields(
+                line,
+                {"phase", "exit_code"},
+                {"phase", "exit_code"},
+            )
+            if line.startswith("HEPH_GCP_FAILURE ") and event and event["phase"] in browser_failure_phases:
+                try:
+                    exit_code = int(event["exit_code"])
+                except ValueError:
+                    continue
+                selected = selected_failure_phase()
+                if (
+                    1 <= exit_code <= 255
+                    and (selected is None or selected in wrapper_failure_phases or selected == event["phase"])
+                    and (candidate is None or candidate[1] == "cooking-workload")
+                ):
+                    candidate = (
+                        event["phase"],
+                        "playwright-run",
+                        exit_code,
+                        "playwright-log",
+                        "playwright-failed",
+                    )
+                    break
+
             event = fields(
                 line,
                 {"event", "phase", "command", "status", "exit"},
