@@ -14,8 +14,8 @@ export PATH
 
 readonly metadata_root='http://metadata.google.internal/computeMetadata/v1'
 readonly gcs_bucket='hephaestus-508000-cooking-cache'
-readonly gcs_object='cooking/heph-gcp-cooking-cache.tar.zst'
-readonly cache_sha256='0ed20efcc1aa019b79405d1eed626b13d4702019e9ceeba2bdde54e45ae29296'
+readonly gcs_object='cooking/replacements/02430eca0a4e94ba129c4fdad969233f51486ee1dccdf1ee85e31f580f4d386d/heph-gcp-cooking-cache.tar.zst'
+readonly cache_sha256='02430eca0a4e94ba129c4fdad969233f51486ee1dccdf1ee85e31f580f4d386d'
 readonly forge_uid=10001
 readonly forge_gid=10001
 readonly work_root='/srv/hephaestus'

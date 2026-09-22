@@ -548,13 +548,23 @@ diagnostics object. The scope is used only with those bucket-scoped roles.
 | `gs://hephaestus-508000-cooking-diagnostics` | `europe-west1`, STANDARD, uniform bucket-level access, public access prevention enforced, versioning disabled, soft delete `0`, Delete lifecycle at object age 1 day | `storage.objectCreator` only | `storage.objectViewer` |
 
 The cache object is
-`gs://hephaestus-508000-cooking-cache/cooking/heph-gcp-cooking-cache.tar.zst`.
-The reviewed immutable archive SHA-256 is
-`0ed20efcc1aa019b79405d1eed626b13d4702019e9ceeba2bdde54e45ae29296`.
+`gs://hephaestus-508000-cooking-cache/cooking/replacements/02430eca0a4e94ba129c4fdad969233f51486ee1dccdf1ee85e31f580f4d386d/heph-gcp-cooking-cache.tar.zst`.
+The reviewed immutable archive size is `1813939981` bytes and its base64 MD5 is
+`wt25yyIq4ikDQzFsaxFsdA==`. The reviewed immutable archive SHA-256 is
+`02430eca0a4e94ba129c4fdad969233f51486ee1dccdf1ee85e31f580f4d386d`.
 The diagnostics object key is
 `cooking/runs/{github_run_id}/{github_run_attempt}/{github_sha}.tar.gz`.
 The runtime uses a unique key and cannot read or delete previous bundles.
 Lifecycle deletion is retention control, not an immediate deletion guarantee.
+
+The replacement provenance record is preserved in
+[`docs/experiments/gcp-cache-replacement-20260922/README.md`](experiments/gcp-cache-replacement-20260922/README.md).
+It records packaging from canonical platform revision
+`581b939d5ad5e5a81e77ad01ad8931487a8d2bcf` and two independent byte-identical
+archive builds. This is a new replacement object; it does not restore the
+original cache SHA. Local packaging and validator checks do not establish
+fresh cloud runtime acceptance, which remains pending after upload and
+promotion of the GCP controller pin to trusted `main`.
 
 The startup pins Rust `1.88.0`, libkrun `v1.19.0` at commit
 `9932c4b59d8f891e60c6aba20d22ebb99ceaa8e2`, libkrunfw `v5.5.0`, and passt at
@@ -597,9 +607,40 @@ bash cloud-shell-diagnostics-bootstrap.sh apply
 The cache script enables `storage.googleapis.com`, verifies the project and
 bucket configuration, creates or verifies the runtime identity, applies only
 the bucket and exact service-account bindings above, and prints the human
-upload destination `gs://hephaestus-508000-cooking-cache/cooking/`. Upload the
-selected immutable OCI archive through the Cloud Console, then verify its
-SHA-256 before dispatching `cache-preflight`.
+upload prefix `gs://hephaestus-508000-cooking-cache/cooking/`. Upload the
+selected immutable OCI archive under the reviewed replacement object path
+above through the Cloud Console, then verify its SHA-256 before dispatching
+`cache-preflight`.
+
+An already authorized uploader with both object-create and object-read access
+may use the CLI instead of the Cloud Console; this does not change IAM or
+grant new access. Disable parallel composite
+uploads so that Cloud Storage retains the reviewed MD5, and use the
+generation-match precondition to reject an existing object:
+
+```sh
+CACHE_URI='gs://hephaestus-508000-cooking-cache/cooking/replacements/02430eca0a4e94ba129c4fdad969233f51486ee1dccdf1ee85e31f580f4d386d/heph-gcp-cooking-cache.tar.zst'
+CACHE_ARCHIVE='/absolute/path/heph-gcp-cooking-cache.tar.zst'
+CACHE_DOWNLOAD='/absolute/path/heph-gcp-cooking-cache.download.tar.zst'
+
+CLOUDSDK_STORAGE_PARALLEL_COMPOSITE_UPLOAD_ENABLED=False \
+gcloud storage cp \
+  --if-generation-match=0 --content-type=application/zstd \
+  "$CACHE_ARCHIVE" "$CACHE_URI"
+gcloud storage objects describe "$CACHE_URI" --raw \
+  --format='json(name,size,md5Hash,generation)'
+generation="$(gcloud storage objects describe "$CACHE_URI" --raw \
+  --format='value(generation)')"
+gcloud storage cp "${CACHE_URI}#${generation}" "$CACHE_DOWNLOAD"
+sha256sum "$CACHE_DOWNLOAD"
+```
+
+The metadata output must show the exact replacement name, size
+`1813939981`, base64 MD5 `wt25yyIq4ikDQzFsaxFsdA==`, and a positive generation;
+the final SHA-256 must be
+`02430eca0a4e94ba129c4fdad969233f51486ee1dccdf1ee85e31f580f4d386d`.
+Do not dispatch cloud acceptance until the controller pin containing this URI
+and metadata has been promoted to trusted `main`.
 
 The diagnostics script applies the separate one-day bucket and its creator /
 viewer bindings. It does not modify the cache bucket, budget, VM policy,

@@ -21,12 +21,12 @@ readonly RUNNER_IMAGE_COMPATIBILITY_RECORDS="$(cd -- "$(dirname -- "${BASH_SOURC
 readonly MACHINE_TYPE="n2-standard-8"
 readonly DISK_SIZE="150GB"
 readonly CACHE_BUCKET="hephaestus-508000-cooking-cache"
-readonly CACHE_OBJECT="cooking/heph-gcp-cooking-cache.tar.zst"
+readonly CACHE_OBJECT="cooking/replacements/02430eca0a4e94ba129c4fdad969233f51486ee1dccdf1ee85e31f580f4d386d/heph-gcp-cooking-cache.tar.zst"
 # These values come from the reviewed local cache archive uploaded for Cooking.
 # The preflight checks object metadata before any VM is created; the helper still
 # verifies the archive SHA-256 after download.
-readonly CACHE_SIZE_BYTES="1783474345"
-readonly CACHE_MD5_BASE64="di95x0b0Yqqt4RTyVUvb6A=="
+readonly CACHE_SIZE_BYTES="1813939981"
+readonly CACHE_MD5_BASE64="wt25yyIq4ikDQzFsaxFsdA=="
 readonly DIAGNOSTICS_BUCKET="hephaestus-508000-cooking-diagnostics"
 readonly DIAGNOSTICS_OBJECT_PREFIX="cooking/runs"
 readonly DIAGNOSTIC_MACHINE_TYPE="e2-small"

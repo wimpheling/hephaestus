@@ -1281,9 +1281,33 @@ cache lifecycle. Expiry is plausible, but the deletion cause is not proven.
 
 The reviewed archive with SHA-256
 `0ed20efcc1aa019b79405d1eed626b13d4702019e9ceeba2bdde54e45ae29296`
-was not found in the checked workspace and artifact locations. No local `gcloud`/`gsutil` or GCP upload
-access is available to restore it here. The next operator action is to restore
+was not found in the checked workspace and artifact locations. At the time of
+this pre-auth audit, no local `gcloud`/`gsutil` or GCP upload access was
+available to restore it here; that statement is historical and superseded by
+the dedicated SDK login and upload attempt recorded below. At that pre-auth
+point, the next operator action was to restore
 the reviewed cache archive to the existing documented destination, then rerun
 cache preflight and the diagnostic. Trusted-controller promotion to `main`
 still separately requires merge authorization; no GCP workload acceptance is
 claimed from these preflights.
+
+### Replacement cache packaging (2026-09-22)
+
+Two reproducible replacement archives were built from the existing local
+platform release at revision
+`581b939d5ad5e5a81e77ad01ad8931487a8d2bcf`. Both passed the unchanged
+production cache validator before and after extraction, archive safety checks,
+and strict extracted checksum checks. They are byte-identical with SHA-256
+`02430eca0a4e94ba129c4fdad969233f51486ee1dccdf1ee85e31f580f4d386d`, size
+`1813939981` bytes, and base64 MD5 `wt25yyIq4ikDQzFsaxFsdA==`. The dated
+[reproduction evidence](../../docs/experiments/gcp-cache-replacement-20260922/README.md)
+retains the exact recipe and safe provenance; the original cache SHA remains
+unrestored and unclaimed.
+
+The replacement contains a newer canonical Rust image than the final36 local
+evidence, so fresh cloud runtime acceptance remains pending. The user completed
+the dedicated SDK login, but the upload attempt was denied by
+`storage.objects.get` at the destination; no new cache object is claimed.
+Existing authentication routes are under investigation. No IAM changes or
+promotion to `main` were made. Current cache pins/docs are updated in the
+working tree, and the 11 cleanup tests plus `bash -n` checks passed.

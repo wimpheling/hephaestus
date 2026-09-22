@@ -244,8 +244,8 @@ the [runbook](../../docs/gcp-cooking-ci.md#keyless-identities-and-bucket-access)
 The full path checks this private, immutable cache before creating a VM:
 
 ```text
-gs://hephaestus-508000-cooking-cache/cooking/heph-gcp-cooking-cache.tar.zst
-SHA-256: 0ed20efcc1aa019b79405d1eed626b13d4702019e9ceeba2bdde54e45ae29296
+gs://hephaestus-508000-cooking-cache/cooking/replacements/02430eca0a4e94ba129c4fdad969233f51486ee1dccdf1ee85e31f580f4d386d/heph-gcp-cooking-cache.tar.zst
+SHA-256: 02430eca0a4e94ba129c4fdad969233f51486ee1dccdf1ee85e31f580f4d386d
 ```
 
 A missing or unreadable object, or a checksum mismatch, stops before VM
