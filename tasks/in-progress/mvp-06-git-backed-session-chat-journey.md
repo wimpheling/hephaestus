@@ -1425,3 +1425,22 @@ The earlier [35726448348](https://github.com/wimpheling/hephaestus/actions/runs/
 record remains the failed pre-fix diagnostic. Feature head `251d54e` and
 candidate image build [35729371490](https://github.com/wimpheling/hephaestus/actions/runs/35729371490)
 still require candidate validation and parallel MVP-05/MVP-06 acceptance.
+
+### Candidate image status (2026-09-22)
+
+Candidate image build [35729371490](https://github.com/wimpheling/hephaestus/actions/runs/35729371490)
+failed before image creation because run-id metadata was missing; owned
+builder cleanup was verified. The focused metadata fix passed 52 checks,
+merged into this feature at `068c4b1`, and was promoted on `main` at
+`97f37f4`. Replacement build
+[35730639382](https://github.com/wimpheling/hephaestus/actions/runs/35730639382)
+is in progress. MVP-06 remains in progress and no candidate or cloud journey
+acceptance is inferred from the fix or the running build.
+
+When the candidate is READY, record its immutable image name and full
+fingerprint, then run the reviewed diagnostic, smoke, and exact PR-head full
+scenario checks. After the concurrent scenario runs succeed, record their
+actual proven SHAs and complete artifacts, commit these documentation updates,
+then run the final session-chat acceptance against that exact final head. Add
+that final rerun and its complete evidence to the PR body; make no repository
+edits after that exact-head run.

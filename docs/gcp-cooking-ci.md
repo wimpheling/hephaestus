@@ -1281,9 +1281,19 @@ and the corrected status-17 shell branches also pass.
 Injected run [35726448348](https://github.com/wimpheling/hephaestus/actions/runs/35726448348)
 preserved the `browser-setup`/`diagnostic-setup` boundary: setup exited 78,
 the setup log was retained, the archive uploaded and downloaded, credential
-scanning passed, and the VM was absent after cleanup. This is not accepted
-cloud proof: the controller still expected status 42 while the workload
-reported 78, and the diagnostic timing helper was not staged, leaving timing
-partial. The bounded follow-up is to align that status contract and stage the
-helper in diagnostic before the next cloud run; full MVP-06 cloud acceptance
-remains pending.
+scanning passed, and the VM was absent after cleanup. It was not accepted
+cloud proof because the controller expected status 42 and the diagnostic
+timing helper was not staged. The bounded fix is resolved by corrected run
+[35728835480](https://github.com/wimpheling/hephaestus/actions/runs/35728835480),
+which passed the setup-exit and trusted partial-timing contract; full MVP-06
+cloud acceptance remains pending.
+
+The candidate image build [35729371490](https://github.com/wimpheling/hephaestus/actions/runs/35729371490)
+failed before image creation because the builder received missing run-id
+metadata; owned builder cleanup was verified. The focused metadata fix was
+tested in 52 checks, merged to the feature at `068c4b1`, and promoted on
+`main` at `97f37f4`. Replacement candidate build
+[35730639382](https://github.com/wimpheling/hephaestus/actions/runs/35730639382)
+is in progress; it is not evidence of a READY image or of candidate/full
+scenario acceptance until its result and subsequent diagnostic, smoke and
+full scenario artifacts are reviewed.
