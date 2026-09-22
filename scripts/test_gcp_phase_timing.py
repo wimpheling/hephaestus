@@ -280,6 +280,12 @@ class PhaseTimingTests(unittest.TestCase):
         ):
             with self.subTest(message=message):
                 self.assertEqual(PHASE_TIMING.shell_timing_error_class(PHASE_TIMING.TimingError(message)), "pair")
+        self.assertEqual(
+            PHASE_TIMING.shell_timing_error_class(
+                PHASE_TIMING.TimingError("required phase trust is missing")
+            ),
+            "missing-phase",
+        )
 
     def test_pairing_diagnostics_distinguish_failure_classes(self) -> None:
         cases = {

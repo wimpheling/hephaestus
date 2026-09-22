@@ -190,6 +190,28 @@ class CookingFailureAttributionTests(unittest.TestCase):
         self.assertEqual(with_timing["exit_code"], 17)
         self.assertEqual(self.project_with_collector(with_timing), with_timing)
 
+    def test_browser_report_failure_becomes_evidence_first_failure_after_workload_pass(self) -> None:
+        log = "\n".join(
+            [
+                "HEPH_GCP_COOKING event=workload-result operation=cooking-workload phase=cooking status=passed exit_code=0",
+                "HEPH_GCP_COOKING event=browser-report-validation operation=browser-report-validation phase=evidence status=failed report_state=missing reason=invalid-report exit_code=2",
+                "HEPH_GCP_COOKING event=timing-helper-error operation=cooking-workload phase=cooking stage=timing-helper-validation status=failed exit_code=2 reason_class=pair",
+            ]
+        )
+        value = self.run_attribution(log, "", wrapper_status=2)
+        self.assertEqual(
+            value,
+            {
+                "schema": 1,
+                "phase": "evidence-scan",
+                "command_id": "browser-report-validation",
+                "exit_code": 2,
+                "diagnostic_source": "runtime-log",
+                "diagnostic_error": "phase-failed",
+            },
+        )
+        self.assertEqual(self.project_with_collector(value), value)
+
     def test_pre_browser_runtime_image_failure_is_not_browser_image_failure(self) -> None:
         log = "\n".join(
             [
@@ -350,7 +372,7 @@ class CookingFailureAttributionTests(unittest.TestCase):
             self.assertIn('"${installed_ui_workload_env[@]}"', self.source[systemd_start:systemd_end])
             self.assertTrue((root / "expensive-work").is_file())
 
-    def test_cooking_scenario_enables_published_service_proof(self) -> None:
+    def test_cooking_scenario_keeps_full_build_proof_path(self) -> None:
         cooking_start = self.source.index('    workload_scenario_env=(\n        "--setenv=HEPHAESTUS_APP_COOKING_E2E=1"')
         cooking_end = self.source.index(
             "    printf 'HEPH_GCP_COOKING event=scenario-selected scenario=cooking\\n'",
@@ -358,6 +380,10 @@ class CookingFailureAttributionTests(unittest.TestCase):
         )
         cooking_branch = self.source[cooking_start:cooking_end]
         self.assertIn(
+            '"--setenv=HEPHAESTUS_APP_COOKING_BUILD_PROOF=1"',
+            cooking_branch,
+        )
+        self.assertNotIn(
             '"--setenv=HEPHAESTUS_APP_COOKING_SERVICE_BUILD_PROOF=1"',
             cooking_branch,
         )

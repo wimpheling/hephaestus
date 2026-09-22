@@ -269,7 +269,7 @@ def shell_timing_error_class(error: Exception) -> str:
     """Keep the legacy shell failure marker reason vocabulary stable."""
 
     reason = timing_error_class(error)
-    if reason in {"identity", "path", "record-read", "record-write"}:
+    if reason in {"identity", "path", "record-read", "record-write", "missing-phase"}:
         return reason
     return "pair"
 
