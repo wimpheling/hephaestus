@@ -87,7 +87,9 @@ if [[ -n "${HEPHAESTUS_COOKING_BROWSER_BRIDGE_DIR:-}" ]]; then
     export HEPHAESTUS_E2E_BROWSER_RUNNER=installed-ui
     exec "${repo_root}/scripts/run-ui-e2e-external.sh"
 fi
-browser_image="${HEPHAESTUS_PLAYWRIGHT_IMAGE:?set HEPHAESTUS_PLAYWRIGHT_IMAGE to a reviewed image containing Chromium and certutil}"
+# This is the reviewed local image built by scripts/installed-ui-browser-image/build.sh.
+# Callers may provide a separately pinned reviewed image through the environment.
+browser_image="${HEPHAESTUS_PLAYWRIGHT_IMAGE:-localhost/hephestus-playwright:1.62.0-certutil}"
 [[ -f "${ca_cert}" ]] || { printf 'Caddy CA certificate is unavailable\n' >&2; exit 1; }
 platform_host="${platform_origin#https://}"
 platform_host="${platform_host%%:*}"
@@ -115,6 +117,13 @@ evidence_dir="${fixture_root}/playwright-results"
 mkdir -p -- "${evidence_dir}"
 chmod 700 -- "${fixture_root}" "${evidence_dir}"
 install -m 600 /dev/null "${fixture_root}/playwright.log"
+# The outer Podman redirect owns browser-container.log. Keep nested npm output
+# separate so opening the outer file cannot truncate a concurrently written
+# inner log.
+browser_container_log="${fixture_root}/browser-container.log"
+install -m 600 /dev/null "${browser_container_log}"
+browser_npm_log="${fixture_root}/browser-npm.log"
+install -m 600 /dev/null "${browser_npm_log}"
 readiness_error="${fixture_root}/readiness-curl.log"
 install -m 600 /dev/null "${readiness_error}"
 print_readiness_error() {
@@ -122,6 +131,17 @@ print_readiness_error() {
         head -c 1024 "${readiness_error}" >&2
         printf '\n' >&2
     fi
+}
+
+print_browser_container_error() {
+    local diagnostic_log
+    for diagnostic_log in "${browser_container_log}" "${browser_npm_log}" "${fixture_root}/playwright.log"; do
+        if [[ -s "${diagnostic_log}" ]]; then
+            printf '%s\n' "--- ${diagnostic_log##*/} ---" >&2
+            head -c 4096 "${diagnostic_log}" >&2 || true
+            printf '\n' >&2
+        fi
+    done
 }
 
 cleanup() {
@@ -136,10 +156,16 @@ cleanup() {
     # not retain generated dependencies; the evidence scanner intentionally
     # rejects symlinks in retained artifacts.
     rm -rf -- "${fixture_root}/playwright/node_modules"
-    if python3 "${repo_root}/scripts/check-browser-evidence.py" "${fixture_root}"; then
-        :
-    else
+    evidence_status=0
+    if ! python3 "${repo_root}/scripts/check-browser-evidence.py" "${fixture_root}"; then
+        evidence_status=1
         status=1
+    fi
+    # Only expose retained browser output after the complete fixture has
+    # passed credential scanning. Raw diagnostics must never bypass the
+    # evidence gate on an early startup failure.
+    if ((status != 0 && evidence_status == 0)); then
+        print_browser_container_error
     fi
     if [[ -z "${diagnostics_dir}" ]]; then
         rm -rf -- "${fixture_root}"
@@ -304,7 +330,7 @@ if podman run --rm --name "${browser_container}" \
         certutil -N -d "sql:$nss_dir" --empty-password >/dev/null 2>&1 || true
         certutil -A -d "sql:$nss_dir" -n heph-caddy-fixture -t "C,," -i /run/heph-fixture/caddy-ca.pem
         cd /run/heph-fixture/playwright
-        npm ci --ignore-scripts >/dev/null
+        npm ci --ignore-scripts >/run/heph-fixture/browser-npm.log 2>&1
         HEPHAESTUS_WEB_URL="$HEPHAESTUS_WEB_URL" \
         HEPHAESTUS_OIDC_URL="$HEPHAESTUS_OIDC_URL" \
         HEPHAESTUS_UI_NAMESPACE="$HEPHAESTUS_UI_NAMESPACE" \
@@ -313,8 +339,8 @@ if podman run --rm --name "${browser_container}" \
         HEPHAESTUS_E2E_EVIDENCE_DIR="$HEPHAESTUS_E2E_EVIDENCE_DIR" \
         ./node_modules/.bin/playwright test --config=playwright.installed-ui.config.ts \
         --grep "${HEPHAESTUS_INSTALLED_UI_BROWSER_GREP}" \
-        >/run/heph-fixture/playwright.log 2>/dev/null
-    ' >/dev/null 2>&1
+        >/run/heph-fixture/playwright.log 2>&1
+    ' >"${browser_container_log}" 2>&1
 then
     browser_status=0
 else

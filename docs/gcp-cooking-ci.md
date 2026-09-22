@@ -773,6 +773,10 @@ provided. Focused harness checks and a real Caddy HTTPS smoke pass; a fresh
 full GCP run remains required. The earlier browser, timing, and negative-phase
 gaps are cascaded failures, not acceptance evidence.
 
+The latest full session-chat run is [run 35715007447](https://github.com/wimpheling/hephaestus/actions/runs/35715007447), with trusted controller SHA `93ab78be3c0bed3c9c963624401b3dc5cc40d024` and exact PR53 workload SHA `c902e88bb35c665ffab6c08c11d5f2b1b5526861`. Quota, cache, VM startup, gateway readiness and the Caddy fixture passed; `browser-initial` then failed after 412 ms with status 1. Retained serial evidence `serial-1790072776.log` identifies the precontainer startup error at `scripts/run-installed-ui-e2e.sh:90`: `HEPHAESTUS_PLAYWRIGHT_IMAGE` was unset, although the reviewed image containing Chromium and `certutil` was required. The follow-up fix is wiring the existing reviewed image contract into this path. The missing browser report and later phases are cascaded failures. The diagnostics upload was verified by authenticated download; download and credential scan passed, and cleanup verified the VM absent. Timing projection and gate acceptance failed, so this run does not establish diagnostics-gate acceptance or session-chat acceptance. Evidence is retained under `/var/tmp/heph-gcp-session-35715007447/`.
+
+The PR-only follow-up now prepares the reviewed local installed-UI image using the existing digest-pinned build recipe when `HEPHAESTUS_PLAYWRIGHT_IMAGE` is absent, exports the resulting image reference, and honors an explicit override. The launcher retains separate scanned container, npm, and Playwright logs. Focused 14-scenario tests plus startup/bridge smokes and `bash -n` pass. Cloud acceptance remains pending.
+
 PR mode requires the reviewed runner image with browser dependencies already
 baked. It fails closed on the stock image because installing Playwright
 dependencies as root would execute PR-controlled package code. The

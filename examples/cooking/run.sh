@@ -194,6 +194,60 @@ browser_cleanup() {
 }
 trap browser_cleanup EXIT
 
+prepare_installed_ui_browser_image() {
+    # An explicitly supplied image is owned by the caller. The default local
+    # tag is built from the reviewed repository recipe only when it is absent,
+    # so browser phases never reach Podman with a silently missing image.
+    [[ -n "${HEPHAESTUS_PLAYWRIGHT_IMAGE:-}" ]] && return 0
+    local image='localhost/hephestus-playwright:1.62.0-certutil'
+    local image_diagnostics image_log build_status
+    export HEPHAESTUS_PLAYWRIGHT_IMAGE="${image}"
+    if podman image exists "${image}" >/dev/null 2>&1; then
+        return 0
+    fi
+    command -v podman >/dev/null 2>&1 || {
+        printf 'Installed UI browser image is unavailable and Podman is missing.\n' >&2
+        return 1
+    }
+    if [[ -n "${diagnostics_dir}" ]]; then
+        image_diagnostics="$(mktemp -d "${diagnostics_dir}/installed-ui-browser-image.XXXXXX")"
+    else
+        image_diagnostics="$(mktemp -d "${tmp_root}/heph-installed-ui-browser-image.XXXXXX")"
+    fi
+    chmod 700 -- "${image_diagnostics}"
+    image_log="${image_diagnostics}/build.log"
+    install -m 600 /dev/null "${image_log}"
+    if bash "${repo_root}/scripts/installed-ui-browser-image/build.sh" >"${image_log}" 2>&1; then
+        build_status=0
+    else
+        build_status="$?"
+    fi
+    if ((build_status != 0)) || ! podman image exists "${image}" >/dev/null 2>&1; then
+        if python3 "${repo_root}/scripts/check-browser-evidence.py" "${image_diagnostics}" >/dev/null 2>&1; then
+            if [[ -n "${diagnostics_dir}" ]]; then
+                printf 'Installed UI browser image preparation failed; retained diagnostics=%s\n' \
+                    "${image_log}" >&2
+            else
+                rm -rf -- "${image_diagnostics}"
+            fi
+        else
+            rm -rf -- "${image_diagnostics}"
+            printf 'Installed UI browser image preparation failed; diagnostics were withheld by the credential scanner.\n' >&2
+        fi
+        return 1
+    fi
+    if ! python3 "${repo_root}/scripts/check-browser-evidence.py" "${image_diagnostics}" >/dev/null 2>&1; then
+        rm -rf -- "${image_diagnostics}"
+        printf 'Installed UI browser image preparation produced unsafe diagnostics.\n' >&2
+        return 1
+    fi
+    [[ -n "${diagnostics_dir}" ]] || rm -rf -- "${image_diagnostics}"
+}
+
+if [[ "${HEPHAESTUS_COOKING_INSTALLED_UI_FIXTURE:-0}" == 1 ]]; then
+    prepare_installed_ui_browser_image || exit 1
+fi
+
 if [[ "${HEPHAESTUS_COOKING_BROWSER_E2E:-1}" == "1" ]]; then
     phase_timing_start browser-setup
     command -v node >/dev/null || {

@@ -1368,3 +1368,11 @@ are not counted as passing checks. The pristine comparison is retained at
 `/var/tmp/heph-original-head.OuxMC8`, with the current comparison at
 `/var/tmp/heph-current-run-tests.mFZVvK/result.log`. Full GCP acceptance remains
 unproven until the corrected workload completes a fresh cloud run.
+
+### GCP run 35715007447 (2026-09-22)
+
+The fresh full run [35715007447](https://github.com/wimpheling/hephaestus/actions/runs/35715007447) used trusted controller SHA `93ab78be3c0bed3c9c963624401b3dc5cc40d024` and the exact PR53 workload SHA `c902e88bb35c665ffab6c08c11d5f2b1b5526861`. Gateway readiness and the Caddy fixture passed, then `browser-initial` failed after 412 ms with status 1. Retained serial evidence `serial-1790072776.log` identifies the precontainer startup error at `scripts/run-installed-ui-e2e.sh:90`: `HEPHAESTUS_PLAYWRIGHT_IMAGE` was unset, although the reviewed image containing Chromium and `certutil` was required. The follow-up fix is wiring the existing reviewed image contract into this path. The missing browser report and later browser, timing and negative phases are cascaded failures, not acceptance evidence.
+
+Diagnostics upload was verified by authenticated download; download and credential scanning passed, and VM cleanup was verified absent. Timing projection and gate acceptance failed, so this run does not establish diagnostics-gate or MVP-06 acceptance. Retained evidence is under `/var/tmp/heph-gcp-session-35715007447/`. The task remains in progress.
+
+The PR-only follow-up now prepares the reviewed local installed-UI image using the existing digest-pinned build recipe when `HEPHAESTUS_PLAYWRIGHT_IMAGE` is absent, exports the resulting image reference, and honors an explicit override. The launcher retains separate scanned container, npm, and Playwright logs. Focused 14-scenario tests plus startup/bridge smokes and `bash -n` pass. Cloud acceptance remains pending.

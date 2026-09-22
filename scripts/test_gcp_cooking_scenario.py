@@ -328,6 +328,9 @@ class GcpCookingScenarioContractTests(unittest.TestCase):
         complete_caddy: bool = False,
         invalid_complete_marker: bool = False,
         expected_status: int = 0,
+        explicit_browser_image: str | None = None,
+        repeat: bool = False,
+        build_fail: bool = False,
     ) -> dict[str, str]:
         with tempfile.TemporaryDirectory(prefix="gcp-cooking-scenario-") as root_name:
             root = Path(root_name)
@@ -338,6 +341,37 @@ class GcpCookingScenarioContractTests(unittest.TestCase):
             cooking.mkdir(parents=True)
             (root / "e2e" / "playwright").mkdir(parents=True)
             fake_bin.mkdir()
+            podman_state = root / "podman-state"
+            podman_state.mkdir()
+            (fake_bin / "podman").write_text(
+                "#!/usr/bin/env bash\n"
+                "set -Eeuo pipefail\n"
+                "state=${PODMAN_STATE:?}\n"
+                "if [[ \"${1:-}\" == image && \"${2:-}\" == exists ]]; then\n"
+                "    [[ -f \"$state/image\" ]]\n"
+                "    exit\n"
+                "fi\n"
+                "if [[ \"${1:-}\" == build ]]; then\n"
+                "    count=0\n"
+                "    [[ -f \"$state/build-count\" ]] && count=$(cat \"$state/build-count\")\n"
+                "    printf '%s\\n' $((count + 1)) >\"$state/build-count\"\n"
+                "    if [[ \"${PODMAN_BUILD_FAIL:-0}\" == 1 ]]; then\n"
+                "        printf '%s\\n' 'reviewed image builder failed safely' >&2\n"
+                "        exit 17\n"
+                "    fi\n"
+                "    touch \"$state/image\"\n"
+                "    exit 0\n"
+                "fi\n"
+                "exit 0\n",
+                encoding="utf-8",
+            )
+            image_script = scripts / "installed-ui-browser-image"
+            image_script.mkdir()
+            shutil.copy2(
+                ROOT.parent / "scripts/installed-ui-browser-image/build.sh",
+                image_script / "build.sh",
+            )
+            (image_script / "Dockerfile").write_text("FROM scratch\n", encoding="utf-8")
             (fake_bin / "node").write_text(
                 "#!/usr/bin/env bash\n"
                 "trap 'exit 0' TERM INT\n"
@@ -375,6 +409,7 @@ class GcpCookingScenarioContractTests(unittest.TestCase):
                 "printf 'caddy-wrapper=%s\\n' \"${HEPHAESTUS_TEST_CADDY_WRAPPER-unset}\" >>\"$SCENARIO_CAPTURE\"\n"
                 "printf 'caddy-port=%s\\n' \"${HEPHAESTUS_CADDY_TEST_PUBLIC_PORT-unset}\" >>\"$SCENARIO_CAPTURE\"\n"
                 "printf 'installed-ui=%s\\n' \"${HEPHAESTUS_COOKING_INSTALLED_UI_FIXTURE-unset}\" >>\"$SCENARIO_CAPTURE\"\n"
+                "if [[ -n \"${IMAGE_CAPTURE:-}\" ]]; then printf '%s\\n' \"${HEPHAESTUS_PLAYWRIGHT_IMAGE-unset}\" >\"$IMAGE_CAPTURE\"; fi\n"
                 "printf 'cooking=%s\\n' \"${HEPHAESTUS_APP_COOKING_E2E-unset}\" >>\"$SCENARIO_CAPTURE\"\n",
                 encoding="utf-8",
             )
@@ -409,12 +444,15 @@ class GcpCookingScenarioContractTests(unittest.TestCase):
                 cooking / "preflight.sh",
                 scripts / "run-gateway-libkrun-e2e.sh",
                 scripts / "run-ui-e2e-host-bridge.sh",
+                image_script / "build.sh",
                 fake_bin / "node",
                 fake_bin / "npm",
                 fake_bin / "curl",
+                fake_bin / "podman",
             ):
                 path.chmod(0o755)
             capture = root / "capture.txt"
+            image_capture = root / "image-capture.txt"
             temp_root = root / "tmp"
             libkrun_tmp_root = root / "libkrun-tmp"
             diagnostics = root / "diagnostics"
@@ -436,6 +474,8 @@ class GcpCookingScenarioContractTests(unittest.TestCase):
                 "TMPDIR": str(temp_root),
                 "HEPHAESTUS_LIBKRUN_TMP_ROOT": str(libkrun_tmp_root),
                 "SCENARIO_CAPTURE": str(capture),
+                "PODMAN_STATE": str(podman_state),
+                "IMAGE_CAPTURE": str(image_capture),
                 "HEPHAESTUS_APP_COOKING_E2E": "inherited",
                 "HEPHAESTUS_APP_SESSION_CHAT_CONCURRENT_E2E": (
                     "1" if scenario == "session-chat" else "0"
@@ -445,6 +485,10 @@ class GcpCookingScenarioContractTests(unittest.TestCase):
                 ),
                 "PATH": f"{fake_bin}:{os.environ['PATH']}",
             }
+            if explicit_browser_image is not None:
+                environment["HEPHAESTUS_PLAYWRIGHT_IMAGE"] = explicit_browser_image
+            if build_fail:
+                environment["PODMAN_BUILD_FAIL"] = "1"
             if complete_caddy:
                 environment.update(
                     {
@@ -466,6 +510,32 @@ class GcpCookingScenarioContractTests(unittest.TestCase):
                 check=False,
             )
             self.assertEqual(completed.returncode, expected_status, completed.stderr)
+            if repeat:
+                repeated = subprocess.run(
+                    ["bash", str(cooking / "run.sh")],
+                    env=environment,
+                    capture_output=True,
+                    text=True,
+                    check=False,
+                )
+                self.assertEqual(repeated.returncode, expected_status, repeated.stderr)
+            build_count = podman_state / "build-count"
+            if scenario == "session-chat" and explicit_browser_image is None and not invalid_complete_marker:
+                self.assertTrue(build_count.is_file())
+                self.assertEqual(build_count.read_text(encoding="utf-8").strip(), "1")
+            else:
+                self.assertFalse(build_count.exists())
+            if build_fail:
+                self.assertIn(
+                    "Installed UI browser image preparation failed; retained diagnostics=",
+                    completed.stderr,
+                )
+                self.assertNotIn("reviewed image builder failed safely", completed.stderr)
+            if expected_status == 0 and scenario == "session-chat":
+                self.assertEqual(
+                    image_capture.read_text(encoding="utf-8").strip(),
+                    explicit_browser_image or "localhost/hephestus-playwright:1.62.0-certutil",
+                )
             if expected_status != 0:
                 return {}
             return dict(
@@ -491,6 +561,20 @@ class GcpCookingScenarioContractTests(unittest.TestCase):
                 "cooking": "unset",
             },
         )
+
+    def test_session_chat_reuses_prepared_installed_ui_image_across_phases(self) -> None:
+        captured = self.run_wrapper_stub("session-chat", repeat=True)
+        self.assertEqual(captured["installed-ui"], "1")
+
+    def test_session_chat_honors_explicit_installed_ui_image_override(self) -> None:
+        captured = self.run_wrapper_stub(
+            "session-chat",
+            explicit_browser_image="registry.example/hephestus-playwright@sha256:" + "c" * 64,
+        )
+        self.assertEqual(captured["installed-ui"], "1")
+
+    def test_session_chat_retains_safe_image_build_failure(self) -> None:
+        self.run_wrapper_stub("session-chat", expected_status=1, build_fail=True)
 
     def test_wrapper_default_cooking_captures_existing_flag(self) -> None:
         captured = self.run_wrapper_stub("cooking")
