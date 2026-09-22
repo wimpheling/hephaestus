@@ -105,6 +105,18 @@ enum ConnectReceiptError {
     InvalidVersion,
 }
 
+impl ConnectReceiptError {
+    const fn error_class(&self) -> &'static str {
+        match self {
+            Self::Application(event_application::MutationReceiptError::Missing) => "missing",
+            Self::Application(event_application::MutationReceiptError::Provider(_)) => {
+                "provider-unavailable"
+            }
+            Self::InvalidVersion => "invalid-version",
+        }
+    }
+}
+
 async fn mutation_receipt(
     receipts: &MutationReceipts,
     occurrence_id: identity_domain::RequestId,
@@ -114,15 +126,17 @@ async fn mutation_receipt(
 ) -> Result<rpc_proto::messages::hephaestus::common::v1::MutationReceipt, connectrpc::ConnectError>
 {
     receipts
-        .load(
-            occurrence_id,
-            actor_id,
-            aggregate_type,
-            primary_scope_kind,
-        )
+        .load(occurrence_id, actor_id, aggregate_type, primary_scope_kind)
         .await
         .map_err(|error| {
-            tracing::error!(%occurrence_id, %aggregate_type, %primary_scope_kind, %error, "mutation receipt unavailable");
+            tracing::error!(
+                %occurrence_id,
+                %aggregate_type,
+                %primary_scope_kind,
+                stage = "mutation-receipt",
+                error_class = error.error_class(),
+                "mutation receipt unavailable"
+            );
             into_connect_error(RpcError::Internal)
         })
 }
@@ -349,12 +363,13 @@ pub(crate) enum RpcInitializationError {
 #[cfg(test)]
 mod tests {
     use super::{
-        DEFAULT_DEADLINE_SECONDS, GLOBAL_MAX_MESSAGE_BYTES, GLOBAL_MAX_REQUEST_BYTES,
-        MAX_DEADLINE_SECONDS, STREAM_IDLE_SECONDS,
+        ConnectReceiptError, DEFAULT_DEADLINE_SECONDS, GLOBAL_MAX_MESSAGE_BYTES,
+        GLOBAL_MAX_REQUEST_BYTES, MAX_DEADLINE_SECONDS, STREAM_IDLE_SECONDS,
     };
     use connectrpc_reflection::{
         Reflector, SERVER_REFLECTION_SERVICE_NAME, SERVER_REFLECTION_V1ALPHA_SERVICE_NAME,
     };
+    use event_application::MutationReceiptError;
     use std::sync::Arc;
 
     #[test]
@@ -390,5 +405,24 @@ mod tests {
         assert_eq!(MAX_DEADLINE_SECONDS, 60);
         assert_eq!(DEFAULT_DEADLINE_SECONDS, 30);
         assert_eq!(STREAM_IDLE_SECONDS, 10);
+    }
+
+    #[test]
+    fn mutation_receipt_diagnostics_use_closed_redacted_error_classes() {
+        let missing = ConnectReceiptError::Application(MutationReceiptError::Missing);
+        assert_eq!(missing.error_class(), "missing");
+
+        let provider = ConnectReceiptError::Application(MutationReceiptError::provider(
+            std::io::Error::other("database password=should-not-be-logged"),
+        ));
+        assert_eq!(provider.error_class(), "provider-unavailable");
+        assert_eq!(
+            provider.to_string(),
+            "mutation receipt application operation failed"
+        );
+        assert!(!provider.to_string().contains("should-not-be-logged"));
+
+        let invalid = ConnectReceiptError::InvalidVersion;
+        assert_eq!(invalid.error_class(), "invalid-version");
     }
 }
