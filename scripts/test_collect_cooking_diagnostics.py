@@ -164,7 +164,10 @@ class CookingDiagnosticsTests(unittest.TestCase):
                 0,
             )
             panic_retained = (panic_output / "sources/test-output").read_text(encoding="utf-8")
-            self.assertEqual(panic_retained, "location=examples/cooking/tests/scenario.rs:7:9\n")
+            self.assertEqual(
+                panic_retained,
+                "HEPH_GCP_TEST test=rust-panic location=examples/cooking/tests/scenario.rs:7:9\n",
+            )
 
     def test_rejects_symlink_and_raw_browser_trace(self):
         with tempfile.TemporaryDirectory() as root:

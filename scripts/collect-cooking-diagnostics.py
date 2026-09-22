@@ -480,6 +480,27 @@ FIRST_FAILURE_ERRORS = frozenset(
     {"none", "setup-failed", "image-build-failed", "npm-failed", "playwright-failed", "phase-failed", "unknown"}
 )
 SAFE_ERROR_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9 _.,:;/'()\[\]-]{0,1023}$")
+# These sources are bounded producer diagnostics rather than lifecycle marker
+# streams. Keep their labels explicit so the broader runtime projection never
+# becomes an accidental raw-log retention path.
+DIAGNOSTIC_TEXT_LABELS = frozenset(
+    {"setup-log", "image-build-log", "npm-log", "playwright-log", "browser-container-log"}
+)
+DIAGNOSTIC_SENSITIVE_RE = re.compile(
+    rb"(?i)(?:"
+    rb"(?:[\"']?[A-Za-z0-9_-]*(?:password|passwd|secret|token|credential|"
+    rb"access[_-]?token|client[_-]?secret|api[_ -]?key|private[_ -]?key|"
+    rb"authorization|key)[A-Za-z0-9_-]*[\"']?\s*[:=]\s*"
+    rb"(?!\[REDACTED\])[^\s,;}]+)"
+    rb"|authorization\s*:\s*bearer"
+    rb"|bearer\s+[A-Za-z0-9._-]{16,}"
+    # A JWT's base64url JSON header starts with ``eyJ``. Require realistic
+    # segment lengths so ordinary dotted software versions are retained.
+    rb"|eyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{16,}"
+    rb"|(?:-----BEGIN [A-Z ]*PRIVATE KEY-----|BEGIN [A-Z ]*PRIVATE KEY)"
+    rb")"
+)
+DIAGNOSTIC_PRINTABLE_RE = re.compile(r"^[\x20-\x7e]{1,4096}$")
 STACK_LINE_RE = re.compile(r"^\s*(?:at\s+|File\s+|[A-Za-z0-9_.-]+\.\w+:\d+)")
 ASSERTION_LINE_RE = re.compile(
     r"^(?:Assertion(?:Error)?|assertion(?: failed)?|FAIL(?:ED)?):\s*(?P<text>.+)$",
@@ -746,6 +767,54 @@ def _collector_failure_marker(error: Exception) -> str:
 def _reject_secret_assignments(data: bytes) -> None:
     if GENERIC_SECRET_RE.search(data):
         raise CollectionError("source contains an unredacted secret assignment")
+
+
+def _normalize_diagnostic_line(raw: bytes) -> str | None:
+    """Return bounded printable diagnostic text after ANSI/control cleanup."""
+
+    if len(raw) > MAX_LINE_BYTES:
+        return None
+    line = ANSI_RE.sub(b"", raw).decode("utf-8", errors="replace").rstrip("\r\n")
+    normalized = " ".join(line.split())
+    if not normalized or "\ufffd" in normalized or not DIAGNOSTIC_PRINTABLE_RE.fullmatch(normalized):
+        return None
+    return normalized
+
+
+def _project_diagnostic_text(source: Path, destination: Path) -> tuple[int, str]:
+    """Retain scanned, normalized plaintext from an explicit diagnostic log.
+
+    Scan and validate the complete bounded input before creating the projected
+    output. This keeps a later unsafe line from leaving an earlier plaintext
+    prefix in the staged file and preserves the collector's source-size limit.
+    """
+
+    source = _safe_input(source)
+    with _open_safe(source) as input_file:
+        raw = input_file.read(MAX_SOURCE_BYTES + 1)
+    if len(raw) > MAX_SOURCE_BYTES:
+        raise CollectionError(f"source exceeds {MAX_SOURCE_BYTES} bytes: {source.name}")
+    EVIDENCE.check_bytes(raw, str(source))
+    if DIAGNOSTIC_SENSITIVE_RE.search(raw):
+        raise CollectionError("source contains sensitive diagnostic content")
+    _reject_secret_assignments(raw)
+
+    digest = hashlib.sha256()
+    retained = 0
+    projected: list[bytes] = []
+    for line in raw.splitlines(keepends=True):
+        normalized = _normalize_diagnostic_line(line)
+        if normalized is None:
+            continue
+        encoded = (normalized + "\n").encode("ascii")
+        retained += len(encoded)
+        if retained > MAX_SOURCE_BYTES:
+            raise CollectionError("projected source exceeds retention limit")
+        projected.append(encoded)
+        digest.update(encoded)
+    destination.write_bytes(b"".join(projected))
+    destination.chmod(0o600)
+    return retained, digest.hexdigest()
 
 
 def _safe_input(path: Path) -> Path:
@@ -1787,7 +1856,7 @@ def _source_rejection_reason(error: Exception) -> str:
     message = str(error).lower()
     if "fixture credential" in message:
         return "credential-scan-rejected"
-    if "unredacted secret assignment" in message:
+    if "unredacted secret assignment" in message or "sensitive diagnostic" in message:
         return "secret-assignment-rejected"
     if "symlink" in message or "unsafe" in message or "forbidden" in message:
         return "source-policy-rejected"
@@ -1966,6 +2035,8 @@ def collect(
                     size, digest = _project_runtime_structured(source_path, destination)
                 elif label == "phase-timing":
                     size, digest = _project_phase_timing(source_path, destination)
+                elif label in DIAGNOSTIC_TEXT_LABELS:
+                    size, digest = _project_diagnostic_text(source_path, destination)
                 else:
                     size, digest = _project_text(source_path, destination)
             except (CollectionError, OSError, ValueError) as error:

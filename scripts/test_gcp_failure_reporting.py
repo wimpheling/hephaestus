@@ -31,6 +31,118 @@ TIMING = ROOT / "gcp_phase_timing.py"
 
 
 class FailureReportingTests(unittest.TestCase):
+    def test_diagnostic_logs_retain_safe_text_and_archive_projection(self) -> None:
+        with tempfile.TemporaryDirectory(prefix="heph-diagnostic-text-") as raw:
+            root = Path(raw)
+            first_failure = root / "first-failure.json"
+            first_failure.write_text(
+                json.dumps({
+                    "schema": 1,
+                    "phase": "browser-setup",
+                    "command_id": "playwright-run",
+                    "exit_code": 1,
+                    "diagnostic_source": "playwright-log",
+                    "diagnostic_error": "playwright-failed",
+                }) + "\n",
+                encoding="utf-8",
+            )
+            messages = {
+                "setup-log": "\x1b[31mError:\x1b[0m podman: command not found",
+                "image-build-log": (
+                    "Podman 5.4.2 on chrome151.0.7922.34 from registry.example.test/heph/browser:stable\n"
+                    "Error: cannot connect to Podman socket at unix:///run/podman/podman.sock"
+                ),
+                "npm-log": "npm ERR! code ENOENT: browser dependency is missing",
+                "playwright-log": "Error: browser executable missing; probe failed",
+                "browser-container-log": "probe failed: expected page marker missing",
+            }
+            logs: dict[str, Path] = {}
+            for label, message in messages.items():
+                path = root / f"{label}.log"
+                path.write_text(message + "\n", encoding="utf-8")
+                logs[label] = path
+            archive = root / "bundle.tar.gz"
+            output = root / "bundle"
+            self.assertEqual(
+                COLLECTOR.collect(
+                    output,
+                    [
+                        f"first-failure={first_failure}",
+                        *[f"{label}={path}" for label, path in logs.items()],
+                    ],
+                    None,
+                    None,
+                    archive,
+                ),
+                0,
+            )
+            manifest = json.loads((output / "manifest.json").read_text(encoding="utf-8"))
+            self.assertEqual(manifest["credentialScan"], "passed")
+            for label, message in messages.items():
+                retained = (output / "sources" / label).read_text(encoding="utf-8")
+                self.assertTrue(retained, label)
+                self.assertIn("Error: podman: command not found" if label == "setup-log" else message, retained)
+            with tarfile.open(archive, "r:gz") as bundle:
+                names = bundle.getnames()
+                self.assertIn("cooking-diagnostics/sources/image-build-log", names)
+                extracted = root / "downloaded"
+                bundle.extractall(extracted)
+            self.assertEqual(SCANNER.main([str(extracted / "cooking-diagnostics")]), 0)
+
+    def test_diagnostic_logs_reject_sensitive_assignments_and_keep_first_failure(self) -> None:
+        sensitive_lines = (
+            "secret: value",
+            "token=redacted-looking-value",
+            "key=redacted-looking-value",
+            "private-key: value",
+            '"access_token": "redacted-looking-value"',
+            '"client_secret": "redacted-looking-value"',
+            "Authorization: Bearer abcdefghijklmnop",
+            "eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxMjMifQ.signaturevalue123456",
+            "-----BEGIN PRIVATE KEY-----",
+        )
+        for sensitive_line in sensitive_lines:
+            with self.subTest(sensitive_line=sensitive_line), tempfile.TemporaryDirectory(prefix="heph-diagnostic-secret-") as raw:
+                root = Path(raw)
+                first_failure = root / "first-failure.json"
+                first_failure.write_text(
+                    json.dumps({
+                        "schema": 1,
+                        "phase": "browser-setup",
+                        "command_id": "playwright-run",
+                        "exit_code": 1,
+                        "diagnostic_source": "playwright-log",
+                        "diagnostic_error": "playwright-failed",
+                    }) + "\n",
+                    encoding="utf-8",
+                )
+                diagnostic = root / "diagnostic.log"
+                diagnostic.write_text(
+                    "safe prefix that must not be published before the full scan\n"
+                    + sensitive_line
+                    + "\n",
+                    encoding="utf-8",
+                )
+                output = root / "bundle"
+                self.assertEqual(
+                    COLLECTOR.collect(
+                        output,
+                        [f"first-failure={first_failure}", f"playwright-log={diagnostic}"],
+                        None,
+                        None,
+                        None,
+                    ),
+                    0,
+                )
+                manifest = json.loads((output / "manifest.json").read_text(encoding="utf-8"))
+                self.assertEqual(manifest["collectionStatus"], "partial")
+                self.assertEqual(
+                    manifest["rejectedSources"],
+                    [{"label": "playwright-log", "reason": "secret-assignment-rejected", "status": "rejected"}],
+                )
+                self.assertFalse((output / "sources/playwright-log").exists())
+                self.assertTrue((output / "sources/first-failure").is_file())
+
     def test_first_failure_and_explicit_logs_are_scanned_and_projected(self) -> None:
         with tempfile.TemporaryDirectory(prefix="heph-first-failure-") as raw:
             root = Path(raw)
