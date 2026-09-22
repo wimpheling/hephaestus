@@ -81,6 +81,9 @@ class GcpCookingScenarioContractTests(unittest.TestCase):
         cls.smoke = (ROOT / "gcp-kvm-smoke.sh").read_text(encoding="utf-8")
         cls.startup = (ROOT / "gcp-kvm-startup.sh").read_text(encoding="utf-8")
         cls.runtime = (ROOT / "gcp-cooking-run.sh").read_text(encoding="utf-8")
+        cls.cooking = (ROOT.parent / "examples/cooking/run.sh").read_text(
+            encoding="utf-8"
+        )
 
     def test_workflow_exposes_default_and_allowlisted_input(self) -> None:
         self.assertRegex(
@@ -223,6 +226,15 @@ class GcpCookingScenarioContractTests(unittest.TestCase):
             else:
                 self.assertIn(f"phase_timing_start {phase}", libkrun)
 
+    def test_session_chat_bootstraps_owned_caddy_before_browser_setup(self) -> None:
+        browser_setup = self.cooking.index(
+            'if [[ "${HEPHAESTUS_COOKING_BROWSER_E2E:-1}" == "1" ]]'
+        )
+        caddy_reentry = self.cooking.index(
+            '"${repo_root}/scripts/run-gateway-libkrun-e2e.sh"'
+        )
+        self.assertLess(caddy_reentry, browser_setup)
+
     @staticmethod
     def write_phase_records(path: Path, phases: tuple[str, ...]) -> None:
         common = {
@@ -309,7 +321,14 @@ class GcpCookingScenarioContractTests(unittest.TestCase):
             result.stderr,
         )
 
-    def run_wrapper_stub(self, scenario: str) -> dict[str, str]:
+    def run_wrapper_stub(
+        self,
+        scenario: str,
+        *,
+        complete_caddy: bool = False,
+        invalid_complete_marker: bool = False,
+        expected_status: int = 0,
+    ) -> dict[str, str]:
         with tempfile.TemporaryDirectory(prefix="gcp-cooking-scenario-") as root_name:
             root = Path(root_name)
             scripts = root / "scripts"
@@ -353,6 +372,9 @@ class GcpCookingScenarioContractTests(unittest.TestCase):
                 "printf 'browser=%s\\n' \"${HEPHAESTUS_APP_SESSION_CHAT_BROWSER_E2E-unset}\" >>\"$SCENARIO_CAPTURE\"\n"
                 "printf 'concurrent=%s\\n' \"${HEPHAESTUS_APP_SESSION_CHAT_CONCURRENT_E2E-unset}\" >>\"$SCENARIO_CAPTURE\"\n"
                 "printf 'fork=%s\\n' \"${HEPHAESTUS_APP_SESSION_CHAT_FORK_E2E-unset}\" >>\"$SCENARIO_CAPTURE\"\n"
+                "printf 'caddy-wrapper=%s\\n' \"${HEPHAESTUS_TEST_CADDY_WRAPPER-unset}\" >>\"$SCENARIO_CAPTURE\"\n"
+                "printf 'caddy-port=%s\\n' \"${HEPHAESTUS_CADDY_TEST_PUBLIC_PORT-unset}\" >>\"$SCENARIO_CAPTURE\"\n"
+                "printf 'installed-ui=%s\\n' \"${HEPHAESTUS_COOKING_INSTALLED_UI_FIXTURE-unset}\" >>\"$SCENARIO_CAPTURE\"\n"
                 "printf 'cooking=%s\\n' \"${HEPHAESTUS_APP_COOKING_E2E-unset}\" >>\"$SCENARIO_CAPTURE\"\n",
                 encoding="utf-8",
             )
@@ -362,6 +384,21 @@ class GcpCookingScenarioContractTests(unittest.TestCase):
             )
             (scripts / "run-gateway-libkrun-e2e.sh").write_text(
                 "#!/usr/bin/env bash\n"
+                "if [[ \"${1:-}\" == -- ]]; then\n"
+                "    shift\n"
+                "    export HEPHAESTUS_TEST_CADDY_WRAPPER=1\n"
+                "    caddy_ca=\"${TMPDIR}/fake-caddy-ca.pem\"\n"
+                "    printf '%s\\n' 'fake-caddy-ca' >\"$caddy_ca\"\n"
+                "    export HEPHAESTUS_CADDY_TEST_TLS=1\n"
+                "    export HEPHAESTUS_CADDY_TEST_ADMIN_URL=http://127.0.0.1:41001\n"
+                "    export HEPHAESTUS_CADDY_TEST_PUBLIC_URL=https://127.0.0.1:41002\n"
+                "    export HEPHAESTUS_CADDY_TEST_LISTEN=127.0.0.1:41002\n"
+                "    export HEPHAESTUS_CADDY_TEST_PUBLIC_PORT=41002\n"
+                "    export HEPHAESTUS_CADDY_TEST_CA_CERT=\"$caddy_ca\"\n"
+                "    export HEPHAESTUS_CADDY_TEST_ENV_COMPLETE=1\n"
+                "    \"$@\"\n"
+                "    exit\n"
+                "fi\n"
                 "printf 'runner=cooking\\n' >\"$SCENARIO_CAPTURE\"\n"
                 "printf 'cooking=%s\\n' \"${HEPHAESTUS_APP_COOKING_E2E-unset}\" >>\"$SCENARIO_CAPTURE\"\n",
                 encoding="utf-8",
@@ -384,6 +421,8 @@ class GcpCookingScenarioContractTests(unittest.TestCase):
             temp_root.mkdir()
             libkrun_tmp_root.mkdir()
             diagnostics.mkdir()
+            external_ca = root / "external-caddy-ca.pem"
+            external_ca.write_text("external-caddy-ca\n", encoding="utf-8")
             environment = {
                 **os.environ,
                 "HEPHAESTUS_COOKING_SESSION_DETACHED": "1",
@@ -406,6 +445,19 @@ class GcpCookingScenarioContractTests(unittest.TestCase):
                 ),
                 "PATH": f"{fake_bin}:{os.environ['PATH']}",
             }
+            if complete_caddy:
+                environment.update(
+                    {
+                        "HEPHAESTUS_CADDY_TEST_TLS": "1",
+                        "HEPHAESTUS_CADDY_TEST_ADMIN_URL": "http://127.0.0.1:42001",
+                        "HEPHAESTUS_CADDY_TEST_PUBLIC_URL": "https://127.0.0.1:42002",
+                        "HEPHAESTUS_CADDY_TEST_LISTEN": "127.0.0.1:42002",
+                        "HEPHAESTUS_CADDY_TEST_PUBLIC_PORT": "42002",
+                        "HEPHAESTUS_CADDY_TEST_CA_CERT": str(external_ca),
+                    }
+                )
+            if invalid_complete_marker:
+                environment["HEPHAESTUS_CADDY_TEST_ENV_COMPLETE"] = "1"
             completed = subprocess.run(
                 ["bash", str(cooking / "run.sh")],
                 env=environment,
@@ -413,7 +465,9 @@ class GcpCookingScenarioContractTests(unittest.TestCase):
                 text=True,
                 check=False,
             )
-            self.assertEqual(completed.returncode, 0, completed.stderr)
+            self.assertEqual(completed.returncode, expected_status, completed.stderr)
+            if expected_status != 0:
+                return {}
             return dict(
                 line.split("=", 1)
                 for line in capture.read_text(encoding="utf-8").splitlines()
@@ -431,6 +485,9 @@ class GcpCookingScenarioContractTests(unittest.TestCase):
                 "browser": "1",
                 "concurrent": "1",
                 "fork": "1",
+                "caddy-wrapper": "1",
+                "caddy-port": "41002",
+                "installed-ui": "1",
                 "cooking": "unset",
             },
         )
@@ -438,6 +495,18 @@ class GcpCookingScenarioContractTests(unittest.TestCase):
     def test_wrapper_default_cooking_captures_existing_flag(self) -> None:
         captured = self.run_wrapper_stub("cooking")
         self.assertEqual(captured, {"runner": "cooking", "cooking": "1"})
+
+    def test_session_chat_reuses_complete_external_caddy_environment(self) -> None:
+        captured = self.run_wrapper_stub("session-chat", complete_caddy=True)
+        self.assertEqual(captured["caddy-wrapper"], "unset")
+        self.assertEqual(captured["caddy-port"], "42002")
+        self.assertEqual(captured["installed-ui"], "1")
+
+    def test_session_chat_rejects_incomplete_marked_caddy_environment(self) -> None:
+        captured = self.run_wrapper_stub(
+            "session-chat", invalid_complete_marker=True, expected_status=1
+        )
+        self.assertEqual(captured, {})
 
 
 if __name__ == "__main__":

@@ -534,17 +534,15 @@ supplies only pinned preinstalled dependencies
 The PR SHA therefore selects workload code only. Trusted
 `gcp-cooking-run.sh` invokes its `examples/cooking/run.sh` and exports the
 validated Cooking selector and typed gates ([`gcp-cooking-run.sh`](../../scripts/gcp-cooking-run.sh#L995)).
-The selector implementation described below is present only on the reviewed
-branch commits; the trusted `main` controller/workflow/startup path is not yet
-promoted, so premerge GCP still cannot select chat through a PR SHA alone.
-Selectable chat validation requires that trusted promotion while preserving
-exact repository/SHA validation, private diagnostics, cleanup/post-delete
-checks and typed gate results. Merging the trusted-controller changes still
-requires user authorization; GCP integration remains within the requested
-scope.
+The trusted controller/workflow/startup path was user-authorized and promoted
+to `main` through `ff83d68` and startup-compatibility fix
+`93ab78be3c0bed3c9c963624401b3dc5cc40d024`; the feature workload remains at
+`035763c38d0b1834981e84d2a2447b8c2696123d` in open PR 53. This preserves exact
+repository/SHA validation, private diagnostics, cleanup/post-delete checks and
+typed gate results while allowing the session-chat selector to run in GCP.
 
-Until that promotion, the bounded premerge path remains the standalone local
-runner with `HEPHAESTUS_APP_SESSION_CHAT_E2E=1`,
+The bounded local path remains the standalone runner with
+`HEPHAESTUS_APP_SESSION_CHAT_E2E=1`,
 `HEPHAESTUS_APP_LIBKRUN_E2E=1` and
 `HEPHAESTUS_APP_COOKING_BUILD_PROOF=1`, without
 `HEPHAESTUS_APP_COOKING_E2E=1`; the browser extension is selected by
@@ -560,7 +558,7 @@ The requested-rule command and RPC checks each passed one test, recorded in
 These focused checks do not establish full released-agent, browser, VM/model,
 or GCP journey acceptance.
 
-### GCP session selector implementation status (2026-09-21)
+### GCP session selector implementation status (2026-09-21; status updated 2026-09-22)
 
 Commits `7852201` and `c61bddb` add the reviewed branch implementation for a
 separately selectable `workflow_dispatch` scenario. `cooking_scenario` is an
@@ -578,17 +576,31 @@ The session workload phase profile requires the emitted phases
 `golden-tests`, and `database-tests`. The browser projector requires the
 strict two-turn `session_chat_new` contract: initialization, send, response,
 second send, second response, and reconnect, with complete initial browser
-evidence. This is a selector and validation implementation record, not a
-cloud-run result: the controller/startup changes remain unpromoted to trusted
-`main`, no chat cloud run has been dispatched, and full browser/VM/GCP
-acceptance remains pending. The existing exact-SHA/repository checks, WIF
-boundary, immutable image selection, private evidence, cleanup and typed gates
-remain required.
+evidence. This is a selector and validation implementation record. The trusted
+controller/startup changes are now promoted to `main`; the current full cloud
+attempt and its typed failure are recorded below. The existing exact-SHA/
+repository checks, WIF boundary, immutable image selection, private evidence,
+cleanup and typed gates remain required for acceptance.
 
 The focused controller, cleanup, sandbox, image, timing and browser-summary
 suite passed 54 tests (`/var/tmp/gcp-chat-integration-focused-final2.log`).
 Shell syntax and `git diff --check` also passed. These checks validate the
 integration contracts; they do not establish a successful cloud workload.
+
+The current GCP preflights passed quota in run `35709922726`, cache in run
+`35710020642`, and the retry diagnostic in run `35710753133`; the first
+diagnostic attempt `35710102347` failed the startup allowlist hash before VM
+creation and remains historical. The full session-chat run
+`35711193957`, using workload SHA
+`035763c38d0b1834981e84d2a2447b8c2696123d`, reached the real VM but failed
+before browser execution at `crates/hephaestus-app/tests/golden.rs:4749`:
+the installed UI fixture required Caddy TLS. Source review proved the cause:
+the selector flag was enabled, but the session-chat entrypoint skipped the
+Caddy-owned path used by final36. A narrow harness fix has passed focused validation; later browser,
+timing, and negative-phase gaps are cascaded from that startup failure and are
+not acceptance evidence. Diagnostics download, scan, and gate validation
+passed, while gate acceptance failed and cleanup was verified absent. No
+cloud acceptance is claimed.
 
 ### Verified standalone first-turn acceptance (2026-09-21)
 
@@ -1085,10 +1097,9 @@ handoff projection has a passing positive and mutation-negative test (lines
 final30 document-URL failure was therefore a browser assertion mismatch,
 not a platform contract failure.
 
-The smallest next step is user-authorized promotion of the reviewed trusted
-controller/workflow changes to `main`; after the whole PR is merged, the
-workflow's no-PR-input path can dispatch a fresh GCP acceptance run. No merge
-authorization or GCP acceptance is claimed here. The
+The trusted controller/workflow changes are now promoted to `main`; the next
+step is to validate the narrow Caddy/TLS fixture fix in a fresh full GCP run
+for PR 53. No GCP acceptance is claimed here. The
 versioned protocol's
 fork and tombstone warning semantics remain release-owned and do not add a
 platform approval step (lines 1024-1027 above).
@@ -1270,9 +1281,9 @@ not inferred from these local results.
 
 ### GCP cache and quota preflight (2026-09-22)
 
-The current-main quota preflight on revision `7d5d228` passed without creating
+The initial current-main quota preflight on revision `7d5d228` passed without creating
 VMs in [run 35672341049](https://github.com/wimpheling/hephaestus/actions/runs/35672341049).
-The cache preflight in [run 35672382880](https://github.com/wimpheling/hephaestus/actions/runs/35672382880)
+The initial cache preflight in [run 35672382880](https://github.com/wimpheling/hephaestus/actions/runs/35672382880)
 failed with metadata HTTP 404 before workload execution; the designated
 existing bucket was empty. Existing read IAM access worked, so these results do
 not establish a missing IAM grant or require bootstrap. The cache key matches
@@ -1287,9 +1298,17 @@ available to restore it here; that statement is historical and superseded by
 the dedicated SDK login and upload attempt recorded below. At that pre-auth
 point, the next operator action was to restore
 the reviewed cache archive to the existing documented destination, then rerun
-cache preflight and the diagnostic. Trusted-controller promotion to `main`
-still separately requires merge authorization; no GCP workload acceptance is
-claimed from these preflights.
+cache preflight and the diagnostic. At that pre-auth point, trusted-controller
+promotion to `main` also remained separately authorization-gated; no GCP
+workload acceptance was claimed from those preflights.
+
+Those initial cache and diagnostic results are superseded by the current
+preflights: quota run `35709922726`, cache run `35710020642`, and diagnostic
+retry `35710753133` passed. Diagnostic run `35710102347` remains the earlier
+startup-allowlist failure before VM creation. The full session-chat run
+`35711193957` still failed before browser execution on the Caddy/TLS fixture
+assertion recorded above; the cache and diagnostic passes do not establish
+session-chat acceptance.
 
 ### Replacement cache packaging (2026-09-22)
 
@@ -1321,6 +1340,31 @@ the [dated reproduction evidence](../../docs/experiments/gcp-cache-replacement-2
 The three CI jobs passed for exact source SHA
 `d0f96f72adfceac53b95d5f6cb8dbaa3e452252e` in [run 35675627526](https://github.com/wimpheling/hephaestus/actions/runs/35675627526);
 this does not claim that a new documentation commit was tested. The original
-cache SHA remains unrecovered. Fresh cache preflight, diagnostic, session-chat
-GCP acceptance, and `main` merge approval remain pending. The 11 cleanup tests
-plus `bash -n` checks passed.
+cache SHA remains unrecovered. Cache and diagnostic preflights now pass; the
+session-chat GCP acceptance remains pending a
+fresh run. PR 53 remains open for the feature workload; no merge or full cloud
+acceptance is claimed. The 11 cleanup tests plus `bash -n` checks passed.
+
+### Self-contained Caddy fixture correction (2026-09-22)
+
+The session-chat entrypoint now enables the installed-UI fixture and starts
+the existing disposable Caddy wrapper before browser/OIDC setup when a
+complete external TLS fixture is absent. The wrapper passes its public port,
+HTTPS endpoint, and CA to the child entrypoint. Complete caller-owned fixtures
+are reused; a falsely marked complete environment is rejected. Ordinary
+Cooking and the wrapper's default libkrun invocation remain supported.
+
+The focused controller/scenario suite passed 72 tests, with shell syntax and
+diff checks passing. Removing the bootstrap block in an isolated mutation
+reproduced the installed-UI TLS failure. A real disposable Caddy smoke verified
+HTTPS with the generated CA, matching public port, the expected initial 503
+response, and container cleanup. Retained local records are
+`/var/tmp/heph-sessionchat-old-path-mutation.log` and
+`/var/tmp/heph-sessionchat-caddy-wrapper-smoke.log`.
+
+The older `scripts.test_cooking_run` suite reports the same five failures and
+one error on pristine pre-fix HEAD and the changed checkout; these results
+are not counted as passing checks. The pristine comparison is retained at
+`/var/tmp/heph-original-head.OuxMC8`, with the current comparison at
+`/var/tmp/heph-current-run-tests.mFZVvK/result.log`. Full GCP acceptance remains
+unproven until the corrected workload completes a fresh cloud run.

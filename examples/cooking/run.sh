@@ -59,6 +59,37 @@ if [[ "${cooking_scenario}" == session-chat ]]; then
     # The shared browser/OIDC/bridge lifecycle must see this before setup;
     # the standalone runner receives the same flag again at invocation.
     export HEPHAESTUS_COOKING_BROWSER_E2E=1
+    export HEPHAESTUS_COOKING_INSTALLED_UI_FIXTURE=1
+fi
+
+caddy_environment_complete() {
+    [[ "${HEPHAESTUS_CADDY_TEST_TLS:-0}" == 1 ]] || return 1
+    local port="${HEPHAESTUS_CADDY_TEST_PUBLIC_PORT:-}"
+    [[ "${port}" =~ ^[1-9][0-9]{0,4}$ && "${port}" -le 65535 ]] || return 1
+    [[ "${HEPHAESTUS_CADDY_TEST_ADMIN_URL:-}" == *:* ]] || return 1
+    [[ "${HEPHAESTUS_CADDY_TEST_PUBLIC_URL:-}" == https://*:${port} ]] || return 1
+    [[ "${HEPHAESTUS_CADDY_TEST_LISTEN:-}" == *:${port} ]] || return 1
+    [[ -f "${HEPHAESTUS_CADDY_TEST_CA_CERT:-}" &&
+        ! -L "${HEPHAESTUS_CADDY_TEST_CA_CERT:-}" ]] || return 1
+}
+
+if [[ "${cooking_scenario}" == session-chat ]]; then
+    if [[ "${HEPHAESTUS_CADDY_TEST_ENV_COMPLETE:-0}" == 1 ]]; then
+        caddy_environment_complete || {
+            printf 'HEPHAESTUS_CADDY_TEST_ENV_COMPLETE requires a complete Caddy TLS environment.\n' >&2
+            exit 1
+        }
+    elif ! caddy_environment_complete; then
+        # The wrapper owns the Caddy process and re-enters this script under
+        # its exported environment. The explicit marker prevents that child
+        # from starting a second wrapper while preserving a caller-owned
+        # complete Caddy environment.
+        exec env \
+            HEPHAESTUS_CADDY_TEST_TLS=1 \
+            HEPHAESTUS_CADDY_TEST_ENV_COMPLETE=0 \
+            "${repo_root}/scripts/run-gateway-libkrun-e2e.sh" \
+            -- "${BASH_SOURCE[0]}" "$@"
+    fi
 fi
 diagnostics_dir="${HEPHAESTUS_COOKING_DIAGNOSTICS_DIR:-}"
 if [[ -n "${diagnostics_dir}" ]]; then

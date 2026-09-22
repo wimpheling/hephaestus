@@ -52,11 +52,11 @@ complete create/code/run project journey.
   implementation. Confirm the intended scope, dependency order and acceptance
   evidence in [the MVP-06 task](in-progress/mvp-06-git-backed-session-chat-journey.md)
   before implementation items are taken up.
-- [ ] Trace the complete path from user input through durable acceptance and
+- [x] Trace the complete path from user input through durable acceptance and
   isolated execution to a visible response and reconnectable history.
-- [ ] Classify each transition as already supported, awkward to integrate, or
+- [x] Classify each transition as already supported, awkward to integrate, or
   genuinely missing, using repository evidence and focused experiments.
-- [ ] Identify the smallest necessary changes for response publication,
+- [x] Identify the smallest necessary changes for response publication,
   subscriptions, authorization and recovery before committing to an API design.
 - [x] Record ownership of the visible transcript separately from agent-owned
   model context and internal workflow state.

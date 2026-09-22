@@ -11,6 +11,26 @@ script_dir="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)"
 readonly script_dir
 repo_root="$(cd -- "${script_dir}/.." && pwd -P)"
 readonly repo_root
+
+# With no arguments this wrapper runs the historical libkrun integration
+# harness.  A command after `--` is run under the same disposable Caddy
+# environment, which lets a composed workload bootstrap Caddy before its
+# browser/OIDC setup.
+command_args=("${script_dir}/run-libkrun-integration.sh")
+if (($# > 0)); then
+    [[ "$1" == -- ]] || {
+        printf 'usage: %s [-- command [args...]]\n' "${BASH_SOURCE[0]}" >&2
+        exit 2
+    }
+    shift
+    (($# > 0)) || {
+        printf 'a command is required after --\n' >&2
+        exit 2
+    }
+    command_args=("$@")
+fi
+readonly command_args
+
 source "${repo_root}/scripts/shell-failure-diagnostics.sh"
 heph_shell_failure_init gateway-libkrun-e2e gateway
 caddy_image="${HEPHAESTUS_CADDY_TEST_IMAGE:-docker.io/library/caddy@sha256:d8c17a862962def15cde69863a3a463f25a2664942eafd7bdbf050e9c3116b83}"
@@ -178,6 +198,8 @@ integration_env=(
     "HEPHAESTUS_CADDY_TEST_ADMIN_URL=${admin_url}"
     "HEPHAESTUS_CADDY_TEST_PUBLIC_URL=${public_url}"
     "HEPHAESTUS_CADDY_TEST_LISTEN=${public_listen}"
+    "HEPHAESTUS_CADDY_TEST_PUBLIC_PORT=${public_port}"
+    "HEPHAESTUS_CADDY_TEST_ENV_COMPLETE=${tls_enabled}"
 )
 if [[ "${tls_enabled}" == 1 ]]; then
     integration_env+=(
@@ -185,4 +207,4 @@ if [[ "${tls_enabled}" == 1 ]]; then
         "HEPHAESTUS_CADDY_TEST_CA_CERT=${ca_cert_path}"
     )
 fi
-env "${integration_env[@]}" "${script_dir}/run-libkrun-integration.sh"
+env "${integration_env[@]}" "${command_args[@]}"

@@ -701,13 +701,13 @@ current variable value, not a new hardcoded workflow default.
 
 ### MVP-06 session-chat dispatch
 
-The allowlisted `session-chat` selector is implemented by branch commits
-`7852201` (selector, shared lifecycle and phase validation) and `c61bddb`
-(typed browser validation). It is available for GCP only after those trusted
-controller/workflow/startup changes have been reviewed and promoted to
-`main`; a PR workload SHA alone cannot supply new trusted controller behavior.
-After promotion, use the same exact repository and SHA contract with the new
-input:
+The allowlisted `session-chat` selector is implemented by the reviewed
+controller/workflow/startup path promoted to `main` through `ff83d68` and
+startup-compatibility fix `93ab78be3c0bed3c9c963624401b3dc5cc40d024`; the
+first full cloud run tested workload SHA
+`035763c38d0b1834981e84d2a2447b8c2696123d` from open PR 53. A PR workload SHA
+alone cannot supply new trusted controller behavior.
+Use the same exact repository and SHA contract with the input below:
 
 ```sh
 gh workflow run cooking-e2e.yml --repo wimpheling/hephaestus --ref main \
@@ -753,16 +753,25 @@ allowlisted summary and fixed ten-check host result.
 The standalone runner can still be invoked separately with
 `HEPHAESTUS_APP_SESSION_CHAT_DENIAL_PROBE_E2E=1` and without the browser
 lifecycle flags. That direct mode is distinct from combined GCP selection.
-GCP negative-mode dispatch and fresh combined negative evidence are still
-pending trusted-controller/runtime promotion; this section does not claim that
-cloud path has passed.
+GCP negative-mode dispatch is wired through the promoted trusted path, but
+fresh combined negative evidence remains pending because the current full run
+failed during session-chat startup.
 
-These commits provide the selector, lifecycle plumbing, phase validators, and
-private evidence contracts only. No session-chat cloud run or full
-browser/VM acceptance is recorded here. The current local browser attempt
-reached successful server creation and first human send but timed out waiting
-for the first assistant response, so runtime acceptance remains incomplete; no
-cloud run or merge is claimed.
+The current preflights passed quota (`35709922726`), cache (`35710020642`),
+and the retry diagnostic (`35710753133`); diagnostic `35710102347` remains an
+earlier startup-allowlist failure before VM creation. Full session-chat run
+`35711193957`, using workload SHA
+`035763c38d0b1834981e84d2a2447b8c2696123d`, reached the real VM but failed
+before browser execution at `crates/hephaestus-app/tests/golden.rs:4749`:
+the installed UI fixture required Caddy TLS. Source review proved that the
+selector flag was enabled while the session-chat entrypoint skipped the
+Caddy-owned path used by the passing local final36 run. Diagnostics download,
+scan, and gate validation passed, but gate acceptance failed and cleanup was
+verified absent. The session-chat entrypoint now starts the existing Caddy
+wrapper before browser/OIDC setup when a complete external TLS fixture is not
+provided. Focused harness checks and a real Caddy HTTPS smoke pass; a fresh
+full GCP run remains required. The earlier browser, timing, and negative-phase
+gaps are cascaded failures, not acceptance evidence.
 
 PR mode requires the reviewed runner image with browser dependencies already
 baked. It fails closed on the stock image because installing Playwright
