@@ -120,10 +120,14 @@ jobs:
         with:
           version: '>= 390.0.0'
       - name: Build or verify immutable runner image
+        id: runner_image_build
         if: ${{ inputs.cloud_mode == 'image-build' }}
         env:
           GCP_ZONE: ${{ inputs.gcp_zone || 'europe-west1-d' }}
           GCP_RUNNER_IMAGE_STATE: ${{ runner.temp }}/gcp-runner-image-build-state
+          GCP_RUNNER_IMAGE_SERIAL_LOG: ${{ runner.temp }}/gcp-runner-image-serial.log
+          GCP_RUNNER_IMAGE_SERIAL_TAIL_LOG: ${{ runner.temp }}/gcp-runner-image-serial.log.tail
+          GCP_RUNNER_IMAGE_FIRST_FAILURE: ${{ runner.temp }}/gcp-runner-image-first-failure.json
         run: bash scripts/gcp-runner-image-build.sh build
       - name: Retire one validated immutable runner image
         if: ${{ inputs.cloud_mode == 'image-retire' }}
@@ -209,11 +213,76 @@ jobs:
           if-no-files-found: error
           retention-days: 1
       - name: Cleanup immutable runner image build resources
+        id: cleanup_runner_image
         if: ${{ always() && inputs.cloud_mode == 'image-build' }}
         env:
           GCP_ZONE: ${{ inputs.gcp_zone || 'europe-west1-d' }}
           GCP_RUNNER_IMAGE_STATE: ${{ runner.temp }}/gcp-runner-image-build-state
+          GCP_RUNNER_IMAGE_SERIAL_LOG: ${{ runner.temp }}/gcp-runner-image-serial.log
+          GCP_RUNNER_IMAGE_SERIAL_TAIL_LOG: ${{ runner.temp }}/gcp-runner-image-serial.log.tail
+          GCP_RUNNER_IMAGE_FIRST_FAILURE: ${{ runner.temp }}/gcp-runner-image-first-failure.json
         run: bash scripts/gcp-runner-image-build.sh cleanup
+      - name: Retain scanned runner image serial evidence
+        id: runner_image_evidence
+        if: ${{ always() && inputs.cloud_mode == 'image-build' }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: gcp-runner-image-serial-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            ${{ runner.temp }}/gcp-runner-image-serial.log
+            ${{ runner.temp }}/gcp-runner-image-serial.log.tail
+            ${{ runner.temp }}/gcp-runner-image-first-failure.json
+          if-no-files-found: warn
+          retention-days: 1
+      - name: Publish safe runner image failure summary
+        if: ${{ always() && inputs.cloud_mode == 'image-build' }}
+        env:
+          GCP_IMAGE_BUILD_RESULT: ${{ steps.runner_image_build.outcome || 'unknown' }}
+          GCP_IMAGE_CLEANUP_RESULT: ${{ steps.cleanup_runner_image.outcome || 'unknown' }}
+          GCP_IMAGE_EVIDENCE_RESULT: ${{ steps.runner_image_evidence.outcome || 'unknown' }}
+          GCP_IMAGE_FIRST_FAILURE: ${{ runner.temp }}/gcp-runner-image-first-failure.json
+          GCP_IMAGE_ARTIFACTS_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}/artifacts
+          GCP_IMAGE_RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          GCP_IMAGE_REPOSITORY_SHA: ${{ github.sha }}
+        run: |
+          set -Eeuo pipefail
+          python3 - <<'PY'
+          import json
+          import os
+          from pathlib import Path
+
+          first = {}
+          try:
+              value = json.loads(Path(os.environ['GCP_IMAGE_FIRST_FAILURE']).read_text(encoding='utf-8'))
+              if isinstance(value, dict):
+                  first = value
+          except (OSError, ValueError, UnicodeError):
+              pass
+
+          lines = [
+              '## Immutable runner image result',
+              '',
+              f"- Repository/controller: `{os.environ['GCP_IMAGE_REPOSITORY_SHA']}`",
+              f"- Build step: `{os.environ['GCP_IMAGE_BUILD_RESULT']}`; cleanup step: `{os.environ['GCP_IMAGE_CLEANUP_RESULT']}`",
+              f"- Run: [{os.environ['GCP_IMAGE_RUN_URL']}]({os.environ['GCP_IMAGE_RUN_URL']})",
+          ]
+          if first:
+              lines.append(
+                  f"- Primary failure: phase `{first.get('phase', 'unknown')}`, command `{first.get('command_id', 'unknown')}`, exit `{first.get('exit_code', 'unknown')}`, diagnostic `{first.get('diagnostic_error', 'unknown')}`"
+              )
+          elif os.environ['GCP_IMAGE_BUILD_RESULT'] == 'success':
+              lines.append('- Primary failure: none; immutable image build completed successfully.')
+          else:
+              lines.append('- Primary failure: no typed failure record was retained; inspect the scanned serial artifact for the wrapper result.')
+          if os.environ['GCP_IMAGE_EVIDENCE_RESULT'] == 'success':
+              lines.extend([
+                  '- Serial evidence upload step succeeded after credential scanning; unapproved raw output is omitted.',
+                  f"- Scanned serial artifact: [open run artifacts]({os.environ['GCP_IMAGE_ARTIFACTS_URL']})",
+              ])
+          else:
+              lines.append(f"- Serial evidence upload step: `{os.environ['GCP_IMAGE_EVIDENCE_RESULT']}`; no retained artifact is asserted.")
+          Path(os.environ['GITHUB_STEP_SUMMARY']).write_text('\n'.join(lines) + '\n', encoding='utf-8')
+          PY
       - name: Cleanup disposable KVM VM
         if: ${{ always() && (inputs.cloud_mode == 'diagnostic' || inputs.cloud_mode == 'smoke' || inputs.cloud_mode == 'gcp-cooking') }}
         env:

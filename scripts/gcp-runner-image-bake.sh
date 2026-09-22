@@ -68,6 +68,33 @@ generalize_runner_image() {
   systemctl --root="$system_root" enable google-guest-agent.service google-startup-scripts.service
 }
 
+prepare_rootless_podman_config() {
+  local config_path="$1"
+  [[ -d "$(dirname -- "$config_path")" ]] || {
+    printf '%s\n' 'rootless Podman config parent is missing' >&2
+    return 1
+  }
+  cat >"$config_path" <<'EOF'
+# The bake runs as forge without a systemd user session.  cgroupfs keeps
+# rootless Podman independent of the unavailable user-session DBus.
+[engine]
+cgroup_manager = "cgroupfs"
+EOF
+  chmod 0644 "$config_path"
+}
+
+run_installed_ui_build() {
+  local status
+  if "$@"; then
+    return 0
+  else
+    status=$?
+  fi
+  printf 'HEPH_GCP_COOKING event=installed-ui-image status=build-failed exit_code=%s scan_exit_code=0 log_exit_code=0\n' \
+    "$status"
+  return "$status"
+}
+
 # A side-effect-free functional check used by the local image-bake tests.
 if [[ "${HEPH_GCP_IMAGE_PERMISSION_TEST:-0}" == 1 ]]; then
   normalize_node_tree_permissions "${1:?missing Node installation root}"
@@ -76,6 +103,15 @@ fi
 if [[ "${HEPH_GCP_IMAGE_GENERALIZE_TEST:-0}" == 1 ]]; then
   generalize_runner_image "${1:?missing image root}"
   exit 0
+fi
+if [[ "${HEPH_GCP_IMAGE_PODMAN_CONFIG_TEST:-0}" == 1 ]]; then
+  prepare_rootless_podman_config "${1:?missing Podman config path}"
+  exit 0
+fi
+if [[ "${HEPH_GCP_IMAGE_BUILD_FAILURE_TEST:-0}" == 1 ]]; then
+  run_installed_ui_build bash "${1:?missing installed UI build path}" \
+    "${HEPH_GCP_IMAGE_BUILD_TEST_ARG:-}"
+  exit $?
 fi
 
 repo_sha="${HEPH_GCP_IMAGE_BAKE_REPO_SHA:-}"
@@ -110,6 +146,11 @@ bash "$script_dir/gcp-kvm-startup.sh"
 work_root=/srv/hephaestus
 checkout="$work_root/image-browser-checkout"
 browser_root="$work_root/playwright-browsers"
+podman_config_dir=/run/hephaestus-image-bake
+install -d -m 0700 -o forge -g forge "$podman_config_dir"
+podman_config="$podman_config_dir/containers.conf"
+prepare_rootless_podman_config "$podman_config"
+trap 'rm -f -- "$podman_config"; rmdir -- "$podman_config_dir" 2>/dev/null || true' EXIT
 installed_ui_archive_tmp="$work_root/installed-ui-browser-image.oci"
 installed_ui_archive="/usr/share/hephaestus/installed-ui-browser-image.oci"
 node_version="$HEPH_IMAGE_NODE_VERSION"
@@ -166,13 +207,18 @@ installed_ui_build_sha="$(sha256sum "$installed_ui_build" | awk '{print $1}')"
 installed_ui_dockerfile_sha="$(sha256sum "$installed_ui_dockerfile" | awk '{print $1}')"
 install -m 0555 "$installed_ui_build" /usr/local/libexec/hephaestus/installed-ui-browser-image-build.sh
 install -m 0444 "$installed_ui_dockerfile" /usr/local/libexec/hephaestus/installed-ui-browser-image.Dockerfile
-runuser -u forge -- env HOME=/home/forge XDG_RUNTIME_DIR=/run/user/10001 \
-  PATH=/opt/hephaestus/node-${node_version}/bin:/usr/local/bin:/usr/bin:/bin \
+forge_podman_env=(
+  HOME=/home/forge
+  XDG_RUNTIME_DIR=/run/user/10001
+  PATH=/opt/hephaestus/node-${node_version}/bin:/usr/local/bin:/usr/bin:/bin
+  CONTAINERS_CONF="$podman_config"
+)
+run_installed_ui_build runuser -u forge -- env "${forge_podman_env[@]}" \
   bash "$installed_ui_build"
 installed_ui_image_tag='localhost/hephestus-playwright:1.62.0-certutil'
-installed_ui_image_id="$(runuser -u forge -- env HOME=/home/forge XDG_RUNTIME_DIR=/run/user/10001 \
+installed_ui_image_id="$(runuser -u forge -- env "${forge_podman_env[@]}" \
   podman image inspect --format '{{.Id}}' "$installed_ui_image_tag")"
-installed_ui_image_digest="$(runuser -u forge -- env HOME=/home/forge XDG_RUNTIME_DIR=/run/user/10001 \
+installed_ui_image_digest="$(runuser -u forge -- env "${forge_podman_env[@]}" \
   podman image inspect --format '{{.Digest}}' "$installed_ui_image_tag")"
 if [[ "$installed_ui_image_id" =~ ^[0-9a-f]{64}$ ]]; then
   installed_ui_image_id="sha256:$installed_ui_image_id"
@@ -181,7 +227,7 @@ fi
   { printf '%s\n' 'installed UI browser image ID is invalid' >&2; exit 1; }
 [[ "$installed_ui_image_digest" =~ ^sha256:[0-9a-f]{64}$ ]] ||
   { printf '%s\n' 'installed UI browser image digest is invalid' >&2; exit 1; }
-installed_ui_browser_version="$(runuser -u forge -- env HOME=/home/forge XDG_RUNTIME_DIR=/run/user/10001 \
+installed_ui_browser_version="$(runuser -u forge -- env "${forge_podman_env[@]}" \
   podman run --rm --entrypoint sh "$installed_ui_image_tag" -c '
     set -eu
     browser="$(find /ms-playwright -type f \( -name chrome -o -name chrome-headless-shell \) -perm -0100 -print -quit)"
@@ -193,7 +239,7 @@ case "$installed_ui_browser_version" in
   *) printf '%s\n' 'installed UI browser image cannot report a Chromium version' >&2; exit 1 ;;
 esac
 rm -f -- "$installed_ui_archive_tmp"
-runuser -u forge -- env HOME=/home/forge XDG_RUNTIME_DIR=/run/user/10001 \
+runuser -u forge -- env "${forge_podman_env[@]}" \
   podman save --format oci-archive --output "$installed_ui_archive_tmp" "$installed_ui_image_tag"
 install -m 0644 -o root -g root "$installed_ui_archive_tmp" "$installed_ui_archive"
 installed_ui_archive_sha="$(sha256sum "$installed_ui_archive" | awk '{print $1}')"
