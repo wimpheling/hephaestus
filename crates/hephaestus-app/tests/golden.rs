@@ -6722,6 +6722,7 @@ async fn bearer_push_starts_run_through_production_bootstrap() {
             &resolved_head,
             "Family pasta",
             outsider_id,
+            outsider_browser_session,
         )
         .await
         .expect("build and retrieve published cooking blog artifact");
