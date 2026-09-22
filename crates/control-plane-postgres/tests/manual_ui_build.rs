@@ -82,6 +82,8 @@ async fn manual_build_ui_basic_matrix_uses_application_role() {
     let ui_hash = [4_u8; 32];
     let derived_hash =
         agent_config::build_identity::ui_build_definition_hash(base_hash, ui_hash, None);
+    let parallel_identity = identity(owner);
+    let duplicate_identity = identity(owner);
     let identity = identity(owner);
     let app_pool = connect_app(&database_url, 4).await.expect("app pool");
     let application = BuildApplication::new(app_pool);
@@ -121,7 +123,7 @@ async fn manual_build_ui_basic_matrix_uses_application_role() {
         .expect("base hash accepted for valid UI");
     let second = application
         .request_build(
-            &identity,
+            &duplicate_identity,
             request(
                 repository,
                 &valid_commit,
@@ -132,6 +134,90 @@ async fn manual_build_ui_basic_matrix_uses_application_role() {
         .await
         .expect("derived hash accepted for valid UI");
     assert_eq!(first.id, second.id, "base and derived callers deduplicate");
+    let duplicate_receipt_events: i64 = sqlx::query_scalar(
+        "SELECT count(*)
+         FROM application_events
+         WHERE occurrence_id = $1 AND aggregate_type = 'build'
+           AND aggregate_id = $2
+           AND scope_kind = 'repository' AND scope_id = $3 AND actor_id = $4",
+    )
+    .bind(duplicate_identity.idempotency_id.as_uuid())
+    .bind(first.id)
+    .bind(repository)
+    .bind(owner.as_uuid())
+    .fetch_one(&bootstrap)
+    .await
+    .expect("deduplicated build receipt event");
+    assert_eq!(duplicate_receipt_events, 1);
+    let retried = application
+        .request_build(
+            &duplicate_identity,
+            request(
+                repository,
+                &valid_commit,
+                derived_hash,
+                &normalized_config_hash,
+            ),
+        )
+        .await
+        .expect("repeated deduplicated build request");
+    assert_eq!(retried.id, first.id);
+    let repeated_receipt_events: i64 = sqlx::query_scalar(
+        "SELECT count(*)
+         FROM application_events
+         WHERE occurrence_id = $1 AND aggregate_type = 'build'
+           AND aggregate_id = $2
+           AND scope_kind = 'repository' AND scope_id = $3 AND actor_id = $4",
+    )
+    .bind(duplicate_identity.idempotency_id.as_uuid())
+    .bind(first.id)
+    .bind(repository)
+    .bind(owner.as_uuid())
+    .fetch_one(&bootstrap)
+    .await
+    .expect("repeated deduplicated build receipt count");
+    assert_eq!(repeated_receipt_events, 1);
+    assert_eq!(outbox_count(&bootstrap, &valid_commit).await, 1);
+    let (parallel_first, parallel_second) = tokio::join!(
+        application.request_build(
+            &parallel_identity,
+            request(
+                repository,
+                &valid_commit,
+                derived_hash,
+                &normalized_config_hash,
+            ),
+        ),
+        application.request_build(
+            &parallel_identity,
+            request(
+                repository,
+                &valid_commit,
+                derived_hash,
+                &normalized_config_hash,
+            ),
+        ),
+    );
+    let parallel_first = parallel_first.expect("first concurrent deduplicated build request");
+    let parallel_second = parallel_second.expect("second concurrent deduplicated build request");
+    assert_eq!(parallel_first.id, first.id);
+    assert_eq!(parallel_second.id, first.id);
+    let parallel_receipt_events: i64 = sqlx::query_scalar(
+        "SELECT count(*)
+         FROM application_events
+         WHERE occurrence_id = $1 AND aggregate_type = 'build'
+           AND aggregate_id = $2
+           AND scope_kind = 'repository' AND scope_id = $3 AND actor_id = $4",
+    )
+    .bind(parallel_identity.idempotency_id.as_uuid())
+    .bind(first.id)
+    .bind(repository)
+    .bind(owner.as_uuid())
+    .fetch_one(&bootstrap)
+    .await
+    .expect("concurrent deduplicated build receipt count");
+    assert_eq!(parallel_receipt_events, 1);
+    assert_eq!(outbox_count(&bootstrap, &valid_commit).await, 1);
     let stored_hash: Vec<u8> =
         sqlx::query_scalar("SELECT build_definition_hash FROM build_requests WHERE id = $1")
             .bind(first.id)

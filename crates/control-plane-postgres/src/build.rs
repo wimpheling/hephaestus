@@ -721,6 +721,47 @@ impl BuildApplication {
             )
             .await?;
         }
+        if !is_new {
+            // A deduplicated request does not update build_requests, so its
+            // row trigger cannot create the read-your-writes receipt required
+            // by this fresh mutation occurrence. Reuse the durable event
+            // function in this transaction without enqueueing another build.
+            let receipt_exists: bool = sqlx::query_scalar(
+                "SELECT EXISTS(
+                     SELECT 1
+                     FROM application_events
+                     WHERE occurrence_id = $1
+                       AND aggregate_type = 'build'
+                       AND aggregate_id = $2
+                       AND scope_kind = 'repository'
+                       AND scope_id = $3
+                       AND actor_id = $4
+                 )",
+            )
+            .bind(identity.idempotency_id.as_uuid())
+            .bind(row.0)
+            .bind(request.repository_id)
+            .bind(identity.user_id.as_uuid())
+            .fetch_one(&mut *transaction)
+            .await
+            .map_err(BuildError::Persistence)?;
+            if !receipt_exists {
+                sqlx::query(
+                    "SELECT event_id
+                     FROM append_application_event(
+                         $1, 'repository', $2, 'build', $3,
+                         'build.changed', 'updated', $4, $2, NULL
+                     )",
+                )
+                .bind(identity.idempotency_id.as_uuid())
+                .bind(request.repository_id)
+                .bind(row.0)
+                .bind(&row.2)
+                .fetch_one(&mut *transaction)
+                .await
+                .map_err(BuildError::Persistence)?;
+            }
+        }
         if is_new {
             let event_id = Uuid::new_v4();
             sqlx::query(
