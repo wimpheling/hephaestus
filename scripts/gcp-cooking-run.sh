@@ -578,6 +578,7 @@ phases = {
     "browser-recovery": ("playwright-run", "playwright-log", "playwright-failed"),
     "browser-concurrency": ("playwright-run", "playwright-log", "playwright-failed"),
     "browser-fork": ("playwright-run", "playwright-log", "playwright-failed"),
+    "browser-post-operation": ("playwright-run", "playwright-log", "playwright-failed"),
 }
 # These are workload phases whose failed supervisor timing records can
 # identify a workload failure. Keep startup, supervisor, evidence, and
@@ -609,6 +610,37 @@ try:
 except (OSError, UnicodeError):
     pass
 
+# A browser boundary is more specific than the outer golden-test/workload
+# wrapper that reports its nonzero result.  Prefer the first failed browser
+# phase when one is present, while retaining any other valid workload phase
+# as a safe fallback.
+browser_failure_phases = {
+    "browser-initial", "browser-recovery", "browser-concurrency", "browser-fork",
+    "browser-post-operation",
+}
+wrapper_failure_phases = {"golden-tests"}
+
+def selected_failure_phase():
+    if not failure_phases:
+        return None
+    # golden-tests is the outer wrapper around the browser journey.  Skip
+    # only that known wrapper; an earlier production/OCI failure remains the
+    # primary failure even when a later browser phase also failed.
+    if failure_phases[0] not in wrapper_failure_phases:
+        return failure_phases[0]
+    for phase in failure_phases[1:]:
+        if phase in browser_failure_phases or phase not in wrapper_failure_phases:
+            return phase
+    return failure_phases[-1]
+
+def contract_for_phase(phase):
+    contract = phases.get(phase)
+    if contract is not None:
+        return contract
+    if phase in workload_timing_phases:
+        return ("cooking-workload", "runtime-log", "phase-failed")
+    return None
+
 pair = re.compile(r"(?P<key>[a-z_-]+)=(?P<value>[A-Za-z0-9_.:/-]+)")
 safe_tokens = re.compile(r"^[A-Za-z0-9_.:/-]+$")
 image_labels = {"python-ubuntu", "rust-ubuntu", "oci-builder-ubuntu", "oci-verifier-ubuntu"}
@@ -637,6 +669,7 @@ canonical_failure_contract = {
     ("browser-recovery", "playwright-run"): {("playwright-log", "playwright-failed")},
     ("browser-concurrency", "playwright-run"): {("playwright-log", "playwright-failed")},
     ("browser-fork", "playwright-run"): {("playwright-log", "playwright-failed")},
+    ("browser-post-operation", "playwright-run"): {("playwright-log", "playwright-failed")},
 }
 
 def fields(line, required, allowed):
@@ -695,7 +728,7 @@ try:
                 ):
                     phase = event["phase"]
                     if phase == "browser-setup" and event["command_id"] == "playwright-run":
-                        phase = failure_phases[0] if failure_phases else "unknown"
+                        phase = selected_failure_phase() or "unknown"
                     candidate = (
                         phase,
                         event["command_id"],
@@ -744,9 +777,12 @@ try:
                     or event["stage"] not in workload_stages
                 ):
                     continue
-                phase = failure_phases[0] if failure_phases else "cooking-supervisor"
-                candidate = (phase, "cooking-workload", exit_code, "runtime-log", "phase-failed")
-                break
+                phase = selected_failure_phase() or "cooking-supervisor"
+                # Keep scanning: a launcher may emit the more specific typed
+                # browser boundary after this outer workload wrapper.
+                if candidate is None:
+                    candidate = (phase, "cooking-workload", exit_code, "runtime-log", "phase-failed")
+                continue
 
             event = fields(
                 line,
@@ -767,6 +803,8 @@ try:
                 except ValueError:
                     continue
                 if 1 <= exit_code <= 255:
+                    if candidate is not None:
+                        continue
                     candidate = ("evidence-scan", "browser-report-validation", exit_code, "runtime-log", "phase-failed")
                     break
 
@@ -779,8 +817,12 @@ try:
                 exit_code = int(event["status"])
                 if 1 <= exit_code <= 255 and event["diagnostics-scan"] in {"0", "1"}:
                     if failure_phases:
-                        phase = failure_phases[0]
-                        command, source, error = phases[phase]
+                        phase = selected_failure_phase()
+                        contract = contract_for_phase(phase)
+                        if contract is None:
+                            phase, command, source, error = "unknown", "playwright-run", "playwright-log", "playwright-failed"
+                        else:
+                            command, source, error = contract
                     else:
                         phase, command, source, error = "unknown", "playwright-run", "playwright-log", "playwright-failed"
                     candidate = (phase, command, exit_code, source, error)
@@ -803,15 +845,15 @@ try:
                     and event["operation"] in shell_operations
                     and event["reason"] in shell_reasons
                 ):
-                    phase = failure_phases[0] if failure_phases else "cooking-supervisor"
-                    if phase in phases:
-                        command, source, error = phases[phase]
-                    elif phase in workload_timing_phases:
-                        command, source, error = "cooking-workload", "runtime-log", "phase-failed"
+                    phase = selected_failure_phase() or "cooking-supervisor"
+                    contract = contract_for_phase(phase)
+                    if contract is not None:
+                        command, source, error = contract
                     else:
                         phase, command, source, error = "cooking-supervisor", "cooking-workload", "runtime-log", "phase-failed"
-                    candidate = (phase, command, exit_code, source, error)
-                    break
+                    if candidate is None:
+                        candidate = (phase, command, exit_code, source, error)
+                    continue
 except (OSError, UnicodeError):
     pass
 
@@ -825,8 +867,9 @@ if candidate is None:
                 if not isinstance(value, dict) or value.get("record") != "end" or value.get("outcome") in {"passed", "none"}:
                     continue
                 phase = value.get("phase")
-                if phase in phases:
-                    command, source, error = phases[phase]
+                contract = contract_for_phase(phase)
+                if contract is not None:
+                    command, source, error = contract
                     candidate = (phase, command, wrapper_status, source, error)
                     break
     except (OSError, UnicodeError, ValueError, TypeError):
