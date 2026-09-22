@@ -750,6 +750,28 @@ try:
 
             event = fields(
                 line,
+                {"event", "operation", "phase", "status", "report_state", "reason", "exit_code"},
+                {"event", "operation", "phase", "status", "report_state", "reason", "exit_code"},
+            )
+            if (
+                event
+                and event["event"] == "browser-report-validation"
+                and event["operation"] == "browser-report-validation"
+                and event["phase"] == "evidence"
+                and event["status"] == "failed"
+                and event["report_state"] == "missing"
+                and event["reason"] == "invalid-report"
+            ):
+                try:
+                    exit_code = int(event["exit_code"])
+                except ValueError:
+                    continue
+                if 1 <= exit_code <= 255:
+                    candidate = ("evidence-scan", "browser-report-validation", exit_code, "runtime-log", "phase-failed")
+                    break
+
+            event = fields(
+                line,
                 {"event", "status", "diagnostics-scan"},
                 {"event", "status", "diagnostics-scan"},
             )
@@ -1473,7 +1495,6 @@ else
     workload_scenario_env=(
         "--setenv=HEPHAESTUS_APP_COOKING_E2E=1"
         "--setenv=HEPHAESTUS_APP_COOKING_BUILD_PROOF=1"
-        "--setenv=HEPHAESTUS_APP_COOKING_SERVICE_BUILD_PROOF=1"
         "--setenv=HEPHAESTUS_COOKING_UPDATE_E2E=1"
         "--setenv=HEPHAESTUS_COOKING_OCI_BASE_IMPORT_DIAGNOSTIC=0"
         "--setenv=HEPHAESTUS_APP_UPDATE_ADMISSION_E2E=0"

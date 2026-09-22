@@ -469,7 +469,7 @@ FIRST_FAILURE_COMMANDS = frozenset(
     {
         "phase-failure", "metadata-fetch", "runner-image-runtime", "diagnostic-setup",
         "installed-ui-image-build", "browser-setup", "npm-install", "playwright-run",
-        "cooking-workload", "evidence-scan", "diagnostics-collection", "diagnostics-upload",
+        "cooking-workload", "evidence-scan", "browser-report-validation", "diagnostics-collection", "diagnostics-upload",
         "cleanup", "download", "unknown",
     }
 )
