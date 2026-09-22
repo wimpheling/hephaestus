@@ -53,7 +53,9 @@ while (($# > 0)); do
             shift 2
             ;;
         --volume)
-            fixture_mount="${2%:/run/heph-prerequisite:Z}"
+            if [[ "$2" == *:/run/heph-prerequisite:Z ]]; then
+                fixture_mount="${2%:/run/heph-prerequisite:Z}"
+            fi
             shift 2
             ;;
         *) shift ;;
@@ -61,6 +63,7 @@ while (($# > 0)); do
 done
 if [[ "${expected}" == pass ]]; then
     if [[ "${HEPHAESTUS_TEST_SMOKE_MODE:-}" == safe-failure || "${HEPHAESTUS_TEST_SMOKE_MODE:-}" == secret-failure ]]; then
+        printf '%s\n' '{"expected":"pass","status":"failed","reason":"browser-startup-failed","certificate_error_marker":false,"known_page_marker":false,"document_nonempty":false,"exit_code":17}' >"${fixture_mount}/probe-pass.result"
         if [[ "${HEPHAESTUS_TEST_SMOKE_MODE}" == secret-failure ]]; then
             printf '%s\n' 'cooking-inbound-only-fixture-sentinel' >&2
         else
@@ -68,14 +71,15 @@ if [[ "${expected}" == pass ]]; then
         fi
         exit "${HEPHAESTUS_TEST_SMOKE_STATUS:-17}"
     fi
-    printf '%s\n' 'heph-installed-ui-prerequisite' >"${fixture_mount}/browser.html"
+    printf '%s\n' '{"expected":"pass","status":"passed","reason":"target-page-200-marker","certificate_error_marker":false,"known_page_marker":true,"document_nonempty":true,"exit_code":0}' >"${fixture_mount}/probe-pass.result"
     exit 0
 fi
 if [[ "${HEPHAESTUS_TEST_SMOKE_MODE:-}" == wrong-ca-failure ]]; then
+    printf '%s\n' '{"expected":"fail","status":"failed","reason":"browser-startup-failed","certificate_error_marker":false,"known_page_marker":false,"document_nonempty":false,"exit_code":17}' >"${fixture_mount}/probe-fail.result"
     printf '%s\n' 'injected wrong-CA browser startup failure' >&2
     exit "${HEPHAESTUS_TEST_SMOKE_STATUS:-17}"
 fi
-printf '%s\n' ERR_CERT_AUTHORITY_INVALID >"${fixture_mount}/browser.html"
+printf '%s\n' '{"expected":"fail","status":"passed","reason":"certificate-authority-denied","certificate_error_marker":true,"known_page_marker":false,"document_nonempty":false,"exit_code":0}' >"${fixture_mount}/probe-fail.result"
 exit 0
 PODMAN
 chmod 700 -- "${fake_bin}/openssl" "${fake_bin}/podman"
@@ -105,6 +109,9 @@ safe_output="${root}/safe.log"
 safe_status="$(run_smoke safe-failure "${safe_output}")"
 [[ "${safe_status}" == 17 ]] || { cat "${safe_output}" >&2; exit 1; }
 grep -Fq -- '--- probe-pass.log ---' "${safe_output}"
+grep -Fq -- '--- probe-pass.result ---' "${safe_output}"
+grep -Fq -- 'podman_exit_code=17' "${safe_output}"
+grep -Fq -- 'cert_error_marker=0' "${safe_output}"
 grep -Fq -- 'injected browser startup failure: certutil unavailable' "${safe_output}"
 grep -Fq -- 'HEPH_GCP_FAILURE phase=browser-setup command_id=playwright-run exit_code=17' "${safe_output}"
 
@@ -112,6 +119,8 @@ wrong_ca_output="${root}/wrong-ca.log"
 wrong_ca_status="$(run_smoke wrong-ca-failure "${wrong_ca_output}")"
 [[ "${wrong_ca_status}" == 17 ]] || { cat "${wrong_ca_output}" >&2; exit 1; }
 grep -Fq -- '--- probe-fail.log ---' "${wrong_ca_output}"
+grep -Fq -- '--- probe-fail.result ---' "${wrong_ca_output}"
+grep -Fq -- 'podman_exit_code=17' "${wrong_ca_output}"
 grep -Fq -- 'injected wrong-CA browser startup failure' "${wrong_ca_output}"
 
 secret_output="${root}/secret.log"

@@ -65,7 +65,11 @@ browser_user="$(id -u):$(id -g)"
 
 print_probe_failure_context() {
     local expected="$1" diagnostic_log
-    for diagnostic_log in "${fixture_root}/probe-${expected}.log" "${fixture_root}/browser.log"; do
+    for diagnostic_log in \
+        "${fixture_root}/probe-${expected}.result" \
+        "${fixture_root}/probe-${expected}.status" \
+        "${fixture_root}/probe-${expected}.log" \
+        "${fixture_root}/browser.log"; do
         if [[ -s "${diagnostic_log}" ]]; then
             printf '%s\n' "--- ${diagnostic_log##*/} ---" >&2
             head -c 4096 "${diagnostic_log}" >&2 || true
@@ -76,10 +80,14 @@ print_probe_failure_context() {
 
 run_browser_probe() {
     local trust_ca="$1" expected="$2"
-    local probe_log="${fixture_root}/probe-${expected}.log" probe_status
+    local probe_log="${fixture_root}/probe-${expected}.log" probe_result="${fixture_root}/probe-${expected}.result" probe_status probe_result_status
+    local probe_status_path="${fixture_root}/probe-${expected}.status"
     install -m 600 /dev/null "${probe_log}"
+    install -m 600 /dev/null "${probe_result}"
+    install -m 600 /dev/null "${probe_status_path}"
     if podman run --rm --userns=keep-id --user "${browser_user}" --network host \
         --volume "${fixture_root}:/run/heph-prerequisite:Z" \
+        --volume "${repo_root}/scripts/installed-ui-browser-image/probe.mjs:/run/heph-prerequisite-probe.mjs:ro,Z" \
         --env HOME=/tmp \
         --env HEPH_PREREQUISITE_CA="${trust_ca}" \
         --env HEPH_PREREQUISITE_URL="${public_url}/" \
@@ -87,7 +95,7 @@ run_browser_probe() {
         --env HEPH_PREREQUISITE_EXPECTED="${expected}" \
         "${image}" bash -Eeuo pipefail -c '
             command -v certutil >/dev/null
-            command -v timeout >/dev/null
+            command -v node >/dev/null
             browser="$(find /ms-playwright -type f \( -name chrome -o -name chrome-headless-shell \) -perm -0100 -print -quit)"
             test -n "$browser"
             "$browser" --version
@@ -97,28 +105,42 @@ run_browser_probe() {
             trap '\''rm -rf "$HOME"'\'' EXIT
             certutil -N -d "sql:$nss_dir" --empty-password >/dev/null 2>&1
             certutil -A -d "sql:$nss_dir" -n heph-caddy-fixture -t "C,," -i "$HEPH_PREREQUISITE_CA"
-            output=/run/heph-prerequisite/browser.html
-            if timeout --kill-after=2s 15s "$browser" --headless=new --no-sandbox \
-                --disable-gpu --disable-background-networking \
-                --dump-dom "$HEPH_PREREQUISITE_URL" \
-                >"$output" 2>/run/heph-prerequisite/browser.log; then
-                if [[ "$HEPH_PREREQUISITE_EXPECTED" == pass ]]; then
-                    if [[ "$HEPH_PREREQUISITE_REQUIRE_MARKER" == 1 ]]; then
-                        grep -Fq heph-installed-ui-prerequisite "$output"
-                    else
-                        test -s "$output"
-                        ! grep -Fq ERR_CERT_AUTHORITY_INVALID "$output"
-                    fi
-                else
-                    grep -Fq ERR_CERT_AUTHORITY_INVALID "$output"
-                fi
-            else
-                false
-            fi
+            node /run/heph-prerequisite-probe.mjs "$browser" "$HEPH_PREREQUISITE_URL" \
+                "$HEPH_PREREQUISITE_EXPECTED" "/run/heph-prerequisite/probe-${HEPH_PREREQUISITE_EXPECTED}.result" \
+                /run/heph-prerequisite/browser.log "$HEPH_PREREQUISITE_REQUIRE_MARKER" 15000
         ' >"${probe_log}" 2>&1; then
         probe_status=0
     else
         probe_status=$?
+    fi
+    if [[ -s "${probe_result}" ]]; then
+        {
+            printf '\n--- %s ---\n' "${probe_result##*/}"
+            head -c 4096 "${probe_result}"
+            printf '\n'
+        } >>"${probe_log}"
+    fi
+    if grep -Fq '"status":"failed"' "${probe_result}" 2>/dev/null; then
+        probe_result_status=failed
+        ((probe_status != 0)) || probe_status=1
+    elif grep -Fq '"status":"passed"' "${probe_result}" 2>/dev/null; then
+        probe_result_status=passed
+    else
+        probe_result_status=unknown
+    fi
+    cert_error_marker=0
+    known_page_marker=0
+    grep -Fq '"certificate_error_marker":true' "${probe_result}" 2>/dev/null && cert_error_marker=1 || true
+    grep -Fq '"known_page_marker":true' "${probe_result}" 2>/dev/null && known_page_marker=1 || true
+    {
+        printf 'expected=%s\n' "${expected}"
+        printf 'podman_exit_code=%s\n' "${probe_status}"
+        printf 'probe_result_status=%s\n' "${probe_result_status}"
+        printf 'cert_error_marker=%s\n' "${cert_error_marker}"
+        printf 'known_page_marker=%s\n' "${known_page_marker}"
+    } >"${probe_status_path}"
+    if [[ ! -s "${probe_result}" ]]; then
+        cp -- "${probe_status_path}" "${probe_result}"
     fi
     return "${probe_status}"
 }
@@ -152,9 +174,7 @@ if run_browser_probe /run/heph-prerequisite/wrong-ca.pem fail; then
     :
 else
     probe_status=$?
-    if ! grep -Fq ERR_CERT_AUTHORITY_INVALID "${fixture_root}/browser.html" 2>/dev/null; then
-        gcp_failure_marker playwright-run "${probe_status}" playwright-log playwright-failed
-    fi
+    gcp_failure_marker playwright-run "${probe_status}" playwright-log playwright-failed
     printf 'HEPH_GCP_COOKING event=installed-ui-prerequisite status=failed reason=wrong-ca-probe-failed\n' >&2
     if python3 "${scanner}" "${fixture_root}" >/dev/null 2>&1; then
         print_probe_failure_context fail
