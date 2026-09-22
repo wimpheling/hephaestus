@@ -179,6 +179,23 @@ async fn cooking_preparation_drains_child_before_resuming_either_panic() {
     }
 }
 
+#[tokio::test]
+#[serial]
+async fn cooking_confinement_scan_matches_fresh_migrated_schema() {
+    let Ok(parent_database_url) = env::var("HEPHAESTUS_POSTGRES_TEST_URL") else {
+        eprintln!("skipping confinement schema coverage: HEPHAESTUS_POSTGRES_TEST_URL is unset");
+        return;
+    };
+    let isolated = IsolatedGoldenDatabase::create(&parent_database_url).await;
+    let pool = PgPoolOptions::new()
+        .max_connections(2)
+        .connect(&isolated.target_url)
+        .await
+        .expect("connect fresh migrated confinement database");
+    cooking_confinement::assert_static_storage_scan_matches_catalog(&pool).await;
+    isolated.cleanup(pool).await;
+}
+
 const WORKLOAD_PHASE_TIMING_EVENT: &str = "phase-timing";
 const WORKLOAD_PHASE_TIMING_MAX_MS: u128 = 45 * 60 * 1_000;
 
