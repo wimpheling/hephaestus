@@ -155,6 +155,8 @@ jobs:
         run: scripts/test-ui-e2e-installed-bridge.sh
       - name: Installed UI browser startup diagnostics
         run: scripts/test-installed-ui-e2e-startup.sh
+      - name: Installed UI browser prerequisite diagnostics
+        run: scripts/test-installed-ui-browser-smoke.sh
       - name: Phoenix and browser golden path
         env:
           HEPHAESTUS_PLAYWRIGHT_SKIP_BROWSER_INSTALL: "1"

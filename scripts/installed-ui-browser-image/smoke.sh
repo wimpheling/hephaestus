@@ -63,6 +63,17 @@ install -m 0644 "${ca_cert}" "${fixture_root}/caddy-ca.pem"
 install -m 0600 /dev/null "${fixture_root}/browser.log"
 browser_user="$(id -u):$(id -g)"
 
+print_probe_failure_context() {
+    local expected="$1" diagnostic_log
+    for diagnostic_log in "${fixture_root}/probe-${expected}.log" "${fixture_root}/browser.log"; do
+        if [[ -s "${diagnostic_log}" ]]; then
+            printf '%s\n' "--- ${diagnostic_log##*/} ---" >&2
+            head -c 4096 "${diagnostic_log}" >&2 || true
+            printf '\n' >&2
+        fi
+    done
+}
+
 run_browser_probe() {
     local trust_ca="$1" expected="$2"
     local probe_log="${fixture_root}/probe-${expected}.log" probe_status
@@ -118,13 +129,13 @@ else
     probe_status=$?
     printf 'HEPH_GCP_COOKING event=installed-ui-prerequisite status=failed reason=browser-ca-or-page\n' >&2
     if python3 "${scanner}" "${fixture_root}" >/dev/null 2>&1; then
-        head -c 4096 "${fixture_root}/browser.log" >&2 || true
+        print_probe_failure_context pass
     else
         retain_fixture=0
         printf 'Installed UI prerequisite diagnostics were withheld by the credential scanner.\n' >&2
     fi
     gcp_failure_marker playwright-run "${probe_status}" playwright-log playwright-failed
-    exit 1
+    exit "${probe_status}"
 fi
 
 if ! openssl req -x509 -newkey rsa:2048 -nodes -days 1 \
@@ -145,11 +156,13 @@ else
         gcp_failure_marker playwright-run "${probe_status}" playwright-log playwright-failed
     fi
     printf 'HEPH_GCP_COOKING event=installed-ui-prerequisite status=failed reason=wrong-ca-probe-failed\n' >&2
-    if ! python3 "${scanner}" "${fixture_root}" >/dev/null 2>&1; then
+    if python3 "${scanner}" "${fixture_root}" >/dev/null 2>&1; then
+        print_probe_failure_context fail
+    else
         retain_fixture=0
         printf 'Installed UI prerequisite diagnostics were withheld by the credential scanner.\n' >&2
     fi
-    exit 1
+    exit "${probe_status}"
 fi
 if ! python3 "${scanner}" "${fixture_root}" >/dev/null 2>&1; then
     retain_fixture=0
