@@ -148,8 +148,8 @@ set +e
 env \
     PATH="${fake_bin}:${PATH}" \
     HOME="${root}/home" \
-    HEP_TEST_BROWSER_STATUS=17 \
-    HEP_TEST_BROWSER_STATUS_FILE=playwright.status \
+    HEPH_TEST_BROWSER_STATUS=17 \
+    HEPH_TEST_BROWSER_STATUS_FILE=playwright.status \
     HEPHAESTUS_E2E_COOKING_FIXTURE="${fixture}" \
     HEPHAESTUS_E2E_EXTERNAL_DATABASE_URL='postgres://startup-test.invalid/test' \
     HEPHAESTUS_E2E_EXTERNAL_RPC_ENDPOINT='http://startup-test.invalid/rpc' \
@@ -172,8 +172,8 @@ set +e
 env \
     PATH="${fake_bin}:${PATH}" \
     HOME="${root}/home" \
-    HEP_TEST_BROWSER_STATUS=17 \
-    HEP_TEST_BROWSER_STATUS_FILE=npm.status \
+    HEPH_TEST_BROWSER_STATUS=17 \
+    HEPH_TEST_BROWSER_STATUS_FILE=npm.status \
     HEPHAESTUS_E2E_COOKING_FIXTURE="${fixture}" \
     HEPHAESTUS_E2E_EXTERNAL_DATABASE_URL='postgres://startup-test.invalid/test' \
     HEPHAESTUS_E2E_EXTERNAL_RPC_ENDPOINT='http://startup-test.invalid/rpc' \
