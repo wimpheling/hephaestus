@@ -734,8 +734,18 @@ PYNEG
       diagnostics_triage_state='failed'
     fi
   fi
-  if [[ "$expected_mode" == gcp-cooking && "${GCP_EXPECT_PHASE_TIMING:-false}" == true ]]; then
-    set_phase_timing_workload_requirements "$cooking_scenario"
+  if [[ ("$expected_mode" == diagnostic) ||
+    ("$expected_mode" == gcp-cooking && "${GCP_EXPECT_PHASE_TIMING:-false}" == true) ]]; then
+    local expected_diagnostic_failure="${GCP_DIAGNOSTIC_FAILURE:-none}"
+    [[ "$expected_diagnostic_failure" == none || "$expected_diagnostic_failure" == setup ]] || {
+      diagnostics_download_error='diagnostic-failure-invalid'
+      phase_timing_status='unavailable'
+      phase_timing_error="$diagnostics_download_error"
+      return 1
+    }
+    if [[ "$expected_mode" == gcp-cooking ]]; then
+      set_phase_timing_workload_requirements "$cooking_scenario"
+    fi
     # Timing is required for acceptance, but a missing or invalid projection
     # must not discard the archive scan and triage already completed above.
     phase_timing_object="${object%.tar.gz}.phase-timing.json"
@@ -767,6 +777,52 @@ PYNEG
       phase_timing_status='unavailable'
       phase_timing_error="$diagnostics_download_error"
       rm -f -- "$phase_timing_destination" "$phase_timing_staging"
+    elif [[ "$expected_mode" == diagnostic ]]; then
+      diagnostic_timing_status=0
+      if ! python3 -B "$PHASE_TIMING_SCRIPT" validate-projection \
+          --path "$phase_timing_staging" \
+          --expected-run-id "$diagnostics_source_run_id" \
+          --expected-attempt "$diagnostics_source_attempt" \
+          --expected-source-sha "$diagnostics_source_sha" \
+          --require-supervisor-phase archive --require-supervisor-phase evidence-scan \
+          --require-supervisor-phase upload >/dev/null; then
+        diagnostic_timing_status=1
+      fi
+      if ((diagnostic_timing_status == 0)) && [[ "$expected_diagnostic_failure" == setup ]]; then
+        python3 - "$phase_timing_staging" <<'PYDIAGTIMING' || diagnostic_timing_status=$?
+import json
+import sys
+from pathlib import Path
+
+value = json.loads(Path(sys.argv[1]).read_text(encoding="utf-8"))
+if value.get("completeness") != "partial":
+    raise SystemExit("diagnostic setup timing must remain partial")
+required = value.get("required_phases")
+missing = value.get("missing_phases")
+if required != ["browser-setup", "browser-initial"] or missing != ["browser-initial"]:
+    raise SystemExit("diagnostic setup timing requirements are invalid")
+phase = next((item for item in value.get("phases", []) if item.get("phase") == "browser-setup"), None)
+if not isinstance(phase, dict) or phase.get("trust") != "supervisor" or phase.get("clock_domain") != "guest-startup" or phase.get("outcome") != "failed":
+    raise SystemExit("diagnostic setup failure timing is missing or untrusted")
+PYDIAGTIMING
+      fi
+      if ((diagnostic_timing_status != 0)); then
+        diagnostics_download_error='phase-timing-invalid'
+        phase_timing_status='unavailable'
+        phase_timing_error="$diagnostics_download_error"
+        rm -f -- "$phase_timing_destination" "$phase_timing_staging"
+      elif ! mv -- "$phase_timing_staging" "$phase_timing_destination"; then
+        diagnostics_download_error='phase-timing-invalid'
+        phase_timing_status='unavailable'
+        phase_timing_error="$diagnostics_download_error"
+        rm -f -- "$phase_timing_destination" "$phase_timing_staging"
+      else
+        if [[ "$expected_diagnostic_failure" == setup ]]; then
+          phase_timing_status='partial'
+        else
+          phase_timing_status='complete'
+        fi
+      fi
     elif python3 -B "$PHASE_TIMING_SCRIPT" validate-projection \
         --path "$phase_timing_staging" \
         --expected-run-id "$diagnostics_source_run_id" \
@@ -833,12 +889,12 @@ PY
   fi
   if [[ "$gate_validation" != not-applicable || -f "$extract_root/cooking-diagnostics/sources/gate-results" ]]; then
     local gate_acceptance_status=0
-    python3 - "$status_path" "$extract_root/cooking-diagnostics" "$expected_mode" "$gate_validation" <<'PYGATE_ACCEPT' || gate_acceptance_status=$?
+    python3 - "$status_path" "$extract_root/cooking-diagnostics" "$expected_mode" "$gate_validation" "$expected_diagnostic_failure" <<'PYGATE_ACCEPT' || gate_acceptance_status=$?
 import json
 from pathlib import Path
 import sys
 
-status_path, root_name, requested_mode, gate_validation = sys.argv[1:]
+status_path, root_name, requested_mode, gate_validation, expected_diagnostic_failure = sys.argv[1:]
 root = Path(root_name)
 status = json.loads(Path(status_path).read_text(encoding="utf-8"))
 gate_path = root / "sources" / "gate-results"
@@ -858,12 +914,18 @@ if gate_validation == "passed" and gate_path.is_file():
         manifest = json.loads((root / "manifest.json").read_text(encoding="utf-8"))
         evidence = json.loads((root / "sources" / "evidence-scan").read_text(encoding="utf-8"))
         evidence_gate = value["gates"]["evidence-scan"]
+        expected_exit = 78 if expected_diagnostic_failure == "setup" else 42
         accepted = (
-            value["overall_exit_code"] == 42
-            and value["supervisor_exit_code"] == 42
+            expected_diagnostic_failure in {"none", "setup"}
+            and value["overall_exit_code"] == expected_exit
+            and value["supervisor_exit_code"] == expected_exit
+            and value["gates"]["workload"]["state"] == "failed"
+            and value["gates"]["workload"]["exit_code"] == expected_exit
             and evidence_gate["state"] == "failed"
             and evidence_gate["exit_code"] == 1
             and evidence_gate["reason_class"] == "evidence-scan-failed"
+            and value["gates"]["browser-validation"]["state"] == "failed"
+            and value["gates"]["browser-validation"]["exit_code"] == expected_exit
             and evidence.get("status") == "failed"
             and evidence.get("rule") == "browser-secret-org"
             and any(
@@ -931,6 +993,9 @@ PY
 download_diagnostics() {
   local status_path="${GCP_DIAGNOSTICS_STATUS:-${RUNNER_TEMP:-/tmp}/gcp-diagnostics-status.json}"
   local status object='private-diagnostics'
+  local expected_diagnostic_failure="${GCP_DIAGNOSTIC_FAILURE:-none}"
+  [[ "$expected_diagnostic_failure" == none || "$expected_diagnostic_failure" == setup ]] ||
+    die 'GCP_DIAGNOSTIC_FAILURE must be none or setup'
   mkdir -p -- "$(dirname -- "$status_path")"
   diagnostics_download_error='download-failed'
   diagnostics_cleanup_state='unverified'
@@ -1363,6 +1428,9 @@ smoke() {
       metadata_values+=",workload-trust=untrusted-pr"
     fi
   fi
+  if [[ "$mode" == diagnostic ]]; then
+    metadata_values+=",phase-timing-script-sha256=${phase_timing_script_sha256}"
+  fi
   if [[ "$mode" == diagnostic && "$diagnostic_failure" == setup ]]; then
     metadata_values+=",diagnostic-failure=setup"
   fi
@@ -1374,7 +1442,9 @@ smoke() {
   if [[ "$mode" == smoke || "$mode" == gcp-cooking || "$mode" == diagnostic ]]; then
     metadata_file_values+=",diagnostics-collector-script=$DIAGNOSTICS_COLLECTOR_SCRIPT,diagnostics-scanner-script=$DIAGNOSTICS_SCANNER_SCRIPT,cooking-gate-results-helper=$COOKING_GATE_RESULTS_HELPER_SCRIPT"
   fi
-  if [[ "$mode" == gcp-cooking ]]; then
+  if [[ "$mode" == diagnostic ]]; then
+    metadata_file_values+=",phase-timing-script=$PHASE_TIMING_SCRIPT"
+  elif [[ "$mode" == gcp-cooking ]]; then
     metadata_file_values+=",cooking-runtime-script=$COOKING_RUNTIME_SCRIPT,cooking-browser-summary-script=$COOKING_BROWSER_SUMMARY_SCRIPT,phase-timing-script=$PHASE_TIMING_SCRIPT"
   fi
   if [[ -n "${GCP_RUNNER_IMAGE:-}" ]]; then
