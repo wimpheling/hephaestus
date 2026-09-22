@@ -122,7 +122,7 @@ set -e
 }
 cat -- "${result_log}"
 grep -Fq 'fake browser startup failure: certutil unavailable image=localhost/hephestus-playwright:1.62.0-certutil' "${result_log}"
-grep -Fq 'HEPH_GCP_FAILURE phase=initial command_id=browser-setup exit_code=1 diagnostic_source=setup-log diagnostic_error=setup-failed' "${result_log}"
+grep -Fq 'HEPH_GCP_FAILURE phase=browser-initial command_id=browser-setup exit_code=1 diagnostic_source=setup-log diagnostic_error=setup-failed' "${result_log}"
 browser_log="$(find "${diagnostics}" -type f -name browser-container.log -print -quit)"
 [[ -n "${browser_log}" && ! -L "${browser_log}" ]] || {
     printf 'retained browser startup log is missing\n' >&2
@@ -165,7 +165,7 @@ env \
 status17_playwright="$?"
 set -e
 [[ "${status17_playwright}" == 17 ]] || exit 1
-grep -Fq 'HEPH_GCP_FAILURE phase=initial command_id=playwright-run exit_code=17 diagnostic_source=playwright-log diagnostic_error=playwright-failed' "${status17_playwright_log}"
+grep -Fq 'HEPH_GCP_FAILURE phase=browser-initial command_id=playwright-run exit_code=17 diagnostic_source=playwright-log diagnostic_error=playwright-failed' "${status17_playwright_log}"
 
 status17_npm_log="${root}/status17-npm.log"
 set +e
@@ -189,7 +189,7 @@ env \
 status17_npm="$?"
 set -e
 [[ "${status17_npm}" == 17 ]] || exit 1
-grep -Fq 'HEPH_GCP_FAILURE phase=recovery command_id=npm-install exit_code=17 diagnostic_source=npm-log diagnostic_error=npm-failed' "${status17_npm_log}"
+grep -Fq 'HEPH_GCP_FAILURE phase=browser-recovery command_id=npm-install exit_code=17 diagnostic_source=npm-log diagnostic_error=npm-failed' "${status17_npm_log}"
 
 # The launcher must scan retained startup output before exposing it. Exercise
 # the failure path with a known fixture credential and ensure it stays out of

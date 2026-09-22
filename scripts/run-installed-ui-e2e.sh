@@ -5,7 +5,17 @@ set -Eeuo pipefail
 
 repo_root="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd -P)"
 gcp_failure_marker() {
-    local failure_phase="${HEPH_GCP_FAILURE_PHASE:-${phase:-browser-setup}}"
+    local raw_phase="${HEPH_GCP_FAILURE_PHASE:-${phase:-browser-setup}}"
+    local failure_phase
+    case "${raw_phase}" in
+        initial) failure_phase=browser-initial ;;
+        recovery) failure_phase=browser-recovery ;;
+        concurrency) failure_phase=browser-concurrency ;;
+        fork) failure_phase=browser-fork ;;
+        browser-setup|browser-initial|browser-recovery|browser-concurrency|browser-fork|unknown)
+            failure_phase="${raw_phase}" ;;
+        *) failure_phase=unknown ;;
+    esac
     printf 'HEPH_GCP_FAILURE phase=%s command_id=%s exit_code=%s diagnostic_source=%s diagnostic_error=%s\n' \
         "${failure_phase}" "$1" "$2" "$3" "$4" >&2
 }
