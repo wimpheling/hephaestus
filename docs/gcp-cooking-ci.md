@@ -78,6 +78,32 @@ above is the retained proof of that fix. Feature head `251d54e` and candidate
 image build [35729371490](https://github.com/wimpheling/hephaestus/actions/runs/35729371490)
 remain pending candidate validation and parallel MVP-05/MVP-06 acceptance.
 
+The candidate-image diagnostic [35737889271](https://github.com/wimpheling/hephaestus/actions/runs/35737889271)
+also passed its expected primary setup boundary: `diagnostic-setup` exited `78`
+in `browser-setup`, with a trusted partial setup timing of `137 ms`. Its safe
+artifacts are [diagnostics manifest
+10698149710](https://github.com/wimpheling/hephaestus/actions/runs/35737889271/artifacts/10698149710),
+[controller timings
+10698224495](https://github.com/wimpheling/hephaestus/actions/runs/35737889271/artifacts/10698224495),
+and [Cooking timings
+10698425827](https://github.com/wimpheling/hephaestus/actions/runs/35737889271/artifacts/10698425827).
+Upload/download, credential scan, gate acceptance, and cleanup verification
+passed. This remains diagnostic infrastructure evidence; it does not complete
+the MVP-06 journey.
+
+The smoke runs [35738409751](https://github.com/wimpheling/hephaestus/actions/runs/35738409751)
+and [35741394855](https://github.com/wimpheling/hephaestus/actions/runs/35741394855)
+retained only generic failure context. The definitive retained runtime cause is
+from [35743484713](https://github.com/wimpheling/hephaestus/actions/runs/35743484713):
+the private-service broker failed because its Unix-domain socket path exceeded
+`SUN_LEN`. The safe manifest
+10702610430 and controller timings 10702460565 were retained; upload/download,
+scan, cleanup absence, and the zero-resource quota audit passed. The confirmed
+socket-path fix is on `main` at `6069fdc` with 196 focused checks passed;
+smoke validation [35745822383](https://github.com/wimpheling/hephaestus/actions/runs/35745822383)
+is pending. No application bug is claimed from this evidence, protected image
+variables are unchanged, and MVP-06 full acceptance remains pending.
+
 The optional encrypted `diagnostics-triage` export is published at source
 `87399f8` with 9 export tests and 90 diagnostics/collector tests; it
 revalidates the fixed private bundle before producing a one-day CMS ciphertext

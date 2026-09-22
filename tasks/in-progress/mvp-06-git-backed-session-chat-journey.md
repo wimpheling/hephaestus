@@ -1481,5 +1481,27 @@ was retained, and the builder VM and source disk were deleted and independently
 verified absent. Current protected image variables are unchanged.
 
 Diagnostic run [35737889271](https://github.com/wimpheling/hephaestus/actions/runs/35737889271)
-is pending. MVP-06 remains in progress pending diagnostic, smoke, parallel
-scenario, and exact-final-head session-chat evidence.
+passed its expected primary setup boundary on the candidate image: the injected
+`diagnostic-setup` exited `78` in `browser-setup`, and trusted partial timing
+recorded `137 ms`. Safe artifacts are [diagnostics manifest
+10698149710](https://github.com/wimpheling/hephaestus/actions/runs/35737889271/artifacts/10698149710),
+[controller timings
+10698224495](https://github.com/wimpheling/hephaestus/actions/runs/35737889271/artifacts/10698224495),
+and [Cooking timings
+10698425827](https://github.com/wimpheling/hephaestus/actions/runs/35737889271/artifacts/10698425827).
+Upload/download, credential scan, gate acceptance, and cleanup verification
+passed. This validates the diagnostic contract only.
+
+Smoke runs [35738409751](https://github.com/wimpheling/hephaestus/actions/runs/35738409751)
+and [35741394855](https://github.com/wimpheling/hephaestus/actions/runs/35741394855)
+retained generic context without a definitive runtime classification. The
+definitive failure is [35743484713](https://github.com/wimpheling/hephaestus/actions/runs/35743484713):
+the private-service broker failed because its Unix-domain socket path exceeded
+`SUN_LEN`. Its safe manifest `10702610430` and controller timings `10702460565`
+were retained, with cleanup absence, diagnostics download/scan, and zero
+resource quota audit verified. The confirmed socket-path fix is on `main` at
+`6069fdc` with 196 focused checks passed; smoke validation
+[35745822383](https://github.com/wimpheling/hephaestus/actions/runs/35745822383)
+is pending. This does not establish an application bug, protected image
+variables remain unchanged, and MVP-06 remains pending full journey,
+parallel-scenario, and exact-final-head evidence.
