@@ -81,11 +81,11 @@ the review rather than assumed to be complete.
 
 ## Implementation checklist
 
-- [ ] **1. Audit the existing interactive path**
-  - [ ] Trace user input through durable acceptance, isolated execution,
+- [x] **1. Audit the existing interactive path**
+  - [x] Trace user input through durable acceptance, isolated execution,
     visible response, and reconnectable history using repository evidence and
     focused experiments.
-  - [ ] Classify each transition as supported, awkward to integrate, or
+  - [x] Classify each transition as supported, awkward to integrate, or
     genuinely missing, and record the smallest required changes for response
     publication, subscriptions, authorization, and recovery.
   - [x] Record ownership of the visible transcript separately from
@@ -114,8 +114,8 @@ the review rather than assumed to be complete.
   - [x] Keep that adapter and any commands/forms out of the Hephaestus core
     workflow model.
 
-- [ ] **4. Build the reference chat release**
-  - [ ] Complete the prerequisite exact-run worktree and internal Git remote:
+- [x] **4. Build the reference chat release**
+  - [x] Complete the prerequisite exact-run worktree and internal Git remote:
     a dedicated guest-to-host bridge must work with disabled or broker-only
     networking, use the existing guarded Git receive path and keep credentials
     out of arguments, environment values, Git configuration and logs.
@@ -129,20 +129,20 @@ the review rather than assumed to be complete.
     MVP 04 destination-bound egress bindings; prove that the release cannot
     use its source repository, another session, or an undeclared destination.
 
-- [ ] **5. Prove the journey**
+- [x] **5. Prove the journey locally**
   - [x] Prove one standalone first-turn path from native human Git input through
     production build/release and VM execution to the deterministic HTTPS model,
     canonical assistant response, and runtime Git provenance.
-  - [ ] Cover session creation, release-owned initialization, first message,
+  - [x] Cover session creation, release-owned initialization, first message,
     agent response, subsequent turn, branch/fork, restart/recovery, concurrent
     release-defined writers, and visibility/history in browser and real-Git
     integration tests.
   - [x] Cover denied source/other-repository access, prohibited ref/path
     writes, delete/force-push attempts, expired/revoked Git capability, and
     recursive-trigger suppression.
-  - [ ] Run deterministic fake-model coverage and a separate optional real
-    OpenRouter placeholder-substitution smoke test without weakening credential
-    controls.
+  - [x] Run deterministic fake-model coverage; the separate real OpenRouter
+    placeholder-substitution smoke test remains explicitly optional and was not
+    run. Credential controls remain unchanged.
 
 - [ ] **6. Integrate the accepted journey with the GCP Cooking workflow**
   - [ ] Add the MVP-06 real-Git/browser/VM acceptance path to the GCP workflow
@@ -166,7 +166,7 @@ over repositories and content capabilities later.
 - [x] Publish the reference release's versioned repository protocol, including
   its retention and fork warning semantics, rather than presenting it as a
   core Hephaestus contract.
-- [ ] Run real-Git and browser integration coverage for the journey and
+- [x] Run real-Git and browser integration coverage for the journey and
   negative capability cases listed above. Exercise the released agent in its
   VM runtime with the deterministic fake HTTPS model endpoint; keep an
   OpenRouter smoke test separately opt-in and use only placeholder
@@ -177,7 +177,7 @@ over repositories and content capabilities later.
 - [x] Run `cargo doc --workspace --all-features --no-deps`.
 - [x] Run applicable UI checks when the reference distribution adapter changes.
 - [x] Before repository handoff, run `git diff --check` and `cargo dev quality`.
-- [ ] Record acceptance evidence with the released protocol version and source
+- [x] Record local acceptance evidence with the released protocol version and source
   revision, browser and real-Git evidence for creation, turns, restart/recovery
   and fork, allowed and denied capability cases, and fake-model placeholder and
   credential findings, including any explicitly justified exclusions.
@@ -1035,7 +1035,7 @@ installed-UI repository Git routes. Log:
 services were cleaned up. These diagnostics must be resolved before the
 repository-wide quality gate can be marked complete.
 
-### Current journey transition audit (final26/final35, 2026-09-22)
+### Current journey transition audit (final36, 2026-09-22)
 
 This current classification separates implementation and contract presence from
 runtime acceptance. Final26's retained evidence
@@ -1056,22 +1056,25 @@ negative phases are not reached. Final32 captures both concurrent requests,
 then fails while checking a ref before either release completes. Final33
 passes initial, recovery, and concurrency browser stages with canonical
 validation for five turns, then fails in fork setup before fork browser
-execution. Final35 passes all four browser phases with canonical validation for
-the initial two turns, recovery third turn, concurrency fifth turn, and fork
-target sixth turn; its separate negative process fails before its golden
-scenario starts.
+execution. Final35 passes all four browser phases but its separate negative
+process fails before its golden scenario starts. Final36 supersedes that run:
+all four browser phases pass with canonical validation for turns 2, 3, 5, and
+6; the separate negative process passes its ten-check typed summary; the
+PostgreSQL follow-on passes eight tests; and the local disposable run exits
+zero after runtime and cgroup cleanup. This remains local Cooking evidence;
+fresh GCP acceptance is still pending.
 
 | Transition | Responsibility boundary | Current classification and evidence |
 | --- | --- | --- |
 | User intent → trusted creation | Platform composes the authorized new-chat route, repository/session resources, capability, installation, and handoff; the release owns its initialization contract. | **Supported for the exercised initial path.** Final26 created and opened the real Git-backed session. This does not establish a generic platform session API beyond that route. |
 | Trusted creation → release-owned UI | Platform supplies the repository-scoped installation and verified route context; the release adapter owns its transcript and controls. | **Supported for the exercised initial path.** The installed UI initialized and served the session in final26. |
-| Release UI input → human Git receive | The release adapter writes the human record; the platform authenticates and persists the receive with repository/ref attribution. | **Supported for two canonical turns.** Final26's host validation and retained receive evidence cover both turns; this is runtime evidence for the selected journey, not proof of every adapter operation. |
-| Human receive → authorized run → isolated VM/broker | Platform selects the authorized trigger, immutable snapshot, and VM; the release agent reads its protocol and uses brokered model egress. | **Supported for the two-turn initial path.** Final26's canonical host validation follows both turns through the production bootstrap. |
-| Assistant response Git → visible browser response/reconnect | The release adapter reads committed history and correlates responses; platform owns installation and route delivery. | **Supported for final26's initial browser path.** Two responses and the captured restart state are recorded; final31 additionally proves a third turn and reconnect after restart. |
+| Release UI input → human Git receive | The release adapter writes the human record; the platform authenticates and persists the receive with repository/ref attribution. | **Supported by final36.** The local run validates the initial, recovery, concurrent, and fork browser turns through the production Git boundary. |
+| Human receive → authorized run → isolated VM/broker | Platform selects the authorized trigger, immutable snapshot, and VM; the release agent reads its protocol and uses brokered model egress. | **Supported by final36's full local lifecycle.** All four browser phases reach the released agent and deterministic fake model through isolated VMs. |
+| Assistant response Git → visible browser response/reconnect | The release adapter reads committed history and correlates responses; platform owns installation and route delivery. | **Supported by final36.** Browser validation covers response turns 2, 3, 5, and 6, including restart/reconnect and fork history. |
 | Restart state → recovery UI launch and reconnect | Platform/fixture must resolve the repository-scoped installation and handoff; the release UI must reconnect and reread history. | **Supported by final31.** Recovery and canonical validation of the third turn pass after correcting the harness URL assertion. Bootstrap preserves permitted theme query parameters; the earlier bare-path suffix assertion was invalid. |
-| Recovery → concurrent writers | The platform reruns the release with the same authority boundary; the release handles expected-parent retry and preserves transcript history. | **Supported for the exercised browser phase.** Final33 passes all concurrency browser stages and canonical validation for five turns after the parser correction. Negative and full-journey acceptance remains open. |
-| Recovery/history → forked session | Trusted composition creates fresh target authority, model binding, and installation; the release copies reachable history and applies its fork manifest. | **Supported for the exercised browser phase.** Final35 passes fork setup and the fork-target browser phase with canonical validation for the sixth turn after the role-idempotency and fresh-alias fixture corrections. |
-| Journey → negative capability proof | Platform runs the separate fresh guest denial process; the release/runtime boundary supplies the scoped Git capability and fixed typed result. | **Attempted but unaccepted.** Final35 reaches the separate negative process, but it fails before the golden scenario at the restricted Caddy TLS published-proof setup; its typed summary records `status=failed`, `reason=marker_missing`, and `runner=101`. |
+| Recovery → concurrent writers | The platform reruns the release with the same authority boundary; the release handles expected-parent retry and preserves transcript history. | **Supported by final36.** The concurrency browser phase passes with canonical validation for five turns. |
+| Recovery/history → forked session | Trusted composition creates fresh target authority, model binding, and installation; the release copies reachable history and applies its fork manifest. | **Supported by final36.** Fork setup uses fresh target authority/model binding and the fork browser phase passes canonical validation for the sixth turn. |
+| Journey → negative capability proof | Platform runs the separate fresh guest denial process; the release/runtime boundary supplies the scoped Git capability and fixed typed result. | **Supported locally by final36.** The typed summary records ten validated checks, unchanged refs/receives, and a passing fresh guest denial process. Fresh GCP evidence remains pending. |
 
 The platform-side receipt, UUID, and handoff prerequisites have separate
 focused evidence: secret-binding receipt and replay are verified in the
@@ -1082,8 +1085,7 @@ handoff projection has a passing positive and mutation-negative test (lines
 final30 document-URL failure was therefore a browser assertion mismatch,
 not a platform contract failure.
 
-The smallest next step is to correct the negative child-environment isolation
-and rerun the separate negative process. The
+The smallest next step is a fresh GCP acceptance run. The
 versioned protocol's
 fork and tombstone warning semantics remain release-owned and do not add a
 platform approval step (lines 1024-1027 above).
@@ -1211,3 +1213,55 @@ setup is unavailable. Its typed summary exists with
 `session-chat-negative-summary.json`. Cleanup completed. This proves the full
 browser chain, not negative capability acceptance or the GCP workflow; the
 next step is child-environment isolation correction and a fresh rerun.
+
+### Final36 local full-journey acceptance (2026-09-22)
+
+Final36 is retained at
+`/var/tmp/sessionchat-browser-final36-run.log` and
+`/var/tmp/sessionchat-browser-final36/cooking-execution.CddKz9.log`.
+The launcher reached terminal exit 0 after the local disposable runtime and
+cgroup cleanup. The retained verifier-derivation marker records tested
+implementation source revision
+`d74f8ee75607f0f9018a296bbc2a987185cc4b78`; no separate launcher HEAD marker
+was retained. The current documentation update is on the working tree at
+`9729c886027c05ec91bd4dcad7b156a32127fd85`, which is provenance for this
+record only, not a claim about the tested release artifact. The release-owned protocol is
+`heph.session-chat` version 1, as specified in
+[`examples/session-chat/PROTOCOL.md`](../../examples/session-chat/PROTOCOL.md).
+The retained safe final36 records do not expose release or artifact IDs, so no
+such IDs are claimed here; the GCP acceptance record remains the place to add
+those identifiers if its artifacts retain them.
+
+The four browser phases passed with canonical validation for turns 2, 3, 5,
+and 6: initial/new chat, restart/recovery, concurrent writers, and forked
+session. The main golden suite reported 35 passed, 0 failed, and 1 ignored.
+The separate negative guest process passed its typed summary with ten
+validated checks, unchanged denied refs and receives, and runner exit 0;
+the retained summary is
+`/var/tmp/sessionchat-browser-final36/session-chat-negative-summary.json`.
+The PostgreSQL follow-on reported 8 passed, 0 failed, including the service
+resolver query evidence. The run ended with `daemon golden E2E passed; runtime
+and cgroup cleanup verified`.
+
+The local acceptance record now covers the allowed session-repository
+fast-forward/model turn and the mandatory denied cases: source and other
+repository access, prohibited ref/path writes, delete and force-push, expired
+and revoked Git capability, and recursive-trigger suppression. The ten guest
+denial checks include one credential-exposure check. That check obtains the
+helper password only in guest memory and scans it against Git subprocess
+arguments, effective environments, captured output, and resolved
+configuration. The protected authority document and arbitrary host process
+memory/logging remain explicit exclusions of that scan, as documented by the
+released-guest denial evidence.
+
+The protocol document records the required release-owned warnings before fork
+and tombstone operations: fork history and new identity are retained while
+platform authority/model binding are fresh, and tombstoning hides a record from
+the release view without erasing Git history. Deterministic fake-model egress
+uses the non-secret `heph-placeholder:v1:<rule-id>` request value and no
+provider credential; the optional real OpenRouter smoke test was not run.
+
+This closes the local MVP-06 journey and initial transition audit. A fresh GCP
+workflow acceptance run and its retained artifact review remain pending. The
+current final-quality3 run remains in progress and is intentionally not marked
+complete by this local evidence.
