@@ -1434,8 +1434,9 @@ builder cleanup was verified. The focused metadata fix passed 52 checks,
 merged into this feature at `068c4b1`, and was promoted on `main` at
 `97f37f4`. Replacement build
 [35730639382](https://github.com/wimpheling/hephaestus/actions/runs/35730639382)
-is in progress. MVP-06 remains in progress and no candidate or cloud journey
-acceptance is inferred from the fix or the running build.
+subsequently failed at the installed-UI browser build. MVP-06 remains in
+progress and no candidate or cloud journey acceptance is inferred from that
+run.
 
 When the candidate is READY, record its immutable image name and full
 fingerprint, then run the reviewed diagnostic, smoke, and exact PR-head full
@@ -1459,6 +1460,26 @@ passed 62 tests. Quality passed for `068c4b1`, with no application delta. The
 ordinary CI audit failure for `10b2627` remains under investigation and is not
 counted as passing validation.
 
-Candidate build [35733508154](https://github.com/wimpheling/hephaestus/actions/runs/35733508154)
-is pending. MVP-06 remains in progress pending candidate, diagnostic, smoke,
-and exact-final-head session-chat evidence.
+Run [35733508154](https://github.com/wimpheling/hephaestus/actions/runs/35733508154)
+completed with scanned artifact [10696214772](https://github.com/wimpheling/hephaestus/actions/runs/35733508154/artifacts/10696214772)
+preserving the typed browser-probe failure: the reviewed Chromium-only version
+contract rejected `Google Chrome for Testing`. Owned cleanup was independently
+verified and the quota result was zero remaining allocations. This is
+image-build evidence, not workload acceptance.
+
+Controller fix `79fadd3` was verified with the actual OCI image, NSS checks and
+browser-version validation; the combined controller suite passed 194 tests.
+Quality passed for `76b04e7`. The old CI summary-selector failure for `10b2627`
+was corrected in `79fadd3`; the UI audit was not reproduced, and its strict
+assertion remains with added diagnostics in `94d6ee7`.
+
+Candidate build [35736033938](https://github.com/wimpheling/hephaestus/actions/runs/35736033938)
+completed successfully from controller `79fadd3`, producing immutable image
+fingerprint `528dbd58f75901c5dc3e0844ac5d940f50b8418589dc0a2d5f125b90d672b9d1`.
+Artifact [10697249155](https://github.com/wimpheling/hephaestus/actions/runs/35736033938/artifacts/10697249155)
+was retained, and the builder VM and source disk were deleted and independently
+verified absent. Current protected image variables are unchanged.
+
+Diagnostic run [35737889271](https://github.com/wimpheling/hephaestus/actions/runs/35737889271)
+is pending. MVP-06 remains in progress pending diagnostic, smoke, parallel
+scenario, and exact-final-head session-chat evidence.
