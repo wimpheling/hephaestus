@@ -4,6 +4,14 @@
 set -Eeuo pipefail
 
 repo_root="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd -P)"
+gcp_failure_marker() {
+    local failure_phase="${HEPH_GCP_FAILURE_PHASE:-${phase:-browser-setup}}"
+    printf 'HEPH_GCP_FAILURE phase=%s command_id=%s exit_code=%s diagnostic_source=%s diagnostic_error=%s\n' \
+        "${failure_phase}" "$1" "$2" "$3" "$4" >&2
+}
+if [[ "${HEPHAESTUS_INSTALLED_UI_PREREQUISITE_ONLY:-0}" == 1 ]]; then
+    exec "${repo_root}/scripts/installed-ui-browser-image/smoke.sh"
+fi
 fixture="${HEPHAESTUS_E2E_COOKING_FIXTURE:?set HEPHAESTUS_E2E_COOKING_FIXTURE}"
 database_url="${HEPHAESTUS_E2E_EXTERNAL_DATABASE_URL:?set HEPHAESTUS_E2E_EXTERNAL_DATABASE_URL}"
 rpc_endpoint="${HEPHAESTUS_E2E_EXTERNAL_RPC_ENDPOINT:?set HEPHAESTUS_E2E_EXTERNAL_RPC_ENDPOINT}"
@@ -219,7 +227,13 @@ PY
 
 # The Phoenix container mounts the host asset tree and must receive the
 # locked JavaScript dependencies before compiling its production bundles.
-npm ci --prefix "${repo_root}/web/assets" >/dev/null
+if npm ci --prefix "${repo_root}/web/assets" >"${browser_npm_log}" 2>&1; then
+    :
+else
+    npm_setup_status=$?
+    gcp_failure_marker npm-install "${npm_setup_status}" npm-log npm-failed
+    exit "${npm_setup_status}"
+fi
 
 podman run --detach \
     --name "${web_container}" \
@@ -276,6 +290,7 @@ while :; do
     web_container_state="$(podman inspect --format '{{.State.Status}} {{.State.ExitCode}}' \
         "${web_container}" 2>/dev/null || true)"
     if [[ "${web_container_state}" != running* ]]; then
+        gcp_failure_marker browser-setup 1 setup-log setup-failed
         printf 'browser web container stopped state=%s status=%s\n' \
             "${web_container_state:-unavailable}" "${web_curl_status}" >&2
         print_readiness_error
@@ -324,14 +339,30 @@ if podman run --rm --name "${browser_container}" \
     --env HEPHAESTUS_INSTALLED_UI_BROWSER_GREP="${browser_grep}" \
     "${browser_image}" \
     sh -euc '
-        command -v certutil >/dev/null || { echo "browser image lacks certutil (libnss3-tools)" >&2; exit 78; }
+        command -v certutil >/dev/null || {
+            printf '%s\n' 78 >/run/heph-fixture/setup.status
+            echo "browser image lacks certutil (libnss3-tools)" >&2
+            exit 78
+        }
         nss_dir="$HOME/.local/share/pki/nssdb"
         mkdir -p "$nss_dir"
         certutil -N -d "sql:$nss_dir" --empty-password >/dev/null 2>&1 || true
-        certutil -A -d "sql:$nss_dir" -n heph-caddy-fixture -t "C,," -i /run/heph-fixture/caddy-ca.pem
+        if certutil -A -d "sql:$nss_dir" -n heph-caddy-fixture -t "C,," -i /run/heph-fixture/caddy-ca.pem; then
+            :
+        else
+            certutil_status="$?"
+            printf '%s\n' "$certutil_status" >/run/heph-fixture/setup.status
+            exit "$certutil_status"
+        fi
         cd /run/heph-fixture/playwright
-        npm ci --ignore-scripts >/run/heph-fixture/browser-npm.log 2>&1
-        HEPHAESTUS_WEB_URL="$HEPHAESTUS_WEB_URL" \
+        if npm ci --ignore-scripts >/run/heph-fixture/browser-npm.log 2>&1; then
+            :
+        else
+            npm_status="$?"
+            printf '%s\n' "$npm_status" >/run/heph-fixture/npm.status
+            exit "$npm_status"
+        fi
+        if HEPHAESTUS_WEB_URL="$HEPHAESTUS_WEB_URL" \
         HEPHAESTUS_OIDC_URL="$HEPHAESTUS_OIDC_URL" \
         HEPHAESTUS_UI_NAMESPACE="$HEPHAESTUS_UI_NAMESPACE" \
         HEPHAESTUS_INSTALLED_UI_CONTROL_DIR="$HEPHAESTUS_INSTALLED_UI_CONTROL_DIR" \
@@ -339,11 +370,33 @@ if podman run --rm --name "${browser_container}" \
         HEPHAESTUS_E2E_EVIDENCE_DIR="$HEPHAESTUS_E2E_EVIDENCE_DIR" \
         ./node_modules/.bin/playwright test --config=playwright.installed-ui.config.ts \
         --grep "${HEPHAESTUS_INSTALLED_UI_BROWSER_GREP}" \
-        >/run/heph-fixture/playwright.log 2>&1
+        >/run/heph-fixture/playwright.log 2>&1; then
+            :
+        else
+            playwright_status="$?"
+            printf '%s\n' "$playwright_status" >/run/heph-fixture/playwright.status
+            exit "$playwright_status"
+        fi
     ' >"${browser_container_log}" 2>&1
 then
     browser_status=0
 else
     browser_status="$?"
+    marker_status=1
+    marker_command=browser-setup
+    marker_source=setup-log
+    marker_error=setup-failed
+    for marker_file in playwright.status npm.status setup.status; do
+        if [[ -s "${fixture_root}/${marker_file}" ]]; then
+            marker_status="$(cat "${fixture_root}/${marker_file}")"
+            [[ "${marker_status}" =~ ^[0-9]+$ ]] || marker_status=1
+            case "${marker_file}" in
+                playwright.status) marker_command=playwright-run; marker_source=playwright-log; marker_error=playwright-failed ;;
+                npm.status) marker_command=npm-install; marker_source=npm-log; marker_error=npm-failed ;;
+            esac
+            break
+        fi
+    done
+    gcp_failure_marker "${marker_command}" "${marker_status}" "${marker_source}" "${marker_error}"
 fi
 exit "${browser_status}"

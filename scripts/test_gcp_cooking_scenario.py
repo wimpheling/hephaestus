@@ -1,6 +1,7 @@
 """Contract checks for the allowlisted GCP Cooking scenario selector."""
 
 from pathlib import Path
+import hashlib
 import os
 import re
 import shutil
@@ -332,6 +333,9 @@ class GcpCookingScenarioContractTests(unittest.TestCase):
         repeat: bool = False,
         build_fail: bool = False,
         unsafe_build_output: bool = False,
+        reviewed_archive: bool = False,
+        archive_hash_mismatch: bool = False,
+        browser_e2e: bool = False,
     ) -> dict[str, str]:
         with tempfile.TemporaryDirectory(prefix="gcp-cooking-scenario-") as root_name:
             root = Path(root_name)
@@ -363,6 +367,10 @@ class GcpCookingScenarioContractTests(unittest.TestCase):
                 "        printf '%s\\n' 'reviewed image builder failed safely' >&2\n"
                 "        exit 17\n"
                 "    fi\n"
+                "    touch \"$state/image\"\n"
+                "    exit 0\n"
+                "fi\n"
+                "if [[ \"${1:-}\" == load ]]; then\n"
                 "    touch \"$state/image\"\n"
                 "    exit 0\n"
                 "fi\n"
@@ -417,6 +425,13 @@ class GcpCookingScenarioContractTests(unittest.TestCase):
                 "printf 'cooking=%s\\n' \"${HEPHAESTUS_APP_COOKING_E2E-unset}\" >>\"$SCENARIO_CAPTURE\"\n",
                 encoding="utf-8",
             )
+            (scripts / "run-installed-ui-e2e.sh").write_text(
+                "#!/usr/bin/env bash\n"
+                "set -Eeuo pipefail\n"
+                "[[ \"${HEPHAESTUS_INSTALLED_UI_PREREQUISITE_ONLY:-0}\" == 1 ]]\n"
+                ": >\"$PREREQUISITE_CAPTURE\"\n",
+                encoding="utf-8",
+            )
             (cooking / "preflight.sh").write_text(
                 "#!/usr/bin/env bash\nprintf 'preflight=ok\\n' >\"$SCENARIO_CAPTURE\"\n",
                 encoding="utf-8",
@@ -445,6 +460,7 @@ class GcpCookingScenarioContractTests(unittest.TestCase):
             for path in (
                 cooking / "run.sh",
                 scripts / "run-libkrun-integration.sh",
+                scripts / "run-installed-ui-e2e.sh",
                 cooking / "preflight.sh",
                 scripts / "run-gateway-libkrun-e2e.sh",
                 scripts / "run-ui-e2e-host-bridge.sh",
@@ -469,7 +485,7 @@ class GcpCookingScenarioContractTests(unittest.TestCase):
                 **os.environ,
                 "HEPHAESTUS_COOKING_SESSION_DETACHED": "1",
                 "HEPHAESTUS_COOKING_SCENARIO": scenario,
-                "HEPHAESTUS_COOKING_BROWSER_E2E": "0",
+                "HEPHAESTUS_COOKING_BROWSER_E2E": "1" if browser_e2e else "0",
                 "HEPHAESTUS_COOKING_SOURCE_ROOT": str(cooking),
                 "HEPHAESTUS_LIBKRUN_UBUNTU_IMAGE": "registry.invalid/python@sha256:" + "a" * 64,
                 "HEPHAESTUS_LIBKRUN_RUST_BUILDER_IMAGE": "registry.invalid/rust@sha256:" + "b" * 64,
@@ -480,6 +496,7 @@ class GcpCookingScenarioContractTests(unittest.TestCase):
                 "SCENARIO_CAPTURE": str(capture),
                 "PODMAN_STATE": str(podman_state),
                 "IMAGE_CAPTURE": str(image_capture),
+                "PREREQUISITE_CAPTURE": str(root / "prerequisite-capture"),
                 "HEPHAESTUS_APP_COOKING_E2E": "inherited",
                 "HEPHAESTUS_APP_SESSION_CHAT_CONCURRENT_E2E": (
                     "1" if scenario == "session-chat" else "0"
@@ -491,6 +508,15 @@ class GcpCookingScenarioContractTests(unittest.TestCase):
             }
             if explicit_browser_image is not None:
                 environment["HEPHAESTUS_PLAYWRIGHT_IMAGE"] = explicit_browser_image
+            if reviewed_archive:
+                archive = root / "installed-ui-browser-image.oci"
+                archive.write_bytes(b"reviewed-installed-ui-image")
+                environment["HEPHAESTUS_PLAYWRIGHT_IMAGE_ARCHIVE"] = str(archive)
+                environment["HEPHAESTUS_PLAYWRIGHT_IMAGE_ARCHIVE_SHA256"] = hashlib.sha256(
+                    archive.read_bytes()
+                ).hexdigest()
+                if archive_hash_mismatch:
+                    environment["HEPHAESTUS_PLAYWRIGHT_IMAGE_ARCHIVE_SHA256"] = "0" * 64
             if build_fail:
                 environment["PODMAN_BUILD_FAIL"] = "2" if unsafe_build_output else "1"
             if complete_caddy:
@@ -524,7 +550,9 @@ class GcpCookingScenarioContractTests(unittest.TestCase):
                 )
                 self.assertEqual(repeated.returncode, expected_status, repeated.stderr)
             build_count = podman_state / "build-count"
-            if scenario == "session-chat" and explicit_browser_image is None and not invalid_complete_marker:
+            if reviewed_archive:
+                self.assertFalse(build_count.exists())
+            elif (scenario == "session-chat" or browser_e2e) and explicit_browser_image is None and not invalid_complete_marker:
                 self.assertTrue(build_count.is_file())
                 self.assertEqual(build_count.read_text(encoding="utf-8").strip(), "1")
             else:
@@ -532,6 +560,10 @@ class GcpCookingScenarioContractTests(unittest.TestCase):
             if build_fail:
                 self.assertIn(
                     "Installed UI browser image preparation failed; retained diagnostics=",
+                    completed.stderr,
+                )
+                self.assertIn(
+                    "HEPH_GCP_FAILURE phase=browser-setup command_id=installed-ui-image-build",
                     completed.stderr,
                 )
                 self.assertNotIn("reviewed image builder failed safely", completed.stderr)
@@ -545,6 +577,8 @@ class GcpCookingScenarioContractTests(unittest.TestCase):
                 )
             if expected_status != 0:
                 return {}
+            if scenario == "session-chat" or browser_e2e:
+                self.assertTrue(Path(environment["PREREQUISITE_CAPTURE"]).is_file())
             return dict(
                 line.split("=", 1)
                 for line in capture.read_text(encoding="utf-8").splitlines()
@@ -580,6 +614,15 @@ class GcpCookingScenarioContractTests(unittest.TestCase):
         )
         self.assertEqual(captured["installed-ui"], "1")
 
+    def test_session_chat_loads_reviewed_archive_before_builder(self) -> None:
+        captured = self.run_wrapper_stub("session-chat", reviewed_archive=True)
+        self.assertEqual(captured["installed-ui"], "1")
+
+    def test_session_chat_rejects_tampered_reviewed_archive_before_load(self) -> None:
+        self.run_wrapper_stub(
+            "session-chat", reviewed_archive=True, archive_hash_mismatch=True, expected_status=1
+        )
+
     def test_session_chat_retains_safe_image_build_failure(self) -> None:
         self.run_wrapper_stub("session-chat", expected_status=1, build_fail=True)
 
@@ -591,6 +634,9 @@ class GcpCookingScenarioContractTests(unittest.TestCase):
     def test_wrapper_default_cooking_captures_existing_flag(self) -> None:
         captured = self.run_wrapper_stub("cooking")
         self.assertEqual(captured, {"runner": "cooking", "cooking": "1"})
+
+    def test_cooking_browser_prerequisite_runs_without_installed_fixture_mode(self) -> None:
+        self.run_wrapper_stub("cooking", browser_e2e=True)
 
     def test_session_chat_reuses_complete_external_caddy_environment(self) -> None:
         captured = self.run_wrapper_stub("session-chat", complete_caddy=True)

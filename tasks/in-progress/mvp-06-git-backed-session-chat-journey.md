@@ -1380,3 +1380,30 @@ The PR-only follow-up now prepares the reviewed local installed-UI image using t
 ### GCP run 35718227620 (2026-09-22)
 
 The subsequent full session-chat run [35718227620](https://github.com/wimpheling/hephaestus/actions/runs/35718227620), using workload SHA `6e8d84ce012e48d524eaf2cf7eb07c31b1820bb7`, failed during setup before browser execution. Diagnostics upload, authenticated download and credential scanning passed, and cleanup verified the VM absent. A local replay reproduced the setup boundary: the digest-pinned builder pulled the reviewed image, completed its build and tool checks, then `certutil -H` exited 1. The follow-up replaces that help probe with actual NSS database create/list validation; the fixed builder replay exited 0 in `/var/tmp/heph-installed-ui-build-replay-fixed-35718227620.log`. Fifteen scenario tests plus startup/bridge smokes and `bash -n` pass, and scanned build output is now collected from the runtime stream. This local replay explains the observed setup failure but does not establish the cloud root cause; acceptance remains pending.
+
+### Verified current cloud baseline: GCP run 35719717491 (2026-09-22)
+
+The next full run [35719717491](https://github.com/wimpheling/hephaestus/actions/runs/35719717491)
+completed successfully with trusted controller SHA
+`93ab78be3c0bed3c9c963624401b3dc5cc40d024` and exact workload SHA
+`3ab25640d9948753b19a37341f0b19ebc1dc9644`. Its safe artifacts are [cooking
+timings 10691119660](https://github.com/wimpheling/hephaestus/actions/runs/35719717491/artifacts/10691119660),
+[controller timings 10691064704](https://github.com/wimpheling/hephaestus/actions/runs/35719717491/artifacts/10691064704),
+and [diagnostics manifest 10690964670](https://github.com/wimpheling/hephaestus/actions/runs/35719717491/artifacts/10690964670).
+
+All required workload phases passed. The canonical browser evidence contains
+passed initial, recovery, concurrency, and fork phases. The negative-capability
+summary passed all ten checks with unchanged refs and receives, one golden-test
+pass, and runner exit 0. Diagnostics scan, phase timing, gate validation, and
+gate acceptance passed; upload was verified by download and cleanup verified
+the VM absent. The retained archive SHA-256 is
+`823f47901c987d742d82d3bde5b9085b2fe20922b6a9dcab15ea06206731a0d3`.
+
+Measured timing hotspots were controller VM wait `961323 ms`, supervisor
+cooking `809832 ms` and `732949 ms`, golden tests `402316 ms`, browser initial
+`111173 ms`, runtime guest build `87196 ms`, and runtime worker build `79264 ms`.
+The diagnostics manifest has a lineage partial-collection anomaly: `lineage`
+and `lineage-status` were missing. Typed gates still passed; complete source
+collection is not claimed. This is the latest successful cloud baseline, while
+the newer user-requested infrastructure remains in progress and needs updated
+head cloud proof before merge. MVP-06 remains in progress.

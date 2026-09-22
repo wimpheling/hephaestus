@@ -48,6 +48,17 @@ interactive session, durable input/output, isolated execution, and reconnectable
 history. It does not by itself deliver the primary administration UI or the
 complete create/code/run project journey.
 
+The latest successful cloud baseline is [GCP run
+35719717491](https://github.com/wimpheling/hephaestus/actions/runs/35719717491),
+using controller SHA `93ab78be3c0bed3c9c963624401b3dc5cc40d024` and workload SHA
+`3ab25640d9948753b19a37341f0b19ebc1dc9644`. It passed the required workload,
+four browser phases, ten-check negative-capability summary, typed diagnostics
+gates, and VM cleanup verification. The retained diagnostics manifest records
+missing `lineage` and `lineage-status` sources, so complete source collection
+is not claimed. This is a baseline for the current cloud path; newer
+user-requested infrastructure remains in progress and needs updated-head cloud
+proof before merge. MVP-06 stays in progress.
+
 - [x] Jointly review the MVP-06 plan with the user before starting or resuming
   implementation. Confirm the intended scope, dependency order and acceptance
   evidence in [the MVP-06 task](in-progress/mvp-06-git-backed-session-chat-journey.md)

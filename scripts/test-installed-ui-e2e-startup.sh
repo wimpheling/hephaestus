@@ -41,12 +41,16 @@ cat >"${fake_bin}/podman" <<'PODMAN'
 set -Eeuo pipefail
 name=''
 image=''
+fixture_mount=''
 case "${1:-}" in
     run)
         shift
         while (($# > 0)); do
             if [[ "$1" == --name ]]; then
                 name="$2"
+                shift 2
+            elif [[ "$1" == --volume && "$2" == *:/run/heph-fixture:Z ]]; then
+                fixture_mount="${2%:/run/heph-fixture:Z}"
                 shift 2
             elif [[ "$1" == localhost/hephestus-playwright:* || "$1" == browser@sha256:* ]]; then
                 image="$1"
@@ -56,6 +60,10 @@ case "${1:-}" in
             fi
         done
         if [[ "${name}" == hephaestus-ui-installed-browser-* ]]; then
+            if [[ -n "${HEPH_TEST_BROWSER_STATUS:-}" && -n "${fixture_mount}" ]]; then
+                printf '%s\n' "${HEPH_TEST_BROWSER_STATUS}" >"${fixture_mount}/${HEPH_TEST_BROWSER_STATUS_FILE:-playwright.status}"
+                exit "${HEPH_TEST_BROWSER_STATUS}"
+            fi
             if [[ "${HEPH_TEST_UNSAFE_BROWSER_OUTPUT:-}" == 1 ]]; then
                 printf '%s\n' 'cooking-inbound-only-fixture-sentinel' >&2
             else
@@ -114,6 +122,7 @@ set -e
 }
 cat -- "${result_log}"
 grep -Fq 'fake browser startup failure: certutil unavailable image=localhost/hephestus-playwright:1.62.0-certutil' "${result_log}"
+grep -Fq 'HEPH_GCP_FAILURE phase=initial command_id=browser-setup exit_code=1 diagnostic_source=setup-log diagnostic_error=setup-failed' "${result_log}"
 browser_log="$(find "${diagnostics}" -type f -name browser-container.log -print -quit)"
 [[ -n "${browser_log}" && ! -L "${browser_log}" ]] || {
     printf 'retained browser startup log is missing\n' >&2
@@ -130,6 +139,57 @@ browser_npm_log="$(find "${diagnostics}" -type f -name browser-npm.log -print -q
     exit 1
 }
 printf 'installed UI startup diagnostics smoke passed log=%s\n' "${browser_log}"
+
+# Preserve the actual browser exit status and phase in the closed marker. Run
+# both parser branches so a status-17 Playwright failure cannot be mislabeled
+# as setup or npm failure.
+status17_playwright_log="${root}/status17-playwright.log"
+set +e
+env \
+    PATH="${fake_bin}:${PATH}" \
+    HOME="${root}/home" \
+    HEP_TEST_BROWSER_STATUS=17 \
+    HEP_TEST_BROWSER_STATUS_FILE=playwright.status \
+    HEPHAESTUS_E2E_COOKING_FIXTURE="${fixture}" \
+    HEPHAESTUS_E2E_EXTERNAL_DATABASE_URL='postgres://startup-test.invalid/test' \
+    HEPHAESTUS_E2E_EXTERNAL_RPC_ENDPOINT='http://startup-test.invalid/rpc' \
+    HEPHAESTUS_E2E_EXTERNAL_RPC_SECRET='startup-test-secret-with-sufficient-entropy' \
+    HEPHAESTUS_E2E_EXTERNAL_OIDC_ISSUER='http://startup-test.invalid/oidc' \
+    HEPHAESTUS_E2E_EXTERNAL_WEB_PORT=4444 \
+    HEPHAESTUS_PLATFORM_HTTPS_ORIGIN='https://platform.localhost:4443' \
+    HEPHAESTUS_UI_NAMESPACE='ui.platform.localhost' \
+    HEPHAESTUS_CADDY_TEST_CA_CERT="${root}/caddy-ca.pem" \
+    HEPHAESTUS_COOKING_DIAGNOSTICS_DIR="${diagnostics}" \
+    HEPHAESTUS_E2E_COOKING_PHASE=initial \
+    bash "${fake_repo}/scripts/run-installed-ui-e2e.sh" >"${status17_playwright_log}" 2>&1
+status17_playwright="$?"
+set -e
+[[ "${status17_playwright}" == 17 ]] || exit 1
+grep -Fq 'HEPH_GCP_FAILURE phase=initial command_id=playwright-run exit_code=17 diagnostic_source=playwright-log diagnostic_error=playwright-failed' "${status17_playwright_log}"
+
+status17_npm_log="${root}/status17-npm.log"
+set +e
+env \
+    PATH="${fake_bin}:${PATH}" \
+    HOME="${root}/home" \
+    HEP_TEST_BROWSER_STATUS=17 \
+    HEP_TEST_BROWSER_STATUS_FILE=npm.status \
+    HEPHAESTUS_E2E_COOKING_FIXTURE="${fixture}" \
+    HEPHAESTUS_E2E_EXTERNAL_DATABASE_URL='postgres://startup-test.invalid/test' \
+    HEPHAESTUS_E2E_EXTERNAL_RPC_ENDPOINT='http://startup-test.invalid/rpc' \
+    HEPHAESTUS_E2E_EXTERNAL_RPC_SECRET='startup-test-secret-with-sufficient-entropy' \
+    HEPHAESTUS_E2E_EXTERNAL_OIDC_ISSUER='http://startup-test.invalid/oidc' \
+    HEPHAESTUS_E2E_EXTERNAL_WEB_PORT=4444 \
+    HEPHAESTUS_PLATFORM_HTTPS_ORIGIN='https://platform.localhost:4443' \
+    HEPHAESTUS_UI_NAMESPACE='ui.platform.localhost' \
+    HEPHAESTUS_CADDY_TEST_CA_CERT="${root}/caddy-ca.pem" \
+    HEPHAESTUS_COOKING_DIAGNOSTICS_DIR="${diagnostics}" \
+    HEPHAESTUS_E2E_COOKING_PHASE=recovery \
+    bash "${fake_repo}/scripts/run-installed-ui-e2e.sh" >"${status17_npm_log}" 2>&1
+status17_npm="$?"
+set -e
+[[ "${status17_npm}" == 17 ]] || exit 1
+grep -Fq 'HEPH_GCP_FAILURE phase=recovery command_id=npm-install exit_code=17 diagnostic_source=npm-log diagnostic_error=npm-failed' "${status17_npm_log}"
 
 # The launcher must scan retained startup output before exposing it. Exercise
 # the failure path with a known fixture credential and ensure it stays out of

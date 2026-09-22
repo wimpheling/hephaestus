@@ -109,6 +109,14 @@ case "${tls_enabled}" in
         exit 1
         ;;
 esac
+smoke_page="${HEPHAESTUS_CADDY_TEST_SMOKE_PAGE:-0}"
+case "${smoke_page}" in
+    0|1) ;;
+    *)
+        printf 'HEPHAESTUS_CADDY_TEST_SMOKE_PAGE must be 0 or 1\n' >&2
+        exit 1
+        ;;
+esac
 admin_url="http://127.0.0.1:${admin_port}"
 if [[ "${tls_enabled}" == 1 ]]; then
     public_url="https://127.0.0.1:${public_port}"
@@ -120,8 +128,13 @@ ca_cert_path="${fixture_root}/caddy-local-root.pem"
 readonly admin_port public_port tls_enabled admin_url public_url public_listen ca_cert_path
 
 if [[ "${tls_enabled}" == 1 ]]; then
+    response_status=503
+    [[ "${smoke_page}" == 1 ]] && response_status=200
     printf '{\n    auto_https disable_redirects\n    admin 127.0.0.1:%s\n}\n\nhttps://127.0.0.1:%s {\n    tls internal\n    respond "gateway configuration pending" 503\n}\n' \
         "${admin_port}" "${public_port}" >"${fixture_root}/Caddyfile"
+    if [[ "${smoke_page}" == 1 ]]; then
+        sed -i 's/respond "gateway configuration pending" 503/respond "heph-installed-ui-prerequisite" 200/' "${fixture_root}/Caddyfile"
+    fi
 else
     printf '{\n    auto_https off\n    admin 127.0.0.1:%s\n}\n\nhttp://%s {\n    respond "gateway configuration pending" 503\n}\n' \
         "${admin_port}" "${public_listen}" >"${fixture_root}/Caddyfile"
@@ -180,7 +193,7 @@ if [[ "${tls_enabled}" == 1 ]]; then
         if public_status="$(curl --silent --show-error --cacert "${ca_cert_path}" \
             --connect-timeout 2 --max-time 5 --output /dev/null \
             --write-out '%{http_code}' "${public_url}/" 2>/dev/null)" &&
-            [[ "${public_status}" == 503 ]]; then
+            [[ "${public_status}" == "${response_status}" ]]; then
             break
         fi
         if (( attempt == 30 )); then
@@ -200,6 +213,7 @@ integration_env=(
     "HEPHAESTUS_CADDY_TEST_LISTEN=${public_listen}"
     "HEPHAESTUS_CADDY_TEST_PUBLIC_PORT=${public_port}"
     "HEPHAESTUS_CADDY_TEST_ENV_COMPLETE=${tls_enabled}"
+    "HEPHAESTUS_CADDY_TEST_SMOKE_PAGE=${smoke_page}"
 )
 if [[ "${tls_enabled}" == 1 ]]; then
     integration_env+=(

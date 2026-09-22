@@ -25,6 +25,40 @@ validation is **accepted for the full-evidence gate** through the no-VM recovery
 recorded below. Historical smoke or self-hosted Cooking results do
 not establish that the current GCP Cooking path is green.
 
+## Latest full-evidence baseline (2026-09-22)
+
+The latest completed baseline is [workflow run
+35719717491](https://github.com/wimpheling/hephaestus/actions/runs/35719717491),
+with trusted controller SHA `93ab78be3c0bed3c9c963624401b3dc5cc40d024`
+and workload SHA `3ab25640d9948753b19a37341f0b19ebc1dc9644`. The workflow and
+`gcp-cloud` job passed. The safe artifacts are [cooking timings
+10691119660](https://github.com/wimpheling/hephaestus/actions/runs/35719717491/artifacts/10691119660),
+[controller timings
+10691064704](https://github.com/wimpheling/hephaestus/actions/runs/35719717491/artifacts/10691064704),
+and [diagnostics manifest
+10690964670](https://github.com/wimpheling/hephaestus/actions/runs/35719717491/artifacts/10690964670).
+
+All required workload phases passed, including browser setup, runtime and OCI
+materialization, gateway readiness, golden and database tests, all four browser
+phases, and guest-negative capability. The canonical browser summary reports
+four passed phases. The session-chat negative summary reports ten validated
+checks, unchanged refs and receives, one golden-test pass, and runner exit 0.
+Diagnostics download, scan, phase timing, gate validation, and gate acceptance
+passed; upload was verified by download and VM cleanup was verified absent. The
+private archive is 8,868 bytes with SHA-256
+`823f47901c987d742d82d3bde5b9085b2fe20922b6a9dcab15ea06206731a0d3`.
+
+Measured timing bottlenecks were controller VM wait `961323 ms`, supervisor
+cooking phases `809832 ms` and `732949 ms`, golden tests `402316 ms`, browser
+initial `111173 ms`, runtime guest build `87196 ms`, and runtime worker build
+`79264 ms`. The diagnostics manifest records `collectionStatus=partial` because
+the `lineage` and `lineage-status` sources were missing; this anomaly does not
+change the passed typed gates, and it does not claim complete source collection.
+
+This is the latest accepted baseline. The newer user-requested infrastructure
+changes remain in progress; their updated head needs fresh cloud proof before
+merge.
+
 The optional encrypted `diagnostics-triage` export is published at source
 `87399f8` with 9 export tests and 90 diagnostics/collector tests; it
 revalidates the fixed private bundle before producing a one-day CMS ciphertext

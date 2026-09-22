@@ -139,6 +139,82 @@ class RunnerImageManifestTests(unittest.TestCase):
             self.assertNotEqual(result.returncode, 0)
             self.assertIn("required path is missing", result.stderr)
 
+    def test_installed_ui_archive_contract_is_recorded(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            manifest = self.make_manifest(root)
+            archive = root / "usr/share/hephaestus/installed-ui-browser-image.oci"
+            build = root / "usr/local/libexec/hephaestus/installed-ui-browser-image-build.sh"
+            dockerfile = root / "usr/local/libexec/hephaestus/installed-ui-browser-image.Dockerfile"
+            archive.parent.mkdir(parents=True)
+            archive.write_bytes(b"reviewed OCI archive")
+            build.write_text("reviewed build recipe\n", encoding="utf-8")
+            dockerfile.write_text("FROM reviewed\n", encoding="utf-8")
+            document = json.loads(manifest.read_text(encoding="utf-8"))
+            document["required_paths"].extend([
+                "/usr/share/hephaestus/installed-ui-browser-image.oci",
+                "/usr/local/libexec/hephaestus/installed-ui-browser-image-build.sh",
+                "/usr/local/libexec/hephaestus/installed-ui-browser-image.Dockerfile",
+            ])
+            document["installed_ui_image"] = {
+                "archive_path": "/usr/share/hephaestus/installed-ui-browser-image.oci",
+                "build_path": "/usr/local/libexec/hephaestus/installed-ui-browser-image-build.sh",
+                "dockerfile_path": "/usr/local/libexec/hephaestus/installed-ui-browser-image.Dockerfile",
+                "archive_sha256": hashlib.sha256(archive.read_bytes()).hexdigest(),
+                "image_tag": "localhost/hephestus-playwright:1.62.0-certutil",
+                "image_digest": "sha256:" + "1" * 64,
+                "image_id": "sha256:" + "2" * 64,
+                "build_sha256": hashlib.sha256(build.read_bytes()).hexdigest(),
+                "dockerfile_sha256": hashlib.sha256(dockerfile.read_bytes()).hexdigest(),
+                "browser_version": "Chromium 151.0.7922.34",
+            }
+            unsigned = dict(document)
+            unsigned.pop("manifest_sha256")
+            document["manifest_sha256"] = hashlib.sha256(
+                json.dumps(unsigned, sort_keys=True, separators=(",", ":"), ensure_ascii=True).encode()
+            ).hexdigest()
+            manifest.write_text(json.dumps(document), encoding="utf-8")
+            result = self.execute(root, manifest)
+            self.assertEqual(result.returncode, 0, result.stderr)
+
+    def test_manifest_rejects_partial_installed_ui_contract(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            result = subprocess.run(
+                [
+                    sys.executable,
+                    str(MANIFEST_WRITER),
+                    "--output", str(root / "manifest.json"),
+                    "--repository-sha", "a" * 40,
+                    "--browser-lock-sha256", "b" * 64,
+                    "--browser-version", "Chromium 151",
+                    "--recipe-sha256", "c" * 64,
+                    "--startup-sha256", "d" * 64,
+                    "--bake-sha256", "e" * 64,
+                    "--verifier-sha256", "f" * 64,
+                    "--manifest-generator-sha256", "0" * 64,
+                    "--installed-ui-archive-sha256", "1" * 64,
+                ],
+                env={
+                    **os.environ,
+                    "HEPH_IMAGE_RUST_VERSION": "rust",
+                    "HEPH_IMAGE_LIBKRUN_TAG": "libkrun",
+                    "HEPH_IMAGE_LIBKRUN_REVISION": "a" * 40,
+                    "HEPH_IMAGE_LIBKRUNFW_TAG": "libkrunfw",
+                    "HEPH_IMAGE_PASST_REVISION": "b" * 40,
+                    "HEPH_IMAGE_NODE_VERSION": "node",
+                    "HEPH_IMAGE_NODE_SHA256": "2" * 64,
+                    "HEPH_IMAGE_PLAYWRIGHT_VERSION": "playwright",
+                    "HEPH_IMAGE_ORAS_VERSION": "oras",
+                    "HEPH_IMAGE_ORAS_SHA256": "3" * 64,
+                },
+                text=True,
+                capture_output=True,
+                check=False,
+            )
+            self.assertNotEqual(result.returncode, 0)
+            self.assertIn("metadata must be supplied together", result.stderr)
+
     def test_only_node_and_soname_symlinks_are_allowed_inside_install_roots(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
@@ -509,6 +585,13 @@ emit_kvm_evidence
                 "--recipe-sha256", "e" * 64, "--startup-sha256", "f" * 64,
                 "--bake-sha256", "0" * 64, "--verifier-sha256", "1" * 64,
                 "--manifest-generator-sha256", "2" * 64,
+                "--installed-ui-archive-sha256", "3" * 64,
+                "--installed-ui-image-tag", "localhost/hephestus-playwright:1.62.0-certutil",
+                "--installed-ui-image-digest", "sha256:" + "4" * 64,
+                "--installed-ui-image-id", "sha256:" + "5" * 64,
+                "--installed-ui-build-sha256", "6" * 64,
+                "--installed-ui-dockerfile-sha256", "7" * 64,
+                "--installed-ui-browser-version", "Chromium 151.0.7922.34",
             ]
             result = subprocess.run(args, env={**os.environ, **environment}, text=True, capture_output=True)
             self.assertEqual(result.returncode, 0, result.stderr)
@@ -517,6 +600,7 @@ emit_kvm_evidence
             fingerprint = unsigned.pop("manifest_sha256")
             canonical = json.dumps(unsigned, sort_keys=True, separators=(",", ":"), ensure_ascii=True).encode()
             self.assertEqual(fingerprint, hashlib.sha256(canonical).hexdigest())
+            self.assertEqual(document["installed_ui_image"]["archive_sha256"], "3" * 64)
 
     def test_bake_normalizes_copied_node_tree_for_nonroot_runtime(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

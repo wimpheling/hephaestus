@@ -73,24 +73,6 @@ caddy_environment_complete() {
         ! -L "${HEPHAESTUS_CADDY_TEST_CA_CERT:-}" ]] || return 1
 }
 
-if [[ "${cooking_scenario}" == session-chat ]]; then
-    if [[ "${HEPHAESTUS_CADDY_TEST_ENV_COMPLETE:-0}" == 1 ]]; then
-        caddy_environment_complete || {
-            printf 'HEPHAESTUS_CADDY_TEST_ENV_COMPLETE requires a complete Caddy TLS environment.\n' >&2
-            exit 1
-        }
-    elif ! caddy_environment_complete; then
-        # The wrapper owns the Caddy process and re-enters this script under
-        # its exported environment. The explicit marker prevents that child
-        # from starting a second wrapper while preserving a caller-owned
-        # complete Caddy environment.
-        exec env \
-            HEPHAESTUS_CADDY_TEST_TLS=1 \
-            HEPHAESTUS_CADDY_TEST_ENV_COMPLETE=0 \
-            "${repo_root}/scripts/run-gateway-libkrun-e2e.sh" \
-            -- "${BASH_SOURCE[0]}" "$@"
-    fi
-fi
 diagnostics_dir="${HEPHAESTUS_COOKING_DIAGNOSTICS_DIR:-}"
 if [[ -n "${diagnostics_dir}" ]]; then
     [[ "${diagnostics_dir}" = /* && ! -L "${diagnostics_dir}" ]] || {
@@ -194,21 +176,118 @@ browser_cleanup() {
 }
 trap browser_cleanup EXIT
 
+gcp_failure_marker() {
+    printf 'HEPH_GCP_FAILURE phase=browser-setup command_id=%s exit_code=%s diagnostic_source=%s diagnostic_error=%s\n' \
+        "$1" "$2" "$3" "$4" >&2
+}
+
+# The prerequisite smoke is shared by both Cooking scenarios whenever browser
+# E2E is enabled. The application fixture selector remains independent: the
+# ordinary Cooking browser still uses its existing HTTP fixture path.
+if [[ "${HEPHAESTUS_COOKING_BROWSER_E2E:-1}" == 1 ]]; then
+    if [[ "${HEPHAESTUS_CADDY_TEST_ENV_COMPLETE:-0}" == 1 ]]; then
+        caddy_environment_complete || {
+            gcp_failure_marker browser-setup 1 setup-log setup-failed
+            printf 'HEPHAESTUS_CADDY_TEST_ENV_COMPLETE requires a complete Caddy TLS environment.\n' >&2
+            exit 1
+        }
+    elif ! caddy_environment_complete; then
+        # The wrapper owns the Caddy process and re-enters this script under
+        # its exported environment. The explicit marker prevents that child
+        # from starting a second wrapper while preserving a caller-owned
+        # complete Caddy environment.
+        exec env \
+            HEPHAESTUS_CADDY_TEST_TLS=1 \
+            HEPHAESTUS_CADDY_TEST_ENV_COMPLETE=0 \
+            HEPHAESTUS_CADDY_TEST_SMOKE_PAGE=1 \
+            "${repo_root}/scripts/run-gateway-libkrun-e2e.sh" \
+            -- "${BASH_SOURCE[0]}" "$@"
+    fi
+fi
+
+if [[ "${HEPHAESTUS_COOKING_BROWSER_E2E:-1}" == 1 ]]; then
+    phase_timing_start browser-setup
+fi
+
 prepare_installed_ui_browser_image() {
     # An explicitly supplied image is owned by the caller. The default local
     # tag is built from the reviewed repository recipe only when it is absent,
     # so browser phases never reach Podman with a silently missing image.
     [[ -n "${HEPHAESTUS_PLAYWRIGHT_IMAGE:-}" ]] && return 0
     local image='localhost/hephestus-playwright:1.62.0-certutil'
-    local image_diagnostics image_log build_status
+    local image_diagnostics image_log build_status archive archive_sha expected_archive_sha load_log load_diagnostics load_status
     export HEPHAESTUS_PLAYWRIGHT_IMAGE="${image}"
-    if podman image exists "${image}" >/dev/null 2>&1; then
-        return 0
-    fi
     command -v podman >/dev/null 2>&1 || {
+        gcp_failure_marker installed-ui-image-build 1 image-build-log image-build-failed
         printf 'Installed UI browser image is unavailable and Podman is missing.\n' >&2
         return 1
     }
+    archive="${HEPHAESTUS_PLAYWRIGHT_IMAGE_ARCHIVE:-}"
+    expected_archive_sha="${HEPHAESTUS_PLAYWRIGHT_IMAGE_ARCHIVE_SHA256:-}"
+    if podman image exists "${image}" >/dev/null 2>&1; then
+        return 0
+    fi
+    if [[ -n "${archive}" ]]; then
+        [[ "${archive}" = /* && -f "${archive}" && ! -L "${archive}" ]] || {
+            gcp_failure_marker installed-ui-image-build 1 image-build-log image-build-failed
+            printf 'Installed UI browser image archive is unavailable or unsafe.\n' >&2
+            return 1
+        }
+        [[ "${expected_archive_sha}" =~ ^[0-9a-f]{64}$ ]] || {
+            gcp_failure_marker installed-ui-image-build 1 image-build-log image-build-failed
+            printf 'Installed UI browser image archive hash is missing or invalid.\n' >&2
+            return 1
+        }
+        archive_sha="$(sha256sum "${archive}" | awk '{print $1}')"
+        [[ "${archive_sha}" == "${expected_archive_sha}" ]] || {
+            gcp_failure_marker installed-ui-image-build 1 image-build-log image-build-failed
+            printf 'Installed UI browser image archive hash does not match its reviewed manifest.\n' >&2
+            return 1
+        }
+        printf 'HEPH_GCP_COOKING event=installed-ui-image status=archive-load image=%s\n' "${image}"
+        if [[ -n "${diagnostics_dir}" ]]; then
+            load_diagnostics="${diagnostics_dir}/installed-ui-browser-image-load"
+        else
+            load_diagnostics="$(mktemp -d "${tmp_root}/heph-installed-ui-browser-image-load.XXXXXX")"
+        fi
+        install -d -m 700 "${load_diagnostics}"
+        load_log="${load_diagnostics}/podman.log"
+        install -m 600 /dev/null "${load_log}"
+        printf 'HEPH_GCP_COOKING installed-ui-archive-load output=begin image=%s\n' "${image}" >"${load_log}"
+        if podman load --input "${archive}" >>"${load_log}" 2>&1; then
+            load_status=0
+        else
+            load_status=$?
+        fi
+        if ((load_status != 0)); then
+            gcp_failure_marker installed-ui-image-build "${load_status}" image-build-log image-build-failed
+            if python3 "${repo_root}/scripts/check-browser-evidence.py" "${load_diagnostics}" >/dev/null 2>&1; then
+                if [[ -n "${diagnostics_dir}" ]]; then
+                    printf 'Installed UI browser image archive could not be loaded; retained diagnostics=%s\n' \
+                        "${load_log}" >&2
+                else
+                    rm -rf -- "${load_diagnostics}"
+                fi
+            else
+                rm -rf -- "${load_diagnostics}"
+                printf 'Installed UI browser image archive load failed; diagnostics were withheld by the credential scanner.\n' >&2
+            fi
+            return 1
+        fi
+        if ! python3 "${repo_root}/scripts/check-browser-evidence.py" "${load_diagnostics}" >/dev/null 2>&1; then
+            rm -rf -- "${load_diagnostics}"
+            gcp_failure_marker installed-ui-image-build 1 image-build-log image-build-failed
+            printf 'Installed UI browser image archive load produced unsafe diagnostics.\n' >&2
+            return 1
+        fi
+        [[ -n "${diagnostics_dir}" ]] || rm -rf -- "${load_diagnostics}"
+        podman image exists "${image}" >/dev/null 2>&1 || {
+            gcp_failure_marker installed-ui-image-build 1 image-build-log image-build-failed
+            printf 'Installed UI browser image archive did not provide the reviewed image tag.\n' >&2
+            return 1
+        }
+        return 0
+    fi
     if [[ -n "${diagnostics_dir}" ]]; then
         image_diagnostics="$(mktemp -d "${diagnostics_dir}/installed-ui-browser-image.XXXXXX")"
     else
@@ -229,6 +308,7 @@ prepare_installed_ui_browser_image() {
     local build_tee_status="${build_pipeline_status[2]}"
     if ((build_status != 0 || build_scan_status != 0 || build_tee_status != 0)) ||
         ! podman image exists "${image}" >/dev/null 2>&1; then
+        gcp_failure_marker installed-ui-image-build "${build_status}" image-build-log image-build-failed
         printf 'HEPH_GCP_COOKING event=installed-ui-image status=build-failed exit_code=%s scan_exit_code=%s log_exit_code=%s\n' \
             "${build_status}" "${build_scan_status}" "${build_tee_status}"
         if python3 "${repo_root}/scripts/check-browser-evidence.py" "${image_diagnostics}" >/dev/null 2>&1; then
@@ -246,19 +326,22 @@ prepare_installed_ui_browser_image() {
     fi
     if ! python3 "${repo_root}/scripts/check-browser-evidence.py" "${image_diagnostics}" >/dev/null 2>&1; then
         rm -rf -- "${image_diagnostics}"
+        gcp_failure_marker installed-ui-image-build 1 image-build-log image-build-failed
         printf 'Installed UI browser image preparation produced unsafe diagnostics.\n' >&2
         return 1
     fi
     [[ -n "${diagnostics_dir}" ]] || rm -rf -- "${image_diagnostics}"
 }
 
-if [[ "${HEPHAESTUS_COOKING_INSTALLED_UI_FIXTURE:-0}" == 1 ]]; then
+if [[ "${HEPHAESTUS_COOKING_BROWSER_E2E:-1}" == 1 ]]; then
     prepare_installed_ui_browser_image || exit 1
+    HEPHAESTUS_INSTALLED_UI_PREREQUISITE_ONLY=1 \
+        "${repo_root}/scripts/run-installed-ui-e2e.sh"
 fi
 
 if [[ "${HEPHAESTUS_COOKING_BROWSER_E2E:-1}" == "1" ]]; then
-    phase_timing_start browser-setup
     command -v node >/dev/null || {
+        gcp_failure_marker npm-install 1 setup-log setup-failed
         printf 'Cooking browser E2E requires node for the local OIDC fixture.\n' >&2
         exit 1
     }
@@ -551,7 +634,11 @@ run_cooking() {
             cd -- "$3/.."
             workload_step_start gateway-e2e
             workload_detail_stage_start gateway-invocation
-            "$3/run-gateway-libkrun-e2e.sh"
+            if [[ "${HEPHAESTUS_CADDY_TEST_ENV_COMPLETE:-0}" == 1 ]]; then
+                "$3/run-libkrun-integration.sh"
+            else
+                "$3/run-gateway-libkrun-e2e.sh"
+            fi
             workload_detail_stage_pass gateway-invocation
             workload_step_pass gateway-e2e
         ' -- "${script_dir}" "${cooking_root}" "${repo_root}/scripts" \
