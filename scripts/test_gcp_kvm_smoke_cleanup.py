@@ -226,6 +226,8 @@ class GcpKvmSmokeCleanupTests(unittest.TestCase):
                 "(runtime-permissions): Permission denied (os error 13)",
                 "thread 'cooking::smoke' panicked at crates/vm-libkrun/src/provider.rs:1184:7",
                 "provision prepared service worker VM: Unavailable { resource: \"worker spawn\", reason: \"Permission denied\" }",
+                "thread 'cooking::smoke' panicked at crates/vm-libkrun/src/provider.rs:174:9",
+                "provision prepared service worker VM: Unavailable { resource: \"private service broker\", reason: \"private service transport I/O failed: path must be shorter than SUN_LEN\" }",
                 "error: Permission denied",
                 "test cooking::smoke ... FAILED",
                 "/opt/hephaestus/scripts/gcp-kvm-startup.sh: line 417: DIAGNOSTICS_OBJECT: unbound variable",
@@ -324,6 +326,15 @@ class GcpKvmSmokeCleanupTests(unittest.TestCase):
         self.assertIn(
             "HEPH_GCP_TEST test=rust-panic operation=worker-spawn "
             "error_class=permission-denied errno=EACCES",
+            result.stderr,
+        )
+        self.assertIn(
+            "HEPH_GCP_TEST test=rust-panic location=crates/vm-libkrun/src/provider.rs:174:9",
+            result.stderr,
+        )
+        self.assertIn(
+            "HEPH_GCP_TEST test=rust-panic operation=private-service-broker "
+            "error_class=path-too-long reason_class=unix-socket-path-limit",
             result.stderr,
         )
         self.assertIn("HEPH_GCP_RUNTIME error=permission-denied errno=EACCES", result.stderr)

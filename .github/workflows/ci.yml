@@ -113,7 +113,7 @@ jobs:
       - name: Test trusted GCP controller evidence contracts
         run: |
           bash -n scripts/gcp-cooking-run.sh scripts/gcp-kvm-smoke.sh scripts/gcp-kvm-startup.sh
-          python3 -m unittest scripts.test_gcp_browser_summary scripts.test_gcp_cooking_failure_attribution scripts.test_gcp_diagnostics_pipeline scripts.test_gcp_failure_reporting scripts.test_gcp_quota_contract scripts.test_gcp_kvm_smoke_cleanup scripts.test_gcp_phase_timing scripts.test_gcp_runner_image scripts.test_gcp_runner_image_build scripts.test_gcp_runner_image_bundle scripts.test_gcp_runner_image_compatibility scripts.test_gcp_runner_image_validator
+          python3 -m unittest scripts.test_gcp_browser_summary scripts.test_gcp_cooking_failure_attribution scripts.test_gcp_diagnostics_pipeline scripts.test_gcp_failure_reporting scripts.test_gcp_quota_contract scripts.test_gcp_kvm_smoke_cleanup scripts.test_gcp_phase_timing scripts.test_gcp_runner_image scripts.test_gcp_runner_image_build scripts.test_gcp_runner_image_bundle scripts.test_gcp_runner_image_compatibility scripts.test_gcp_runner_image_validator scripts.test_libkrun_runtime_root
 
   live-review-browser:
     runs-on: ubuntu-latest
