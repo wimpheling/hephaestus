@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import hashlib
+import importlib.util
 from pathlib import Path
 import subprocess
 import tempfile
@@ -12,6 +13,12 @@ import unittest
 
 ROOT = Path(__file__).parent
 SCRIPT = ROOT / "gcp-cooking-run.sh"
+COLLECTOR_SPEC = importlib.util.spec_from_file_location(
+    "cooking_diagnostics", ROOT / "collect-cooking-diagnostics.py"
+)
+assert COLLECTOR_SPEC is not None and COLLECTOR_SPEC.loader is not None
+COLLECTOR = importlib.util.module_from_spec(COLLECTOR_SPEC)
+COLLECTOR_SPEC.loader.exec_module(COLLECTOR)
 
 
 class CookingFailureAttributionTests(unittest.TestCase):
@@ -134,6 +141,16 @@ class CookingFailureAttributionTests(unittest.TestCase):
             self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
             return json.loads(failure_path.read_text(encoding="utf-8"))
 
+    @staticmethod
+    def project_with_collector(value: dict[str, object]) -> dict[str, object]:
+        with tempfile.TemporaryDirectory(prefix="heph-first-failure-project-") as raw:
+            root = Path(raw)
+            source = root / "first-failure.json"
+            destination = root / "projected-first-failure.json"
+            source.write_text(json.dumps(value) + "\n", encoding="utf-8")
+            COLLECTOR._project_first_failure(source, destination)
+            return json.loads(destination.read_text(encoding="utf-8"))
+
     def test_actual_workload_exit_overrides_wrapper_and_cleanup(self) -> None:
         log = "\n".join(
             [
@@ -147,13 +164,31 @@ class CookingFailureAttributionTests(unittest.TestCase):
             value,
             {
                 "schema": 1,
-                "phase": "cooking",
+                "phase": "cooking-supervisor",
                 "command_id": "cooking-workload",
                 "exit_code": 17,
                 "diagnostic_source": "runtime-log",
                 "diagnostic_error": "phase-failed",
             },
         )
+
+    def test_workload_failure_uses_first_timing_phase_and_projects(self) -> None:
+        log = (
+            "HEPH_GCP_COOKING event=workload-step operation=cooking-workload "
+            "phase=cooking stage=gateway-e2e status=failed exit_code=17\n"
+        )
+        without_timing = self.run_attribution(log, "", wrapper_status=101)
+        self.assertEqual(without_timing["phase"], "cooking-supervisor")
+        self.assertEqual(without_timing["command_id"], "cooking-workload")
+        self.assertEqual(without_timing["exit_code"], 17)
+        self.assertEqual(self.project_with_collector(without_timing), without_timing)
+
+        timing = json.dumps({"record": "end", "phase": "golden-tests", "outcome": "failed"}) + "\n"
+        with_timing = self.run_attribution(log, timing, wrapper_status=101)
+        self.assertEqual(with_timing["phase"], "golden-tests")
+        self.assertEqual(with_timing["command_id"], "cooking-workload")
+        self.assertEqual(with_timing["exit_code"], 17)
+        self.assertEqual(self.project_with_collector(with_timing), with_timing)
 
     def test_pre_browser_runtime_image_failure_is_not_browser_image_failure(self) -> None:
         log = "\n".join(
@@ -314,6 +349,29 @@ class CookingFailureAttributionTests(unittest.TestCase):
             systemd_end = self.source.index("/bin/bash -Eeuo pipefail -c", systemd_start)
             self.assertIn('"${installed_ui_workload_env[@]}"', self.source[systemd_start:systemd_end])
             self.assertTrue((root / "expensive-work").is_file())
+
+    def test_cooking_scenario_enables_published_service_proof(self) -> None:
+        cooking_start = self.source.index('    workload_scenario_env=(\n        "--setenv=HEPHAESTUS_APP_COOKING_E2E=1"')
+        cooking_end = self.source.index(
+            "    printf 'HEPH_GCP_COOKING event=scenario-selected scenario=cooking\\n'",
+            cooking_start,
+        )
+        cooking_branch = self.source[cooking_start:cooking_end]
+        self.assertIn(
+            '"--setenv=HEPHAESTUS_APP_COOKING_SERVICE_BUILD_PROOF=1"',
+            cooking_branch,
+        )
+
+        session_start = self.source.index('    workload_scenario_env=(\n        "--setenv=HEPHAESTUS_APP_SESSION_CHAT_E2E=1"')
+        session_end = self.source.index(
+            "    printf 'HEPH_GCP_COOKING event=scenario-selected scenario=session-chat\\n'",
+            session_start,
+        )
+        session_branch = self.source[session_start:session_end]
+        self.assertNotIn(
+            '"--setenv=HEPHAESTUS_APP_COOKING_SERVICE_BUILD_PROOF=1"',
+            session_branch,
+        )
 
     def test_reviewed_chrome_for_testing_metadata_reaches_forge_workload(self) -> None:
         """Exercise the production validator with the baked candidate's browser identity."""

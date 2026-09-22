@@ -238,7 +238,7 @@ def timing_error_class(error: Exception) -> str:
         return "duplicate"
     if any(token in message for token in ("run_id", "attempt", "source_sha", "fingerprint", "identity")):
         return "identity"
-    if "required phase is missing" in message:
+    if "required phase trust is missing" in message or "required phase is missing" in message:
         return "missing-phase"
     if "trust" in message:
         return "trust"
