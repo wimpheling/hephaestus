@@ -217,12 +217,20 @@ prepare_installed_ui_browser_image() {
     chmod 700 -- "${image_diagnostics}"
     image_log="${image_diagnostics}/build.log"
     install -m 600 /dev/null "${image_log}"
-    if bash "${repo_root}/scripts/installed-ui-browser-image/build.sh" >"${image_log}" 2>&1; then
-        build_status=0
-    else
-        build_status="$?"
-    fi
-    if ((build_status != 0)) || ! podman image exists "${image}" >/dev/null 2>&1; then
+    printf 'HEPH_GCP_COOKING event=installed-ui-image status=build-start image=%s\n' "${image}"
+    set +e
+    bash "${repo_root}/scripts/installed-ui-browser-image/build.sh" 2>&1 |
+        python3 "${repo_root}/scripts/check-browser-evidence.py" --stream |
+        tee "${image_log}"
+    local -a build_pipeline_status=("${PIPESTATUS[@]}")
+    set -e
+    build_status="${build_pipeline_status[0]}"
+    local build_scan_status="${build_pipeline_status[1]}"
+    local build_tee_status="${build_pipeline_status[2]}"
+    if ((build_status != 0 || build_scan_status != 0 || build_tee_status != 0)) ||
+        ! podman image exists "${image}" >/dev/null 2>&1; then
+        printf 'HEPH_GCP_COOKING event=installed-ui-image status=build-failed exit_code=%s scan_exit_code=%s log_exit_code=%s\n' \
+            "${build_status}" "${build_scan_status}" "${build_tee_status}"
         if python3 "${repo_root}/scripts/check-browser-evidence.py" "${image_diagnostics}" >/dev/null 2>&1; then
             if [[ -n "${diagnostics_dir}" ]]; then
                 printf 'Installed UI browser image preparation failed; retained diagnostics=%s\n' \

@@ -331,6 +331,7 @@ class GcpCookingScenarioContractTests(unittest.TestCase):
         explicit_browser_image: str | None = None,
         repeat: bool = False,
         build_fail: bool = False,
+        unsafe_build_output: bool = False,
     ) -> dict[str, str]:
         with tempfile.TemporaryDirectory(prefix="gcp-cooking-scenario-") as root_name:
             root = Path(root_name)
@@ -355,7 +356,10 @@ class GcpCookingScenarioContractTests(unittest.TestCase):
                 "    count=0\n"
                 "    [[ -f \"$state/build-count\" ]] && count=$(cat \"$state/build-count\")\n"
                 "    printf '%s\\n' $((count + 1)) >\"$state/build-count\"\n"
-                "    if [[ \"${PODMAN_BUILD_FAIL:-0}\" == 1 ]]; then\n"
+                "    if [[ \"${PODMAN_BUILD_FAIL:-0}\" == 2 ]]; then\n"
+                "        printf '%s\\n' 'cooking-inbound-only-fixture-sentinel' >&2\n"
+                "        exit 17\n"
+                "    elif [[ \"${PODMAN_BUILD_FAIL:-0}\" == 1 ]]; then\n"
                 "        printf '%s\\n' 'reviewed image builder failed safely' >&2\n"
                 "        exit 17\n"
                 "    fi\n"
@@ -488,7 +492,7 @@ class GcpCookingScenarioContractTests(unittest.TestCase):
             if explicit_browser_image is not None:
                 environment["HEPHAESTUS_PLAYWRIGHT_IMAGE"] = explicit_browser_image
             if build_fail:
-                environment["PODMAN_BUILD_FAIL"] = "1"
+                environment["PODMAN_BUILD_FAIL"] = "2" if unsafe_build_output else "1"
             if complete_caddy:
                 environment.update(
                     {
@@ -531,6 +535,9 @@ class GcpCookingScenarioContractTests(unittest.TestCase):
                     completed.stderr,
                 )
                 self.assertNotIn("reviewed image builder failed safely", completed.stderr)
+            if unsafe_build_output:
+                self.assertNotIn("cooking-inbound-only-fixture-sentinel", completed.stdout)
+                self.assertNotIn("cooking-inbound-only-fixture-sentinel", completed.stderr)
             if expected_status == 0 and scenario == "session-chat":
                 self.assertEqual(
                     image_capture.read_text(encoding="utf-8").strip(),
@@ -575,6 +582,11 @@ class GcpCookingScenarioContractTests(unittest.TestCase):
 
     def test_session_chat_retains_safe_image_build_failure(self) -> None:
         self.run_wrapper_stub("session-chat", expected_status=1, build_fail=True)
+
+    def test_session_chat_redacts_unsafe_image_build_output(self) -> None:
+        self.run_wrapper_stub(
+            "session-chat", expected_status=1, build_fail=True, unsafe_build_output=True
+        )
 
     def test_wrapper_default_cooking_captures_existing_flag(self) -> None:
         captured = self.run_wrapper_stub("cooking")
