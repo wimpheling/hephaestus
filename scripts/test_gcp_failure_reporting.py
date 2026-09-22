@@ -244,7 +244,8 @@ test -s "$first_failure_path"
 
     def test_workflow_summary_renders_partial_and_complete_statuses(self) -> None:
         workflow = (ROOT.parent / ".github" / "workflows" / "cooking-e2e.yml").read_text(encoding="utf-8")
-        body = workflow.split("python3 - <<'PY'\n", 1)[1].split("\n          PY", 1)[0]
+        summary_step = workflow.split("      - name: Publish safe GCP failure summary\n", 1)[1]
+        body = summary_step.split("python3 - <<'PY'\n", 1)[1].split("\n          PY", 1)[0]
         body = textwrap.dedent(body)
         with tempfile.TemporaryDirectory(prefix="heph-summary-render-") as raw:
             root = Path(raw)

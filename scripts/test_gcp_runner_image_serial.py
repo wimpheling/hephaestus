@@ -122,6 +122,22 @@ class RunnerImageSerialTests(unittest.TestCase):
             self.assertIn("command=installed-ui-image-build", serial_log.read_text(encoding="utf-8"))
             self.assertEqual(failure_path.stat().st_mode & 0o777, 0o600)
 
+    def test_typed_installed_ui_browser_probe_failure_is_reported_as_browser_setup(self) -> None:
+        serial = (
+            "HEPH_GCP_KVM_BUILD_ERROR phase=installed-ui-browser-probe status=1 "
+            "log=/var/log/hephaestus/installed-ui-browser-probe.log\n"
+            "HEPH_GCP_RUNNER_IMAGE: FAIL exit=1\n"
+        )
+        with tempfile.TemporaryDirectory(prefix="heph-runner-image-serial-browser-probe-") as raw:
+            root = Path(raw)
+            result, serial_log = self._run(root, serial)
+            self.assertNotEqual(result.returncode, 0)
+            failure = json.loads((root / "serial.log.first-failure.json").read_text(encoding="utf-8"))
+            self.assertEqual(failure["phase"], "browser-setup")
+            self.assertEqual(failure["command_id"], "installed-ui-browser-probe")
+            self.assertEqual(failure["exit_code"], 1)
+            self.assertIn("command=installed-ui-browser-probe", serial_log.read_text(encoding="utf-8"))
+
     def test_zero_exit_typed_build_failure_is_ignored(self) -> None:
         serial = (
             "HEPH_GCP_KVM_BUILD_ERROR phase=libkrun status=0 log=/srv/hephaestus/libkrun.log\n"
@@ -135,6 +151,23 @@ class RunnerImageSerialTests(unittest.TestCase):
             self.assertEqual(failure["phase"], "unknown")
             self.assertEqual(failure["command_id"], "runner-image-bake-wrapper")
             self.assertEqual(failure["exit_code"], 17)
+
+    def test_baked_browser_probe_failure_keeps_typed_exit_over_wrapper(self) -> None:
+        serial = (
+            "HEPH_GCP_KVM_BUILD_ERROR phase=installed-ui-browser-probe status=7 "
+            "log=/srv/hephaestus/browser-probe.log\n"
+            "HEPH_GCP_KVM_FIRST_ERROR Google Chrome for Testing is not Chromium\n"
+            "HEPH_GCP_RUNNER_IMAGE: FAIL exit=1\n"
+        )
+        with tempfile.TemporaryDirectory(prefix="heph-runner-image-serial-browser-probe-") as raw:
+            root = Path(raw)
+            result, serial_log = self._run(Path(raw), serial)
+            self.assertNotEqual(result.returncode, 0)
+            failure = json.loads((root / "serial.log.first-failure.json").read_text(encoding="utf-8"))
+            self.assertEqual(failure["phase"], "browser-setup")
+            self.assertEqual(failure["command_id"], "installed-ui-browser-probe")
+            self.assertEqual(failure["exit_code"], 7)
+            self.assertIn("failure phase=browser-setup command=installed-ui-browser-probe exit=7", serial_log.read_text(encoding="utf-8"))
 
     def test_typed_failure_survives_credential_rejection_without_secret(self) -> None:
         secret = "fixture-secret-value"

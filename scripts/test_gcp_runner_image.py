@@ -671,6 +671,30 @@ emit_kvm_evidence
             self.assertEqual(info.returncode, 0, info.stderr)
             self.assertEqual(info.stdout.strip(), "cgroupfs")
 
+    def test_bake_accepts_only_reviewed_browser_version_outputs(self) -> None:
+        bake = Path(__file__).with_name("gcp-runner-image-bake.sh")
+        for value in ("Chromium 151.0.7922.34", "Google Chrome for Testing 151.0.7922.34"):
+            result = subprocess.run(
+                ["bash", str(bake), value],
+                env={**os.environ, "HEPH_GCP_BROWSER_VERSION_TEST": "1"},
+                text=True,
+                capture_output=True,
+            )
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertEqual(result.stdout, value + "\n")
+        rejected = subprocess.run(
+            ["bash", str(bake), "Google Chrome for Testing 151.0.7922.35"],
+            env={**os.environ, "HEPH_GCP_BROWSER_VERSION_TEST": "1"},
+            text=True,
+            capture_output=True,
+        )
+        self.assertEqual(rejected.returncode, 1)
+        self.assertIn(
+            "HEPH_GCP_KVM_BUILD_ERROR phase=installed-ui-browser-probe status=1",
+            rejected.stderr,
+        )
+        self.assertNotIn("151.0.7922.35", rejected.stdout)
+
     def test_bake_emits_typed_installed_ui_build_failure_and_preserves_exit(self) -> None:
         bake = Path(__file__).with_name("gcp-runner-image-bake.sh")
         with tempfile.TemporaryDirectory(prefix="heph-image-build-failure-") as raw:
