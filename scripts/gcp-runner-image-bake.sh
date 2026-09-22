@@ -83,6 +83,20 @@ EOF
   chmod 0644 "$config_path"
 }
 
+normalize_reviewed_browser_version() {
+  local value="$1"
+  case "$value" in
+    'Google Chrome for Testing 151.0.7922.34'|'Chromium 151.0.7922.34')
+      printf '%s\n' "$value"
+      ;;
+    *)
+      printf 'HEPH_GCP_KVM_BUILD_ERROR phase=installed-ui-browser-probe status=1 log=/var/log/hephaestus/installed-ui-browser-probe.log\n' >&2
+      printf '%s\n' 'installed UI browser image cannot report the reviewed browser version' >&2
+      return 1
+      ;;
+  esac
+}
+
 run_installed_ui_build() {
   local status
   if "$@"; then
@@ -111,6 +125,10 @@ fi
 if [[ "${HEPH_GCP_IMAGE_BUILD_FAILURE_TEST:-0}" == 1 ]]; then
   run_installed_ui_build bash "${1:?missing installed UI build path}" \
     "${HEPH_GCP_IMAGE_BUILD_TEST_ARG:-}"
+  exit $?
+fi
+if [[ "${HEPH_GCP_BROWSER_VERSION_TEST:-0}" == 1 ]]; then
+  normalize_reviewed_browser_version "${1:?missing browser version}"
   exit $?
 fi
 
@@ -191,7 +209,7 @@ chown -R forge:forge "$browser_root"
 browser_executable="$(find "$browser_root" -type f \( -name chrome-headless-shell -o -name chrome \) -perm -0100 -print -quit 2>/dev/null)"
 [[ -n "$browser_executable" ]] || { printf '%s\n' 'Chromium executable was not installed' >&2; exit 1; }
 browser_version="$($browser_executable --version 2>/dev/null || true)"
-[[ -n "$browser_version" ]] || { printf '%s\n' 'Chromium executable cannot report its version' >&2; exit 1; }
+browser_version="$(normalize_reviewed_browser_version "$browser_version")"
 
 # Build the reviewed installed-UI browser image once as forge and preserve it
 # as an immutable OCI archive. The Cooking workload later imports this archive
@@ -227,17 +245,14 @@ fi
   { printf '%s\n' 'installed UI browser image ID is invalid' >&2; exit 1; }
 [[ "$installed_ui_image_digest" =~ ^sha256:[0-9a-f]{64}$ ]] ||
   { printf '%s\n' 'installed UI browser image digest is invalid' >&2; exit 1; }
-installed_ui_browser_version="$(runuser -u forge -- env "${forge_podman_env[@]}" \
+installed_ui_browser_version_raw="$(runuser -u forge -- env "${forge_podman_env[@]}" \
   podman run --rm --entrypoint sh "$installed_ui_image_tag" -c '
     set -eu
     browser="$(find /ms-playwright -type f \( -name chrome -o -name chrome-headless-shell \) -perm -0100 -print -quit)"
     test -n "$browser"
     "$browser" --version
   ')"
-case "$installed_ui_browser_version" in
-  Chromium\ *) ;;
-  *) printf '%s\n' 'installed UI browser image cannot report a Chromium version' >&2; exit 1 ;;
-esac
+installed_ui_browser_version="$(normalize_reviewed_browser_version "$installed_ui_browser_version_raw")"
 rm -f -- "$installed_ui_archive_tmp"
 runuser -u forge -- env "${forge_podman_env[@]}" \
   podman save --format oci-archive --output "$installed_ui_archive_tmp" "$installed_ui_image_tag"

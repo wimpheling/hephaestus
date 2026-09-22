@@ -405,7 +405,9 @@ failure_commands = {
     "libkrunfw": "image-bake-libkrunfw",
     "libkrun": "image-bake-libkrun",
     "image-bake-ready": "image-bake-finalize",
+    "installed-ui-browser-probe": "installed-ui-browser-probe",
 }
+failure_phases = {"installed-ui-browser-probe": "browser-setup"}
 for raw in text.splitlines():
     line = prefix.sub("", raw.strip())
     if "startup-script:" in line:
@@ -423,7 +425,7 @@ for raw in text.splitlines():
     if build_error and typed_failure is None and 1 <= int(build_error.group(2)) <= 255:
         failure_phase = build_error.group(1)
         typed_failure = {
-            "phase": failure_phase if failure_phase in failure_commands else "unknown",
+            "phase": failure_phases.get(failure_phase, failure_phase if failure_phase in failure_commands else "unknown"),
             "command_id": failure_commands.get(failure_phase, "image-bake-command"),
             "exit_code": int(build_error.group(2)),
             "diagnostic_error": "image-build-failed",
