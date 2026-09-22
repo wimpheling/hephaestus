@@ -4735,8 +4735,11 @@ async fn bearer_push_starts_run_through_production_bootstrap() {
         "the Cooking service build proof requires HEPHAESTUS_APP_COOKING_E2E=1"
     );
     assert!(
-        !caddy_tls || cooking_service_build_proof || session_chat_browser_e2e,
-        "Caddy TLS mode is restricted to the published Cooking service proof"
+        !caddy_tls
+            || cooking_service_build_proof
+            || session_chat_browser_e2e
+            || (cooking_build_proof && cooking::enabled() && gateway_caddy_e2e && libkrun_e2e),
+        "Caddy TLS mode requires the published Cooking service proof, browser session-chat proof, or the full Cooking Caddy/libkrun proof"
     );
     assert!(
         !cooking_service_build_proof || (gateway_caddy_e2e && libkrun_e2e),
@@ -6396,7 +6399,7 @@ async fn bearer_push_starts_run_through_production_bootstrap() {
             "{}/gateway/cooking/telegram",
             env::var("HEPHAESTUS_CADDY_TEST_PUBLIC_URL").expect("public Caddy URL")
         );
-        let adversarial_response = reqwest::Client::new()
+        let adversarial_response = cooking::caddy_gateway_client()
             .post(adversarial_url)
             .header("x-telegram-bot-api-secret-token", cooking::INBOUND_SENTINEL)
             .json(&serde_json::json!({
@@ -6817,7 +6820,7 @@ async fn bearer_push_starts_run_through_production_bootstrap() {
             let public =
                 env::var("HEPHAESTUS_CADDY_TEST_PUBLIC_URL").expect("joined Caddy public URL");
             let url = format!("{public}/gateway/cooking/telegram");
-            let client = reqwest::Client::new();
+            let client = cooking::caddy_gateway_client();
             let old = cooking::send_update_with_credential(
                 &client,
                 &url,
@@ -7731,7 +7734,7 @@ async fn bearer_push_starts_run_through_production_bootstrap() {
                 service_instance_id = Some(replacement_instance_id);
                 service_resource_paths = Some(replacement_resource_paths);
             }
-            let client = reqwest::Client::new();
+            let client = cooking::caddy_gateway_client();
             let first = client
                 .post(format!("{public_url}/gateway/brokered?mode=real"))
                 .header("x-webhook-secret", BROKERED_E2E_SENTINEL)

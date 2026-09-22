@@ -60,6 +60,35 @@ pub fn gateway_artifact() -> Option<Vec<u8>> {
     })
 }
 
+/// Build the client used by Cooking probes that call the joined Caddy public
+/// origin. The disposable Caddy CA is trusted explicitly in TLS mode while
+/// ordinary HTTP runs retain reqwest's default behavior.
+pub fn caddy_gateway_client() -> reqwest::Client {
+    caddy_gateway_client_inner(None)
+}
+
+pub fn caddy_gateway_client_with_timeout(timeout: Duration) -> reqwest::Client {
+    caddy_gateway_client_inner(Some(timeout))
+}
+
+fn caddy_gateway_client_inner(timeout: Option<Duration>) -> reqwest::Client {
+    let mut builder = reqwest::Client::builder();
+    if let Some(timeout) = timeout {
+        builder = builder.timeout(timeout);
+    }
+    if env::var("HEPHAESTUS_CADDY_TEST_TLS").as_deref() == Ok("1") {
+        let ca_path =
+            env::var("HEPHAESTUS_CADDY_TEST_CA_CERT").expect("joined Caddy TLS fixture CA path");
+        let ca_pem = fs::read(&ca_path).expect("read joined Caddy TLS fixture CA");
+        let certificate =
+            reqwest::Certificate::from_pem(&ca_pem).expect("parse joined Caddy TLS fixture CA");
+        builder = builder.add_root_certificate(certificate);
+    }
+    builder
+        .build()
+        .expect("bounded Cooking Caddy gateway client")
+}
+
 pub fn secret_slots() -> serde_json::Value {
     serde_json::json!([
         {"key":"model","purpose":"Cooking model fixture","required":true,"delivery_modes":["brokered"],"phases":["normal"],"destinations":["api.model.example"]},
@@ -1489,7 +1518,7 @@ pub async fn exercise_active_relay_revocation(
 ) {
     let public = env::var("HEPHAESTUS_CADDY_TEST_PUBLIC_URL").expect("public Caddy URL");
     let url = format!("{public}/gateway/cooking/telegram");
-    let client = reqwest::Client::new();
+    let client = caddy_gateway_client();
     let accepted = send_update_with_credential(
         &client,
         &url,
@@ -1979,7 +2008,7 @@ pub async fn exercise_initial(
 ) -> CookingCheckpoint {
     let public = env::var("HEPHAESTUS_CADDY_TEST_PUBLIC_URL").expect("public Caddy URL");
     let url = format!("{public}/gateway/cooking/telegram");
-    let client = reqwest::Client::new();
+    let client = caddy_gateway_client();
     let baseline = mailbox_counts(pool, gateway).await;
     for credential in [None, Some("wrong-inbound-value")] {
         let response = send_raw(
@@ -2089,7 +2118,7 @@ pub async fn exercise_follow_up(
     let CookingCheckpoint { alice, bob } = checkpoint;
     let public = env::var("HEPHAESTUS_CADDY_TEST_PUBLIC_URL").expect("public Caddy URL");
     let url = format!("{public}/gateway/cooking/telegram");
-    let client = reqwest::Client::new();
+    let client = caddy_gateway_client();
     // This request is deliberately sent only after the supervisor restart;
     // its model request must carry Alice's persisted SQLite summary.
     let follow_up = deliver_request(pool, gateway, &client, &url, 44, 1001, "salad").await;

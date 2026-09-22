@@ -416,7 +416,7 @@ async fn retire_gateway(
     assert!(!gateway_history.revisions.is_empty());
 
     let before_effects = effect_counts(ctx).await?;
-    let response = reqwest::Client::new()
+    let response = super::cooking::caddy_gateway_client()
         .post(format!("{}/gateway/cooking/telegram", ctx.public_url.trim_end_matches('/')))
         .header("x-telegram-bot-api-secret-token", ctx.valid_inbound_credential)
         .json(&serde_json::json!({"update_id": 9002, "message": {"from": {"id": 1001}, "text": "retired-gateway"}}))

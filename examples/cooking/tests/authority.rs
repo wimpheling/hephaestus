@@ -354,9 +354,7 @@ async fn assert_revoked_ingress(
     .fetch_one(pool)
     .await?;
     let public = std::env::var("HEPHAESTUS_CADDY_TEST_PUBLIC_URL")?;
-    let response = reqwest::Client::builder()
-        .timeout(Duration::from_secs(30))
-        .build()?
+    let response = super::cooking::caddy_gateway_client_with_timeout(Duration::from_secs(30))
         .post(format!("{public}/gateway/cooking/telegram"))
         .header("x-telegram-bot-api-secret-token", inbound_credential)
         .json(&serde_json::json!({
