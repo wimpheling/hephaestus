@@ -175,7 +175,7 @@ over repositories and content capabilities later.
 - [x] Run `cargo clippy --workspace --all-targets --all-features`.
 - [x] Run `cargo test --workspace --all-features`.
 - [x] Run `cargo doc --workspace --all-features --no-deps`.
-- [ ] Run applicable UI checks when the reference distribution adapter changes.
+- [x] Run applicable UI checks when the reference distribution adapter changes.
 - [x] Before repository handoff, run `git diff --check` and `cargo dev quality`.
 - [ ] Record acceptance evidence with the released protocol version and source
   revision, browser and real-Git evidence for creation, turns, restart/recovery
@@ -1035,7 +1035,7 @@ installed-UI repository Git routes. Log:
 services were cleaned up. These diagnostics must be resolved before the
 repository-wide quality gate can be marked complete.
 
-### Current journey transition audit (final26/final33, 2026-09-22)
+### Current journey transition audit (final26/final35, 2026-09-22)
 
 This current classification separates implementation and contract presence from
 runtime acceptance. Final26's retained evidence
@@ -1056,7 +1056,10 @@ negative phases are not reached. Final32 captures both concurrent requests,
 then fails while checking a ref before either release completes. Final33
 passes initial, recovery, and concurrency browser stages with canonical
 validation for five turns, then fails in fork setup before fork browser
-execution.
+execution. Final35 passes all four browser phases with canonical validation for
+the initial two turns, recovery third turn, concurrency fifth turn, and fork
+target sixth turn; its separate negative process fails before its golden
+scenario starts.
 
 | Transition | Responsibility boundary | Current classification and evidence |
 | --- | --- | --- |
@@ -1066,9 +1069,9 @@ execution.
 | Human receive → authorized run → isolated VM/broker | Platform selects the authorized trigger, immutable snapshot, and VM; the release agent reads its protocol and uses brokered model egress. | **Supported for the two-turn initial path.** Final26's canonical host validation follows both turns through the production bootstrap. |
 | Assistant response Git → visible browser response/reconnect | The release adapter reads committed history and correlates responses; platform owns installation and route delivery. | **Supported for final26's initial browser path.** Two responses and the captured restart state are recorded; final31 additionally proves a third turn and reconnect after restart. |
 | Restart state → recovery UI launch and reconnect | Platform/fixture must resolve the repository-scoped installation and handoff; the release UI must reconnect and reread history. | **Supported by final31.** Recovery and canonical validation of the third turn pass after correcting the harness URL assertion. Bootstrap preserves permitted theme query parameters; the earlier bare-path suffix assertion was invalid. |
-| Recovery → concurrent writers | The platform reruns the release with the same authority boundary; the release handles expected-parent retry and preserves transcript history. | **Supported for the exercised browser phase.** Final33 passes all concurrency browser stages and canonical validation for five turns after the parser correction. Broader fork, negative, and full-journey acceptance remains open. |
-| Recovery/history → forked session | Trusted composition creates fresh target authority, model binding, and installation; the release copies reachable history and applies its fork manifest. | **Partially exercised.** Final33 reaches fork setup, then fails before fork browser execution on a duplicate project-secret-manager role constraint. The narrow fixture investigation is pending. |
-| Journey → negative capability proof | Platform runs the separate fresh guest denial process; the release/runtime boundary supplies the scoped Git capability and fixed typed result. | **Unexecuted in the combined journey.** Final33 does not reach the negative phase and no fresh combined runtime evidence is inferred. |
+| Recovery → concurrent writers | The platform reruns the release with the same authority boundary; the release handles expected-parent retry and preserves transcript history. | **Supported for the exercised browser phase.** Final33 passes all concurrency browser stages and canonical validation for five turns after the parser correction. Negative and full-journey acceptance remains open. |
+| Recovery/history → forked session | Trusted composition creates fresh target authority, model binding, and installation; the release copies reachable history and applies its fork manifest. | **Supported for the exercised browser phase.** Final35 passes fork setup and the fork-target browser phase with canonical validation for the sixth turn after the role-idempotency and fresh-alias fixture corrections. |
+| Journey → negative capability proof | Platform runs the separate fresh guest denial process; the release/runtime boundary supplies the scoped Git capability and fixed typed result. | **Attempted but unaccepted.** Final35 reaches the separate negative process, but it fails before the golden scenario at the restricted Caddy TLS published-proof setup; its typed summary records `status=failed`, `reason=marker_missing`, and `runner=101`. |
 
 The platform-side receipt, UUID, and handoff prerequisites have separate
 focused evidence: secret-binding receipt and replay are verified in the
@@ -1079,9 +1082,8 @@ handoff projection has a passing positive and mutation-negative test (lines
 final30 document-URL failure was therefore a browser assertion mismatch,
 not a platform contract failure.
 
-The smallest next step is to resolve the duplicate project-secret-manager role
-constraint in the fork fixture, then run the full lifecycle through fork and
-negative phases. The
+The smallest next step is to correct the negative child-environment isolation
+and rerun the separate negative process. The
 versioned protocol's
 fork and tombstone warning semantics remain release-owned and do not add a
 platform approval step (lines 1024-1027 above).
@@ -1107,9 +1109,9 @@ removed the disposable containers and confirmed
 `examples/session-chat/ui/node_modules` is absent. This is repository quality
 evidence, not acceptance of the Cooking VM/GCP lifecycle or the full MVP-06
 journey: final26 previously proved the initial browser path and two turns,
-final33 now proves recovery, the canonical third turn, and concurrency with
-five canonical turns, while fork and negative-process integration remain
-pending.
+final35 now proves recovery, the canonical third turn, concurrency with five
+canonical turns, and fork-target validation for the sixth turn. The separate
+negative-process integration remains pending.
 
 ### Final28 browser evidence (2026-09-22)
 
@@ -1190,3 +1192,22 @@ reached and cleanup completed. Commits `6a65296` and `b8243c` contain the
 parser and runner/CI helper corrections; 26 Node checks and TypeScript checks
 pass. This is not fork or full-journey acceptance. The next step is the narrow
 fork-fixture role investigation followed by a fresh full lifecycle run.
+
+### Final35 browser and negative-process evidence (2026-09-22)
+
+Final35 is retained at
+`/var/tmp/sessionchat-browser-final35/cooking-execution.ascqMI.log`
+(`session27341`, overall exit 101). The initial, recovery, concurrency, and
+fork browser phases pass with canonical validation for turns 2, 3, 5, and the
+fork target 6. The main golden suite reports 35 passed, 0 failed, and 1
+ignored. The fork fixture corrections in `ee67c2f` (role idempotency) and
+`e4d8655` (fresh alias) are exercised by this run.
+
+The separate negative process reaches its launch but fails before the golden
+scenario at `golden.rs:4737`, where the Caddy TLS restricted published-proof
+setup is unavailable. Its typed summary exists with
+`status=failed`, `reason=marker_missing`, and `runner=101`; retained evidence is
+`/var/tmp/sessionchat-browser-final35/session-chat-negative.C4IDsl.log` and
+`session-chat-negative-summary.json`. Cleanup completed. This proves the full
+browser chain, not negative capability acceptance or the GCP workflow; the
+next step is child-environment isolation correction and a fresh rerun.
