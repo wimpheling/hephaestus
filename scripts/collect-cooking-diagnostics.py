@@ -305,6 +305,82 @@ RUST_PANIC_LOCATION_RE = re.compile(
     r"^thread\s+'[^']{1,128}'\s+panicked at\s+"
     r"(?P<location>[A-Za-z0-9_./:-]+:\d+(?::\d+)?)(?:$|:.*$)"
 )
+RUST_PANIC_ERROR_MARKERS = (
+    ("Permission denied", "EACCES", "permission-denied"),
+    ("PermissionDenied", "EACCES", "permission-denied"),
+    ("Operation not permitted", "EPERM", "operation-not-permitted"),
+    ("No such file or directory", "ENOENT", "not-found"),
+    ("Invalid argument", "EINVAL", "invalid-argument"),
+    ("Connection refused", "ECONNREFUSED", "connection-refused"),
+    ("Connection reset by peer", "ECONNRESET", "connection-reset"),
+    ("Address already in use", "EADDRINUSE", "address-in-use"),
+)
+RUST_PANIC_VM_CONTEXT_PREFIX = "provision prepared service worker VM:"
+RUST_PANIC_VM_CODE_RE = re.compile(
+    r'\bcode\s*:\s*"(?P<code>[A-Za-z0-9-]{1,64})"'
+)
+RUST_PANIC_VM_RESOURCE_RE = re.compile(
+    r'\bresource\s*:\s*"(?P<resource>[A-Za-z0-9][A-Za-z0-9 -]{0,63})"'
+)
+RUST_PANIC_VM_OPERATIONS = frozenset(
+    {
+        "runtime-create", "runtime-permissions", "worker-binary",
+        "cgroup-create", "cgroup-cpu-limit", "cgroup-memory-limit", "cgroup-pids-limit",
+        "cgroup-io-format", "cgroup-io-limit", "cgroup-place-worker",
+        "worker-listener", "worker-accept", "worker-write", "worker-response",
+        "private-service-broker",
+    }
+)
+RUST_PANIC_VM_RESOURCES = {
+    "worker binary": "worker-binary",
+    "private service broker": "private-service-broker",
+}
+
+
+def _project_rust_panic(match: re.Match[str], line: str) -> str:
+    """Project a panic location and a closed errno class when it is safe."""
+
+    projected = f"HEPH_GCP_TEST test=rust-panic location={match.group('location')}"
+    suffix = line[match.end("location") :]
+    context = _project_rust_panic_context_fields(suffix.lstrip(": "))
+    if context is not None:
+        return f"{projected} {context}"
+    for phrase, errno, error_class in RUST_PANIC_ERROR_MARKERS:
+        if phrase in suffix:
+            return f"{projected} error_class={error_class} errno={errno}"
+    return projected
+
+
+def _project_rust_panic_context_fields(line: str) -> str | None:
+    """Project closed fields from one recognized nested VM error line."""
+
+    if not line.startswith(RUST_PANIC_VM_CONTEXT_PREFIX):
+        return None
+    reason: tuple[str, str, str] | None = None
+    for marker in RUST_PANIC_ERROR_MARKERS:
+        if marker[0] in line:
+            reason = marker
+            break
+    if reason is None:
+        return None
+    _, errno, error_class = reason
+    code = RUST_PANIC_VM_CODE_RE.search(line)
+    operation = code.group("code") if code is not None else None
+    if operation not in RUST_PANIC_VM_OPERATIONS:
+        resource = RUST_PANIC_VM_RESOURCE_RE.search(line)
+        operation = RUST_PANIC_VM_RESOURCES.get(resource.group("resource")) if resource is not None else None
+    if operation is None:
+        return None
+    return f"operation={operation} error_class={error_class} errno={errno}"
+
+
+def _project_rust_panic_context(line: str) -> str | None:
+    """Project one recognized nested VM error line after a Rust panic."""
+
+    fields = _project_rust_panic_context_fields(line)
+    return None if fields is None else f"HEPH_GCP_TEST test=rust-panic {fields}"
+
+
 PHASE_TIMING_DIAGNOSTIC_STAGES = frozenset(
     {
         "workload-source", "supervisor-source", "workload-validation", "supervisor-validation",
@@ -1031,6 +1107,7 @@ def _project_text(source: Path, destination: Path) -> tuple[int, str]:
     retained = 0
     total = 0
     digest = hashlib.sha256()
+    panic_context_pending = False
     with _open_safe(source) as input_file, destination.open("wb") as output:
         for raw in input_file:
             total += len(raw)
@@ -1039,8 +1116,10 @@ def _project_text(source: Path, destination: Path) -> tuple[int, str]:
             EVIDENCE.check_bytes(raw, str(source))
             _reject_secret_assignments(raw)
             if len(raw) > MAX_LINE_BYTES:
+                panic_context_pending = False
                 continue
             line = ANSI_RE.sub(b"", raw).decode("utf-8", errors="replace").rstrip("\r\n")
+            panic_location = None
             readiness = classify_readiness_error(line)
             if readiness is not None:
                 projected = readiness
@@ -1053,6 +1132,7 @@ def _project_text(source: Path, destination: Path) -> tuple[int, str]:
             elif (gate_marker := _project_gate_marker(line)) is not None:
                 projected = gate_marker
             elif DROP_LINE_RE.search(line):
+                panic_context_pending = False
                 continue
             else:
                 marker = RUNTIME_MARKER_RE.search(line)
@@ -1062,13 +1142,17 @@ def _project_text(source: Path, destination: Path) -> tuple[int, str]:
                 error_match = ERROR_LINE_RE.fullmatch(stripped)
                 rust_test = RUST_TEST_RESULT_RE.fullmatch(stripped)
                 panic_location = RUST_PANIC_LOCATION_RE.fullmatch(stripped)
-                if rust_test:
+                panic_context = _project_rust_panic_context(stripped) if panic_context_pending else None
+                if panic_context is not None:
+                    projected = panic_context
+                elif rust_test:
                     status = {"ok": "passed", "FAILED": "failed", "ignored": "ignored"}[rust_test.group("status")]
                     projected = f"HEPH_GCP_TEST test={rust_test.group('test')} status={status}"
                 elif panic_location:
                     # A caught panic is only informational until cargo emits a
-                    # canonical test result; retain its bounded source location.
-                    projected = f"location={panic_location.group('location')}"
+                    # canonical test result; retain its bounded location and,
+                    # when approved by the scanner, a closed errno class.
+                    projected = _project_rust_panic(panic_location, stripped)
                 elif stack_match:
                     # Keep only a canonical source location; never retain the
                     # caller's free-form stack text.
@@ -1082,15 +1166,19 @@ def _project_text(source: Path, destination: Path) -> tuple[int, str]:
                         or BROWSER_DROP_WORD_RE.search(text)
                         or len(text) > 1024
                     ):
+                        panic_context_pending = False
                         continue
                     field = "assertion" if assertion_match else "error"
                     projected = f"{field}={text}"
                 elif marker is not None:
                     projected, fields = _project_runtime_fields(line)
                     if not fields and not projected.split()[1:]:
+                        panic_context_pending = False
                         continue
                 else:
+                    panic_context_pending = False
                     continue
+            panic_context_pending = panic_location is not None
             encoded = (projected[:16 * 1024] + (" [TRUNCATED]" if len(projected) > 16 * 1024 else "") + "\n").encode()
             output.write(encoded)
             digest.update(encoded)

@@ -434,6 +434,99 @@ finish
                 [],
             )
 
+    def test_panic_reason_is_closed_and_credential_panic_is_quarantined_with_first_failure(self):
+        """Keep an approved errno class while preserving typed failure provenance."""
+
+        with tempfile.TemporaryDirectory(prefix="heph-gcp-panic-projection-") as directory:
+            root = Path(directory)
+            safe_runtime = root / "safe-runtime.log"
+            safe_runtime.write_text(
+                "thread 'prepared-worker' panicked at crates/foo/src/lib.rs:470:9: Permission denied\n"
+                "provision prepared service worker VM: VmError::Provider "
+                "{ code: \"cgroup-place-worker\", reason: \"Permission denied\" }\n"
+                "thread 'prepared-worker' panicked at crates/foo/src/worker.rs:512:7\n"
+                "provision prepared service worker VM: VmError::Unavailable "
+                "{ resource: \"worker binary\", reason: \"Permission denied\" }\n"
+                "thread 'prepared-worker' panicked at crates/foo/src/cgroup.rs:42:7\n"
+                "provision prepared service worker VM: VmError::Provider "
+                "{ code: \"cgroup-create\", reason: \"Permission denied\" }\n",
+                encoding="utf-8",
+            )
+            safe_bundle = root / "safe-bundle"
+            self.assertEqual(
+                COLLECTOR.collect(safe_bundle, [f"runtime-log={safe_runtime}"], None, None, None),
+                0,
+            )
+            projected = (safe_bundle / "sources" / "runtime-log").read_text(encoding="utf-8")
+            self.assertEqual(
+                projected,
+                "HEPH_GCP_TEST test=rust-panic location=crates/foo/src/lib.rs:470:9 "
+                "error_class=permission-denied errno=EACCES\n"
+                "HEPH_GCP_TEST test=rust-panic operation=cgroup-place-worker "
+                "error_class=permission-denied errno=EACCES\n"
+                "HEPH_GCP_TEST test=rust-panic location=crates/foo/src/worker.rs:512:7\n"
+                "HEPH_GCP_TEST test=rust-panic operation=worker-binary "
+                "error_class=permission-denied errno=EACCES\n"
+                "HEPH_GCP_TEST test=rust-panic location=crates/foo/src/cgroup.rs:42:7\n"
+                "HEPH_GCP_TEST test=rust-panic operation=cgroup-create "
+                "error_class=permission-denied errno=EACCES\n",
+            )
+
+            first_failure = root / "first-failure.json"
+            first_failure.write_text(
+                json.dumps(
+                    {
+                        "schema": 1,
+                        "phase": "browser-setup",
+                        "command_id": "browser-setup",
+                        "exit_code": 78,
+                        "diagnostic_source": "runtime-log",
+                        "diagnostic_error": "setup-failed",
+                    }
+                )
+                + "\n",
+                encoding="utf-8",
+            )
+            credential_runtime = root / "runtime-panicked.log"
+            credential_runtime.write_text(
+                "thread 'prepared-worker' panicked at crates/foo/src/lib.rs:470:9: "
+                "Permission denied\n"
+                "provision prepared service worker VM: VmError::Provider "
+                "{ code: \"cgroup-place-worker\", reason: \"Permission denied\", "
+                "secret=HEPHAESTUS_BROWSER_SECRET_4d7ccf_org }\n",
+                encoding="utf-8",
+            )
+            quarantined_bundle = root / "quarantined-bundle"
+            self.assertEqual(
+                COLLECTOR.collect(
+                    quarantined_bundle,
+                    [
+                        f"first-failure={first_failure}",
+                        f"runtime-log={credential_runtime}",
+                    ],
+                    None,
+                    None,
+                    None,
+                ),
+                0,
+            )
+            manifest = json.loads((quarantined_bundle / "manifest.json").read_text(encoding="utf-8"))
+            self.assertEqual(
+                manifest["rejectedSources"],
+                [{"label": "runtime-log", "reason": "credential-scan-rejected", "status": "rejected"}],
+            )
+            self.assertTrue(
+                any(
+                    record["label"] == "first-failure"
+                    and record["path"] == "sources/first-failure"
+                    and record["bytes"] == (quarantined_bundle / "sources" / "first-failure").stat().st_size
+                    for record in manifest["sources"]
+                )
+            )
+            triage = TRIAGE.summarize(quarantined_bundle)
+            self.assertEqual(triage["firstFailure"]["exit_code"], 78)
+            self.assertNotIn("HEPHAESTUS_BROWSER_SECRET_4d7ccf_org", json.dumps(triage))
+
     def test_triage_context_prioritizes_late_failures_and_deduplicates_sources(self):
         with tempfile.TemporaryDirectory(prefix="heph-gcp-triage-context-cap-") as directory:
             root = Path(directory)
