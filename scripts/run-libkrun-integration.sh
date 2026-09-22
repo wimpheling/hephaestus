@@ -36,6 +36,7 @@ nats_image="${HEPHAESTUS_NATS_TEST_IMAGE:-${DEFAULT_NATS_IMAGE}}"
 readonly nats_image
 
 fixture_root=""
+runtime_root=""
 container_name=""
 postgres_container_name=""
 nats_container_name=""
@@ -471,12 +472,12 @@ redact_diagnostics() {
 
 diagnostics_body() {
     printf 'libkrun integration failed; redacted service diagnostics:\n'
-    if [[ -n "${fixture_root}" && -d "${fixture_root}/runtime" ]]; then
+    if [[ -n "${runtime_root}" && -d "${runtime_root}" ]]; then
         printf 'guest passt logs (bounded):\n'
         while IFS= read -r passt_log; do
             printf '%s\n' "--- ${passt_log} (last 200 lines) ---"
             tail -200 -- "${passt_log}" 2>&1 || true
-        done < <(find "${fixture_root}/runtime" -type f -name passt.log -print | sort | head -n 4)
+        done < <(find "${runtime_root}" -type f -name passt.log -print | sort | head -n 4)
     fi
     for service in "${postgres_container_name}" "${nats_container_name}" "${zot_container_name}"; do
         [[ -n "${service}" ]] || continue
@@ -769,6 +770,10 @@ cleanup() {
         chmod -R u+w "${fixture_root}"
         rm -rf -- "${fixture_root}"
     fi
+    if [[ -n "${runtime_root}" && -d "${runtime_root}" ]]; then
+        chmod -R u+w "${runtime_root}"
+        rm -rf -- "${runtime_root}"
+    fi
     exit "${status}"
 }
 interrupt() {
@@ -832,16 +837,16 @@ phase_timing_end runtime-guest-build passed
 # libkrun appends a UUID and supervisor.sock beneath this directory. Keep the
 # generated prefix short enough for Linux's 108-byte Unix socket limit.
 fixture_root="$(mktemp -d "${HEPHAESTUS_LIBKRUN_TMP_ROOT:-/tmp}/h.XXXXXX")"
+runtime_root="$(mktemp -d "${HEPHAESTUS_LIBKRUN_TMP_ROOT:-/tmp}/r.XXXXXX")"
 touch "${fixture_root}/.hephaestus-integration-fixture"
 chmod 0700 "${fixture_root}"
+chmod 0700 "${runtime_root}"
 mkdir -p \
     "${fixture_root}/rootfs" \
     "${fixture_root}/image-root" \
-    "${fixture_root}/runtime" \
     "${fixture_root}/disks" \
     "${fixture_root}/mounts/repository" \
     "${fixture_root}/mounts/workspace"
-chmod 0700 "${fixture_root}/runtime"
 
 materialize_image "${ubuntu_image}" "${fixture_root}/rootfs" fixture
 prepare_guest_root "${fixture_root}/rootfs"
@@ -961,7 +966,7 @@ if [[ "${HEPHAESTUS_APP_LIBKRUN_E2E:-0}" == "1" ]]; then
         HEPHAESTUS_APP_LIBKRUN_E2E=1 \
         HEPHAESTUS_POSTGRES_TEST_URL="${postgres_url}" \
         HEPHAESTUS_NATS_TEST_URL="${nats_url}" \
-        HEPHAESTUS_LIBKRUN_RUNTIME_ROOT="${fixture_root}/runtime" \
+        HEPHAESTUS_LIBKRUN_RUNTIME_ROOT="${runtime_root}" \
         HEPHAESTUS_LIBKRUN_IMAGE_ROOT="${fixture_root}" \
         HEPHAESTUS_LIBKRUN_RUST_BUILDER_ROOT="${rust_builder_root}" \
         HEPHAESTUS_LIBKRUN_ROOTFS="${fixture_root}/rootfs" \
@@ -1040,7 +1045,7 @@ if [[ "${HEPHAESTUS_APP_LIBKRUN_E2E:-0}" == "1" ]]; then
             HEPHAESTUS_APP_COOKING_BUILD_PROOF=1 \
             HEPHAESTUS_POSTGRES_TEST_URL="${postgres_url}" \
             HEPHAESTUS_NATS_TEST_URL="${nats_url}" \
-            HEPHAESTUS_LIBKRUN_RUNTIME_ROOT="${fixture_root}/runtime" \
+            HEPHAESTUS_LIBKRUN_RUNTIME_ROOT="${runtime_root}" \
             HEPHAESTUS_LIBKRUN_IMAGE_ROOT="${fixture_root}" \
             HEPHAESTUS_LIBKRUN_RUST_BUILDER_ROOT="${rust_builder_root}" \
             HEPHAESTUS_LIBKRUN_ROOTFS="${fixture_root}/rootfs" \
@@ -1110,7 +1115,7 @@ elif [[ "${HEPHAESTUS_PHASE1B_INTEGRATION:-0}" == "1" ]]; then
         --package vm-libkrun \
         --bin hephaestus-vm-libkrun-worker
     run_as_guest_owner env \
-        HEPHAESTUS_LIBKRUN_RUNTIME_ROOT="${fixture_root}/runtime" \
+        HEPHAESTUS_LIBKRUN_RUNTIME_ROOT="${runtime_root}" \
         HEPHAESTUS_LIBKRUN_IMAGE_ROOT="${fixture_root}" \
         HEPHAESTUS_LIBKRUN_RUST_BUILDER_ROOT="${rust_builder_root}" \
         HEPHAESTUS_LIBKRUN_ROOTFS="${fixture_root}/rootfs" \
@@ -1127,7 +1132,7 @@ else
     printf 'Running libkrun smoke test with pinned image %s\n' "${ubuntu_image}"
     run_as_guest_owner env \
         HEPHAESTUS_LIBKRUN_INTEGRATION=1 \
-        HEPHAESTUS_LIBKRUN_RUNTIME_ROOT="${fixture_root}/runtime" \
+        HEPHAESTUS_LIBKRUN_RUNTIME_ROOT="${runtime_root}" \
         HEPHAESTUS_LIBKRUN_IMAGE_ROOT="${fixture_root}" \
         HEPHAESTUS_LIBKRUN_RUST_BUILDER_ROOT="${rust_builder_root}" \
         HEPHAESTUS_LIBKRUN_ROOTFS="${fixture_root}/rootfs" \
@@ -1145,12 +1150,12 @@ else
         -- --nocapture
 fi
 
-if [[ ! -d "${fixture_root}/runtime" ]]; then
+if [[ ! -d "${runtime_root}" ]]; then
     heph_shell_failure_die runtime-cleanup missing-input 1 "${LINENO}"
     die "runtime cleanup directory is unavailable"
 fi
 runtime_entries=''
-if ! runtime_entries="$(find "${fixture_root}/runtime" -mindepth 1 -print -quit)"; then
+if ! runtime_entries="$(find "${runtime_root}" -mindepth 1 -print -quit)"; then
     heph_shell_failure_die runtime-cleanup read-failed 1 "${LINENO}"
     die "runtime cleanup directory cannot be inspected"
 fi
@@ -1159,17 +1164,17 @@ fi
 # materialized run; reject every other entry and let non-empty namespace
 # children surface as leaks.
 if [[ -n "${runtime_entries}" ]]; then
-    runtime_entries="$(find "${fixture_root}/runtime" -mindepth 1 -print | while IFS= read -r entry; do
+    runtime_entries="$(find "${runtime_root}" -mindepth 1 -print | while IFS= read -r entry; do
         case "${entry}" in
-            "${fixture_root}/runtime/exact-runs")
+            "${runtime_root}/exact-runs")
                 if [[ -L "${entry}" || ! -d "${entry}" ]]; then
                     printf '%s\n' "${entry}"
                     break
                 fi
                 ;;
-            "${fixture_root}/runtime/exact-runs/active"|\
-            "${fixture_root}/runtime/exact-runs/gateway-services"|\
-            "${fixture_root}/runtime/authority-handoffs")
+            "${runtime_root}/exact-runs/active"|\
+            "${runtime_root}/exact-runs/gateway-services"|\
+            "${runtime_root}/authority-handoffs")
                 if [[ -L "${entry}" || ! -d "${entry}" ]]; then
                     printf '%s\n' "${entry}"
                     break
