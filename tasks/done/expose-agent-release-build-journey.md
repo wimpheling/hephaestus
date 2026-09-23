@@ -231,7 +231,7 @@ explicit platform policy.
   - [x] Allow a project to define a custom OCI image from a committed Dockerfile
     and OCI build configuration.
     - [x] Define repository-owned Dockerfile discovery, approved-base, selector,
-      lifecycle, and isolation rules in `tasks/in-progress/repository-oci-builders.md`.
+      lifecycle, and isolation rules in `tasks/done/repository-oci-builders.md`.
     - [x] Restrict custom image base images to approved digest-pinned
       platform OCI images.
     - [x] Build custom OCI images in an isolated image-builder job with
@@ -239,7 +239,7 @@ explicit platform policy.
       `heph-base` OCI layouts, exact-Git checkouts, and an offline Trivy gate.
       - The optional single-node daemon worker is configured with explicit
         private roots and trusted absolute binary paths; see
-        `tasks/in-progress/repository-oci-builders.md`.
+        `tasks/done/repository-oci-builders.md`.
     - [x] Record the resulting immutable OCI digest, provenance, scan result,
       and preparation state under the owning project.
     - [x] Materialize each prepared custom digest in the shared local image cache.

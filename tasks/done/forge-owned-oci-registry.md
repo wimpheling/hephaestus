@@ -44,7 +44,7 @@ session state.
 | Registry implementation | Package a pinned Zot release by immutable binary/container digest. Do not implement the OCI Distribution server in Hephaestus. |
 | Deployment | Run Zot as a separately isolated forge service. It is deployed, configured, monitored, backed up, and upgraded by Hephaestus deployment tooling. |
 | Public surface | Expose only the OCI Distribution endpoints required by supported clients at a configured registry authority, normally `registry.<forge-domain>`. Zot management, debug, search, and UI endpoints remain private or disabled unless separately specified. |
-| Protocol | Require OCI Distribution 1.1 behavior used by Hephaestus, including digest pull/push, indexes, content negotiation, and referrers. Production certification with the upstream OCI conformance suite is deferred to `tasks/todo/complete-forge-oci-registry-operational-acceptance.md`. |
+| Protocol | Require OCI Distribution 1.1 behavior used by Hephaestus, including digest pull/push, indexes, content negotiation, and referrers. Production certification with the upstream OCI conformance suite is deferred to `tasks/todo/quality_improvements/complete-forge-oci-registry-operational-acceptance.md`. |
 | Authentication | Configure Zot to trust bearer tokens signed by the Hephaestus registry token service. Keep the signing key in the existing secret/runtime boundary and give Zot only verification material. |
 | Initial clients | Direct push is limited to trusted platform, release, and repository-builder workers plus explicit operator recovery actions. End-user arbitrary image push is not part of the first release. |
 | Authorization | Hephaestus derives registry scopes from durable platform/project/repository/release ownership. A requested scope never grants more authority than the authenticated actor or workload already has. |
@@ -128,7 +128,7 @@ below complete.
   event-stream reconnects.
 
 The following production operational acceptance is deliberately deferred to
-[complete-forge-oci-registry-operational-acceptance.md](../todo/complete-forge-oci-registry-operational-acceptance.md):
+[complete-forge-oci-registry-operational-acceptance.md](../todo/quality_improvements/complete-forge-oci-registry-operational-acceptance.md):
 OCI conformance certification; real edge TLS/header and storage-outage drills;
 callback/reconciliation failure and replay drills; signing-key rotation,
 compromise response, and token revocation; coordinated backup/restore; and
@@ -284,7 +284,7 @@ cross-project-denial acceptance remains active.
     digests, not approved internal registry references.
   - [x] Split production-shaped Ubuntu base import and durable source-digest
     recording into
-    [complete-forge-oci-registry-operational-acceptance.md](../todo/complete-forge-oci-registry-operational-acceptance.md).
+    [complete-forge-oci-registry-operational-acceptance.md](../todo/quality_improvements/complete-forge-oci-registry-operational-acceptance.md).
   - [x] Publish each builder to `platform/builders/<builder-key>`, including an
     OCI index and explicit per-architecture manifests for every supported
     architecture.
@@ -315,7 +315,7 @@ cross-project-denial acceptance remains active.
     tags, builder definitions, approvals, or policy change.
   - [x] Split additional retry, retirement, and missing-content lifecycle E2E
     coverage into
-    [expand-repository-oci-builder-lifecycle-e2e-coverage.md](../todo/expand-repository-oci-builder-lifecycle-e2e-coverage.md).
+    [expand-repository-oci-builder-lifecycle-e2e-coverage.md](../todo/quality_improvements/test_coverage/expand-repository-oci-builder-lifecycle-e2e-coverage.md).
 
 - [x] **9. Expose forge-owned registry state in the UI**
   - [x] Add typed service/query projections for authorized image identity,
@@ -367,12 +367,12 @@ cross-project-denial acceptance remains active.
 
 - [x] Split durable production-shaped authority, artifact, and catalog evidence
   into
-  [complete-forge-oci-registry-operational-acceptance.md](../todo/complete-forge-oci-registry-operational-acceptance.md).
+  [complete-forge-oci-registry-operational-acceptance.md](../todo/quality_improvements/complete-forge-oci-registry-operational-acceptance.md).
 - [x] Record successful repository-builder publication-to-materialization,
   execution, and cross-project-denial evidence through
   `scripts/test-repository-oci-builder-e2e.sh`; retry, retirement, and
   missing-content expansion is tracked in
-  [expand-repository-oci-builder-lifecycle-e2e-coverage.md](../todo/expand-repository-oci-builder-lifecycle-e2e-coverage.md).
+  [expand-repository-oci-builder-lifecycle-e2e-coverage.md](../todo/quality_improvements/test_coverage/expand-repository-oci-builder-lifecycle-e2e-coverage.md).
 - [x] Record the complete repository quality and browser-gate output before
   moving this task to `tasks/done/`.
   `cargo dev quality` passed with 197 Phoenix tests and 78 focused UI tests;

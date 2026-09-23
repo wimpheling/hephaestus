@@ -439,7 +439,7 @@ infrastructure result. If diagnosis shows that a startup fix needs image
 compatibility work, a bounded runner-image rebuild may be necessary; promotion
 still follows the existing validation and protection rules. Image rebuild
 automation remains tracked in
-[`automate-gcp-runner-image-rebuilds.md`](../todo/automate-gcp-runner-image-rebuilds.md).
+[`automate-gcp-runner-image-rebuilds.md`](../todo/quality_improvements/test_coverage/automate-gcp-runner-image-rebuilds.md).
 
 ## Completion evidence
 

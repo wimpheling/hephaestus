@@ -4,7 +4,7 @@ Purpose
 -------
 Measure cold disposable-GCP Cooking CI performance and evaluate one bounded
 change at a time without weakening correctness, security, private evidence or
-cleanup. The linked plan is tasks/todo/optimize-gcp-cooking-ci-performance.md.
+cleanup. The linked plan is tasks/todo/quality_improvements/test_coverage/optimize-gcp-cooking-ci-performance.md.
 
 Rules
 -----

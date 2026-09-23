@@ -7,8 +7,8 @@ account or live provider delivery is required. Application unit and subsystem
 integration tests support these cases but do not replace the joined E2E proof.
 
 On 2026-09-07 the user split the exhaustive
-[host-daemon crash matrix](../../tasks/todo/complete-host-daemon-crash-recovery-matrix.md)
-and [expanded adversarial isolation matrix](../../tasks/todo/complete-adversarial-isolation-e2e-matrix.md)
+[host-daemon crash matrix](../../tasks/todo/quality_improvements/complete-host-daemon-crash-recovery-matrix.md)
+and [expanded adversarial isolation matrix](../../tasks/todo/quality_improvements/test_coverage/complete-adversarial-isolation-e2e-matrix.md)
 into follow-up tasks. They are not MVP-05 blockers. Existing executable crash,
 denial, isolation, rotation/revocation, retirement and confinement assertions
 remain required; demonstrated security defects remain blockers.

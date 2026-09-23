@@ -1718,6 +1718,7 @@ test_mode=diagnostic
 revision=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
 diagnostics_gate_helper="$3"
 diagnostics_gate_script_sha256="$(sha256sum "$diagnostics_gate_helper" | awk '{print $1}')"
+trial_deadline_epoch=$(( $(date +%s) + 30 ))
 collection_deadline_epoch=$(( $(date +%s) + 30 ))
 initialize_cooking_gate_results
 complete_diagnostic_gate_results

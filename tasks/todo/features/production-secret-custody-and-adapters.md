@@ -28,5 +28,5 @@ lease, semantic-operation, revocation, and audit contracts.
 
 ## Dependencies
 
-- [`manage-delegate-and-deliver-secrets.md`](../done/manage-delegate-and-deliver-secrets.md)
-- [`mvp-04-brokered-model-and-outbound-capabilities.md`](mvp-04-brokered-model-and-outbound-capabilities.md)
+- [`manage-delegate-and-deliver-secrets.md`](../../done/manage-delegate-and-deliver-secrets.md)
+- [`mvp-04-brokered-model-and-outbound-capabilities.md`](../../done/mvp-04-brokered-model-and-outbound-capabilities.md)

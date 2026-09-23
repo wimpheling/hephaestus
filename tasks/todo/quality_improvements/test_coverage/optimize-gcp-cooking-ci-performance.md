@@ -14,7 +14,7 @@ Then use instrumented measurements and one-change experiments to reduce
 avoidable work.
 
 The experiment ledger is
-[`docs/gcp-cooking-ci-performance-experiments.txt`](../../docs/gcp-cooking-ci-performance-experiments.txt).
+[`docs/gcp-cooking-ci-performance-experiments.txt`](../../../../docs/gcp-cooking-ci-performance-experiments.txt).
 It is the only place where a change may be recorded as accepted or rejected.
 The ledger currently records a valid cold-GCP baseline and accepted CPU,
 host-build-removal and overlap trials; broader optimization work remains in

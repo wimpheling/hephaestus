@@ -65,7 +65,7 @@ agent definition per source commit.
 
 General state-capability transitions and declared hookless state compatibility
 are deferred to
-[`support-agent-state-capability-transitions.md`](support-agent-state-capability-transitions.md).
+[`support-agent-state-capability-transitions.md`](../todo/structural/generic_capacity_trait/support-agent-state-capability-transitions.md).
 
 ## Dependencies and affected boundaries
 

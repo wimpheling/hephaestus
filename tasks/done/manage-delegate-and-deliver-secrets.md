@@ -529,7 +529,7 @@ Evidence recorded 2026-07-29:
   operator runbook covers provisioning, rotation, unavailable-key recovery,
   metadata-only inspection, emergency revocation/cancellation, and orphan
   reconciliation. Production KMS/vault/proxy/adapter/renewal work is isolated
-  in `tasks/todo/production-secret-custody-and-adapters.md`.
+  in `tasks/todo/features/production-secret-custody-and-adapters.md`.
 - Migration `0009_operational_observability.sql` applied cleanly to fresh
   PostgreSQL 17.10 and has SHA-256
   `77d6d9cd5c04f495d1106e42d538087fa9c33914d9f2c0d6d00466b27429cb16`.

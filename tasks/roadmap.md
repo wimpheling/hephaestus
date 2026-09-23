@@ -26,8 +26,8 @@ require them to assemble everything before receiving value.
   recovery, retained security and guest-crash coverage, deterministic transport,
   browser evidence, and reproducible local and CI execution. Real Telegram is
   excluded. The user split the exhaustive
-  [host-daemon crash matrix](todo/complete-host-daemon-crash-recovery-matrix.md)
-  and [expanded adversarial isolation matrix](todo/complete-adversarial-isolation-e2e-matrix.md)
+  [host-daemon crash matrix](todo/quality_improvements/complete-host-daemon-crash-recovery-matrix.md)
+  and [expanded adversarial isolation matrix](todo/quality_improvements/test_coverage/complete-adversarial-isolation-e2e-matrix.md)
   into follow-ups on 2026-09-07; they are not MVP-05 completion blockers.
 - [x] Preserve the distinction between the verified first-request proof and
   remaining acceptance requirements; record the agreed scope changes explicitly.
@@ -56,9 +56,12 @@ phases, negative-capability checks, diagnostic gates, and cleanup passed.
 Local quality and repository CI passed for the same implementation. Exact
 provenance and artifacts are recorded in the task and [GCP runbook](../docs/gcp-cooking-ci.md).
 
-The next product task is [shipping the agent-led Heph distribution](todo/ship-agent-led-heph-distribution.md).
-Its primary administration UI and complete create/code/run project journey
-remain open; MVP-06 supplies the proven interactive foundation.
+The next product task is [defining the own-the-loop agent platform](todo/distribution/define-own-the-loop-agent-platform.md).
+That definition is a prerequisite to fixing the first distribution's product
+boundaries. The ordered work before [shipping the agent-led Heph distribution](todo/distribution/ship-agent-led-heph-distribution.md)
+is laid out at the start of step 3. The distribution's primary administration
+UI and complete create/code/run project journey remain open; MVP-06 supplies
+the proven interactive foundation.
 
 - [x] Jointly review the MVP-06 plan with the user before starting or resuming
   implementation. Confirm the intended scope, dependency order and acceptance
@@ -79,9 +82,24 @@ this stage. No new actor abstraction, instance API or conversation service is
 presupposed by this step. Do not add a second scheduler or delivery system when
 the existing mechanisms suffice.
 
-## 3. Ship the first usable distribution
+## 3. Prepare and ship the first usable distribution
 
-- [ ] Deliver the [agent-led Heph distribution](todo/ship-agent-led-heph-distribution.md)
+### Ordered prerequisites
+
+Prioritize these workstreams before distribution implementation. Named
+dependencies determine the order within them; independent tasks may proceed
+in parallel:
+
+- [ ] Define the [own-the-loop agent platform and product](todo/distribution/define-own-the-loop-agent-platform.md)
+  as the product boundary and source for the distribution's decisions.
+- [ ] Clarify the [workspace crate topology and extension boundaries](todo/structural/code_architecture/clarify-workspace-crate-topology-and-extension-boundaries.md).
+- [ ] After topology is complete, enforce the [350-line Rust file limit](todo/structural/code_architecture/enforce-350-line-rust-file-limit.md).
+- [ ] Complete [architecture and boundary lint hardening](todo/structural/code_architecture/harden-architecture-linter-boundaries.md), using the topology task's package boundaries.
+- [ ] Define [first-class private-volume, SQLite, and S3-compatible object primitives](todo/structural/generic_capacity_trait/first-class-sqlite-and-s3-object-primitives.md).
+- [ ] After the resource model is defined, support [agent state-capability transitions](todo/structural/generic_capacity_trait/support-agent-state-capability-transitions.md) against explicit resource bindings.
+- [ ] Add [parent-scoped resource slugs](todo/structural/add-parent-scoped-resource-slugs.md) before shipping canonical organization, project, and repository routes.
+
+- [ ] Deliver the [agent-led Heph distribution](todo/distribution/ship-agent-led-heph-distribution.md)
   whose primary entry point is the agent UI described in the product direction;
   retain trusted shell controls and human approval for grants, deployment, and
   recovery.
@@ -145,7 +163,7 @@ interactive-path audit rather than being treated as already implemented.
   evidence to prioritize subsequent work.
 - [ ] Automate content-versioned GCP runner image candidates with bounded
   validation and protected promotion; see
-  [the runner-image rebuild plan](todo/automate-gcp-runner-image-rebuilds.md).
+  [the runner-image rebuild plan](todo/quality_improvements/test_coverage/automate-gcp-runner-image-rebuilds.md).
 - [ ] Define backup and restoration as a first-class product workstream,
   including the consistent set of code, configuration and persistent state
   needed to recover an installation and the handling of credentials/keys.

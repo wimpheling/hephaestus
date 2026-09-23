@@ -28,7 +28,7 @@ registry implementation task.
 | Test authority | Use a disposable registry authority and test credentials with the same routing, token, TLS, and storage topology as production. Never weaken production authorization merely to satisfy a test client. |
 | Failure testing | Inject failures at the edge, callback delivery, reconciliation, storage, and token/key boundaries. Assertions must prove fail-closed execution and recovery without corrupting approved lifecycle state. |
 | Recovery | Restore PostgreSQL and Zot storage as a coordinated system, run reconciliation before execution resumes, and retain the evidence of any unavailable or missing approved content. |
-| Destructive collection | Keep Zot garbage collection disabled. This task does not authorize enabling it; use `tasks/todo/enable-reviewed-zot-garbage-collection.md` for that decision. |
+| Destructive collection | Keep Zot garbage collection disabled. This task does not authorize enabling it; use `tasks/todo/quality_improvements/enable-reviewed-zot-garbage-collection.md` for that decision. |
 | Production controls | Quotas and alerts are production-only acceptance. They are designed and proven here, but are not prerequisites for the current blueprint registry task. |
 
 ## Non-goals

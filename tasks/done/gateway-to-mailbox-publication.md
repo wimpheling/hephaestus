@@ -69,37 +69,66 @@ streaming, general scheduling, or cross-project mailbox publication.
   - [x] Prove a gateway cannot publish to another mailbox, another project, an unbound slot, or with another producer identity; prove revocation during a request produces the documented outcome.
   - [x] Prove no event body, secret, runtime credential, raw provider request, or target state appears in guest-visible authority files, logs, traces, NATS, browser payloads, or inspection responses.
 
-- [ ] **5. Inspect and verify**
+- [x] **5. Inspect and verify**
   - [x] Add authorized inspection that follows one gateway request through invocation, exact binding, mailbox acceptance, delivery, dispatch, and final disposition, while denying unprivileged viewers.
   - [x] Add real PostgreSQL, NATS JetStream, Caddy, and libkrun integration coverage for publication, deduplication, crash recovery, revocation, and provenance.
   - [x] Run `cargo fmt --all -- --check`.
   - [x] Run `cargo clippy --workspace --all-targets --all-features`.
   - [x] Run `cargo test --workspace --all-features`.
   - [x] Run `cargo doc --workspace --all-features --no-deps`.
-  - [ ] Run `cargo dev quality` and `git diff --check`.
+  - [x] Run `cargo dev quality` with the pinned toolchain and `git diff --check` (recorded implementation-head quality evidence and this closeout's diff check).
 
 ## Completion evidence
 
-Record gateway/revision/binding/grant/mailbox/event/delivery/run IDs, exact
-authorization snapshots, deduplication and crash-recovery evidence, denial and
-revocation outcomes, redaction/sentinel results, provenance screenshots, and
-the exact verification commands and test counts.
+The records below tie a released gateway request to a mailbox event, dispatch,
+and agent run. The linked journey and integration suites cover deduplication,
+crash recovery, denial, revocation, and redaction. The retained summaries omit
+some per-record IDs and provenance screenshots; those limits are stated below
+rather than inferred from aggregate results.
 
-## Implementation evidence (pending live journey)
+## Implementation evidence (journey and quality passed)
 
-- Source fixture: [`examples/cooking/cooking-gateway`](../../examples/cooking/cooking-gateway); it uses one
-  `cooking_requests` slot and a stable `telegram-update-<update_id>`
-  deduplication key, with no mailbox identifiers, broker/database access, or
-  credentials in its source.
-- Automated checks passed on 2026-09-03: `cargo fmt --all -- --check`,
-  `cargo clippy --workspace --all-targets --all-features`,
-  `cargo test --workspace --all-features`, `cargo doc --workspace
-  --all-features --no-deps`, and `git diff --check`.
-- `crates/gateway-postgres/tests/postgres.rs` supplies opt-in real-PostgreSQL
-  coverage. `scripts/run-gateway-libkrun-e2e.sh` supplies its disposable
-  PostgreSQL and JetStream URLs to those tests after the joined
-  Caddy/libkrun/daemon proof. Together they cover concurrent distinct
-  requests, retry deduplication, target dispatch, grant revocation, worker and
-  application RLS, crash/redelivery recovery, and redacted provenance. That
-  external-service command and `cargo dev quality` remain operator-run
-  evidence and are intentionally not claimed here.
+- Fixture: [`examples/cooking/cooking-gateway`](../../examples/cooking/cooking-gateway)
+  declares one `cooking_requests` slot and uses the stable
+  `telegram-update-<update_id>` deduplication key. The source contains no
+  mailbox identifiers, broker/database access, or credentials.
+- **Disposable local wrapper evidence, 2026-09-05:** the
+  [Cooking README record](../../examples/cooking/README.md#recorded-verification-2026-09-05)
+  reports one real daemon journey and four PostgreSQL/NATS regressions for
+  `examples/cooking/run.sh`; `scripts/run-gateway-libkrun-e2e.sh` separately
+  passed its ordinary gateway journey and four regressions. The README states
+  the identified resources did not remain installed after fixture cleanup:
+
+  | Evidence | Recorded identifier or outcome |
+  | --- | --- |
+  | Route | `2e1ce551-7985-4a3d-8231-1954f5af4847` |
+  | Gateway revision | `b604910b-a208-4b21-a644-ec575b0706ab` |
+  | Mailbox | `36441a8b-729a-4561-917e-4b9201e1711d` |
+  | Event | `d8f69d9f-ff04-40c2-96a7-5de5c0b5c092` |
+  | Run / authorization snapshot | `417922be-fb60-49d2-9962-37a32db83092` |
+  | Cooking revision | `ddf12f57-967c-4e74-8769-f0f4e1defa0c` |
+  | State lease | `e346d3ac-c8f3-4a89-8d27-7e4ea022f6e6`, fencing token `2` |
+  | Dispatch / disposition | Sequence `1`, `delivered` |
+
+- **Current GCP evidence, 2026-09-23:** the accepted [Cooking run 35799526119](https://github.com/wimpheling/hephaestus/actions/runs/35799526119)
+  exercised workload head `4061545a21c6f3ce84f6e475f69e8d2819024efe`;
+  all 15 required workload phases passed with zero failures. Its `golden-tests`
+  phase runs the joined Cooking journey. The `database-tests` phase runs the
+  unfiltered `gateway-postgres` integration test binary against disposable
+  PostgreSQL and JetStream after the shared-Caddy/libkrun proof. The runbook
+  records manifest `10726285171`, workload `10726165768`, controller
+  `10726155828`, archive SHA-256
+  `d002d5ec20bce85138e9e53713f82216f66a7d032d55d3ac2947cf600d985a02`, a
+  clean scan of 38 files / 1,163,789 bytes, and independent VM, disk, and IP
+  absence verification. See the [GCP Cooking evidence record](../../docs/gcp-cooking-ci.md#current-feature-and-evidence-status)
+  and [MVP-05.1 acceptance record](../done/mvp-05.1-complete-cooking-acceptance.md).
+- `cargo +1.88.0 dev quality` passed for the same implementation head; the
+  recorded log is
+  `/var/tmp/heph-cargo-dev-quality-4061545-20260923-final-1143909.log`.
+  `git diff --check` also passed for this closeout.
+- The local 2026-09-05 summary does not record binding, grant, or delivery-row
+  IDs; it records only the delivered dispatch sequence, not a delivery UUID.
+  Neither that summary nor the published current GCP record includes a
+  provenance screenshot. The GCP artifact IDs above are run-level pointers and
+  do not supply those per-record IDs. The local disposable run is distinct
+  from the GCP run and does not record the current GCP workload head.

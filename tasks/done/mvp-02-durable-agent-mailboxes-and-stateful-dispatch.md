@@ -38,7 +38,7 @@ from durable application state rather than arbitrary process checkpoints.
 
 - [`mvp-01-agent-principals-capabilities-and-runtime-authority.md`](../done/mvp-01-agent-principals-capabilities-and-runtime-authority.md)
 - [`reusable-agent-releases-and-instances.md`](../done/reusable-agent-releases-and-instances.md)
-- [`define-own-the-loop-agent-platform.md`](define-own-the-loop-agent-platform.md)
+- [`define-own-the-loop-agent-platform.md`](../todo/distribution/define-own-the-loop-agent-platform.md)
 
 ## Non-goals
 
