@@ -48,30 +48,21 @@ interactive session, durable input/output, isolated execution, and reconnectable
 history. It does not by itself deliver the primary administration UI or the
 complete create/code/run project journey.
 
-The latest successful cloud baseline is [GCP run
-35719717491](https://github.com/wimpheling/hephaestus/actions/runs/35719717491),
-using controller SHA `93ab78be3c0bed3c9c963624401b3dc5cc40d024` and workload SHA
-`3ab25640d9948753b19a37341f0b19ebc1dc9644`. It passed the required workload,
-four browser phases, ten-check negative-capability summary, typed diagnostics
-gates, and VM cleanup verification. The retained diagnostics manifest records
-missing `lineage` and `lineage-status` sources, so complete source collection
-is not claimed. This is a baseline for the current cloud path; newer
-user-requested infrastructure remains in progress and needs updated-head cloud
-proof before merge. MVP-06 stays in progress.
+The [MVP-06 Git-backed session-chat journey](done/mvp-06-git-backed-session-chat-journey.md)
+is complete as an interaction precursor. Paired [Cooking](https://github.com/wimpheling/hephaestus/actions/runs/35799526119)
+and [session-chat](https://github.com/wimpheling/hephaestus/actions/runs/35799529195)
+GCP runs accepted implementation `4061545a`: all required workload/browser
+phases, negative-capability checks, diagnostic gates, and cleanup passed.
+Local quality and repository CI passed for the same implementation. Exact
+provenance and artifacts are recorded in the task and [GCP runbook](../docs/gcp-cooking-ci.md).
 
-The corrected diagnostic infrastructure proof [35728835480](https://github.com/wimpheling/hephaestus/actions/runs/35728835480)
-tested head `2c336b401ef5cd0615a41b53124760515f8b0cea`: the injected setup
-boundary failed at `browser-setup` after `147 ms` with exit `78`, and the
-retained timing projection marked `browser-initial` downstream-missing. Its
-safe timing artifact is [10694044487](https://github.com/wimpheling/hephaestus/actions/runs/35728835480/artifacts/10694044487);
-upload/download, scan, gate acceptance and VM cleanup all passed. This is
-infrastructure evidence, not MVP-06 completion. Feature head `251d54e` and
-candidate image build [35729371490](https://github.com/wimpheling/hephaestus/actions/runs/35729371490)
-remain pending candidate validation and parallel MVP-05/MVP-06 acceptance.
+The next product task is [shipping the agent-led Heph distribution](todo/ship-agent-led-heph-distribution.md).
+Its primary administration UI and complete create/code/run project journey
+remain open; MVP-06 supplies the proven interactive foundation.
 
 - [x] Jointly review the MVP-06 plan with the user before starting or resuming
   implementation. Confirm the intended scope, dependency order and acceptance
-  evidence in [the MVP-06 task](in-progress/mvp-06-git-backed-session-chat-journey.md)
+  evidence in [the MVP-06 task](done/mvp-06-git-backed-session-chat-journey.md)
   before implementation items are taken up.
 - [x] Trace the complete path from user input through durable acceptance and
   isolated execution to a visible response and reconnectable history.
