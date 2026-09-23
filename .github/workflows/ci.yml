@@ -113,17 +113,31 @@ jobs:
         run: |
           set -Eeuo pipefail
           mkdir -p coverage
+          coverage_ignore_regex='crates/rpc-proto/src/generated/'
           cargo llvm-cov \
             --workspace \
             --all-features \
+            --ignore-filename-regex "${coverage_ignore_regex}" \
             --html \
             --output-dir coverage/html \
             -- \
             --test-threads=1
-          cargo llvm-cov report 2>&1 | tee coverage/summary.txt
           cargo llvm-cov report \
+            --ignore-filename-regex "${coverage_ignore_regex}" \
+            2>&1 | tee coverage/summary.txt
+          cargo llvm-cov report \
+            --ignore-filename-regex "${coverage_ignore_regex}" \
             --lcov \
             --output-path coverage/lcov.info
+      - name: Aggregate Rust coverage by crate
+        id: rust_coverage_summary
+        if: ${{ steps.rust_coverage.outcome == 'success' }}
+        run: |
+          set -Eeuo pipefail
+          python3 scripts/rust_coverage_summary.py \
+            --lcov coverage/lcov.info \
+            --csv coverage/rust-coverage-by-crate.csv \
+            --markdown coverage/rust-coverage-by-crate.md
       - name: Retain Rust coverage reports
         id: upload_rust_coverage
         if: ${{ always() }}
@@ -137,12 +151,14 @@ jobs:
         if: ${{ always() }}
         env:
           COVERAGE_OUTCOME: ${{ steps.rust_coverage.outcome }}
+          COVERAGE_SUMMARY_OUTCOME: ${{ steps.rust_coverage_summary.outcome }}
           COVERAGE_ARTIFACT_URL: ${{ steps.upload_rust_coverage.outputs.artifact-url }}
         run: |
           {
             echo '## Rust coverage'
             echo
             echo "Result: \`${COVERAGE_OUTCOME}\`"
+            echo "Per-crate summary: \`${COVERAGE_SUMMARY_OUTCOME}\`"
             echo
             if [[ -s coverage/summary.txt ]]; then
               echo '```text'
@@ -154,6 +170,11 @@ jobs:
             echo
             echo 'Scope: the root `crates/*` workspace with `--workspace --all-features` and serialized tests.'
             echo 'Focused integration scripts, doc tests, and standalone Cooking workspaces are outside this report.'
+            if [[ -s coverage/rust-coverage-by-crate.md ]]; then
+              cat coverage/rust-coverage-by-crate.md
+            else
+              echo 'No per-crate coverage table was generated.'
+            fi
             if [[ -n "${COVERAGE_ARTIFACT_URL}" ]]; then
               echo "Coverage artifact: [download HTML and LCOV reports](${COVERAGE_ARTIFACT_URL})"
             else
