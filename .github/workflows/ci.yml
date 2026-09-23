@@ -30,7 +30,7 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
         with:
           toolchain: "1.88"
-          components: clippy,rustfmt
+          components: clippy,rustfmt,llvm-tools-preview
       - uses: Swatinem/rust-cache@v2
       - name: Install integration dependencies
         run: sudo apt-get update && sudo apt-get install -y e2fsprogs postgresql-client
@@ -69,6 +69,121 @@ jobs:
         run: scripts/check-authz.sh
       - name: Documentation
         run: cargo doc --workspace --all-features --no-deps
+      - name: Install cargo-llvm-cov
+        uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-llvm-cov@0.9.1
+      - name: Prepare isolated Rust coverage services
+        run: |
+          set -Eeuo pipefail
+          coverage_database="hephaestus_coverage_${GITHUB_RUN_ID}_${GITHUB_RUN_ATTEMPT}"
+          postgres_url_without_query="${HEPHAESTUS_POSTGRES_TEST_URL%%\?*}"
+          postgres_query_suffix=""
+          if [[ "${HEPHAESTUS_POSTGRES_TEST_URL}" == *\?* ]]; then
+            postgres_query_suffix="?${HEPHAESTUS_POSTGRES_TEST_URL#*\?}"
+          fi
+          postgres_authority="${postgres_url_without_query%/*}"
+          coverage_maintenance_url="${postgres_authority}/postgres${postgres_query_suffix}"
+          coverage_database_url="${postgres_authority}/${coverage_database}${postgres_query_suffix}"
+          psql --no-psqlrc --set ON_ERROR_STOP=1 \
+            --dbname "${coverage_maintenance_url}" \
+            --command "CREATE DATABASE \"${coverage_database}\""
+          docker run --detach --rm \
+            --name hephaestus-nats-coverage \
+            --publish 127.0.0.1:4223:4222 \
+            docker.io/library/nats@sha256:e4bf19f15fd3218814a4e3c9e0064e1334bd8aa20d5984b9f1a0afd084f8cc00 \
+            -js
+          for attempt in $(seq 1 30); do
+            if docker logs hephaestus-nats-coverage 2>&1 | grep -q 'Server is ready'; then
+              break
+            fi
+            if [[ "${attempt}" == 30 ]]; then
+              docker logs hephaestus-nats-coverage >&2 || true
+              echo 'isolated coverage JetStream did not become ready' >&2
+              exit 1
+            fi
+            sleep 1
+          done
+          {
+            echo "HEPHAESTUS_POSTGRES_TEST_URL=${coverage_database_url}"
+            echo 'HEPHAESTUS_NATS_TEST_URL=nats://127.0.0.1:4223'
+          } >> "${GITHUB_ENV}"
+      - name: Rust coverage
+        id: rust_coverage
+        run: |
+          set -Eeuo pipefail
+          mkdir -p coverage
+          coverage_ignore_regex='crates/rpc-proto/src/generated/'
+          cargo llvm-cov \
+            --workspace \
+            --all-features \
+            --ignore-filename-regex "${coverage_ignore_regex}" \
+            --html \
+            --output-dir coverage/html \
+            -- \
+            --test-threads=1
+          cargo llvm-cov report \
+            --ignore-filename-regex "${coverage_ignore_regex}" \
+            2>&1 | tee coverage/summary.txt
+          cargo llvm-cov report \
+            --ignore-filename-regex "${coverage_ignore_regex}" \
+            --lcov \
+            --output-path coverage/lcov.info
+      - name: Aggregate Rust coverage by crate
+        id: rust_coverage_summary
+        if: ${{ steps.rust_coverage.outcome == 'success' }}
+        run: |
+          set -Eeuo pipefail
+          python3 scripts/rust_coverage_summary.py \
+            --lcov coverage/lcov.info \
+            --csv coverage/rust-coverage-by-crate.csv \
+            --markdown coverage/rust-coverage-by-crate.md
+      - name: Retain Rust coverage reports
+        id: upload_rust_coverage
+        if: ${{ always() }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: rust-coverage-${{ github.run_id }}-${{ github.run_attempt }}
+          path: coverage
+          if-no-files-found: warn
+          retention-days: 7
+      - name: Publish Rust coverage summary
+        if: ${{ always() }}
+        env:
+          COVERAGE_OUTCOME: ${{ steps.rust_coverage.outcome }}
+          COVERAGE_SUMMARY_OUTCOME: ${{ steps.rust_coverage_summary.outcome }}
+          COVERAGE_ARTIFACT_URL: ${{ steps.upload_rust_coverage.outputs.artifact-url }}
+        run: |
+          {
+            echo '## Rust coverage'
+            echo
+            echo "Result: \`${COVERAGE_OUTCOME}\`"
+            echo "Per-crate summary: \`${COVERAGE_SUMMARY_OUTCOME}\`"
+            echo
+            if [[ -s coverage/summary.txt ]]; then
+              echo '```text'
+              tail -n 30 coverage/summary.txt
+              echo '```'
+            else
+              echo 'No coverage summary was generated.'
+            fi
+            echo
+            echo 'Scope: the root `crates/*` workspace with `--workspace --all-features` and serialized tests.'
+            echo 'Focused integration scripts, doc tests, and standalone Cooking workspaces are outside this report.'
+            if [[ -s coverage/rust-coverage-by-crate.md ]]; then
+              cat coverage/rust-coverage-by-crate.md
+            else
+              echo 'No per-crate coverage table was generated.'
+            fi
+            if [[ -n "${COVERAGE_ARTIFACT_URL}" ]]; then
+              echo "Coverage artifact: [download HTML and LCOV reports](${COVERAGE_ARTIFACT_URL})"
+            else
+              echo 'Coverage artifact URL unavailable.'
+            fi
+          } >> "$GITHUB_STEP_SUMMARY"
+      - name: Cleanup isolated Rust coverage services
+        if: ${{ always() }}
+        run: docker rm --force hephaestus-nats-coverage >/dev/null 2>&1 || true
 
   cooking-applications:
     runs-on: ubuntu-24.04
