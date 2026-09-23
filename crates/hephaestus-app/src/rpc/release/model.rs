@@ -26,8 +26,8 @@ use rpc_proto::messages::hephaestus::{
     release::v1::{
         Release, ReleaseAgent, ReleaseState, ReleaseSummary, ReleaseUiApiBinding,
         ReleaseUiCachePolicy, ReleaseUiDescriptor, ReleaseUiIcon, ReleaseUiManagedService,
-        ReleaseUiPresentation, ReleaseUiScope, ReleaseUiStaticContent, ReleaseUiStaticFile,
-        release_ui_descriptor,
+        ReleaseUiPresentation, ReleaseUiRepositoryGitAccess, ReleaseUiScope,
+        ReleaseUiStaticContent, ReleaseUiStaticFile, release_ui_descriptor,
     },
 };
 use time::OffsetDateTime;
@@ -118,9 +118,22 @@ fn ui_descriptor(value: ApplicationUiDescriptor) -> ReleaseUiDescriptor {
         entrypoint: value.entrypoint.to_string(),
         ui_kit_version: u32::from(value.ui_kit_version),
         cache: ui_cache(value.cache).into(),
+        repository_git_access: ui_repository_git_access(value.repository_git_access).into(),
         content: Some(content),
         apis: value.apis.into_iter().map(api_binding).collect(),
         ..Default::default()
+    }
+}
+
+const fn ui_repository_git_access(
+    value: release_domain::ui::UiRepositoryGitAccess,
+) -> ReleaseUiRepositoryGitAccess {
+    match value {
+        release_domain::ui::UiRepositoryGitAccess::None => ReleaseUiRepositoryGitAccess::None,
+        release_domain::ui::UiRepositoryGitAccess::Read => ReleaseUiRepositoryGitAccess::Read,
+        release_domain::ui::UiRepositoryGitAccess::ReadWrite => {
+            ReleaseUiRepositoryGitAccess::ReadWrite
+        }
     }
 }
 
@@ -370,7 +383,8 @@ pub(super) fn application_error(error: ReleaseError) -> super::super::RpcError {
 mod tests {
     use super::*;
     use release_domain::ui::{
-        UiIcon, UiKey, UiLabel, UiMediaType, UiPresentation, UiRoutePath, UiScope,
+        UiIcon, UiKey, UiLabel, UiMediaType, UiPresentation, UiRepositoryGitAccess, UiRoutePath,
+        UiScope,
     };
     use rpc_proto::messages::hephaestus::release::v1::release_ui_descriptor::Content;
     use uuid::Uuid;
@@ -386,6 +400,7 @@ mod tests {
             entrypoint: UiRoutePath::parse("index.html").expect("valid entrypoint"),
             ui_kit_version: 1,
             cache: ApplicationUiCachePolicy::NoStore,
+            repository_git_access: UiRepositoryGitAccess::None,
             content: ApplicationUiContent::Static { files: Vec::new() },
             apis: Vec::new(),
         }

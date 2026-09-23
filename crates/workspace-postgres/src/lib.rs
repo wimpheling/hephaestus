@@ -7,8 +7,8 @@ use sqlx::{FromRow, PgPool};
 use uuid::Uuid;
 use workspace_domain::{
     PendingResultMetadata, ResultArtifactMetadata, ResultId, ResultMetadata, ResultRepository,
-    WorkspaceMetadata, WorkspaceMetadataRepository, WorkspaceRepositoryError,
-    WorkspaceRequestMetadata,
+    RuntimeGitWorkspaceRequest, WorkspaceMetadata, WorkspaceMetadataRepository,
+    WorkspaceRepositoryError, WorkspaceRequestMetadata,
 };
 
 /// `PostgreSQL` implementation of workspace metadata persistence.
@@ -116,6 +116,29 @@ impl WorkspaceMetadataRepository for PgWorkspaceMetadataRepository {
             .map(|_| ())
     }
 
+    async fn insert_runtime_git_preparing(
+        &self,
+        metadata: &WorkspaceMetadata,
+        repository_id: Uuid,
+        input_commit: &str,
+        run_id: RunId,
+        event: Value,
+    ) -> Result<(), WorkspaceRepositoryError> {
+        let mut transaction = self.pool.begin().await.map_err(error)?;
+        sqlx::query("INSERT INTO run_workspaces (id, run_id, repository_id, input_commit, active_path, sealed_path, state) VALUES ($1, $2, $3, $4, $5, $6, 'preparing')")
+            .bind(metadata.id)
+            .bind(run_id.as_uuid())
+            .bind(repository_id)
+            .bind(input_commit)
+            .bind(&metadata.active_path)
+            .bind(&metadata.sealed_path)
+            .execute(&mut *transaction)
+            .await
+            .map_err(error)?;
+        insert_event(&mut transaction, run_id, "runtime_git.preparing", event).await?;
+        transaction.commit().await.map_err(error)
+    }
+
     async fn mark_failed(
         &self,
         run_id: RunId,
@@ -127,6 +150,84 @@ impl WorkspaceMetadataRepository for PgWorkspaceMetadataRepository {
 
     async fn mark_cleaned(&self, run_id: RunId) -> Result<(), WorkspaceRepositoryError> {
         sqlx::query("UPDATE run_workspaces SET state = 'cleaned', cleaned_at = now() WHERE run_id = $1 AND state <> 'cleaned'").bind(run_id.as_uuid()).execute(&self.pool).await.map_err(error).map(|_| ())
+    }
+
+    async fn runtime_git_request(
+        &self,
+        run_id: RunId,
+    ) -> Result<Option<RuntimeGitWorkspaceRequest>, WorkspaceRepositoryError> {
+        let row = sqlx::query_as::<_, RuntimeGitRequestRow>(
+            "SELECT git.repository_id,
+                    COALESCE(provenance.target_repository_id, $2) AS target_repository_id,
+                    COALESCE(provenance.target_ref, '') AS target_ref,
+                    COALESCE(provenance.target_commit, '') AS target_commit,
+                    git.git_operations, git.ref_globs
+             FROM runs AS run
+             JOIN run_authorization_snapshots AS snapshot
+               ON snapshot.run_id = run.id
+              AND snapshot.instance_id = run.instance_id
+              AND snapshot.instance_revision_id = run.instance_revision_id
+             JOIN run_git_authority_snapshots AS git
+               ON git.snapshot_id = snapshot.id
+              AND git.instance_revision_id = snapshot.instance_revision_id
+             LEFT JOIN run_instance_provenance AS provenance
+               ON provenance.run_id = run.id
+              AND provenance.instance_id = run.instance_id
+              AND provenance.instance_revision_id = run.instance_revision_id
+             WHERE run.id = $1",
+        )
+        .bind(run_id.as_uuid())
+        .bind(Uuid::nil())
+        .fetch_optional(&self.pool)
+        .await
+        .map_err(error)?;
+        Ok(row.map(Into::into))
+    }
+
+    async fn runtime_git_workspace(
+        &self,
+        run_id: RunId,
+    ) -> Result<Option<WorkspaceMetadata>, WorkspaceRepositoryError> {
+        let row = sqlx::query_as::<_, WorkspaceRow>(
+            "SELECT workspace.id, workspace.state, workspace.active_path,
+                    workspace.sealed_path, workspace.input_commit
+             FROM run_workspaces AS workspace
+             WHERE workspace.run_id = $1
+               AND workspace.state IN ('preparing', 'active', 'materialization_failed')
+               AND EXISTS (
+                   SELECT 1 FROM run_events AS event
+                   WHERE event.run_id = workspace.run_id
+                     AND event.event_type = 'runtime_git.preparing'
+               )",
+        )
+        .bind(run_id.as_uuid())
+        .fetch_optional(&self.pool)
+        .await
+        .map_err(error)?;
+        Ok(row.map(Into::into))
+    }
+
+    async fn runtime_git_workspaces(
+        &self,
+    ) -> Result<Vec<(RunId, WorkspaceMetadata)>, WorkspaceRepositoryError> {
+        let rows = sqlx::query_as::<_, RuntimeGitWorkspaceRow>(
+            "SELECT workspace.run_id, workspace.id, workspace.state,
+                    workspace.active_path, workspace.sealed_path, workspace.input_commit
+             FROM run_workspaces AS workspace
+             WHERE workspace.state IN ('preparing', 'active', 'materialization_failed')
+               AND EXISTS (
+                   SELECT 1 FROM run_events AS event
+                   WHERE event.run_id = workspace.run_id
+                     AND event.event_type = 'runtime_git.preparing'
+               )",
+        )
+        .fetch_all(&self.pool)
+        .await
+        .map_err(error)?;
+        Ok(rows
+            .into_iter()
+            .map(|row| (RunId::from_uuid(row.run_id), row.into()))
+            .collect())
     }
 }
 
@@ -246,6 +347,52 @@ struct RequestRow {
     instance_id: Uuid,
     configuration: Value,
 }
+
+#[derive(FromRow)]
+struct RuntimeGitRequestRow {
+    repository_id: Uuid,
+    target_repository_id: Uuid,
+    target_ref: String,
+    target_commit: String,
+    git_operations: Vec<String>,
+    ref_globs: Vec<String>,
+}
+
+#[derive(FromRow)]
+struct RuntimeGitWorkspaceRow {
+    run_id: Uuid,
+    id: Uuid,
+    state: String,
+    active_path: String,
+    sealed_path: String,
+    input_commit: Option<String>,
+}
+
+impl From<RuntimeGitWorkspaceRow> for WorkspaceMetadata {
+    fn from(row: RuntimeGitWorkspaceRow) -> Self {
+        Self {
+            id: row.id,
+            state: row.state,
+            active_path: row.active_path,
+            sealed_path: row.sealed_path,
+            input_commit: row.input_commit,
+        }
+    }
+}
+
+impl From<RuntimeGitRequestRow> for RuntimeGitWorkspaceRequest {
+    fn from(row: RuntimeGitRequestRow) -> Self {
+        Self {
+            repository_id: row.repository_id,
+            target_repository_id: row.target_repository_id,
+            target_ref: row.target_ref,
+            target_commit: row.target_commit,
+            git_operations: row.git_operations,
+            ref_globs: row.ref_globs,
+        }
+    }
+}
+
 impl From<RequestRow> for WorkspaceRequestMetadata {
     fn from(row: RequestRow) -> Self {
         Self {

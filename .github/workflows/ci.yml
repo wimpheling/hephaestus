@@ -105,6 +105,12 @@ jobs:
           trap 'rm -rf -- "$hugo_root"' EXIT
           ../cooking-blog/verify-hugo.sh "$hugo_root/hugo"
           COOKING_HUGO_BINARY="$hugo_root/hugo" python3 -B -m unittest -v
+      - name: Test reference session-chat Python release
+        run: |
+          PYTHONDONTWRITEBYTECODE=1 python3 -m unittest discover \
+            -s examples/session-chat -p 'test_*.py' -v
+          PYTHONDONTWRITEBYTECODE=1 python3 -m unittest discover \
+            -s examples/session-chat/tests -p 'test_*.py' -v
       - name: Check cooking blog
         working-directory: examples/cooking/cooking-blog
         run: python3 check.py
@@ -113,7 +119,7 @@ jobs:
       - name: Test trusted GCP controller evidence contracts
         run: |
           bash -n scripts/gcp-cooking-run.sh scripts/gcp-kvm-smoke.sh scripts/gcp-kvm-startup.sh
-          python3 -m unittest scripts.test_gcp_browser_summary scripts.test_gcp_cooking_failure_attribution scripts.test_gcp_diagnostics_pipeline scripts.test_gcp_failure_reporting scripts.test_gcp_quota_contract scripts.test_gcp_kvm_smoke_cleanup scripts.test_gcp_phase_timing scripts.test_gcp_runner_image scripts.test_gcp_runner_image_build scripts.test_gcp_runner_image_bundle scripts.test_gcp_runner_image_compatibility scripts.test_gcp_runner_image_validator scripts.test_libkrun_runtime_root
+          python3 -m unittest scripts.test_gcp_browser_summary scripts.test_gcp_cooking_scenario scripts.test_gcp_cooking_failure_attribution scripts.test_gcp_diagnostics_pipeline scripts.test_gcp_failure_reporting scripts.test_gcp_quota_contract scripts.test_gcp_kvm_smoke_cleanup scripts.test_gcp_phase_timing scripts.test_gcp_runner_image scripts.test_gcp_runner_image_build scripts.test_gcp_runner_image_bundle scripts.test_gcp_runner_image_compatibility scripts.test_gcp_runner_image_validator scripts.test_libkrun_runtime_root
 
   live-review-browser:
     runs-on: ubuntu-latest
@@ -143,9 +149,14 @@ jobs:
           node --test --test-isolation=none --test-reporter=tap \
             web/assets/js/design_system/hooks/installed_ui_navigation_test.mjs \
             crates/hephaestus-app/tests/ui_bootstrap_script.mjs \
+            e2e/playwright/cooking-tests/session-chat-concurrent-parser.test.mjs \
             e2e/playwright/reporter-tests/safe-installed-ui-reporter.test.mjs
       - name: Installed UI bridge protocol
         run: scripts/test-ui-e2e-installed-bridge.sh
+      - name: Installed UI browser startup diagnostics
+        run: scripts/test-installed-ui-e2e-startup.sh
+      - name: Installed UI browser prerequisite diagnostics
+        run: scripts/test-installed-ui-browser-smoke.sh
       - name: Phoenix and browser golden path
         env:
           HEPHAESTUS_PLAYWRIGHT_SKIP_BROWSER_INSTALL: "1"

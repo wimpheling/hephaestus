@@ -28,7 +28,7 @@ pub async fn exercise(
     let public =
         std::env::var("HEPHAESTUS_CADDY_TEST_PUBLIC_URL").expect("joined cooking public URL");
     let url = format!("{public}/gateway/cooking/telegram");
-    let client = reqwest::Client::new();
+    let client = super::cooking::caddy_gateway_client();
     for (offset, text) in [
         "before-commit",
         "after-commit",

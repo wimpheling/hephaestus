@@ -48,17 +48,29 @@ interactive session, durable input/output, isolated execution, and reconnectable
 history. It does not by itself deliver the primary administration UI or the
 complete create/code/run project journey.
 
-- [ ] Jointly review the MVP-06 plan with the user before starting or resuming
+The [MVP-06 Git-backed session-chat journey](done/mvp-06-git-backed-session-chat-journey.md)
+is complete as an interaction precursor. Paired [Cooking](https://github.com/wimpheling/hephaestus/actions/runs/35799526119)
+and [session-chat](https://github.com/wimpheling/hephaestus/actions/runs/35799529195)
+GCP runs accepted implementation `4061545a`: all required workload/browser
+phases, negative-capability checks, diagnostic gates, and cleanup passed.
+Local quality and repository CI passed for the same implementation. Exact
+provenance and artifacts are recorded in the task and [GCP runbook](../docs/gcp-cooking-ci.md).
+
+The next product task is [shipping the agent-led Heph distribution](todo/ship-agent-led-heph-distribution.md).
+Its primary administration UI and complete create/code/run project journey
+remain open; MVP-06 supplies the proven interactive foundation.
+
+- [x] Jointly review the MVP-06 plan with the user before starting or resuming
   implementation. Confirm the intended scope, dependency order and acceptance
-  evidence in [the MVP-06 task](in-progress/mvp-06-git-backed-session-chat-journey.md)
+  evidence in [the MVP-06 task](done/mvp-06-git-backed-session-chat-journey.md)
   before implementation items are taken up.
-- [ ] Trace the complete path from user input through durable acceptance and
+- [x] Trace the complete path from user input through durable acceptance and
   isolated execution to a visible response and reconnectable history.
-- [ ] Classify each transition as already supported, awkward to integrate, or
+- [x] Classify each transition as already supported, awkward to integrate, or
   genuinely missing, using repository evidence and focused experiments.
-- [ ] Identify the smallest necessary changes for response publication,
+- [x] Identify the smallest necessary changes for response publication,
   subscriptions, authorization and recovery before committing to an API design.
-- [ ] Record ownership of the visible transcript separately from agent-owned
+- [x] Record ownership of the visible transcript separately from agent-owned
   model context and internal workflow state.
 
 This is an audit of Hephaestus's own requirements and existing primitives.

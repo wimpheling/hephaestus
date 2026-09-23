@@ -9,6 +9,7 @@ use crate::{
         MAX_PRIVATE_HTTP_BODY_BYTES, MAX_PRIVATE_HTTP_HEADERS, MAX_RESULT_MESSAGE_SIZE,
         PRIVATE_SERVICE_SOCKET_NAME, PROTOCOL_VERSION, PrivateHttpServiceMessage,
         PrivateServiceConnectionMessage, RUNTIME_AUTHORITY_PATH_ENV, RuntimeAuthorityMessage,
+        RuntimeGitBridgeMessage,
     },
     validation::{PreparedForward, PreparedSpec},
 };
@@ -36,6 +37,7 @@ pub struct WorkerConfiguration {
     pub service_gid: u32,
     pub startup_timeout: Duration,
     pub broker_socket_path: Option<PathBuf>,
+    pub runtime_git_socket_path: Option<PathBuf>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -298,6 +300,10 @@ impl WorkerRuntime {
                 .as_ref()
                 .map(|_| self.runtime_dir.join(PRIVATE_SERVICE_SOCKET_NAME))
                 .as_deref(),
+            self.spec
+                .runtime_git_bridge
+                .as_ref()
+                .and(self.config.runtime_git_socket_path.as_deref()),
         ) {
             drop(passt);
             return Err(WireError::from(error));
@@ -521,6 +527,13 @@ fn handle_guest(
                 max_connections: service.max_connections,
                 connect_timeout_ms: service.connect_timeout_ms,
             });
+    let runtime_git_bridge =
+        spec.runtime_git_bridge
+            .as_ref()
+            .map(|bridge| RuntimeGitBridgeMessage {
+                repository_id: bridge.repository_id,
+                loopback_port: bridge.loopback_port,
+            });
     let expected_authority_ack = runtime_authority
         .as_ref()
         .map(|authority| (authority.session_id, authority.generation));
@@ -534,6 +547,7 @@ fn handle_guest(
             runtime_authority,
             gateway_handler,
             private_http_service,
+            runtime_git_bridge,
         },
     )?;
 

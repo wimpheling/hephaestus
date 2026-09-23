@@ -141,6 +141,7 @@ mod tests {
                 })),
                 gateway_handler: true,
                 private_http_service: None,
+                runtime_git_bridge: None,
             },
             HostMessage::Cancel { timeout_ms: 500 },
             HostMessage::HealthPing { nonce: 42 },
@@ -166,7 +167,7 @@ mod tests {
     }
 
     #[test]
-    fn private_http_service_start_round_trips_with_protocol_v8_fields() {
+    fn private_http_service_start_round_trips_with_protocol_v9_fields() {
         let message = HostMessage::Start {
             version: PROTOCOL_VERSION,
             command: GuestCommandMessage {
@@ -184,6 +185,7 @@ mod tests {
                 max_connections: 16,
                 connect_timeout_ms: 1500,
             }),
+            runtime_git_bridge: None,
         };
 
         round_trip(&message);

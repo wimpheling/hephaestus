@@ -4,12 +4,15 @@ mod application;
 mod event_adapter;
 mod event_cursor;
 pub mod rpc;
+mod runtime_git_listener;
 mod service_log_maintenance;
 pub(crate) mod ui_audit;
 mod ui_bootstrap;
 mod ui_browser_content;
+mod ui_context;
 mod ui_origin_config;
 mod ui_origin_wiring;
+mod ui_repository_git;
 
 pub use ui_origin_config::{UiOriginConfig, UiOriginConfigError};
 
@@ -127,7 +130,10 @@ use release_postgres::{
     PgUiBrowserServingStore, PgUiBrowserSessionStore, PgUiGenerationHostResolver,
     PgUiRequestAuditRepository, ReleaseService, ReleaseServiceError,
 };
-use release_service::{BeginUpdateHook, UiBrowserSessionStore};
+use release_service::{
+    BeginUpdateHook, UiBrowserRepositoryGitAuthorization, UiBrowserSessionStore,
+    UiGenerationHostResolver,
+};
 use review_domain::CONTROL_EXECUTE_SUBJECT;
 use review_postgres::{GitRepositoryLocator, PostgresReviewRepository};
 use review_service::{NatsControlHandler, ReviewControlService, ReviewOutboxPublisher};
@@ -194,7 +200,7 @@ use workspace_local::{LocalWorkspaceConfig, LocalWorkspaceManager};
 use workspace_postgres::PgWorkspaceMetadataRepository;
 
 /// Ordered database migration expected by this application version.
-pub const EXPECTED_DATABASE_MIGRATION: i64 = 94;
+pub const EXPECTED_DATABASE_MIGRATION: i64 = 100;
 
 const GATEWAY_SERVICE_SERVING_CAPACITY: usize = 8;
 const GATEWAY_SERVICE_REPLACEMENT_CAPACITY: usize = 2;
@@ -258,6 +264,17 @@ pub enum VmBackendConfig {
     FixtureResult,
     /// Explicit provider injection for hardware-independent end-to-end tests.
     Custom(Arc<dyn VmProvider>),
+    /// Explicit provider injection that retains the runtime Git bridge socket.
+    ///
+    /// Test observers wrap a libkrun provider as a custom provider. Keeping
+    /// this metadata beside that provider prevents the composition root from
+    /// dropping the bridge endpoint while preserving the observer boundary.
+    CustomWithRuntimeGitSocket {
+        /// Provider used to provision and run the guest.
+        provider: Arc<dyn VmProvider>,
+        /// Host Unix socket used by the runtime Git bridge.
+        runtime_git_socket_path: PathBuf,
+    },
     /// Production libkrun provider.
     Libkrun(Box<LibkrunConfig>),
 }
@@ -651,6 +668,7 @@ pub struct HephaestusApp {
     outbox_batch_size: i64,
     startup_timeout: Duration,
     shutdown_timeout: Duration,
+    runtime_git_socket_path: Option<PathBuf>,
 }
 
 /// Runtime-owned dependencies for the optional shared-Caddy gateway edge.
@@ -1223,6 +1241,22 @@ impl HephaestusApp {
     // production security boundaries directly auditable.
     #[allow(clippy::too_many_lines)]
     pub async fn build(mut config: AppConfig) -> Result<Self, AppError> {
+        let runtime_git_socket_path = match &mut config.vm_backend {
+            VmBackendConfig::Libkrun(provider) => {
+                let path = provider
+                    .runtime_git_socket_path
+                    .get_or_insert_with(|| provider.runtime_root.join("runtime-git.sock"))
+                    .clone();
+                Some(path)
+            }
+            VmBackendConfig::CustomWithRuntimeGitSocket {
+                runtime_git_socket_path,
+                ..
+            } => Some(runtime_git_socket_path.clone()),
+            VmBackendConfig::Fake | VmBackendConfig::FixtureResult | VmBackendConfig::Custom(_) => {
+                None
+            }
+        };
         config.validate()?;
         let gateway_service_host_id = config.volumes.host_id.clone();
         if let VmBackendConfig::Libkrun(provider) = &mut config.vm_backend {
@@ -1341,7 +1375,8 @@ impl HephaestusApp {
         let provider: Arc<dyn VmProvider> = match config.vm_backend {
             VmBackendConfig::Fake => Arc::new(FakeProvider::new()),
             VmBackendConfig::FixtureResult => Arc::new(ResultFixtureProvider),
-            VmBackendConfig::Custom(provider) => provider,
+            VmBackendConfig::Custom(provider)
+            | VmBackendConfig::CustomWithRuntimeGitSocket { provider, .. } => provider,
             VmBackendConfig::Libkrun(provider) => {
                 Arc::new(LibkrunProvider::new(*provider).map_err(component("libkrun provider"))?)
             }
@@ -1617,7 +1652,12 @@ impl HephaestusApp {
                 spec_factory,
                 config.agent_state_capacity_bytes,
             )
-            .with_workspace_manager(workspaces)
+            .with_workspace_manager(
+                Arc::clone(&workspaces) as Arc<dyn workspace_domain::RunWorkspaceManager>
+            )
+            .with_runtime_git_workspace_manager(
+                workspaces as Arc<dyn workspace_domain::RuntimeGitWorkspaceManager>,
+            )
             .with_runtime_manager(run_runtime)
             .with_launch_authorizer(launch_authorizer)
             .with_resource_observer(Arc::new(MailboxRunResources::new(Arc::clone(
@@ -1698,6 +1738,7 @@ impl HephaestusApp {
             outbox_batch_size: config.outbox_batch_size,
             startup_timeout: config.startup_timeout,
             shutdown_timeout: config.shutdown_timeout,
+            runtime_git_socket_path,
         })
     }
 
@@ -1705,6 +1746,7 @@ impl HephaestusApp {
     /// gateway configuration is reconciled.
     async fn build_ui_listener(
         &self,
+        git: Arc<GitHttpService>,
     ) -> Result<Option<(tokio::net::TcpListener, Router)>, AppError> {
         let Some(gateway) = &self.gateway_edge else {
             return Ok(None);
@@ -1733,7 +1775,7 @@ impl HephaestusApp {
         let audit_sink: Arc<dyn release_service::UiRequestAuditSink> = Arc::new(
             PgUiRequestAuditRepository::new(self.service_log_pool.clone()),
         );
-        let host_resolver: Arc<dyn release_service::UiGenerationHostResolver> = Arc::new(
+        let host_resolver: Arc<dyn UiGenerationHostResolver> = Arc::new(
             PgUiGenerationHostResolver::new(self.application_pool.clone()),
         );
         let bootstrap = Arc::new(ui_bootstrap::UiBootstrapState::new(
@@ -1742,14 +1784,16 @@ impl HephaestusApp {
             origin,
             Arc::clone(&audit_sink),
         ));
+        let serving_store = Arc::new(PgUiBrowserServingStore::new(self.application_pool.clone()));
         let serving: Arc<dyn release_service::UiBrowserHttpServingProjection> =
-            Arc::new(PgUiBrowserServingStore::new(self.application_pool.clone()));
+            serving_store.clone();
+        let git_authority: Arc<dyn UiBrowserRepositoryGitAuthorization> = serving_store.clone();
         let gateway = gateway.ui_dispatcher.clone().ok_or_else(|| {
             AppError::Configuration(String::from("UI origin requires a real gateway dispatcher"))
         })?;
         let content = Arc::new(
             ui_browser_content::UiContentState::new(
-                host_resolver,
+                Arc::clone(&host_resolver),
                 serving,
                 Arc::new(self.artifact_store.clone()),
                 gateway,
@@ -1760,8 +1804,26 @@ impl HephaestusApp {
             )
             .map_err(component("UI content configuration"))?,
         );
+        let git = Arc::new(ui_repository_git::UiRepositoryGitState::new(
+            host_resolver.clone(),
+            git_authority,
+            git,
+            ui.namespace().clone(),
+            ui.public_port(),
+            Arc::clone(&audit_sink),
+        ));
+        let context_state = Arc::new(ui_context::UiContextState::new(
+            Arc::clone(&host_resolver),
+            serving_store,
+            ui.namespace().clone(),
+            ui.public_port(),
+            Arc::clone(&audit_sink),
+        ));
         let router = ui_origin_wiring::bounded_ui_router_with_audit(
-            ui_bootstrap::router(bootstrap).merge(ui_browser_content::router(content)),
+            ui_bootstrap::router(bootstrap)
+                .merge(ui_context::router(context_state))
+                .merge(ui_repository_git::router(git))
+                .merge(ui_browser_content::router(content)),
             Arc::new(Semaphore::new(128)),
             Duration::from_secs(30),
             Arc::clone(&audit_sink),
@@ -1813,24 +1875,36 @@ impl HephaestusApp {
         let mailbox_consumer = ensure_mailbox_jetstream_topology(&self.jetstream)
             .await
             .map_err(component("mailbox JetStream topology"))?;
-        // Bind the optional UI listener before constructing the HTTP/Caddy
-        // graph, while all application fields are still borrowed in place.
-        let ui_listener = self.build_ui_listener().await?;
+        let receive_hook = self.git_pre_receive_hook.clone();
+        let git = Arc::new(
+            GitHttpService::new(
+                Arc::clone(&self.forge),
+                Arc::clone(&self.storage),
+                self.git_authenticator.clone(),
+                self.git_authorizer.clone(),
+                self.git_backend.clone(),
+                self.git_limits.clone(),
+            )
+            .and_then(|service| service.with_runtime_receive_hook(receive_hook))
+            .map_err(component("Git HTTP configuration"))?,
+        );
+        let runtime_git_listener = self
+            .runtime_git_socket_path
+            .as_ref()
+            .map(|path| runtime_git_listener::RuntimeGitListener::bind(path.clone()))
+            .transpose()
+            .map_err(component("runtime Git Unix listener"))?;
+        let runtime_git_router = runtime_git_listener
+            .as_ref()
+            .map(|_| runtime_git_listener::router(git.as_ref()));
+        // Bind the optional UI listener after creating the shared Git service,
+        // so browser and public Git requests share repository receive locks.
+        let ui_listener = self.build_ui_listener(Arc::clone(&git)).await?;
         let broker = BrokerServer::bind(
             self.secret_broker_socket,
             Arc::clone(&self.secret_broker_executor),
         )
         .map_err(component("secret broker listener"))?;
-        let git = GitHttpService::new(
-            Arc::clone(&self.forge),
-            Arc::clone(&self.storage),
-            self.git_authenticator.clone(),
-            self.git_authorizer,
-            self.git_backend,
-            self.git_limits,
-        )
-        .and_then(|service| service.with_runtime_receive_hook(self.git_pre_receive_hook))
-        .map_err(component("Git HTTP configuration"))?;
         let command_state = application::commands::InternalCommandState::new(
             Arc::clone(&self.release_service),
             Arc::clone(&self.secret_service),
@@ -1927,7 +2001,7 @@ impl HephaestusApp {
         };
         let router = Router::new()
             .route("/healthz", get(|| async { "ok" }))
-            .merge(git.router())
+            .merge(git.as_ref().clone().router())
             .merge(registry_tokens)
             .merge(registry_notifications)
             .fallback_service(rpc)
@@ -2082,6 +2156,12 @@ impl HephaestusApp {
         } else {
             None
         };
+        let runtime_git_ready_rx =
+            runtime_git_listener
+                .zip(runtime_git_router)
+                .map(|(listener, router)| {
+                    spawn_runtime_git_listener(listener, router, &cancellation, &mut tasks)
+                });
         let (http_ready_tx, http_ready_rx) = oneshot::channel();
         let http_cancel = cancellation.clone();
         tasks.push(tokio::spawn(async move {
@@ -2271,6 +2351,11 @@ impl HephaestusApp {
             if let Some(ui_ready_rx) = ui_ready_rx {
                 ui_ready_rx.await.map_err(|_| {
                     AppError::Readiness(String::from("UI origin listener task exited"))
+                })?;
+            }
+            if let Some(runtime_git_ready_rx) = runtime_git_ready_rx {
+                runtime_git_ready_rx.await.map_err(|_| {
+                    AppError::Readiness(String::from("runtime Git listener task exited"))
                 })?;
             }
             publisher_ready_rx
@@ -3191,6 +3276,30 @@ async fn reap_failed_start(tasks: Vec<JoinHandle<Result<(), String>>>) {
         task.abort();
         drop(task.await);
     }
+}
+
+fn spawn_runtime_git_listener(
+    listener: runtime_git_listener::RuntimeGitListener,
+    router: Router,
+    cancellation: &CancellationToken,
+    tasks: &mut Vec<JoinHandle<Result<(), String>>>,
+) -> oneshot::Receiver<()> {
+    let (ready_tx, ready_rx) = oneshot::channel();
+    let runtime_git_cancel = cancellation.clone();
+    tasks.push(tokio::spawn(async move {
+        if ready_tx.send(()).is_err() {
+            return Ok(());
+        }
+        let result = listener
+            .serve(router, runtime_git_cancel.clone())
+            .await
+            .map_err(|error| error.to_string());
+        if result.is_err() && !runtime_git_cancel.is_cancelled() {
+            runtime_git_cancel.cancel();
+        }
+        result
+    }));
+    ready_rx
 }
 
 async fn oci_builder_loop(workers: Arc<OciBuilderWorkers>, cancellation: CancellationToken) {
@@ -4792,6 +4901,7 @@ impl VmSpecFactory for PgAgentVmSpecFactory {
                 working_dir: Some(working_directory.into()),
             },
             runtime_authority: None,
+            runtime_git_bridge: None,
             private_http_service: None,
             labels,
         })

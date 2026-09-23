@@ -66,6 +66,9 @@ pub struct LibkrunConfig {
     /// Host Unix socket exposed only through the dedicated guest broker vsock
     /// port.
     pub broker_socket_path: Option<PathBuf>,
+    /// Host Unix socket exposed only through the dedicated runtime-Git vsock
+    /// port. This is a raw stream bridge, never the secret broker.
+    pub runtime_git_socket_path: Option<PathBuf>,
     /// Dedicated worker executable.
     pub worker_binary: PathBuf,
     /// `passt` executable.
@@ -110,6 +113,7 @@ impl LibkrunConfig {
             disk_roots,
             mount_roots,
             broker_socket_path: None,
+            runtime_git_socket_path: None,
             worker_binary: worker_binary.into(),
             passt_binary: PathBuf::from("/usr/bin/passt"),
             kvm_device: PathBuf::from("/dev/kvm"),

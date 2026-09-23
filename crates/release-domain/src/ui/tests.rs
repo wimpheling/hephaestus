@@ -81,6 +81,16 @@ fn ui_enums_have_stable_wire_values() {
         "\"image/svg+xml\""
     );
     assert!(serde_json::from_str::<UiMediaType>("\"text/html; charset=utf-8\"").is_err());
+    assert_eq!(
+        UiRepositoryGitAccess::default(),
+        UiRepositoryGitAccess::None
+    );
+    assert_eq!(UiRepositoryGitAccess::Read.as_str(), "read");
+    assert_eq!(
+        UiRepositoryGitAccess::parse("read_write"),
+        Ok(UiRepositoryGitAccess::ReadWrite)
+    );
+    assert!(UiRepositoryGitAccess::parse("write").is_err());
 }
 
 #[test]

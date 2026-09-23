@@ -1,0 +1,50 @@
+{
+  "byte_identical": true,
+  "guest_profile": {
+    "archive": "guest-images/rust-ubuntu-profile.oci",
+    "archive_sha256": "5bfb9f94a62d6840c9c70e5a0f58c41f32656ca27fb90f28aabcad7423de75e8",
+    "manifest_digest": "sha256:45b9ef6f3f2fbd1e8f3e3aea4606360ab977b1ce9bb043389d228e18cb3a3e6c",
+    "skopeo_inspect": "PASS"
+  },
+  "platform_revision": "581b939d5ad5e5a81e77ad01ad8931487a8d2bcf",
+  "post_extraction_sha256sums": {
+    "run1": "PASS",
+    "run2": "PASS"
+  },
+  "production_validator": {
+    "archive_safety": "PASS",
+    "run1_extracted": "PASS",
+    "run1_staged": "PASS",
+    "run2_extracted": "PASS",
+    "run2_staged": "PASS",
+    "source_lines": "scripts/gcp-cooking-run.sh:617-659"
+  },
+  "recipe": "/var/tmp/heph-gcp-cache-replacement-20260922/package_cache.py",
+  "runs": [
+    {
+      "archive": "/var/tmp/heph-gcp-cache-replacement-20260922/run1/heph-gcp-cooking-cache-replacement.tar.zst",
+      "md5_base64": "wt25yyIq4ikDQzFsaxFsdA==",
+      "platform_revision": "581b939d5ad5e5a81e77ad01ad8931487a8d2bcf",
+      "sha256": "02430eca0a4e94ba129c4fdad969233f51486ee1dccdf1ee85e31f580f4d386d",
+      "size_bytes": 1813939981
+    },
+    {
+      "archive": "/var/tmp/heph-gcp-cache-replacement-20260922/run2/heph-gcp-cooking-cache-replacement.tar.zst",
+      "md5_base64": "wt25yyIq4ikDQzFsaxFsdA==",
+      "platform_revision": "581b939d5ad5e5a81e77ad01ad8931487a8d2bcf",
+      "sha256": "02430eca0a4e94ba129c4fdad969233f51486ee1dccdf1ee85e31f580f4d386d",
+      "size_bytes": 1813939981
+    }
+  ],
+  "source_platform_release": "/home/a/projects/hephaestus/.local/hephaestus/platform-images/releases/581b939d5ad5e5a81e77ad01ad8931487a8d2bcf",
+  "source_repository": "/home/a/projects/hephaestus",
+  "tool_versions": {
+    "python3": "Python 3.14.3",
+    "sha256sum": "sha256sum (GNU coreutils) 9.10",
+    "skopeo": "skopeo version 1.22.0 commit: ea32de81e7e31dd9fddb57c82a92d2840a0ff79c",
+    "tar": "tar (GNU tar) 1.35",
+    "zstd": "*** Zstandard CLI (64-bit) v1.5.7, by Yann Collet ***"
+  },
+  "validator_source": "/home/a/projects/hephaestus/scripts/gcp-cooking-run.sh",
+  "validator_source_sha256": "dc9e65559009cedc413916bee5854f66b0026828fc457025d051a48c835f99a6"
+}

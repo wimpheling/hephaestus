@@ -6,6 +6,7 @@ defmodule HephaestusWeb.RPC.UiClientTest do
   alias Hephaestus.Release.V1.{
     CreateUiBrowserHandoffResponse,
     GlobalUiInstallationTarget,
+    InstallUiResponse,
     ListUiInstallationsResponse,
     ReleaseUiIcon,
     ReleaseUiPresentation,
@@ -17,6 +18,7 @@ defmodule HephaestusWeb.RPC.UiClientTest do
 
   alias HephaestusWeb.Identity
   alias HephaestusWeb.RPC.Client
+  alias HephaestusWeb.UIBrowser
 
   @organization "10000000-0000-4000-8000-000000000001"
   @installation "20000000-0000-4000-8000-000000000002"
@@ -144,6 +146,81 @@ defmodule HephaestusWeb.RPC.UiClientTest do
     assert global["launchable"]
   end
 
+  test "install sends explicit target and projects enabled lifecycle" do
+    caller = self()
+
+    stub = fn _channel, request, options ->
+      send(caller, {:install_call, request, options})
+
+      {:ok,
+       %InstallUiResponse{
+         installation_id: %OpaqueId{value: @installation},
+         generation_id: %OpaqueId{value: @generation},
+         lifecycle: UiInstallationLifecycle.value(:UI_INSTALLATION_LIFECYCLE_ENABLED)
+       }}
+    end
+
+    assert {:ok,
+            %{
+              "installation_id" => @installation,
+              "generation_id" => @generation,
+              "lifecycle" => "enabled"
+            }} =
+             Client.install_ui(
+               identity(),
+               @organization,
+               {:repository, @installation},
+               "70000000-0000-4000-8000-000000000007",
+               "reference-session-chat",
+               idempotency_key: "attempt-1:install_ui",
+               stub_call: stub,
+               channel_provider: channel_provider()
+             )
+
+    assert_receive {:install_call, request, options}
+    assert request.organization_id.value == @organization
+    assert request.target.target == {:repository_id, %OpaqueId{value: @installation}}
+    assert request.release_id.value == "70000000-0000-4000-8000-000000000007"
+    assert request.ui_key == "reference-session-chat"
+    assert request.acknowledge_repository_git_access == false
+    assert request.context.idempotency_key == "attempt-1:install_ui"
+    assert options[:metadata]["x-request-id"] =~ ~r/\A[0-9a-f-]{36}\z/i
+  end
+
+  test "install forwards repository Git acknowledgement only when explicitly enabled" do
+    caller = self()
+
+    stub = fn _channel, request, _options ->
+      send(caller, {:acknowledgement, request.acknowledge_repository_git_access})
+      {:ok, %InstallUiResponse{}}
+    end
+
+    assert {:ok, _} =
+             Client.install_ui(
+               identity(),
+               @organization,
+               {:repository, @installation},
+               @generation,
+               "session-chat",
+               acknowledge_repository_git_access: true,
+               stub_call: stub,
+               channel_provider: channel_provider()
+             )
+
+    assert_receive {:acknowledgement, true}
+  end
+
+  test "install rejects an unsupported target before making an RPC" do
+    assert {:error, %HephaestusWeb.RPC.Error{kind: :invalid}} =
+             Client.install_ui(
+               identity(),
+               @organization,
+               {:organization, @organization},
+               @installation,
+               "reference-session-chat"
+             )
+  end
+
   test "handoff sends fresh request context, empty idempotency, exact secret, and no retry" do
     caller = self()
 
@@ -204,6 +281,47 @@ defmodule HephaestusWeb.RPC.UiClientTest do
     refute Map.has_key?(safe_response, "handoff_secret")
     assert_receive {:secret, secret}
     assert_receive {:callback, ^safe_response, ^secret}
+  end
+
+  test "handoff wire projection preserves route for the browser route-base adapter" do
+    response = %CreateUiBrowserHandoffResponse{
+      handoff_id: %OpaqueId{value: "40000000-0000-4000-8000-000000000004"},
+      installation_id: %OpaqueId{value: @installation},
+      generation_id: %OpaqueId{value: @generation},
+      route: "docs"
+    }
+
+    wire = response |> CreateUiBrowserHandoffResponse.encode() |> IO.iodata_to_binary()
+    decoded = CreateUiBrowserHandoffResponse.decode(wire)
+
+    stub = fn _channel, _request, _options -> {:ok, decoded} end
+
+    assert {:ok, url} =
+             Client.create_ui_browser_handoff(
+               identity(),
+               @installation,
+               @generation,
+               "docs",
+               stub_call: stub,
+               channel_provider: channel_provider(),
+               on_success: fn handoff, secret ->
+                 assert handoff["route"] == "docs"
+
+                 handoff
+                 |> Map.put("route_base", handoff["route"])
+                 |> UIBrowser.bootstrap_url(secret, "light",
+                   namespace: "ui.example.com",
+                   platform_host: "example.com"
+                 )
+               end
+             )
+
+    assert String.starts_with?(
+             url,
+             "https://g-#{String.replace(@generation, "-", "")}.ui.example.com/"
+           )
+
+    assert url =~ "/_heph/bootstrap?heph_theme=light#"
   end
 
   test "handoff does not retry an unavailable mutation or invoke its callback" do

@@ -137,6 +137,7 @@ impl ReleaseService {
             release_id: command.release_id,
             ui_key: command.ui_key,
             expected_organization_id: None,
+            acknowledge_repository_git_access: false,
         };
         for attempt in 0..2 {
             match self.install_ui_once(identity, &command, true).await {
@@ -412,6 +413,20 @@ impl ReleaseService {
             UiBindingResolutionError::Persistence => UiInstallationError::Unavailable,
             UiBindingResolutionError::Invalid => UiInstallationError::InvalidOrUnsupported,
         })?;
+        let repository_git_access = resolve_repository_git_access(
+            &mut tx,
+            release_id,
+            &ui_key,
+            target.scope_name(),
+            matches!(target, release_domain::UiInstallationTarget::Repository(_)),
+            false,
+            Some(locked.current_generation_id),
+        )
+        .await
+        .map_err(|error| match error {
+            UiBindingResolutionError::Persistence => UiInstallationError::Unavailable,
+            UiBindingResolutionError::Invalid => UiInstallationError::InvalidOrUnsupported,
+        })?;
         for binding in &bindings {
             self.require(
                 &mut tx,
@@ -429,8 +444,9 @@ impl ReleaseService {
         let generation_id = UiInstallationGenerationId::new();
         sqlx::query(
             "INSERT INTO ui_installation_generations
-             (id, installation_id, generation_no, release_id, ui_key, ui_scope)
-             VALUES ($1, $2, $3, $4, $5, $6)",
+             (id, installation_id, generation_no, release_id, ui_key, ui_scope,
+              repository_git_access)
+             VALUES ($1, $2, $3, $4, $5, $6, $7)",
         )
         .bind(generation_id.as_uuid())
         .bind(installation_id.as_uuid())
@@ -438,6 +454,7 @@ impl ReleaseService {
         .bind(release_id.as_uuid())
         .bind(ui_key.as_str())
         .bind(target.scope_name())
+        .bind(repository_git_access)
         .execute(&mut *tx)
         .await
         .map_err(|_| UiInstallationError::Unavailable)?;
@@ -728,11 +745,12 @@ impl ReleaseService {
             command.caller_key.clone(),
         );
         let command_key = command_identity.command_key();
-        let input_hash = UiInstallationInputDigest::install_with_expected_organization(
+        let input_hash = UiInstallationInputDigest::install_with_expected_organization_and_git_ack(
             command.target,
             command.release_id,
             &command.ui_key,
             command.expected_organization_id,
+            command.acknowledge_repository_git_access,
         );
         // The target owner is the current authority for replay. A stored receipt
         // remains durable even when its source gateway or release permissions
@@ -772,6 +790,23 @@ impl ReleaseService {
             command.target.scope_name(),
             &command.ui_key,
             static_zero_api_only,
+        )
+        .await
+        .map_err(|error| match error {
+            UiBindingResolutionError::Persistence => UiInstallationError::Unavailable,
+            UiBindingResolutionError::Invalid => UiInstallationError::InvalidOrUnsupported,
+        })?;
+        let repository_git_access = resolve_repository_git_access(
+            &mut tx,
+            command.release_id,
+            &command.ui_key,
+            command.target.scope_name(),
+            matches!(
+                command.target,
+                release_domain::UiInstallationTarget::Repository(_)
+            ),
+            command.acknowledge_repository_git_access,
+            None,
         )
         .await
         .map_err(|error| match error {
@@ -822,14 +857,16 @@ impl ReleaseService {
         .await?;
         sqlx::query(
             "INSERT INTO ui_installation_generations
-             (id, installation_id, generation_no, release_id, ui_key, ui_scope)
-             VALUES ($1, $2, 1, $3, $4, $5)",
+             (id, installation_id, generation_no, release_id, ui_key, ui_scope,
+              repository_git_access)
+             VALUES ($1, $2, 1, $3, $4, $5, $6)",
         )
         .bind(generation_id.as_uuid())
         .bind(installation_id.as_uuid())
         .bind(command.release_id.as_uuid())
         .bind(command.ui_key.as_str())
         .bind(command.target.scope_name())
+        .bind(repository_git_access)
         .execute(&mut *tx)
         .await
         .map_err(|_| UiInstallationError::Unavailable)?;
@@ -1312,6 +1349,69 @@ async fn active_installation(
 enum UiBindingResolutionError {
     Invalid,
     Persistence,
+}
+
+async fn resolve_repository_git_access(
+    tx: &mut Transaction<'_, Postgres>,
+    release_id: ReleaseId,
+    ui_key: &release_domain::ui::UiKey,
+    target_scope: &str,
+    repository_target: bool,
+    acknowledged: bool,
+    previous_generation_id: Option<Uuid>,
+) -> Result<&'static str, UiBindingResolutionError> {
+    let access: String = sqlx::query_scalar(
+        "SELECT repository_git_access
+         FROM release_ui_descriptors
+         WHERE release_id = $1 AND ui_key = $2 AND scope = $3",
+    )
+    .bind(release_id.as_uuid())
+    .bind(ui_key.as_str())
+    .bind(target_scope)
+    .fetch_optional(&mut **tx)
+    .await
+    .map_err(|_| UiBindingResolutionError::Persistence)?
+    .ok_or(UiBindingResolutionError::Invalid)?;
+    let access = release_domain::ui::UiRepositoryGitAccess::parse(access)
+        .map_err(|_| UiBindingResolutionError::Invalid)?;
+    if !repository_target && !matches!(access, release_domain::ui::UiRepositoryGitAccess::None) {
+        return Err(UiBindingResolutionError::Invalid);
+    }
+    if matches!(access, release_domain::ui::UiRepositoryGitAccess::None) {
+        return Ok(access.as_str());
+    }
+    let approved = if acknowledged {
+        true
+    } else if let Some(previous_generation_id) = previous_generation_id {
+        let previous: String = sqlx::query_scalar(
+            "SELECT repository_git_access
+             FROM ui_installation_generations WHERE id = $1",
+        )
+        .bind(previous_generation_id)
+        .fetch_optional(&mut **tx)
+        .await
+        .map_err(|_| UiBindingResolutionError::Persistence)?
+        .ok_or(UiBindingResolutionError::Invalid)?;
+        git_access_rank(
+            release_domain::ui::UiRepositoryGitAccess::parse(previous)
+                .map_err(|_| UiBindingResolutionError::Invalid)?,
+        ) >= git_access_rank(access)
+    } else {
+        false
+    };
+    if approved {
+        Ok(access.as_str())
+    } else {
+        Err(UiBindingResolutionError::Invalid)
+    }
+}
+
+const fn git_access_rank(access: release_domain::ui::UiRepositoryGitAccess) -> u8 {
+    match access {
+        release_domain::ui::UiRepositoryGitAccess::None => 0,
+        release_domain::ui::UiRepositoryGitAccess::Read => 1,
+        release_domain::ui::UiRepositoryGitAccess::ReadWrite => 2,
+    }
 }
 
 #[derive(Debug, sqlx::FromRow)]

@@ -1,0 +1,24 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Session chat</title>
+    <link rel="stylesheet" href="./dist/session-chat-ui.css">
+  </head>
+  <body>
+    <main data-heph-session-chat>
+      <header class="chat-header">
+        <div><h1>Session chat</h1><p class="chat-status" data-status>Opening session…</p></div>
+        <button type="button" data-reconnect>Reconnect</button>
+      </header>
+      <section aria-live="polite" data-transcript></section>
+      <form>
+        <label for="message">Message</label>
+        <textarea id="message" maxlength="16384" required></textarea>
+        <button type="submit">Send</button>
+      </form>
+    </main>
+    <script type="module" src="./dist/session-chat-ui.js"></script>
+  </body>
+</html>

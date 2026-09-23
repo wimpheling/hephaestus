@@ -225,6 +225,24 @@ pub struct BrokerRequest {
     pub body: Vec<u8>,
 }
 
+/// Immutable HTTPS rule metadata verified against one runtime lease snapshot.
+///
+/// The runtime service constructs this projection only after checking the
+/// claimed rule, binding, version, session, run, and destination. Host
+/// adapters may use it for header substitution and transport selection; they
+/// must not derive authority from the guest request body.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct VerifiedBrokeredHttpsRule {
+    /// Immutable placeholder rule identity.
+    pub rule_id: Uuid,
+    /// Exact HTTPS origin, including its scheme.
+    pub destination_origin: String,
+    /// Exact outbound header name.
+    pub header_name: String,
+    /// Optional fixed value prefix before the runtime credential.
+    pub header_prefix: Option<String>,
+}
+
 /// Sanitized broker response without upstream headers or credential material.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct BrokerResponse {
@@ -260,6 +278,26 @@ pub trait BrokerAdapter: Send + Sync {
         operation: &str,
         body: &[u8],
     ) -> Result<BrokerResponse, BrokerAdapterError>;
+
+    /// Applies a verified generic HTTPS rule to one bounded request.
+    ///
+    /// The default preserves compatibility with legacy adapters. Generic
+    /// HTTPS adapters that support rules declared after startup override this
+    /// seam and consume the verified projection explicitly.
+    async fn invoke_verified_https(
+        &self,
+        credential: &SecretValue,
+        request: &BrokerRequest,
+        _rule: &VerifiedBrokeredHttpsRule,
+    ) -> Result<BrokerResponse, BrokerAdapterError> {
+        self.invoke(
+            credential,
+            &request.destination,
+            &request.operation,
+            &request.body,
+        )
+        .await
+    }
 }
 
 /// Sanitized adapter failure.

@@ -512,6 +512,9 @@ message DeclareBrokeredHttpsRuleRequest {
   string destination = 3;
   string header = 4;
   optional string header_prefix = 5;
+  // Optional caller-selected identity used when a release parameter already
+  // refers to this rule. Absent requests retain server-generated IDs.
+  optional hephaestus.common.v1.OpaqueId requested_rule_id = 6;
 }
 message DeclareBrokeredHttpsRuleResponse {
   hephaestus.common.v1.OpaqueId rule_id = 1;

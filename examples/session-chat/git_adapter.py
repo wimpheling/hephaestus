@@ -1,0 +1,516 @@
+"""Small real-local-Git adapter for the release-owned session-chat protocol.
+
+This is deliberately a release example. It shells out to the ordinary Git
+executable, stores only the locked protocol paths, and does not grant or
+emulate Hephaestus runtime authority.
+"""
+
+from __future__ import annotations
+
+from pathlib import Path
+import os
+import subprocess
+from typing import Iterable
+from uuid import UUID, uuid4
+
+from protocol import (
+    Conflict,
+    ContextEntry,
+    MAIN_REF,
+    MalformedRecord,
+    NewRunRequired,
+    ProtocolError,
+    Record,
+    SessionRepo,
+    StaleAgentParent,
+    StaleParent,
+    path_for_context,
+    path_for_record,
+    utc_now,
+)
+
+
+GIT_BINARY = "/usr/bin/git"
+GIT_USER_NAME = "Reference Chat Release"
+GIT_USER_EMAIL = "reference-chat@example.invalid"
+
+_GIT_OPERATIONS = frozenset(
+    {
+        "add",
+        "clone",
+        "commit",
+        "config",
+        "diff_tree",
+        "fetch",
+        "init",
+        "ls_remote",
+        "merge",
+        "push",
+        "rebase",
+        "remote",
+        "rev_list",
+        "rev_parse",
+        "rm",
+        "show",
+        "symbolic_ref",
+    }
+)
+
+
+def _operation(arguments: tuple[str, ...]) -> str:
+    if not arguments:
+        return "other"
+    operation = arguments[0].replace("-", "_")
+    return operation if operation in _GIT_OPERATIONS else "other"
+
+
+def _reason(stderr: str, returncode: int) -> str:
+    """Classify Git's failure without retaining its potentially secret text."""
+
+    detail = stderr.casefold()
+    helper_codes = {
+        "action",
+        "expected_host",
+        "expected_path",
+        "credential_path",
+        "target",
+        "authority_path",
+        "authority_file",
+        "authority_protection",
+        "authority_decode",
+        "credential_missing",
+        "credential_length",
+        "credential_encoding",
+        "internal",
+    }
+    for code in helper_codes:
+        if f"heph_git_credential_error={code}" in detail:
+            return f"helper_{code}"
+    if "dubious ownership" in detail or "unsafe repository" in detail:
+        return "unsafeownership"
+    if "could not read username" in detail or "terminal prompts disabled" in detail:
+        return "credential_missing"
+    if "authentication failed" in detail:
+        return "auth"
+    if "non-fast-forward" in detail or "fetch first" in detail:
+        return "nonfastforward"
+    if "permission denied" in detail or "access denied" in detail:
+        return "permission"
+    if "not a git repository" in detail:
+        return "invalidrepo"
+    if "pre-receive hook declined" in detail or "remote rejected" in detail:
+        return "rejected"
+    if returncode == 127 or "not found" in detail or "cannot run" in detail:
+        return "missinghelper"
+    return "command_failed"
+
+
+def _configure_identity(path: Path) -> None:
+    _git(path, "config", "user.name", GIT_USER_NAME)
+    _git(path, "config", "user.email", GIT_USER_EMAIL)
+
+
+class LocalGitError(RuntimeError):
+    """An ordinary Git command failed in the example repository."""
+
+    def __init__(self, operation: str, returncode: int, reason: str) -> None:
+        self.operation = operation
+        self.returncode = returncode
+        self.reason = reason
+        super().__init__(f"Git {operation} failed ({reason}, exit {returncode})")
+
+
+def _git(path: Path, *arguments: str, check: bool = True) -> str:
+    completed = subprocess.run(
+        [GIT_BINARY, "-C", str(path), *arguments],
+        check=False,
+        capture_output=True,
+        text=True,
+        env={**os.environ, "GIT_TERMINAL_PROMPT": "0"},
+    )
+    if check and completed.returncode:
+        raise LocalGitError(_operation(arguments), completed.returncode, _reason(completed.stderr, completed.returncode))
+    return completed.stdout.strip()
+
+
+def _write(path: Path, value: str) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(value + "\n", encoding="utf-8")
+
+
+class LocalGitSession:
+    """Protocol-aware view over one ordinary local Git checkout."""
+
+    def __init__(self, path: Path) -> None:
+        self.path = path.resolve()
+        self._records: tuple[Record, ...] = ()
+        self._by_id: dict[str, Record] = {}
+        self._participants: dict[str, str] = {}
+        self._stale_runs: set[str] = set()
+        self._session_id = ""
+        self._release_id = ""
+        self._agent_id = ""
+        self._context: dict[tuple[str, str], ContextEntry] = {}
+
+    @classmethod
+    def initialize(
+        cls,
+        path: Path,
+        session_id: str,
+        release_id: str = "release:reference-chat",
+        agent_id: str = "agent:reference-chat",
+        human_ids: Iterable[str] = (),
+    ) -> "LocalGitSession":
+        path = path.resolve()
+        path.mkdir(parents=True, exist_ok=False)
+        _git(path, "init", "-b", "main")
+        _configure_identity(path)
+        model = SessionRepo.initialize(session_id, release_id, agent_id, human_ids)
+        adapter = cls(path)
+        adapter._write_commit(model.baseline.records, "session initialization")
+        return cls.open(path)
+
+    @classmethod
+    def clone(cls, remote: Path, destination: Path) -> "LocalGitSession":
+        destination = destination.resolve()
+        completed = subprocess.run(
+            [
+                GIT_BINARY,
+                "clone",
+                "--branch",
+                "main",
+                str(remote.resolve()),
+                str(destination),
+            ],
+            check=False,
+            capture_output=True,
+            text=True,
+            env={**os.environ, "GIT_TERMINAL_PROMPT": "0"},
+        )
+        if completed.returncode:
+            raise LocalGitError("clone", completed.returncode, _reason(completed.stderr, completed.returncode))
+        _configure_identity(destination)
+        return cls.open(destination)
+
+    @classmethod
+    def open(cls, path: Path) -> "LocalGitSession":
+        adapter = cls(path)
+        # Runtime workspaces are materialized by the platform and do not carry
+        # a release checkout's local Git config into the guest.
+        _configure_identity(path)
+        adapter._load()
+        return adapter
+
+    @property
+    def head(self) -> str:
+        return _git(self.path, "rev-parse", MAIN_REF)
+
+    @property
+    def session_id(self) -> str:
+        return self._session_id
+
+    @property
+    def release_id(self) -> str:
+        return self._release_id
+
+    @property
+    def agent_id(self) -> str:
+        return self._agent_id
+
+    def history(self) -> tuple[Record, ...]:
+        return self._records
+
+    def visible_transcript(self) -> tuple[Record, ...]:
+        tombstoned = {record.tombstone_of for record in self._records if record.kind == "tombstone"}
+        return tuple(
+            record
+            for record in self._records
+            if record.kind in {"user_message", "assistant_message"} and record.record_id not in tombstoned
+        )
+
+    def pending_human_messages(self) -> tuple[Record, ...]:
+        """Return visible human messages without an assistant response."""
+
+        answered = {
+            record.in_reply_to
+            for record in self._records
+            if record.kind == "assistant_message" and record.in_reply_to is not None
+        }
+        return tuple(
+            record
+            for record in self.visible_transcript()
+            if record.kind == "user_message" and record.record_id not in answered
+        )
+
+    def model_context(self, agent_id: str | None = None) -> tuple[ContextEntry, ...]:
+        """Return internal context entries without exposing them as transcript."""
+
+        owner = agent_id or self._agent_id
+        return tuple(
+            value
+            for (entry_owner, _), value in sorted(self._context.items())
+            if entry_owner == owner
+        )
+
+    def _load(self) -> None:
+        if _git(self.path, "symbolic-ref", "-q", "HEAD") != MAIN_REF:
+            raise ProtocolError("session checkout must have refs/heads/main checked out")
+        self._context = {}
+        commit_ids = _git(self.path, "rev-list", "--first-parent", "--reverse", MAIN_REF).splitlines()
+        if not commit_ids:
+            raise ProtocolError("session repository has no main history")
+        records: list[Record] = []
+        seen_paths: dict[str, str] = {}
+        for commit_id in commit_ids:
+            paths = _git(self.path, "diff-tree", "--root", "--no-commit-id", "--name-only", "-r", commit_id).splitlines()
+            if paths != sorted(set(paths)):
+                raise ProtocolError("commit changed paths are not unique and sorted")
+            for path in paths:
+                if not path.startswith(".heph/session/v1/") or not path.endswith(".json"):
+                    continue
+                if "/context/" in path:
+                    try:
+                        value = _git(self.path, "show", f"{commit_id}:{path}")
+                    except LocalGitError as exc:
+                        raise ProtocolError("history deletes an immutable context entry") from exc
+                    entry = ContextEntry.from_json(value)
+                    if path_for_context(entry.agent_id, entry.key) != path:
+                        raise MalformedRecord("context entry is stored at the wrong path")
+                    self._context[(entry.agent_id, entry.key)] = entry
+                    continue
+                if path.endswith("/context.json") or "/content/" in path:
+                    continue
+                value = _git(self.path, "show", f"{commit_id}:{path}")
+                record = Record.from_json(value)
+                if path_for_record(record) != path:
+                    raise MalformedRecord(f"record {record.record_id} is stored at the wrong path")
+                previous = seen_paths.get(path)
+                if previous is None:
+                    records.append(record)
+                elif previous != record.canonical_json():
+                    if path != ".heph/session/v1/manifest.json":
+                        raise ProtocolError(f"immutable record path changed: {path}")
+                    records.append(record)
+                seen_paths[path] = record.canonical_json()
+        self._records = tuple(records)
+        self._by_id = {}
+        for record in self._records:
+            previous = self._by_id.get(record.record_id)
+            if previous is not None and previous.canonical_json() != record.canonical_json():
+                raise MalformedRecord("history contains conflicting record IDs")
+            self._by_id[record.record_id] = record
+        participant_records = [record for record in self._records if record.kind == "participant"]
+        self._participants = {record.participant_id: record.data["role"] for record in participant_records}
+        self._context = {
+            key: value for key, value in self._context.items() if value.agent_id in self._participants
+        }
+        manifests = [record for record in self._records if record.kind == "session_manifest"]
+        if not manifests:
+            raise ProtocolError("session has no manifest")
+        latest = manifests[-1]
+        self._session_id = latest.data["session_id"]
+        self._release_id = latest.data["release_id"]
+        self._agent_id = latest.data["agent_id"]
+        for record in self._records:
+            if record.kind in {"session_manifest", "participant"}:
+                continue
+            if self._participants.get(record.actor_id) != record.actor_role:
+                raise ProtocolError("record actor is not a registered participant")
+            if record.kind == "assistant_message":
+                target = self._by_id.get(record.in_reply_to or "")
+                if target is None or target.kind != "user_message":
+                    raise ProtocolError("assistant response has no user-message target")
+
+    def _write_commit(
+        self,
+        records: Iterable[Record],
+        message: str,
+        context_entries: Iterable[ContextEntry] = (),
+    ) -> str:
+        ordered = tuple(sorted(records, key=lambda record: path_for_record(record).encode("utf-8")))
+        ordered_context = tuple(
+            sorted(context_entries, key=lambda entry: path_for_context(entry.agent_id, entry.key).encode("utf-8"))
+        )
+        files: list[tuple[str, str]] = []
+        for record in ordered:
+            relative = path_for_record(record)
+            files.append((relative, record.canonical_json()))
+        for entry in ordered_context:
+            relative = path_for_context(entry.agent_id, entry.key)
+            files.append((relative, entry.canonical_json()))
+        files.sort(key=lambda item: item[0].encode("utf-8"))
+        paths = [relative for relative, _ in files]
+        if paths != sorted(set(paths)):
+            raise ProtocolError("commit paths must be unique and sorted")
+        for relative, value in files:
+            _write(self.path / relative, value)
+        _git(self.path, "add", "--", *paths)
+        _git(self.path, "commit", "--no-edit", "-m", message)
+        changed = _git(self.path, "diff-tree", "--root", "--no-commit-id", "--name-only", "-r", self.head).splitlines()
+        if changed != sorted(set(changed)):
+            raise ProtocolError("Git commit changed paths are not sorted")
+        if changed != paths:
+            raise ProtocolError(f"unexpected changed paths: {changed!r}")
+        return self.head
+
+    def _assert_parent(self, expected_parent: str) -> None:
+        if self.head != expected_parent:
+            raise StaleParent(f"expected {expected_parent}, current local head is {self.head}")
+
+    def append_human(self, record: Record, expected_parent: str) -> str:
+        if record.kind != "user_message" or record.actor_role != "human":
+            raise ProtocolError("append_human accepts only user messages")
+        if self._participants.get(record.actor_id) != "human":
+            raise ProtocolError("human actor is not registered")
+        previous = self._by_id.get(record.record_id)
+        if previous is not None:
+            if previous.canonical_json() == record.canonical_json():
+                return self._commit_for(record.record_id)
+            raise Conflict("record ID already exists with a different payload")
+        self._assert_parent(expected_parent)
+        commit = self._write_commit((record,), "user message")
+        self._load()
+        return self.head
+
+    def append_human_retry(self, record: Record, expected_parent: str, remote: str = "origin") -> str:
+        """Commit a human record, rebase onto a concurrent remote, and push."""
+
+        self.append_human(record, expected_parent)
+        self.push_reconciled(remote)
+        return self.head
+
+    def publish_agent_response(self, record: Record, expected_parent: str, run_id: str, remote: str = "origin") -> str:
+        return self.publish_agent_responses((record,), expected_parent, run_id, remote=remote)
+
+    def publish_agent_responses(
+        self,
+        records: Iterable[Record],
+        expected_parent: str,
+        run_id: str,
+        context_entries: Iterable[ContextEntry] = (),
+        remote: str = "origin",
+    ) -> str:
+        """Commit one batch of responses and optional context, with one parent check."""
+
+        try:
+            canonical_run_id = str(UUID(run_id))
+        except (ValueError, AttributeError) as exc:
+            raise ProtocolError("run_id must be a canonical UUID") from exc
+        if run_id != canonical_run_id:
+            raise ProtocolError("run_id must use lowercase canonical UUID form")
+        if run_id in self._stale_runs:
+            raise NewRunRequired("stale runtime must retry with a new run")
+        remote_head = self._remote_head(remote)
+        if self.head != expected_parent or (remote_head is not None and remote_head != expected_parent):
+            self._stale_runs.add(run_id)
+            raise StaleAgentParent("runtime expected parent is stale; start a new run")
+        pending: list[Record] = []
+        response_by_input: dict[str, Record] = {}
+        for record in records:
+            if record.kind != "assistant_message" or record.actor_id != self._agent_id:
+                raise ProtocolError("agent publication must use this session's agent")
+            if self._participants.get(record.actor_id) != "agent":
+                raise ProtocolError("agent actor is not registered")
+            target = self._by_id.get(record.in_reply_to or "")
+            if target is None or target.kind != "user_message":
+                raise ProtocolError("assistant response has no user-message target")
+            prior = next(
+                (
+                    value
+                    for value in self._records
+                    if value.kind == "assistant_message" and value.in_reply_to == record.in_reply_to
+                ),
+                None,
+            )
+            if prior is not None:
+                if prior.content is not None and record.content is not None and prior.content.to_dict() == record.content.to_dict():
+                    continue
+                raise Conflict("input already has a different assistant response")
+            prior_batch = response_by_input.get(record.in_reply_to or "")
+            if prior_batch is not None:
+                if prior_batch.content is not None and record.content is not None and prior_batch.content.to_dict() == record.content.to_dict():
+                    continue
+                raise Conflict("batch contains different responses for one input")
+            existing = self._by_id.get(record.record_id)
+            if existing is not None:
+                if existing.canonical_json() == record.canonical_json():
+                    continue
+                raise Conflict("record ID already exists with a different payload")
+            pending.append(record)
+            response_by_input[record.in_reply_to or ""] = record
+        context = tuple(context_entries)
+        for entry in context:
+            if entry.agent_id != self._agent_id:
+                raise ProtocolError("agent context belongs to another agent")
+        if not pending and not context:
+            return self.head
+        commit = self._write_commit(pending, "assistant responses", context)
+        self._load()
+        return commit
+
+    def push(self, remote: str = "origin") -> None:
+        _git(self.path, "push", remote, f"{MAIN_REF}:{MAIN_REF}")
+
+    def fetch(self, remote: str = "origin") -> str:
+        _git(self.path, "fetch", remote, "main")
+        return _git(self.path, "rev-parse", f"refs/remotes/{remote}/main")
+
+    def _remote_head(self, remote: str) -> str | None:
+        result = _git(self.path, "ls-remote", remote, MAIN_REF, check=False)
+        if not result:
+            return None
+        return result.split()[0]
+
+    def push_reconciled(self, remote: str = "origin") -> None:
+        remote_head = self.fetch(remote)
+        if self.head != remote_head:
+            _git(self.path, "rebase", f"refs/remotes/{remote}/main")
+            self._load()
+        self.push(remote)
+
+    def sync(self, remote: str = "origin") -> str:
+        remote_head = self.fetch(remote)
+        if self.head != remote_head:
+            _git(self.path, "merge", "--ff-only", f"refs/remotes/{remote}/main")
+            self._load()
+        return self.head
+
+    def _commit_for(self, record_id: str) -> str:
+        for commit_id in _git(self.path, "rev-list", "--first-parent", "--reverse", MAIN_REF).splitlines():
+            paths = _git(self.path, "diff-tree", "--root", "--no-commit-id", "--name-only", "-r", commit_id).splitlines()
+            for path in paths:
+                if path.endswith(".json") and "/records/" in path:
+                    record = Record.from_json(_git(self.path, "show", f"{commit_id}:{path}"))
+                    if record.record_id == record_id:
+                        return commit_id
+        raise ProtocolError("record is not reachable")
+
+    def fork(self, destination: Path, new_session_id: str) -> "LocalGitSession":
+        destination = destination.resolve()
+        subprocess.run(
+            ["git", "clone", "--local", str(self.path), str(destination)],
+            check=True,
+            capture_output=True,
+            text=True,
+            env={**os.environ, "GIT_TERMINAL_PROMPT": "0"},
+        )
+        forked = self.open(destination)
+        if _git(destination, "remote", check=False):
+            _git(destination, "remote", "remove", "origin")
+        manifest = Record(
+            record_id=str(uuid4()),
+            kind="session_manifest",
+            actor_id=forked.release_id,
+            actor_role="release",
+            participant_id=forked.release_id,
+            created_at=utc_now(),
+            data={
+                "session_id": new_session_id,
+                "release_id": forked.release_id,
+                "agent_id": forked.agent_id,
+                "ref": MAIN_REF,
+                "forked_from_session_id": forked.session_id,
+            },
+        )
+        forked._write_commit((manifest,), "fork session")
+        return self.open(destination)

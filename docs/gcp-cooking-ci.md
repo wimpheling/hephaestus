@@ -20,10 +20,76 @@ procfs remount prevents the trusted `newuidmap` bootstrap from writing
 `/proc/<pid>/uid_map`.
 
 This runbook is the durable reference for the disposable GCP modes in
-[`cooking-e2e.yml`](../.github/workflows/cooking-e2e.yml). The current live
-validation is **accepted for the full-evidence gate** through the no-VM recovery
-recorded below. Historical smoke or self-hosted Cooking results do
-not establish that the current GCP Cooking path is green.
+[`cooking-e2e.yml`](../.github/workflows/cooking-e2e.yml). The tested
+implementation head is `4061545a21c6f3ce84f6e475f69e8d2819024efe`; local
+`cargo +1.88.0 dev quality` passed under
+`/var/tmp/heph-cargo-dev-quality-4061545-20260923-final-1143909.log`, and
+PR-53 CI run `35799426379` passed all three jobs. The detailed current
+acceptance record is at
+[Current feature and evidence status](#current-feature-and-evidence-status).
+The current Cooking run [35799526119](https://github.com/wimpheling/hephaestus/actions/runs/35799526119)
+is accepted with the paired session-chat run
+[35799529195](https://github.com/wimpheling/hephaestus/actions/runs/35799529195)
+for workload SHA `4061545a21c6f3ce84f6e475f69e8d2819024efe` and trusted
+controller `960318a6e5970ba9aff660394dbdd78165523a23`. Image promotion was
+read back as `vars.GCP_RUNNER_IMAGE=hephaestus-runner-528dbd58f75901c5dc3e0844ac5d940f`
+with rollback `hephaestus-runner-f285fc2b8157f8053383fc98bcaec83d`; no images
+were retired. The paired evidence is recorded below.
+
+## Historical full-evidence baseline (2026-09-22)
+
+The earlier successful baseline [35719717491](https://github.com/wimpheling/hephaestus/actions/runs/35719717491)
+passed its required workload, browser, negative-capability, diagnostics, gate,
+and cleanup checks, with missing lineage sources recorded. It remains useful
+historical evidence; the paired `4061545` Cooking and session-chat runs below
+are the current acceptance records for this feature head.
+
+### Accepted diagnostic infrastructure proof (2026-09-22)
+
+The corrected diagnostic run [35728835480](https://github.com/wimpheling/hephaestus/actions/runs/35728835480)
+tested head `2c336b401ef5cd0615a41b53124760515f8b0cea`. Its injected setup
+failure recorded `browser-setup` / `diagnostic-setup`, exit `78`, and retained
+partial trusted timing: `browser-setup` failed after `147 ms`, with
+`browser-initial` explicitly downstream-missing. The [Cooking timing artifact
+10694044487](https://github.com/wimpheling/hephaestus/actions/runs/35728835480/artifacts/10694044487)
+was retained after upload and VM deletion. Diagnostics upload/download and
+scan passed, gate validation and acceptance passed, and cleanup verified the VM
+absent. This proves the corrected diagnostic infrastructure contract only; it
+does not establish a full Cooking or MVP-06 workload result.
+
+The preceding diagnostic [35726448348](https://github.com/wimpheling/hephaestus/actions/runs/35726448348)
+exposed the missing partial-timing and setup-exit contract; the corrected run
+above is the retained proof of that fix. Candidate build
+[35729371490](https://github.com/wimpheling/hephaestus/actions/runs/35729371490)
+is a superseded image-build record; current candidate provenance is recorded
+by [35736033938](https://github.com/wimpheling/hephaestus/actions/runs/35736033938).
+
+The candidate-image diagnostic [35737889271](https://github.com/wimpheling/hephaestus/actions/runs/35737889271)
+also passed its expected primary setup boundary: `diagnostic-setup` exited `78`
+in `browser-setup`, with a trusted partial setup timing of `137 ms`. Its safe
+artifacts are [diagnostics manifest
+10698149710](https://github.com/wimpheling/hephaestus/actions/runs/35737889271/artifacts/10698149710),
+[controller timings
+10698224495](https://github.com/wimpheling/hephaestus/actions/runs/35737889271/artifacts/10698224495),
+and [Cooking timings
+10698425827](https://github.com/wimpheling/hephaestus/actions/runs/35737889271/artifacts/10698425827).
+Upload/download, credential scan, gate acceptance, and cleanup verification
+passed. This remains diagnostic infrastructure evidence; it does not complete
+the MVP-06 journey.
+
+The smoke runs [35738409751](https://github.com/wimpheling/hephaestus/actions/runs/35738409751)
+and [35741394855](https://github.com/wimpheling/hephaestus/actions/runs/35741394855)
+retained only generic failure context. The definitive retained runtime cause is
+from [35743484713](https://github.com/wimpheling/hephaestus/actions/runs/35743484713):
+the private-service broker failed because its Unix-domain socket path exceeded
+`SUN_LEN`. The safe manifest
+10702610430 and controller timings 10702460565 were retained; upload/download,
+scan, cleanup absence, and the zero-resource quota audit passed. The confirmed
+socket-path fix is on `main` at `6069fdc` with 196 focused checks passed;
+smoke validation [35745822383](https://github.com/wimpheling/hephaestus/actions/runs/35745822383)
+is historical infrastructure evidence. No application bug is claimed from
+this evidence, protected image variables are unchanged, and it does not alter
+the current-head acceptance status.
 
 The optional encrypted `diagnostics-triage` export is published at source
 `87399f8` with 9 export tests and 90 diagnostics/collector tests; it
@@ -346,15 +412,11 @@ emits a typed timeout exit `124`. The existing test assertions and browser
 timeouts are unchanged. Diagnostic startup uses a three-minute trial and an
 eight-minute collection deadline. The helper receives the remaining absolute
 deadline, so bootstrap cannot reset the Cooking clock. Cleanup uses the
-existing `run_with_deadline` helper. This deadline behavior remains pending
-live full-path proof. Local retained-tree post-processing passed workload exits
-0 and 1 plus scanner-rejection cases; actual systemd-run replay was blocked by
-host-service/forge availability, so no host provisioning was performed. Live
-budget behavior is not yet validated: the earlier `5c453ea` baseline exposed
-an external-timeout invocation regression returning `127`, corrected in the
-published `8fe2e21` follow-up. The current image fingerprint is unchanged and
-the corrected full trial failed as recorded at the top of this runbook. Paid retries are paused for no-VM retained-bundle triage improvement and local
-lineage diagnosis.
+existing `run_with_deadline` helper. The accepted paired runs now prove normal
+full-path execution within these budgets. Forced deadline exhaustion remains
+covered by local tests; no live injected-timeout proof is claimed. The earlier
+`5c453ea` external-timeout invocation failure (`127`) was corrected by
+`8fe2e21` and is historical diagnosis.
 See
 [`scripts/gcp-kvm-startup.sh`](../scripts/gcp-kvm-startup.sh) and
 [`scripts/gcp-cooking-run.sh`](../scripts/gcp-cooking-run.sh).
@@ -550,12 +612,22 @@ diagnostics object. The scope is used only with those bucket-scoped roles.
 The cache object is
 `gs://hephaestus-508000-cooking-cache/cooking/replacements/02430eca0a4e94ba129c4fdad969233f51486ee1dccdf1ee85e31f580f4d386d/heph-gcp-cooking-cache.tar.zst`.
 The reviewed immutable archive size is `1813939981` bytes and its base64 MD5 is
-`wt25yyIq4ikDQzFsaxFsdA==`. Its SHA-256 is
+`wt25yyIq4ikDQzFsaxFsdA==`. The reviewed immutable archive SHA-256 is
 `02430eca0a4e94ba129c4fdad969233f51486ee1dccdf1ee85e31f580f4d386d`.
 The diagnostics object key is
 `cooking/runs/{github_run_id}/{github_run_attempt}/{github_sha}.tar.gz`.
 The runtime uses a unique key and cannot read or delete previous bundles.
 Lifecycle deletion is retention control, not an immediate deletion guarantee.
+
+The replacement provenance record is preserved in
+[`docs/experiments/gcp-cache-replacement-20260922/README.md`](experiments/gcp-cache-replacement-20260922/README.md).
+It records packaging from canonical platform revision
+`581b939d5ad5e5a81e77ad01ad8931487a8d2bcf` and two independent byte-identical
+archive builds. This is a new replacement object; it does not restore the
+original cache SHA. Local packaging and validator checks do not establish
+fresh cloud runtime acceptance. The accepted paired runs in the
+[current evidence record](#current-feature-and-evidence-status) supply that
+subsequent proof using the replacement cache.
 
 The startup pins Rust `1.88.0`, libkrun `v1.19.0` at commit
 `9932c4b59d8f891e60c6aba20d22ebb99ceaa8e2`, libkrunfw `v5.5.0`, and passt at
@@ -598,9 +670,40 @@ bash cloud-shell-diagnostics-bootstrap.sh apply
 The cache script enables `storage.googleapis.com`, verifies the project and
 bucket configuration, creates or verifies the runtime identity, applies only
 the bucket and exact service-account bindings above, and prints the human
-upload destination `gs://hephaestus-508000-cooking-cache/cooking/`. Upload the
-selected immutable OCI archive through the Cloud Console, then verify its
-SHA-256 before dispatching `cache-preflight`.
+upload prefix `gs://hephaestus-508000-cooking-cache/cooking/`. Upload the
+selected immutable OCI archive under the reviewed replacement object path
+above through the Cloud Console, then verify its SHA-256 before dispatching
+`cache-preflight`.
+
+An already authorized uploader with both object-create and object-read access
+may use the CLI instead of the Cloud Console; this does not change IAM or
+grant new access. Disable parallel composite
+uploads so that Cloud Storage retains the reviewed MD5, and use the
+generation-match precondition to reject an existing object:
+
+```sh
+CACHE_URI='gs://hephaestus-508000-cooking-cache/cooking/replacements/02430eca0a4e94ba129c4fdad969233f51486ee1dccdf1ee85e31f580f4d386d/heph-gcp-cooking-cache.tar.zst'
+CACHE_ARCHIVE='/absolute/path/heph-gcp-cooking-cache.tar.zst'
+CACHE_DOWNLOAD='/absolute/path/heph-gcp-cooking-cache.download.tar.zst'
+
+CLOUDSDK_STORAGE_PARALLEL_COMPOSITE_UPLOAD_ENABLED=False \
+gcloud storage cp \
+  --if-generation-match=0 --content-type=application/zstd \
+  "$CACHE_ARCHIVE" "$CACHE_URI"
+gcloud storage objects describe "$CACHE_URI" --raw \
+  --format='json(name,size,md5Hash,generation)'
+generation="$(gcloud storage objects describe "$CACHE_URI" --raw \
+  --format='value(generation)')"
+gcloud storage cp "${CACHE_URI}#${generation}" "$CACHE_DOWNLOAD"
+sha256sum "$CACHE_DOWNLOAD"
+```
+
+The metadata output must show the exact replacement name, size
+`1813939981`, base64 MD5 `wt25yyIq4ikDQzFsaxFsdA==`, and a positive generation;
+the final SHA-256 must be
+`02430eca0a4e94ba129c4fdad969233f51486ee1dccdf1ee85e31f580f4d386d`.
+Do not dispatch cloud acceptance until the controller pin containing this URI
+and metadata has been promoted to trusted `main`.
 
 The diagnostics script applies the separate one-day bucket and its creator /
 viewer bindings. It does not modify the cache bucket, budget, VM policy,
@@ -646,10 +749,68 @@ After the implementation is reviewed on `main`, the operator command is:
 gh workflow run cooking-e2e.yml --repo wimpheling/hephaestus --ref main \
   -f cloud_mode=gcp-cooking -f gcp_zone=europe-west1-d \
   -f runner_image=hephaestus-runner-<validated-manifest-prefix> \
+  -f cooking_scenario=cooking \
   -f pr_number=<open-pr-number> \
   -f pr_repository_id=1312377552 \
   -f pr_head_sha=<exact-pr-head-sha>
 ```
+
+The `cooking_scenario` input is required and defaults to `cooking`; keep it
+explicit in automation. The current authoritative image is selected through
+the repository variable `vars.GCP_RUNNER_IMAGE` (currently
+`hephaestus-runner-528dbd58f75901c5dc3e0844ac5d940f`) when `runner_image` is
+empty. That variable remains the image source of truth; the value above is a
+current variable value, not a new hardcoded workflow default.
+
+### MVP-06 session-chat dispatch
+
+The trusted controller/workflow/startup path carries the allowlisted
+`session-chat` selector through `GCP_COOKING_SCENARIO` and validates the exact
+repository, PR head SHA, WIF `main` reference, private evidence collection,
+credential scan, post-delete cleanup, and typed gate schema. Dispatch with the
+same inputs as the ordinary Cooking mode and leave `runner_image` empty unless
+an already validated immutable image is explicitly required:
+
+```sh
+gh workflow run cooking-e2e.yml --repo wimpheling/hephaestus --ref main \
+  -f cloud_mode=gcp-cooking -f gcp_zone=europe-west1-d \
+  -f runner_image= \
+  -f cooking_scenario=session-chat \
+  -f pr_number=<open-pr-number> \
+  -f pr_repository_id=1312377552 \
+  -f pr_head_sha=<exact-pr-head-sha>
+```
+
+Session-chat requires the 13 typed workload phases: `browser-setup`,
+`runtime-guest-build`, `oci-image-materialization`, `gateway-services-ready`,
+`runtime-worker-build`, `gateway-readiness`, `golden-tests`, `database-tests`,
+`browser-initial`, `browser-recovery`, `browser-concurrency`, `browser-fork`,
+and `guest-negative-capability`. The four browser phases are part of the
+`golden-tests` browser lifecycle; they are not a sequence appended after
+`database-tests`. The browser projector requires complete typed evidence for
+`session_chat_new`, `session_chat_ui`, `session_chat_concurrent`, and
+`session_chat_fork`; a missing or failed phase fails the typed gate.
+
+The trusted session-chat path enables
+`HEPHAESTUS_APP_SESSION_CHAT_CONCURRENT_E2E=1` with its browser and restart
+flags. Combined negative mode additionally sets
+`HEPHAESTUS_APP_SESSION_CHAT_NEGATIVE_E2E=1`, starts a fresh guest process, and
+requires the allowlisted ten-check summary with unchanged denied refs/receives
+and runner exit 0. The standalone runner remains available with
+`HEPHAESTUS_APP_SESSION_CHAT_DENIAL_PROBE_E2E=1` without the combined browser
+lifecycle flags; that direct mode is distinct from combined GCP selection.
+
+The workflow is labelled `Heph scenario E2E`. Its run name identifies the
+scenario as `MVP-05` for Cooking or `MVP-06` for session-chat, while the
+`cooking_scenario` input becomes `GCP_COOKING_SCENARIO` in the workflow,
+`HEPH_GCP_COOKING_SCENARIO` in smoke/startup, and
+`HEPHAESTUS_COOKING_SCENARIO` in the workload.
+
+The current tested implementation head and exact-head Cooking status are
+maintained in [Current feature and evidence status](#current-feature-and-evidence-status).
+The accepted historical session-chat run and diagnostic/image provenance are
+recorded there so this dispatch section remains operational guidance rather
+than a duplicate status report.
 
 PR mode requires the reviewed runner image with browser dependencies already
 baked. It fails closed on the stock image because installing Playwright
@@ -658,6 +819,12 @@ controller labels the VM and diagnostics with the validated PR SHA, run ID
 and attempt. Startup fetches only that public source SHA and stages
 hash-anchored trusted runtime, gate, scanner, browser-summary and timing
 helpers from metadata before invoking the workload.
+
+The session-chat release fixture must not retain a generated
+`examples/session-chat/ui/node_modules` tree when it is materialized for a VM:
+package-manager symlinks can violate the source-object contract. Build UI
+dependencies in an external temporary tree, copy only the generated release
+assets, and verify the fixture source is clean before the VM build.
 
 The PR process and its npm lifecycle setup both run as `forge` in delegated
 systemd units with the same sandbox. Its cache is staged and frozen
@@ -686,8 +853,11 @@ host user manager and its sockets are not exposed.
 access to controller credentials and the GCE metadata service. The guard is
 installed before PR npm/browser hooks and remains active for passt and the
 nested guest. Collection and upload stay root-owned and retain only validated
-safe projections. Fork execution remains deferred pending a separate trust
-and approval policy.
+safe projections. Fork-origin pull request execution remains deferred pending
+a separate trust and approval policy. That restriction concerns untrusted
+GitHub fork PRs and is distinct from the application session-chat fork phase,
+which still requires its own trusted evidence and is not inferred from earlier
+phases.
 
 This is a local implementation foundation, not live PR acceptance evidence.
 No paid PR dispatch, cloud baseline, performance claim, image promotion or
@@ -1078,3 +1248,95 @@ Related implementation and evidence notes are in
 [`examples/cooking/CI.md`](../examples/cooking/CI.md). The outside-checkout
 Cloud Shell artifacts and their configuration are described in the operator
 README at `/home/a/.local/share/hephaestus-gcp/README.md`.
+
+### Historical certutil setup record
+
+The subsequent full session-chat run [35718227620](https://github.com/wimpheling/hephaestus/actions/runs/35718227620), using workload SHA `6e8d84ce012e48d524eaf2cf7eb07c31b1820bb7`, failed during setup before browser execution. Diagnostics upload, authenticated download and credential scanning passed, and cleanup verified the VM absent. A local replay reproduced the setup boundary: the digest-pinned builder pulled the reviewed image, completed its build and tool checks, then `certutil -H` exited 1. The follow-up replaces that help probe with actual NSS database create/list validation; the fixed builder replay exited 0 in `/var/tmp/heph-installed-ui-build-replay-fixed-35718227620.log`. Fifteen scenario tests plus startup/bridge smokes and `bash -n` pass, and scanned build output is now collected from the runtime stream. This historical record was not acceptance proof for the current workload.
+
+## Current feature and evidence status
+
+The tested implementation head is `4061545a21c6f3ce84f6e475f69e8d2819024efe`.
+Local `cargo +1.88.0 dev quality` passed under the guarded log
+`/var/tmp/heph-cargo-dev-quality-4061545-20260923-final-1143909.log`, and PR-53
+CI run `35799426379` passed `rust-and-authorization`, `cooking-applications`,
+and `live-review-browser`. The current Cooking run
+[35799526119](https://github.com/wimpheling/hephaestus/actions/runs/35799526119)
+is accepted for workload SHA `4061545a21c6f3ce84f6e475f69e8d2819024efe`,
+trusted controller `960318a6e5970ba9aff660394dbdd78165523a23`, and runner image
+`hephaestus-runner-528dbd58f75901c5dc3e0844ac5d940f`. The full image fingerprint
+is `528dbd58f75901c5dc3e0844ac5d940f50b8418589dc0a2d5f125b90d672b9d1`.
+All 15 required workload phases and both browser phases passed with zero
+failures. Timings include golden `767891 ms`, database `55587 ms`, readiness
+`286 ms`, production build `90354 ms`, OCI builder `92308 ms`, verifier
+`179678 ms`, browser initial `94549 ms`, and browser post `45031 ms`.
+First failure was null; collection was complete with no missing or rejected
+sources. All timing, upload/download, scan, and gate checks passed. Artifacts
+are manifest `10726285171`, workload `10726165768`, and controller
+`10726155828`; the 36,067-byte archive SHA-256 is
+`d002d5ec20bce85138e9e53713f82216f66a7d032d55d3ac2947cf600d985a02`.
+Scanning covered 38 files and 1,163,789 bytes; VM, disk, and IP absence was
+independently verified at `00:16:41Z`.
+
+The accepted current session-chat evidence is
+[35799529195](https://github.com/wimpheling/hephaestus/actions/runs/35799529195):
+workload `4061545a21c6f3ce84f6e475f69e8d2819024efe`, trusted controller
+`960318a6e5970ba9aff660394dbdd78165523a23`, all 13 workload phases, all four
+browser phases, and all 10 negative checks passed. Browser timings were
+`94439`, `30508`, `42198`, and `30546 ms` for initial, recovery, concurrency,
+and fork. The negative summary recorded golden-test `1`, runner `0`, and
+unchanged refs/receives. First failure was null; rejected sources were none.
+All 37 phase timings, artifact upload/download, credential scan, gate checks,
+and cleanup passed; collection was partial only for `lineage` and
+`lineage-status`, with zero unavailable or truncated sources. The manifest,
+workload, and controller artifacts are `10725134069`, `10726200050`, and
+`10725009961`. The 15,749-byte archive has SHA-256
+`b24b43a3ccd82fdd649e45c2e6e6537fe090b5fe78923764f8a7f7332a78e243`; scanning
+covered 98 files and 746,417 bytes. The VM returned 404 and the disk listing
+was empty at `2026-09-23T00:11:09Z`.
+
+The accepted historical session-chat evidence is
+[35782795680](https://github.com/wimpheling/hephaestus/actions/runs/35782795680):
+workload `03bf6d0a98438493fac35f4ed3f692dbd189fed1`, controller
+`9818f8972c12e35537a8390168205aa443d92d1f`, all 13/4/10 checks, gates,
+timing, artifact round-trip, scan, and cleanup passed. The accepted diagnostic
+contract proof is [35737889271](https://github.com/wimpheling/hephaestus/actions/runs/35737889271),
+which retained typed setup failure exit `78`, partial timing `137 ms`, scanned
+artifacts, and verified cleanup. The previous Cooking failure
+[35790216539](https://github.com/wimpheling/hephaestus/actions/runs/35790216539)
+retained the canonical workload leaf exit `101` separately from wrapper exit
+`1`, 36 validated partial timing records in the manifest and GitHub summary,
+and passed credential scanning and archive round-trip. Its missing standalone
+timing sidecar is an ancillary strict-projection limitation, not timing-data
+loss. The candidate provenance is
+[35736033938](https://github.com/wimpheling/hephaestus/actions/runs/35736033938),
+which produced immutable image fingerprint
+`528dbd58f75901c5dc3e0844ac5d940f50b8418589dc0a2d5f125b90d672b9d1`.
+
+The ancillary startup token-helper `TypeError` remains deferred because fixing
+it requires a new image bake; it is separate from the primary workload and
+from evidence upload or scanning failure. The cheap real PostgreSQL
+confinement inventory regression now compares the migrated catalog with all
+138 static scan surfaces and executes the scan before the paid cloud path.
+
+Earlier failure links remain historical and are kept for diagnosis: setup and
+browser failures [35715007447](https://github.com/wimpheling/hephaestus/actions/runs/35715007447)
+and [35718227620](https://github.com/wimpheling/hephaestus/actions/runs/35718227620),
+candidate and rootless-image failures [35729371490](https://github.com/wimpheling/hephaestus/actions/runs/35729371490),
+[35730639382](https://github.com/wimpheling/hephaestus/actions/runs/35730639382),
+and [35733508154](https://github.com/wimpheling/hephaestus/actions/runs/35733508154),
+and the Unix socket path diagnosis [35743484713](https://github.com/wimpheling/hephaestus/actions/runs/35743484713).
+The corrected diagnostic proof [35728835480](https://github.com/wimpheling/hephaestus/actions/runs/35728835480)
+and the earlier full baseline [35719717491](https://github.com/wimpheling/hephaestus/actions/runs/35719717491)
+remain infrastructure/history references, not current-head acceptance.
+
+The paired current runs are terminal and accepted. Their exact workload and
+controller SHAs, phase/browser results, first-failure status, timing and
+negative evidence, artifact IDs, archive digests, scans, round-trips, gates,
+and independent cleanup are recorded above. The candidate image promotion was
+read back from the repository variables; no image was retired. MVP-06 is now
+documented under `tasks/done/`, while the agent-led distribution remains open.
+
+The final documentation commit must also pass a full session-chat GCP run and
+required CI against its exact PR head before merge. That final run's SHA and
+artifacts are recorded in [PR #53](https://github.com/wimpheling/hephaestus/pull/53),
+without another repository commit after acceptance.

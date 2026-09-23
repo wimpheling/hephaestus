@@ -8,7 +8,7 @@ use brokered_egress_domain::{
     BrokeredSecretRule, BrokeredSecretRuleId, ExactHttpsOrigin, HeaderName, HttpInjectionLocation,
 };
 use forge_domain::{OrganizationId, ProjectId};
-use identity_domain::{AuthenticatedIdentity, RequestId, UserId};
+use identity_domain::{AuthenticatedIdentity, BrowserSessionSid, RequestId, UserId};
 use secret_application::{
     BindSecret, CreateSecret, DeclareBrokeredHttpsRule, GrantAndAcceptSecretImport, RotateSecret,
 };
@@ -58,6 +58,35 @@ pub fn gateway_artifact() -> Option<Vec<u8>> {
         )
         .expect("read built gateway")
     })
+}
+
+/// Build the client used by Cooking probes that call the joined Caddy public
+/// origin. The disposable Caddy CA is trusted explicitly in TLS mode while
+/// ordinary HTTP runs retain reqwest's default behavior.
+pub fn caddy_gateway_client() -> reqwest::Client {
+    caddy_gateway_client_inner(None)
+}
+
+pub fn caddy_gateway_client_with_timeout(timeout: Duration) -> reqwest::Client {
+    caddy_gateway_client_inner(Some(timeout))
+}
+
+fn caddy_gateway_client_inner(timeout: Option<Duration>) -> reqwest::Client {
+    let mut builder = reqwest::Client::builder();
+    if let Some(timeout) = timeout {
+        builder = builder.timeout(timeout);
+    }
+    if env::var("HEPHAESTUS_CADDY_TEST_TLS").as_deref() == Ok("1") {
+        let ca_path =
+            env::var("HEPHAESTUS_CADDY_TEST_CA_CERT").expect("joined Caddy TLS fixture CA path");
+        let ca_pem = fs::read(&ca_path).expect("read joined Caddy TLS fixture CA");
+        let certificate =
+            reqwest::Certificate::from_pem(&ca_pem).expect("parse joined Caddy TLS fixture CA");
+        builder = builder.add_root_certificate(certificate);
+    }
+    builder
+        .build()
+        .expect("bounded Cooking Caddy gateway client")
 }
 
 pub fn secret_slots() -> serde_json::Value {
@@ -1489,7 +1518,7 @@ pub async fn exercise_active_relay_revocation(
 ) {
     let public = env::var("HEPHAESTUS_CADDY_TEST_PUBLIC_URL").expect("public Caddy URL");
     let url = format!("{public}/gateway/cooking/telegram");
-    let client = reqwest::Client::new();
+    let client = caddy_gateway_client();
     let accepted = send_update_with_credential(
         &client,
         &url,
@@ -1979,7 +2008,7 @@ pub async fn exercise_initial(
 ) -> CookingCheckpoint {
     let public = env::var("HEPHAESTUS_CADDY_TEST_PUBLIC_URL").expect("public Caddy URL");
     let url = format!("{public}/gateway/cooking/telegram");
-    let client = reqwest::Client::new();
+    let client = caddy_gateway_client();
     let baseline = mailbox_counts(pool, gateway).await;
     for credential in [None, Some("wrong-inbound-value")] {
         let response = send_raw(
@@ -2085,11 +2114,14 @@ pub async fn exercise_follow_up(
     input_commit: &str,
     checkpoint: CookingCheckpoint,
     _upstream: &BrokeredTlsUpstream,
+    owner_browser_session: BrowserSessionSid,
+    outsider: UserId,
+    outsider_browser_session: BrowserSessionSid,
 ) -> String {
     let CookingCheckpoint { alice, bob } = checkpoint;
     let public = env::var("HEPHAESTUS_CADDY_TEST_PUBLIC_URL").expect("public Caddy URL");
     let url = format!("{public}/gateway/cooking/telegram");
-    let client = reqwest::Client::new();
+    let client = caddy_gateway_client();
     // This request is deliberately sent only after the supervisor restart;
     // its model request must carry Alice's persisted SQLite summary.
     let follow_up = deliver_request(pool, gateway, &client, &url, 44, 1001, "salad").await;
@@ -2208,6 +2240,9 @@ pub async fn exercise_follow_up(
         bob.run_id.as_uuid(),
         bob.event_id,
         false,
+        owner_browser_session,
+        outsider.as_uuid(),
+        outsider_browser_session,
     )
     .await;
     super::cooking_inspection::inspect(
@@ -2216,6 +2251,9 @@ pub async fn exercise_follow_up(
         follow_up.run_id.as_uuid(),
         follow_up.event_id,
         false,
+        owner_browser_session,
+        outsider.as_uuid(),
+        outsider_browser_session,
     )
     .await;
     assert_eq!(
@@ -2226,7 +2264,17 @@ pub async fn exercise_follow_up(
     let evidence:(uuid::Uuid,uuid::Uuid,i64)=sqlx::query_as("SELECT run.instance_revision_id,lease.id,delivery.dispatch_sequence FROM runs run JOIN agent_instance_volume_leases lease ON lease.run_id=run.id JOIN mailbox_delivery_attempts attempt ON attempt.run_id=run.id JOIN mailbox_deliveries delivery ON delivery.event_id=attempt.event_id WHERE run.id=$1").bind(run_id.as_uuid()).fetch_one(pool).await.expect("revision/state lease/dispatch provenance");
     assert_ne!(evidence.0, instance.revision, "run uses bound revision");
     assert!(evidence.2 > 0);
-    super::cooking_inspection::inspect(pool, running, run_id.as_uuid(), alice.event_id, true).await;
+    super::cooking_inspection::inspect(
+        pool,
+        running,
+        run_id.as_uuid(),
+        alice.event_id,
+        true,
+        owner_browser_session,
+        outsider.as_uuid(),
+        outsider_browser_session,
+    )
+    .await;
     assert_eq!(
         super::git_output_bare(&bare, &["rev-parse", "refs/heads/main"]).await,
         result_commit,
@@ -2235,7 +2283,8 @@ pub async fn exercise_follow_up(
     // Bob's proposal was created against the frozen input commit. Once Alice
     // advances canonical main, approving Bob must settle as a Git conflict and
     // retain the competing proposal history without moving the canonical ref.
-    super::cooking_inspection::approve_for_test(pool, running, &bob_view).await;
+    super::cooking_inspection::approve_for_test(pool, running, &bob_view, owner_browser_session)
+        .await;
     let bob_proposal: uuid::Uuid =
         sqlx::query_scalar("SELECT id FROM review_proposals WHERE run_id = $1")
             .bind(bob.run_id.as_uuid())
@@ -2296,6 +2345,9 @@ pub async fn exercise_follow_up(
         model_fault.event_id,
         false,
         4,
+        owner_browser_session,
+        outsider.as_uuid(),
+        outsider_browser_session,
     )
     .await;
     let relay_fault = deliver_request(
@@ -2316,6 +2368,9 @@ pub async fn exercise_follow_up(
         relay_fault.event_id,
         false,
         2,
+        owner_browser_session,
+        outsider.as_uuid(),
+        outsider_browser_session,
     )
     .await;
     // Update 42 has two deliberate duplicate publications: the response-loss

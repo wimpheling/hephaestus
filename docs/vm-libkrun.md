@@ -59,6 +59,16 @@ passt starts and reported through `VmEvent::Started`.
 - the libkrun shared-object name or path;
 - startup/readiness deadlines and per-VM cgroup/disk/wall-clock limits.
 
+The application composition root defaults `runtime_git_socket_path` to
+`<runtime_root>/runtime-git.sock` for the libkrun backend. The daemon binds
+that path as a mode-0600 Unix socket inside the owner-controlled runtime root. It
+serves the same Git HTTP service used by the public and UI adapters, with an
+additional admission boundary that accepts only the exact `heph-runtime`
+credential form. No TCP listener or guest external egress is used for this
+transport. A stale socket is removed only when it is an owned socket whose
+Unix connect returns `ECONNREFUSED`; live sockets and foreign or non-socket
+paths fail startup.
+
 All input paths are canonicalized and checked against their configured roots
 before worker creation. The provider accepts directory roots and explicitly
 typed raw root disks, and only explicitly typed raw additional disks. Mount

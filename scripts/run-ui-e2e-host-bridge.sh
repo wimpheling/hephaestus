@@ -120,6 +120,7 @@ if runner == "legacy":
 elif runner == "installed-ui":
     required = base_required | {
         "runner", "platform_origin", "ui_namespace", "ui_port", "ca_cert",
+        "installed_ui_browser_grep",
     }
 else:
     raise SystemExit("browser bridge runner is invalid")
@@ -138,10 +139,10 @@ if diagnostics:
     diag = pathlib.Path(diagnostics)
     if not diag.is_absolute() or diag.is_symlink() or not diag.is_dir():
         raise SystemExit("browser diagnostics directory is invalid")
-if payload["phase"] not in {"initial", "post-operation"}:
-    raise SystemExit("browser phase is invalid")
-if runner == "installed-ui" and payload["phase"] != "initial":
-    raise SystemExit("installed UI browser bridge supports only the initial phase")
+if runner == "legacy" and payload["phase"] not in {"initial", "post-operation"}:
+    raise SystemExit("legacy browser phase is invalid")
+if runner == "installed-ui" and payload["phase"] not in {"initial", "recovery", "concurrency", "fork"}:
+    raise SystemExit("installed UI browser bridge supports only the initial, recovery, concurrency, or fork phase")
 if not payload["web_port"].isdigit() or not 1 <= int(payload["web_port"]) <= 65535:
     raise SystemExit("browser web port is invalid")
 for key in ("database_url", "rpc_endpoint", "oidc_issuer"):
@@ -149,6 +150,27 @@ for key in ("database_url", "rpc_endpoint", "oidc_issuer"):
         raise SystemExit("browser endpoint contains a newline")
 if len(payload["rpc_secret"]) < 32:
     raise SystemExit("browser RPC mediator secret is too short")
+if runner == "installed-ui":
+    installed_selector = payload["installed_ui_browser_grep"]
+    concurrency_selector = "cooking concurrent session chat clients reconcile a stale Git push and preserve both turns"
+    fork_selector = "cooking forked session chat preserves inherited history and receives a fresh response"
+    if (payload["phase"] == "concurrency") != (installed_selector == concurrency_selector):
+        raise SystemExit("session-chat concurrency selector and phase must be paired")
+    if (payload["phase"] == "fork") != (installed_selector == fork_selector):
+        raise SystemExit("session-chat fork selector and phase must be paired")
+    allowed_selectors = {
+        "cooking installed UI TLS",
+        "cooking session-chat installed UI initializes and reconnects ordinary Git history",
+        "cooking new session chat creates and opens a real Git-backed browser session",
+        "cooking concurrent session chat clients reconcile a stale Git push and preserve both turns",
+        "cooking forked session chat preserves inherited history and receives a fresh response",
+    }
+    if (
+        installed_selector not in allowed_selectors
+        or len(installed_selector) > 256
+        or any(character in installed_selector for character in "\r\n\x00")
+    ):
+        raise SystemExit("installed UI browser selector is invalid")
 if any("\x00" in payload[key] for key in required):
     raise SystemExit("browser bridge values cannot contain NUL")
 if runner == "installed-ui":
@@ -265,6 +287,7 @@ PY
             "HEPHAESTUS_UI_PORT=${request_values[ui_port]}"
             "HEPHAESTUS_CADDY_TEST_CA_CERT=${bridge_real}/${request_values[ca_cert]}"
             "HEPHAESTUS_INSTALLED_UI_CONTROL_DIR=${bridge_real}/installed-ui-control"
+            "HEPHAESTUS_INSTALLED_UI_BROWSER_GREP=${request_values[installed_ui_browser_grep]}"
         )
         if [[ -n "${HEPHAESTUS_PLAYWRIGHT_IMAGE:-}" ]]; then
             base_env+=("HEPHAESTUS_PLAYWRIGHT_IMAGE=${HEPHAESTUS_PLAYWRIGHT_IMAGE}")

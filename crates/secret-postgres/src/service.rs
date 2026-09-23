@@ -78,6 +78,14 @@ enum PreAdapterDenialStage {
     Decryption,
 }
 
+#[derive(Debug, sqlx::FromRow)]
+struct BrokeredHttpsRuleSnapshotRow {
+    rule_id: Uuid,
+    destination_origin: String,
+    header_name: String,
+    header_prefix: Option<String>,
+}
+
 impl PreAdapterDenialStage {
     const fn as_str(self) -> &'static str {
         match self {
@@ -1092,6 +1100,37 @@ impl<K: KeyProvider + Send + Sync> SecretService<K> {
             .execute(&mut *tx)
             .await
             .map_err(|_| SecretServiceError::Persistence)?;
+
+            // Runtime-Git capability bindings are the typed authority paired
+            // with the generic capability row. Preserve that immutable
+            // authority when a secret binding creates the next revision;
+            // the database constraint deliberately rejects a generic Git row
+            // without its typed companion.
+            sqlx::query(
+                "INSERT INTO agent_git_capability_bindings
+                   (binding_id, instance_revision_id, requirement_id,
+                    grammar_version, git_operations, ref_globs,
+                    changed_path_globs, branch_update_policy, branch_create,
+                    branch_delete, tag_create, tag_update, tag_delete,
+                    other_create, other_update, other_delete, request_bytes,
+                    pack_bytes, object_count, ref_updates,
+                    exact_parent_required, normalized_hash)
+                 SELECT $1, $2, requirement_id, grammar_version,
+                        git_operations, ref_globs, changed_path_globs,
+                        branch_update_policy, branch_create, branch_delete,
+                        tag_create, tag_update, tag_delete, other_create,
+                        other_update, other_delete, request_bytes, pack_bytes,
+                        object_count, ref_updates, exact_parent_required,
+                        normalized_hash
+                   FROM agent_git_capability_bindings
+                  WHERE binding_id = $3",
+            )
+            .bind(cloned.id().as_uuid())
+            .bind(command.new_revision_id.as_uuid())
+            .bind(binding.source_binding_id)
+            .execute(&mut *tx)
+            .await
+            .map_err(|_| SecretServiceError::Persistence)?;
         }
         let effective_policy = json!({
             "grant_id": import.grant_id,
@@ -1227,15 +1266,15 @@ impl<K: KeyProvider + Send + Sync> SecretService<K> {
         if binding.delivery_mode != "brokered" {
             return Err(SecretServiceError::BindingPolicyMismatch);
         }
-        if existing_command(&mut tx, command.command_key, "declare_brokered_https_rule")
-            .await
-            .map_err(|_| SecretServiceError::Persistence)?
-            .is_some()
+        if let Some((aggregate_id, _)) =
+            existing_command(&mut tx, command.command_key, "declare_brokered_https_rule")
+                .await
+                .map_err(|_| SecretServiceError::Persistence)?
         {
             tx.commit()
                 .await
                 .map_err(|_| SecretServiceError::Persistence)?;
-            return Ok(command.rule_id);
+            return Ok(aggregate_id);
         }
         let destination = ExactHttpsOrigin::parse(command.destination)
             .map_err(|_| SecretServiceError::BindingPolicyMismatch)?;
@@ -1314,6 +1353,21 @@ impl<K: KeyProvider + Send + Sync> SecretService<K> {
         .bind(rule.normalized_hash().as_slice())
         .execute(&mut *tx)
         .await
+        .map_err(|_| SecretServiceError::Persistence)?;
+        sqlx::query(
+            "SELECT event_id
+               FROM append_application_event(
+                    $1, 'agent_instance', $2, 'agent_secret_binding', $3,
+                    'agent_secret_binding.changed', 'updated', 'active', $2, $4
+               )",
+        )
+        .bind(identity.idempotency_id.as_uuid())
+        .bind(binding.instance_id)
+        .bind(command.binding_id.as_uuid())
+        .bind(binding.import_id)
+        .fetch_one(&mut *tx)
+        .await
+        .map(|_| ())
         .map_err(|_| SecretServiceError::Persistence)?;
         record_command(
             &mut tx,
@@ -1415,7 +1469,12 @@ impl<K: KeyProvider + Send + Sync> SecretService<K> {
                     "SELECT revision.release_agent_id, release.id AS release_id,
                               revision.parameter_hash,
                               revision.platform_policy_version,
-                              attachment.repository_id
+                              CASE WHEN revision.publication_mode = 'runtime_git'
+                                   THEN CASE WHEN git_binding.binding_id IS NOT NULL
+                                             THEN publication_binding.resource_id
+                                        END
+                                   ELSE attachment.repository_id
+                              END AS repository_id
                        FROM runs AS execution
                        JOIN agent_instances AS instance
                          ON instance.id = execution.instance_id
@@ -1430,6 +1489,13 @@ impl<K: KeyProvider + Send + Sync> SecretService<K> {
                        JOIN releases AS release
                          ON release.id = execution.release_id
                         AND release.id = release_agent.release_id
+                       LEFT JOIN agent_capability_bindings AS publication_binding
+                         ON publication_binding.id = revision.publication_repository_binding_id
+                        AND publication_binding.instance_revision_id = revision.id
+                        AND publication_binding.resource_kind = 'repository'
+                       LEFT JOIN agent_git_capability_bindings AS git_binding
+                         ON git_binding.binding_id = publication_binding.id
+                        AND git_binding.instance_revision_id = revision.id
                        JOIN agent_attachments AS attachment
                          ON attachment.id = execution.attachment_id
                         AND attachment.id = $4
@@ -1446,10 +1512,6 @@ impl<K: KeyProvider + Send + Sync> SecretService<K> {
                          AND attachment.enabled
                          AND attachment.removed_at IS NULL
                          AND attachment.ref_selector = $5
-                         AND NOT EXISTS (
-                             SELECT 1 FROM run_instance_provenance
-                             WHERE run_id = execution.id
-                         )
                        FOR UPDATE OF execution, instance",
                 )
                 .bind(command.run_id.as_uuid())
@@ -1622,7 +1684,8 @@ impl<K: KeyProvider + Send + Sync> SecretService<K> {
                 target_ref, target_commit, parameter_hash,
                 platform_policy_version, phase, authorization_model_version)
                VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10,
-                       $11, $12, $13)",
+                       $11, $12, $13)
+               ON CONFLICT (run_id) DO NOTHING",
         )
         .bind(command.run_id.as_uuid())
         .bind(command.instance_id.as_uuid())
@@ -1640,6 +1703,44 @@ impl<K: KeyProvider + Send + Sync> SecretService<K> {
         .execute(&mut *tx)
         .await
         .map_err(|_| SecretServiceError::Persistence)?;
+        let provenance_matches: bool = sqlx::query_scalar(
+            "SELECT EXISTS (
+                 SELECT 1
+                 FROM run_instance_provenance
+                 WHERE run_id = $1
+                   AND instance_id = $2
+                   AND instance_revision_id = $3
+                   AND release_id = $4
+                   AND release_agent_id = $5
+                   AND attachment_id IS NOT DISTINCT FROM $6
+                   AND target_repository_id IS NOT DISTINCT FROM $7
+                   AND target_ref IS NOT DISTINCT FROM $8
+                   AND target_commit IS NOT DISTINCT FROM $9
+                   AND parameter_hash = $10
+                   AND platform_policy_version = $11
+                   AND phase = $12
+                   AND authorization_model_version = $13
+             )",
+        )
+        .bind(command.run_id.as_uuid())
+        .bind(command.instance_id.as_uuid())
+        .bind(command.instance_revision_id.as_uuid())
+        .bind(exact.release_id)
+        .bind(exact.release_agent_id)
+        .bind(command.attachment_id.map(AgentAttachmentId::as_uuid))
+        .bind(exact.repository_id)
+        .bind(command.target_ref.as_ref().map(GitRef::as_str))
+        .bind(command.target_commit.as_ref().map(CommitSha::as_str))
+        .bind(&exact.parameter_hash)
+        .bind(&exact.platform_policy_version)
+        .bind(phase_name(command.phase))
+        .bind(AUTHORIZATION_MODEL_VERSION)
+        .fetch_one(&mut *tx)
+        .await
+        .map_err(|_| SecretServiceError::Persistence)?;
+        if !provenance_matches {
+            return Err(SecretServiceError::Unavailable);
+        }
         sqlx::query(
             "INSERT INTO secret_runtime_sessions
                (id, run_id, instance_id, instance_revision_id, attachment_id,
@@ -2325,7 +2426,7 @@ impl<K: KeyProvider + Send + Sync> SecretRuntimeService<K> {
                 return Err(error);
             }
         };
-        let (https_request, rule_id) = self
+        let (https_request, rule_id, verified_rule) = self
             .authorize_https_operation(&session, &lease, request)
             .await
             .inspect_err(|error| {
@@ -2363,15 +2464,20 @@ impl<K: KeyProvider + Send + Sync> SecretRuntimeService<K> {
                 );
                 service_error
             })?;
-        let response = match adapter
-            .invoke(
-                &value,
-                &request.destination,
-                &request.operation,
-                &request.body,
-            )
-            .await
-        {
+        let adapter_response = match verified_rule.as_ref() {
+            Some(rule) => adapter.invoke_verified_https(&value, request, rule).await,
+            None => {
+                adapter
+                    .invoke(
+                        &value,
+                        &request.destination,
+                        &request.operation,
+                        &request.body,
+                    )
+                    .await
+            }
+        };
+        let response = match adapter_response {
             Ok(response) => response,
             Err(error) => {
                 self.record_https_failure(&session, &lease, https_request, rule_id)
@@ -2572,8 +2678,11 @@ impl<K: KeyProvider + Send + Sync> SecretRuntimeService<K> {
             return Err(error);
         }
         live_authorization?;
-        self.authorize_brokered_https_snapshot(session, lease, request, rule_id)
-            .await
+        if request.operation == "https_v1" {
+            self.authorize_brokered_https_snapshot(session, lease, request, rule_id)
+                .await?;
+        }
+        Ok(())
     }
 
     async fn authorize_https_operation(
@@ -2581,7 +2690,14 @@ impl<K: KeyProvider + Send + Sync> SecretRuntimeService<K> {
         session: &RuntimeSessionRow,
         lease: &RuntimeLeaseAuthorizationRow,
         request: &BrokerRequest,
-    ) -> Result<(Option<Uuid>, Option<Uuid>), SecretServiceError> {
+    ) -> Result<
+        (
+            Option<Uuid>,
+            Option<Uuid>,
+            Option<VerifiedBrokeredHttpsRule>,
+        ),
+        SecretServiceError,
+    > {
         let https_request = (request.operation == "https_v1").then(Uuid::new_v4);
         let rule_id = broker_request_rule_id(request);
         if !lease.destinations.is_empty()
@@ -2605,6 +2721,9 @@ impl<K: KeyProvider + Send + Sync> SecretRuntimeService<K> {
             }
             return Err(SecretServiceError::BrokerRequestDenied);
         }
+        if https_request.is_none() {
+            return Ok((None, None, None));
+        }
         let authorization = self
             .authorize_brokered_https_snapshot(session, lease, request, rule_id)
             .await;
@@ -2625,8 +2744,12 @@ impl<K: KeyProvider + Send + Sync> SecretRuntimeService<K> {
             )
             .await?;
         }
-        authorization?;
-        Ok((https_request, rule_id))
+        let verified_rule = authorization?;
+        Ok((
+            https_request,
+            Some(verified_rule.rule_id).or(rule_id),
+            Some(verified_rule),
+        ))
     }
 
     async fn authenticate_session(
@@ -2708,14 +2831,14 @@ impl<K: KeyProvider + Send + Sync> SecretRuntimeService<K> {
         lease: &RuntimeLeaseAuthorizationRow,
         request: &BrokerRequest,
         rule_id: Option<Uuid>,
-    ) -> Result<(), SecretServiceError> {
-        if request.operation != "https_v1" {
-            return Ok(());
-        }
+    ) -> Result<VerifiedBrokeredHttpsRule, SecretServiceError> {
         let rule_id = rule_id.ok_or(SecretServiceError::BrokerRequestDenied)?;
         let origin = format!("https://{}", request.destination);
-        let found: Option<Uuid> = sqlx::query_scalar(
-            "SELECT snapshot.id
+        let found: Option<BrokeredHttpsRuleSnapshotRow> = sqlx::query_as(
+            "SELECT snapshot.rule_id,
+                    snapshot.destination_origin,
+                    snapshot.header_name,
+                    snapshot.header_prefix
                FROM brokered_secret_lease_snapshots AS snapshot
                JOIN secret_leases AS exact_lease ON exact_lease.id = snapshot.lease_id
                JOIN agent_secret_bindings AS binding ON binding.id = snapshot.binding_id
@@ -2743,11 +2866,14 @@ impl<K: KeyProvider + Send + Sync> SecretRuntimeService<K> {
         .fetch_optional(&self.authorization_pool)
         .await
         .map_err(|_| SecretServiceError::Persistence)?;
-        if found.is_some() {
-            Ok(())
-        } else {
-            Err(SecretServiceError::BrokerRequestDenied)
-        }
+        found
+            .map(|row| VerifiedBrokeredHttpsRule {
+                rule_id: row.rule_id,
+                destination_origin: row.destination_origin,
+                header_name: row.header_name,
+                header_prefix: row.header_prefix,
+            })
+            .ok_or(SecretServiceError::BrokerRequestDenied)
     }
 }
 

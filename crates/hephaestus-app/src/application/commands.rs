@@ -291,6 +291,7 @@ pub enum InternalCommand {
         destination: String,
         header: String,
         header_prefix: Option<String>,
+        requested_rule_id: Option<Uuid>,
     },
     SetSecretEnabled {
         secret_id: SecretId,
@@ -774,8 +775,9 @@ pub async fn dispatch(
             destination,
             header,
             header_prefix,
+            requested_rule_id,
         } => {
-            let rule_id = stable_id(identity, "declare_brokered_https_rule.rule");
+            let rule_id = declared_rule_id(identity, requested_rule_id);
             state
                 .secrets
                 .declare_brokered_https_rule(
@@ -874,11 +876,16 @@ fn stable_id(identity: &AuthenticatedIdentity, purpose: &str) -> Uuid {
     Uuid::from_bytes(bytes)
 }
 
+fn declared_rule_id(identity: &AuthenticatedIdentity, requested_rule_id: Option<Uuid>) -> Uuid {
+    requested_rule_id.unwrap_or_else(|| stable_id(identity, "declare_brokered_https_rule.rule"))
+}
+
 #[cfg(test)]
 mod tests {
-    use super::stable_id;
+    use super::{declared_rule_id, stable_id};
     use identity_domain::{AuthenticatedIdentity, RequestId, UserId};
     use serde_json::json;
+    use uuid::Uuid;
 
     #[test]
     fn retry_resource_ids_are_stable_and_operation_scoped() {
@@ -893,5 +900,22 @@ mod tests {
         assert_eq!(first, stable_id(&identity, "create_secret.secret"));
         assert_ne!(first, stable_id(&identity, "create_secret.version"));
         assert_eq!(first.get_version_num(), 8);
+    }
+
+    #[test]
+    fn requested_brokered_rule_id_is_preserved_and_absent_uses_stable_id() {
+        let identity = AuthenticatedIdentity::new(
+            UserId::new(),
+            "test",
+            "subject",
+            json!({}),
+            RequestId::new(),
+        );
+        let requested = Uuid::new_v4();
+        assert_eq!(declared_rule_id(&identity, Some(requested)), requested);
+        assert_eq!(
+            declared_rule_id(&identity, None),
+            stable_id(&identity, "declare_brokered_https_rule.rule")
+        );
     }
 }

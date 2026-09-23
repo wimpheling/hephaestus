@@ -36,6 +36,7 @@ mod ui_installation_transport {
     use std::time::{SystemTime, UNIX_EPOCH};
     use tempfile::tempdir;
     use time::OffsetDateTime;
+    use tracing_subscriber::{EnvFilter, fmt};
     use uuid::Uuid;
 
     const SECRET: &[u8] = b"service-log-retention-test-signing-secret";
@@ -634,6 +635,16 @@ mod ui_installation_transport {
     // no-row assertions share one production installation and generation chain.
     #[allow(clippy::too_many_lines)]
     async fn production_ui_installation_rpc_matrix() {
+        // Keep bounded transport-audit failures visible in the CI test log.
+        // `try_init` preserves compatibility with a harness that already owns
+        // the process-wide subscriber.
+        let _ = fmt()
+            .with_env_filter(
+                EnvFilter::try_from_default_env()
+                    .unwrap_or_else(|_| EnvFilter::new("hephaestus_app=warn")),
+            )
+            .with_test_writer()
+            .try_init();
         assert_eq!(
             std::env::var("REAL_UI_INSTALLATION_RPC"),
             Ok(String::from("1")),

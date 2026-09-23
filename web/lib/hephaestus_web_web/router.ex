@@ -47,6 +47,7 @@ defmodule HephaestusWebWeb.Router do
       live "/projects/:project_id", ProjectLive, :repositories
       live "/projects/:project_id/repositories", ProjectLive, :repositories
       live "/projects/:project_id/repositories/new", RepositoryNewLive, :new_repository
+      live "/projects/:project_id/session-chat/new", SessionChatNewLive, :new
       live "/projects/:project_id/agents", ProjectAgentsLive, :agents
       live "/projects/:project_id/images", ProjectRepositoryImagesLive, :images
       live "/projects/:project_id/images/:image_id", ProjectRepositoryImageLive, :show

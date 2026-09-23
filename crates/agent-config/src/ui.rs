@@ -8,7 +8,8 @@ mod validation;
 use gateway_domain::{GatewayName, HttpMethod, RoutePath};
 use release_domain::ArtifactPath;
 use release_domain::ui::{
-    UiIcon, UiKey, UiLabel, UiMediaType, UiPresentation, UiRoutePath, UiScope,
+    UiIcon, UiKey, UiLabel, UiMediaType, UiPresentation, UiRepositoryGitAccess, UiRoutePath,
+    UiScope,
 };
 use serde::{Deserialize, Serialize};
 
@@ -56,6 +57,9 @@ pub struct RepositoryUiConfig {
     pub ui_kit_version: u16,
     /// Explicit cache behavior.
     pub cache: UiCachePolicy,
+    /// Explicit generic repository Git authority for this UI.
+    #[serde(default)]
+    pub repository_git_access: UiRepositoryGitAccess,
     /// Explicit gateway API bindings.
     #[serde(default)]
     pub apis: Vec<UiApiBinding>,

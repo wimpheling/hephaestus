@@ -18,6 +18,7 @@ defmodule HephaestusWeb.RPC.UUID do
   defp hex(value, width) do
     value
     |> Integer.to_string(16)
+    |> String.downcase()
     |> String.pad_leading(width, "0")
   end
 end

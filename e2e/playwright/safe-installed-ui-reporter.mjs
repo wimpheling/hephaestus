@@ -1,8 +1,26 @@
 const TEST_IDS = new Map([
   ["cooking installed UI TLS full-page and managed iframe smoke", "installed_ui_tls_smoke"],
+  ["cooking session-chat installed UI initializes and reconnects ordinary Git history", "session_chat_ui"],
+  ["cooking new session chat creates and opens a real Git-backed browser session", "session_chat_new"],
+  ["cooking concurrent session chat clients reconcile a stale Git push and preserve both turns", "session_chat_concurrent"],
+  ["cooking forked session chat preserves inherited history and receives a fresh response", "session_chat_fork"],
 ]);
 
 const STAGE_IDS = new Map([
+  ["session-chat-initialize", "session_chat_initialize"],
+  ["session-chat-send", "session_chat_send"],
+  ["session-chat-response", "session_chat_response"],
+  ["session-chat-reconnect", "session_chat_reconnect"],
+  ["session-chat-second-send", "session_chat_second_send"],
+  ["session-chat-second-response", "session_chat_second_response"],
+  ["session-chat-concurrent-initialize", "session_chat_concurrent_initialize"],
+  ["session-chat-concurrent-race", "session_chat_concurrent_race"],
+  ["session-chat-concurrent-stale-retry", "session_chat_concurrent_stale_retry"],
+  ["session-chat-concurrent-reconnect", "session_chat_concurrent_reconnect"],
+  ["session-chat-fork-initialize", "session_chat_fork_initialize"],
+  ["session-chat-fork-send", "session_chat_fork_send"],
+  ["session-chat-fork-response", "session_chat_fork_response"],
+  ["session-chat-fork-reconnect", "session_chat_fork_reconnect"],
   ["signin", "signin"],
   ["signin-platform", "signin_platform"],
   ["signin-redirect", "signin_redirect"],
@@ -193,7 +211,7 @@ const SAFE_STATUSES = new Set(["passed", "failed", "skipped", "interrupted", "ti
  * Minimal reporter for the installed UI proof.
  *
  * It intentionally has no stdout/stderr, error, attachment, URL, or raw
- * title handling. The installed UI test must use the fixed test title above
+ * title handling. Installed UI tests must use one of the fixed test titles above
  * and may use only the fixed test.step labels in STAGE_IDS.
  */
 export class SafeInstalledUiReporter {

@@ -15,6 +15,7 @@ defmodule HephaestusWeb.RPC.Invoke do
   @default_timeout 1_000
   @default_maximum_request_bytes 1_048_576
   @default_maximum_response_bytes 2_097_152
+  @default_request_supervisor HephaestusWeb.PageTaskSupervisor
 
   @type stub_call :: (GRPC.Channel.t(), struct(), keyword() ->
                         {:ok, struct()} | {:error, GRPC.RPCError.t()})
@@ -128,14 +129,58 @@ defmodule HephaestusWeb.RPC.Invoke do
   end
 
   defp call(request, stub_call, call_options, options) do
-    channel_provider = Keyword.get(options, :channel_provider, &Channel.get/0)
+    case Keyword.fetch(options, :channel_provider) do
+      {:ok, channel_provider} ->
+        call_with_provider(channel_provider, request, stub_call, call_options)
 
+      :error ->
+        call_with_supervised_worker(request, stub_call, call_options, options)
+    end
+  end
+
+  defp call_with_provider(channel_provider, request, stub_call, call_options) do
     try do
       with {:ok, channel} <- channel_provider.() do
         stub_call.(channel, request, call_options)
       end
     catch
       :exit, _reason -> {:error, :transport_exit}
+    end
+  end
+
+  defp call_with_supervised_worker(request, stub_call, call_options, options) do
+    request_supervisor =
+      Keyword.get(options, :request_supervisor, @default_request_supervisor)
+
+    channel_server = Keyword.get(options, :channel_server, Channel)
+
+    task =
+      Task.Supervisor.async_nolink(request_supervisor, fn ->
+        with {:ok, channel} <- Channel.get(channel_server) do
+          stub_call.(channel, request, call_options)
+        end
+      end)
+
+    await_worker(task, Keyword.fetch!(call_options, :timeout))
+  catch
+    :exit, _reason -> {:error, :transport_exit}
+  end
+
+  defp await_worker(task, :infinity), do: Task.await(task, :infinity)
+
+  defp await_worker(task, timeout) when is_integer(timeout) and timeout >= 0 do
+    case Task.yield(task, timeout) do
+      {:ok, result} ->
+        result
+
+      {:exit, _reason} ->
+        {:error, :transport_exit}
+
+      nil ->
+        # Keep the worker draining the Mint response. Shutting it down here
+        # would kill its response process and recreate the late-header race.
+        Process.demonitor(task.ref, [:flush])
+        {:error, GRPC.RPCError.exception(status: GRPC.Status.deadline_exceeded())}
     end
   end
 

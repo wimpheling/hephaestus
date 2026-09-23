@@ -10,7 +10,9 @@ use oci_builder_runtime_local::LocalOciRuntimeConfig;
 use release_service::{UiNamespace, UiPublicPort};
 use run_runtime_local::LocalRunRuntimeConfig;
 use secret_application::BrokerAdapter;
-use secret_broker::{BrokeredHttpsAdapterRegistry, BrokeredHttpsUpstream, DenyingBrokerAdapter};
+use secret_broker::{
+    BrokeredHttpsAdapterRegistry, BrokeredHttpsOrigin, BrokeredHttpsUpstream, DenyingBrokerAdapter,
+};
 use secret_runtime::EphemeralSecretConfig;
 use secret_store::LocalKeyProvider;
 use serde::Deserialize;
@@ -259,18 +261,41 @@ fn environment_config() -> Result<AppConfig, Box<dyn Error>> {
 }
 
 fn broker_adapter_from_environment() -> Result<Arc<dyn BrokerAdapter>, Box<dyn Error>> {
-    let Some(raw) = env::var_os("HEPHAESTUS_BROKERED_HTTPS_UPSTREAMS_JSON") else {
+    let upstreams = env::var_os("HEPHAESTUS_BROKERED_HTTPS_UPSTREAMS_JSON")
+        .map(|raw| {
+            raw.into_string().map_err(|_| {
+                std::io::Error::new(
+                    std::io::ErrorKind::InvalidData,
+                    "HEPHAESTUS_BROKERED_HTTPS_UPSTREAMS_JSON must be valid UTF-8",
+                )
+            })
+        })
+        .transpose()?
+        .map(|raw| serde_json::from_str::<Vec<BrokeredHttpsUpstream>>(&raw))
+        .transpose()?;
+    let origins = env::var_os("HEPHAESTUS_BROKERED_HTTPS_ORIGIN_CATALOG_JSON")
+        .map(|raw| {
+            raw.into_string().map_err(|_| {
+                std::io::Error::new(
+                    std::io::ErrorKind::InvalidData,
+                    "HEPHAESTUS_BROKERED_HTTPS_ORIGIN_CATALOG_JSON must be valid UTF-8",
+                )
+            })
+        })
+        .transpose()?
+        .map(|raw| serde_json::from_str::<Vec<BrokeredHttpsOrigin>>(&raw))
+        .transpose()?;
+    if upstreams.is_none() && origins.is_none() {
         return Ok(Arc::new(DenyingBrokerAdapter));
-    };
-    let upstreams: Vec<BrokeredHttpsUpstream> = serde_json::from_slice(
-        raw.into_string()
-            .map_err(|_| "HEPHAESTUS_BROKERED_HTTPS_UPSTREAMS_JSON must be valid UTF-8")?
-            .as_bytes(),
-    )?;
-    if upstreams.is_empty() {
-        return Err("HEPHAESTUS_BROKERED_HTTPS_UPSTREAMS_JSON must not be empty".into());
     }
-    Ok(Arc::new(BrokeredHttpsAdapterRegistry::new(upstreams)?))
+    let upstreams = upstreams.unwrap_or_default();
+    let origins = origins.unwrap_or_default();
+    if upstreams.is_empty() && origins.is_empty() {
+        return Err("brokered HTTPS rule or origin catalog must not be empty".into());
+    }
+    Ok(Arc::new(
+        BrokeredHttpsAdapterRegistry::new_with_origin_catalog(upstreams, origins)?,
+    ))
 }
 
 fn gateway_edge_from_environment() -> Result<Option<GatewayEdgeConfig>, Box<dyn Error>> {

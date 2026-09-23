@@ -1,5 +1,6 @@
 //! Guest-side hardware integration probe for the libkrun backend.
 
+use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64};
 use brokered_egress_client::{BrokeredHttpsClient, WireBrokerRequest, WireBrokerStatus};
 use runtime_types::RunId;
 use rusqlite::Connection;
@@ -12,6 +13,7 @@ use std::{
     os::unix::fs::{MetadataExt, PermissionsExt},
     path::Path,
     process,
+    process::{Command, Stdio},
     sync::{
         Arc, Mutex,
         atomic::{AtomicUsize, Ordering},
@@ -38,6 +40,7 @@ const SERVICE_CRASH_EXIT_CODE: i32 = 42;
 const SERVICE_ISOLATION_CHECK_ENV: &str = "HEPH_SERVICE_ISOLATION_CHECK";
 const RUNTIME_AUTHORITY_ENV: &str = "HEPH_RUNTIME_AUTHORITY_PATH";
 const RUNTIME_AUTHORITY_FILE: &str = "/run/hephaestus-authority/session.json";
+const RUNTIME_GIT_CREDENTIAL_HELPER: &str = "/usr/libexec/hephaestus/heph-git-credential";
 use vm_libkrun::protocol::{
     PrivateHttpRequestMessage, PrivateHttpResponseMessage, PrivateMailboxPublicationMessage,
 };
@@ -61,6 +64,12 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
         }
         Some("--serve-http") => return serve_http().map_err(Into::into),
         Some("--serve-service") => return serve_service().map_err(Into::into),
+        Some("--runtime-git-http") => {
+            let repository = std::env::args()
+                .nth(2)
+                .ok_or("runtime Git repository argument is missing")?;
+            return runtime_git_http(&repository).map_err(Into::into);
+        }
         Some("--expect-network-disabled") => return expect_network_disabled(),
         Some("--expect-broker-only") => return expect_broker_only(),
         Some("--brokered-https-e2e") => return brokered_https_e2e(),
@@ -106,6 +115,66 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
     println!("tcp=ok");
     verify_udp_dns()?;
     println!("udp=ok");
+    Ok(())
+}
+
+/// Exercises the guest-local helper and loopback proxy with no guest IP
+/// networking. The host peer is a test-only HTTP endpoint; this does not
+/// assert production Git authentication or repository protocol behavior.
+fn runtime_git_http(repository: &str) -> io::Result<()> {
+    let mut helper = Command::new(RUNTIME_GIT_CREDENTIAL_HELPER)
+        .arg("get")
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
+        .spawn()?;
+    helper
+        .stdin
+        .take()
+        .ok_or_else(|| io::Error::other("runtime Git helper stdin unavailable"))?
+        .write_all(
+            format!("protocol=http\nhost=127.0.0.1:19100\npath=/{repository}\n\n").as_bytes(),
+        )?;
+    let credentials = helper.wait_with_output()?;
+    if !credentials.status.success() {
+        return Err(io::Error::new(
+            io::ErrorKind::PermissionDenied,
+            "runtime Git helper rejected the bound route",
+        ));
+    }
+    let credentials = String::from_utf8(credentials.stdout)
+        .map_err(|_| io::Error::new(io::ErrorKind::InvalidData, "runtime Git credentials UTF-8"))?;
+    let username = credentials
+        .lines()
+        .find_map(|line| line.strip_prefix("username="))
+        .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidData, "runtime Git username"))?;
+    let password = credentials
+        .lines()
+        .find_map(|line| line.strip_prefix("password="))
+        .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidData, "runtime Git password"))?;
+    let authorization = BASE64.encode(format!("{username}:{password}"));
+    let mut stream = TcpStream::connect(("127.0.0.1", 19_100))?;
+    stream.write_all(
+        format!(
+            "GET /{repository}/runtime-git-proof HTTP/1.1\r\nHost: 127.0.0.1:19100\r\nAuthorization: Basic {authorization}\r\nConnection: close\r\n\r\n"
+        )
+        .as_bytes(),
+    )?;
+    let mut response = Vec::new();
+    stream.read_to_end(&mut response)?;
+    if !response.starts_with(b"HTTP/1.1 200 OK\r\n") || !response.ends_with(b"runtime-git-response")
+    {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            format!(
+                "runtime Git bridge response was not exact (bytes={}, starts={}, ends={})",
+                response.len(),
+                response.starts_with(b"HTTP/1.1 200 OK\r\n"),
+                response.ends_with(b"runtime-git-response")
+            ),
+        ));
+    }
+    println!("runtime-git-http=ok");
     Ok(())
 }
 

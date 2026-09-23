@@ -17,9 +17,18 @@ impl RunRuntimeCatalog for PgRunRepository {
     async fn load_runtime(&self, run: &Run) -> Result<RunRuntimeInput, RunRuntimeCatalogError> {
         let context = sqlx::query_as::<_, RuntimeContextRow>(
             "SELECT revision.parameters,
-                    COALESCE(request.repository_id, attachment.repository_id) AS repository_id,
-                    COALESCE(request.git_ref, mailbox_attempt.target_ref) AS git_ref,
-                    COALESCE(request.commit_sha, mailbox_attempt.target_commit) AS commit_sha,
+                    CASE WHEN revision.publication_mode = 'runtime_git'
+                         THEN provenance.target_repository_id
+                         ELSE COALESCE(request.repository_id, attachment.repository_id)
+                    END AS repository_id,
+                    CASE WHEN revision.publication_mode = 'runtime_git'
+                         THEN provenance.target_ref
+                         ELSE COALESCE(request.git_ref, mailbox_attempt.target_ref)
+                    END AS git_ref,
+                    CASE WHEN revision.publication_mode = 'runtime_git'
+                         THEN provenance.target_commit
+                         ELSE COALESCE(request.commit_sha, mailbox_attempt.target_commit)
+                    END AS commit_sha,
                     release.state AS release_state,
                     update.id AS update_id,
                     update.expected_current_revision_id AS previous_revision_id,
@@ -39,6 +48,10 @@ impl RunRuntimeCatalog for PgRunRepository {
              LEFT JOIN agent_attachments AS attachment
                ON attachment.id = stored_run.attachment_id
               AND attachment.instance_id = stored_run.instance_id
+             LEFT JOIN run_instance_provenance AS provenance
+               ON provenance.run_id = stored_run.id
+              AND provenance.instance_id = stored_run.instance_id
+              AND provenance.instance_revision_id = stored_run.instance_revision_id
              LEFT JOIN agent_updates AS update
                ON update.hook_run_id = stored_run.id
              LEFT JOIN agent_instance_revisions AS previous

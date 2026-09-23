@@ -31,7 +31,7 @@ The repository already has these foundations:
 | Isolated execution | Exact-commit releases and instances, capability ceilings, runtime authorization, and VM execution are implemented in [MVP-01](../done/mvp-01-agent-principals-capabilities-and-runtime-authority.md) and [releases and instances](../../docs/releases-and-instances.md). | Implemented foundation; integrated assistant journey is not proven. |
 | Coding and results | Writable per-run workspaces, safe sealing/import, Git result publication, artifacts, and provenance are implemented in [workspaces and results](../../docs/workspaces-and-results.md). | Implemented foundation; assistant-driven project coding/run flow is not proven. |
 | Manual management | Phoenix provides organization/project/repository/agent inspection and controls through the typed control plane. | Implemented foundation; this does not establish a packaged assistant entry point. |
-| Interactive session | MVP-06 specifies a release-owned Git-backed chat reference journey. | Planned precursor; its joint plan review and implementation remain open. |
+| Interactive session | MVP-06 specifies a release-owned Git-backed chat reference journey. | Completed precursor; final paired Cooking/session-chat evidence is recorded in the done task and GCP runbook. |
 | Default distribution | No bundled bootstrap/default assistant has been proven to install and open as the primary entry point. | Missing. |
 | Delegated administration | The platform documents human-mediated, short-lived delegation and one-shot approval direction, but the packaged assistant path is not implemented. | Missing/unverified. |
 
@@ -51,9 +51,8 @@ batch project runs.
   and [MVP-04](../done/mvp-04-brokered-model-and-outbound-capabilities.md).
 - [Release-owned distribution UI surfaces](../done/release-owned-distribution-ui-surfaces.md),
   including explicitly authorized global-interface registration.
-- The [MVP-06 Git-backed session chat journey](../in-progress/mvp-06-git-backed-session-chat-journey.md)
-  as an interaction precursor, after its required joint plan review; MVP-06 is
-  not itself completion of this outcome.
+- The completed [MVP-06 Git-backed session chat journey](../done/mvp-06-git-backed-session-chat-journey.md)
+  as an interaction precursor; MVP-06 is not itself completion of this outcome.
 - [Browser reconnect and restart verification](verify-browser-reconnect-and-restart.md)
   for the durable visible journey.
 
@@ -127,7 +126,7 @@ batch project runs.
     release/instance provenance in the assistant UI.
 
 - [ ] **P1: Prove interactive durability and usability**
-  - [ ] Complete the MVP-06 precursor at its reviewed scope, including failure,
+  - [x] Complete the MVP-06 precursor at its reviewed scope, including failure,
     restart, and release-owned session-history behavior.
   - [ ] Complete browser reconnect/restart evidence for the final assistant UI,
     including duplicate suppression and authorization-safe denial states.

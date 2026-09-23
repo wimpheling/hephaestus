@@ -47,6 +47,24 @@ defmodule HephaestusWebWeb.DesignSystem.Pages.ProjectPageTest do
     assert length(@covered_states) == 5
   end
 
+  test "exposes the session chat entry from project actions" do
+    html =
+      render_component(&ProjectPage.project_page/1,
+        state: :ready,
+        project: project(),
+        project_id: "project-1",
+        item_count: 0,
+        repositories: [],
+        organization_index_destination: "/organizations",
+        organization_destination: "/organizations/org-1",
+        repository_destination: &"/repositories/#{&1}"
+      )
+
+    assert html =~ ~s(id="new-session-chat-link")
+    assert html =~ "/projects/project-1/session-chat/new"
+    assert html =~ "New session chat"
+  end
+
   defp project,
     do: %{
       "id" => "project-1",

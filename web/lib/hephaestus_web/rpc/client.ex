@@ -62,6 +62,7 @@ defmodule HephaestusWeb.RPC.Client do
     CreateAttachmentRequest,
     CreateMailboxRequest,
     CreateUpdateRequest,
+    DeclareBrokeredHttpsRuleRequest,
     GetInstanceRequest,
     ImportAgentRequest,
     MailboxControlAction,
@@ -109,6 +110,7 @@ defmodule HephaestusWeb.RPC.Client do
     CreateUiBrowserHandoffRequest,
     GetReleaseRequest,
     GlobalUiInstallationTarget,
+    InstallUiRequest,
     ListRepositoryReleasesRequest,
     ListUiInstallationsRequest,
     PublishReleaseRequest,
@@ -532,6 +534,55 @@ defmodule HephaestusWeb.RPC.Client do
     end
   end
 
+  @doc "Installs one release-owned UI for an explicit organization target."
+  def install_ui(identity, organization_id, target, release_id, ui_key, options \\ []) do
+    with {:ok, target_message} <- ui_installation_target(target),
+         {:ok, acknowledge_repository_git_access} <-
+           boolean_option(options, :acknowledge_repository_git_access, false) do
+      {context, request_id} = request_context(options)
+
+      request = %InstallUiRequest{
+        context: context,
+        organization_id: id(organization_id),
+        target: target_message,
+        release_id: id(release_id),
+        ui_key: ui_key,
+        acknowledge_repository_git_access: acknowledge_repository_git_access
+      }
+
+      stub_call = Keyword.get(options, :stub_call, &ReleaseService.Stub.install_ui/3)
+
+      invoke_options =
+        options
+        |> Keyword.take([
+          :channel_provider,
+          :channel_reset,
+          :timeout,
+          :maximum_response_bytes
+        ])
+        |> Keyword.merge(
+          request_id: request_id,
+          maximum_request_bytes: 1_048_576,
+          maximum_response_bytes: 65_536
+        )
+
+      case Invoke.unary(
+             identity,
+             "/hephaestus.release.v1.ReleaseService/InstallUi",
+             request,
+             stub_call,
+             invoke_options
+           ) do
+        {:ok, response} ->
+          result = Projection.to_value(response)
+          {:ok, Map.update(result, "lifecycle", "unspecified", &ui_lifecycle/1)}
+
+        {:error, error} ->
+          {:error, error}
+      end
+    end
+  end
+
   @doc "Issues one non-replayable browser handoff with a scoped transient bearer."
   def create_ui_browser_handoff(
         identity,
@@ -829,7 +880,8 @@ defmodule HephaestusWeb.RPC.Client do
         name,
         default_branch,
         is_public,
-        agent_runs_enabled
+        agent_runs_enabled,
+        options \\ []
       ),
       do:
         mutation(
@@ -843,7 +895,8 @@ defmodule HephaestusWeb.RPC.Client do
             is_public: is_public,
             agent_runs_enabled: agent_runs_enabled
           ],
-          &RepositoryService.Stub.create_repository/3
+          &RepositoryService.Stub.create_repository/3,
+          options
         )
 
   def list_builds(identity, repository_id),
@@ -921,16 +974,23 @@ defmodule HephaestusWeb.RPC.Client do
         :releases
       )
 
-  def get_release(identity, release_id),
-    do:
-      unary_projected(
-        identity,
-        "/hephaestus.release.v1.ReleaseService/GetRelease",
-        %GetReleaseRequest{release_id: id(release_id)},
-        &ReleaseService.Stub.get_release/3,
-        :release,
-        maximum_response_bytes: 8_388_608
-      )
+  def get_release(identity, release_id, options \\ []) do
+    stub_call = Keyword.get(options, :stub_call, &ReleaseService.Stub.get_release/3)
+
+    invoke_options =
+      options
+      |> Keyword.take([:channel_provider, :channel_reset, :timeout])
+      |> Keyword.merge(maximum_response_bytes: 8_388_608)
+
+    unary_projected(
+      identity,
+      "/hephaestus.release.v1.ReleaseService/GetRelease",
+      %GetReleaseRequest{release_id: id(release_id)},
+      stub_call,
+      :release,
+      invoke_options
+    )
+  end
 
   def set_draft_version(identity, release_id, version),
     do:
@@ -1180,7 +1240,15 @@ defmodule HephaestusWeb.RPC.Client do
     )
   end
 
-  def import_agent(identity, project_id, release_agent_id, name, parameters, policy) do
+  def import_agent(
+        identity,
+        project_id,
+        release_agent_id,
+        name,
+        parameters,
+        policy,
+        options \\ []
+      ) do
     mutation(
       identity,
       "/hephaestus.instance.v1.AgentInstanceService/ImportAgent",
@@ -1192,11 +1260,12 @@ defmodule HephaestusWeb.RPC.Client do
         parameters: parameter_values(parameters),
         selected_policy: runtime_policy(policy)
       ],
-      &AgentInstanceService.Stub.import_agent/3
+      &AgentInstanceService.Stub.import_agent/3,
+      options
     )
   end
 
-  def create_attachment(identity, instance_id, repository_id, selector, trigger) do
+  def create_attachment(identity, instance_id, repository_id, selector, trigger, options \\ []) do
     mutation(
       identity,
       "/hephaestus.instance.v1.AgentInstanceService/CreateAttachment",
@@ -1207,7 +1276,8 @@ defmodule HephaestusWeb.RPC.Client do
         ref_selector: ref_selector(selector),
         trigger_policy: trigger_policy!(trigger)
       ],
-      &AgentInstanceService.Stub.create_attachment/3
+      &AgentInstanceService.Stub.create_attachment/3,
+      options
     )
   end
 
@@ -1246,7 +1316,7 @@ defmodule HephaestusWeb.RPC.Client do
     )
   end
 
-  def revise_capabilities(identity, instance_id, expected_revision_id, bindings) do
+  def revise_capabilities(identity, instance_id, expected_revision_id, bindings, options \\ []) do
     selections =
       Enum.map(bindings, fn binding ->
         %CapabilityBindingSelection{
@@ -1266,7 +1336,8 @@ defmodule HephaestusWeb.RPC.Client do
         expected_revision_id: id(expected_revision_id),
         bindings: selections
       ],
-      &AgentInstanceService.Stub.revise_capabilities/3
+      &AgentInstanceService.Stub.revise_capabilities/3,
+      options
     )
   end
 
@@ -1336,7 +1407,7 @@ defmodule HephaestusWeb.RPC.Client do
     )
   end
 
-  def bind_secret(identity, attributes) do
+  def bind_secret(identity, attributes, options \\ []) do
     mutation(
       identity,
       "/hephaestus.instance.v1.AgentInstanceService/BindSecret",
@@ -1351,9 +1422,33 @@ defmodule HephaestusWeb.RPC.Client do
         attachment_ids: Enum.map(attributes["attachment_ids"] || [], &id/1),
         destinations: attributes["destinations"] || []
       ],
-      &AgentInstanceService.Stub.bind_secret/3
+      &AgentInstanceService.Stub.bind_secret/3,
+      options
     )
   end
+
+  @doc "Declares one exact HTTPS substitution rule for an existing brokered binding."
+  def declare_brokered_https_rule(identity, attributes, options \\ []) do
+    mutation(
+      identity,
+      "/hephaestus.instance.v1.AgentInstanceService/DeclareBrokeredHttpsRule",
+      DeclareBrokeredHttpsRuleRequest,
+      [
+        binding_id: id(Map.fetch!(attributes, "binding_id")),
+        destination: Map.fetch!(attributes, "destination"),
+        header: Map.fetch!(attributes, "header"),
+        header_prefix: Map.get(attributes, "header_prefix")
+      ]
+      |> maybe_requested_rule_id(attributes),
+      &AgentInstanceService.Stub.declare_brokered_https_rule/3,
+      options
+    )
+  end
+
+  defp maybe_requested_rule_id(request, %{"requested_rule_id" => rule_id}),
+    do: request ++ [requested_rule_id: id(rule_id)]
+
+  defp maybe_requested_rule_id(request, _attributes), do: request
 
   def create_control(identity, attributes) do
     {context, request_id} = request_context()
@@ -1401,15 +1496,21 @@ defmodule HephaestusWeb.RPC.Client do
     end
   end
 
-  defp mutation(identity, audience, request_module, attributes, stub_call) do
-    {context, request_id} = request_context()
+  defp mutation(identity, audience, request_module, attributes, stub_call, options \\ []) do
+    {context, request_id} = request_context(options)
     request = struct!(request_module, [{:context, context} | attributes])
+    stub_call = Keyword.get(options, :stub_call, stub_call)
 
-    Invoke.unary(identity, audience, request, stub_call,
-      request_id: request_id,
-      maximum_request_bytes: 1_048_576,
-      maximum_response_bytes: 65_536
-    )
+    invoke_options =
+      options
+      |> Keyword.take([:channel_provider, :channel_reset, :timeout, :maximum_response_bytes])
+      |> Keyword.merge(
+        request_id: request_id,
+        maximum_request_bytes: 1_048_576,
+        maximum_response_bytes: 65_536
+      )
+
+    Invoke.unary(identity, audience, request, stub_call, invoke_options)
     |> project_response()
   end
 
@@ -1682,9 +1783,9 @@ defmodule HephaestusWeb.RPC.Client do
   defp next_page_token(nil), do: ""
   defp next_page_token(page), do: page.next_page_token || ""
 
-  defp request_context do
+  defp request_context(options \\ []) do
     request_id = UUID.generate()
-    idempotency_key = UUID.generate()
+    idempotency_key = Keyword.get(options, :idempotency_key, UUID.generate())
 
     {%RequestContext{
        request_id: id(request_id),
@@ -1791,6 +1892,13 @@ defmodule HephaestusWeb.RPC.Client do
       memory_mib: policy["memory_mib"],
       network: network_policy!(policy["network"])
     }
+  end
+
+  defp boolean_option(options, key, default) do
+    case Keyword.get(options, key, default) do
+      value when is_boolean(value) -> {:ok, value}
+      _invalid -> {:error, Error.local(:invalid)}
+    end
   end
 
   defp network_policy!("disabled"), do: NetworkPolicy.value(:NETWORK_POLICY_DISABLED)

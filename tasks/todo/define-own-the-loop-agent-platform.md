@@ -822,11 +822,11 @@ MVP 06 chat journey
     controlled Git publication, release update, recovery, and complete
     provenance.
 
-- [ ] **6. Prove the Git-backed chat journey**
-  - [ ] Complete
-    [MVP 06: Git-backed session chat journey](mvp-06-git-backed-session-chat-journey.md)
+- [x] **6. Prove the Git-backed chat journey**
+  - [x] Complete
+    [MVP 06: Git-backed session chat journey](../done/mvp-06-git-backed-session-chat-journey.md)
     after MVP 01.2 and MVP 04 only.
-  - [ ] Verify the selected chat release owns its session repository protocol;
+  - [x] Verify the selected chat release owns its session repository protocol;
     public gateways and outbound delivery are not prerequisites.
 
 - [ ] **7. Verify and hand off the MVP roadmap**

@@ -19,6 +19,21 @@ use std::{sync::Arc, time::Duration};
 /// including denials outside the inner handler.
 pub const DEFAULT_AUDIT_APPEND_TIMEOUT: Duration = Duration::from_millis(250);
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum AuditAppendFailure {
+    Timeout,
+    SinkUnavailable,
+}
+
+impl AuditAppendFailure {
+    const fn error_class(self) -> &'static str {
+        match self {
+            Self::Timeout => "timeout",
+            Self::SinkUnavailable => "sink-unavailable",
+        }
+    }
+}
+
 /// Correlation allocated once by the outer UI middleware and read by inner
 /// handlers. It carries no authority and is never serialized.
 #[derive(Clone, Copy)]
@@ -56,10 +71,12 @@ impl UiAuditRecorder {
         }
     }
 
-    async fn append(&self, event: NewUiRequestAuditEvent) -> bool {
-        tokio::time::timeout(self.append_timeout, self.sink.append(event))
-            .await
-            .is_ok_and(|result| result.is_ok())
+    async fn append(&self, event: NewUiRequestAuditEvent) -> Result<(), AuditAppendFailure> {
+        match tokio::time::timeout(self.append_timeout, self.sink.append(event)).await {
+            Ok(Ok(())) => Ok(()),
+            Ok(Err(_)) => Err(AuditAppendFailure::SinkUnavailable),
+            Err(_) => Err(AuditAppendFailure::Timeout),
+        }
     }
 
     /// Appends a denial while retaining the original safe denial response if
@@ -100,8 +117,14 @@ impl UiAuditRecorder {
             reason,
             context,
         );
-        if !self.append(event).await {
-            tracing::warn!(request_id = %request_id, surface = %surface, "UI denial audit append failed");
+        if let Err(failure) = self.append(event).await {
+            tracing::warn!(
+                request_id = %request_id,
+                surface = %surface,
+                stage = "ui-audit-append",
+                error_class = failure.error_class(),
+                "UI denial audit append failed"
+            );
         }
         response
     }
@@ -123,8 +146,14 @@ impl UiAuditRecorder {
             UiRequestAuditReason::Unavailable,
             context,
         );
-        if !self.append(event).await {
-            tracing::warn!(request_id = %request_id, surface = %surface, "UI timeout audit append failed");
+        if let Err(failure) = self.append(event).await {
+            tracing::warn!(
+                request_id = %request_id,
+                surface = %surface,
+                stage = "ui-audit-append",
+                error_class = failure.error_class(),
+                "UI timeout audit append failed"
+            );
         }
         response
     }
@@ -149,8 +178,14 @@ impl UiAuditRecorder {
             reason,
             context,
         );
-        if !self.append(event).await {
-            tracing::warn!(request_id = %request_id, surface = %surface, "UI allowed audit append failed");
+        if let Err(failure) = self.append(event).await {
+            tracing::warn!(
+                request_id = %request_id,
+                surface = %surface,
+                stage = "ui-audit-append",
+                error_class = failure.error_class(),
+                "UI allowed audit append failed"
+            );
             return audit_unavailable();
         }
         response
@@ -290,6 +325,72 @@ mod tests {
         async fn append(&self, _event: NewUiRequestAuditEvent) -> Result<(), UiRequestAuditError> {
             std::future::pending().await
         }
+    }
+
+    struct UnavailableAuditSink;
+
+    #[async_trait]
+    impl UiRequestAuditSink for UnavailableAuditSink {
+        async fn append(&self, _event: NewUiRequestAuditEvent) -> Result<(), UiRequestAuditError> {
+            Err(UiRequestAuditError::Unavailable)
+        }
+    }
+
+    fn audit_event() -> NewUiRequestAuditEvent {
+        NewUiRequestAuditEvent::now(
+            RequestId::new(),
+            UiRequestAuditSurface::Content,
+            UiRequestAuditDecision::Allowed,
+            UiRequestAuditOutcome::Succeeded,
+            UiRequestAuditReason::None,
+            UiRequestAuditContext::anonymous(),
+        )
+    }
+
+    #[tokio::test]
+    async fn audit_append_classifies_timeout_without_provider_details() {
+        let recorder = UiAuditRecorder::with_append_timeout(
+            std::sync::Arc::new(NeverAuditSink),
+            Duration::from_millis(1),
+        );
+
+        let failure = recorder
+            .append(audit_event())
+            .await
+            .expect_err("hanging sink must time out");
+
+        assert_eq!(failure, AuditAppendFailure::Timeout);
+        assert_eq!(failure.error_class(), "timeout");
+    }
+
+    #[tokio::test]
+    async fn audit_append_classifies_closed_sink_failure() {
+        let recorder = UiAuditRecorder::new(std::sync::Arc::new(UnavailableAuditSink));
+
+        let failure = recorder
+            .append(audit_event())
+            .await
+            .expect_err("unavailable sink must fail closed");
+
+        assert_eq!(failure, AuditAppendFailure::SinkUnavailable);
+        assert_eq!(failure.error_class(), "sink-unavailable");
+    }
+
+    #[tokio::test]
+    async fn allowed_audit_failure_preserves_fail_closed_response() {
+        let recorder = UiAuditRecorder::new(std::sync::Arc::new(UnavailableAuditSink));
+        let response = recorder
+            .allowed(
+                RequestId::new(),
+                UiRequestAuditSurface::Content,
+                UiRequestAuditContext::anonymous(),
+                UiRequestAuditOutcome::Succeeded,
+                UiRequestAuditReason::None,
+                Response::new(Body::empty()),
+            )
+            .await;
+
+        assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
     }
 
     #[tokio::test]

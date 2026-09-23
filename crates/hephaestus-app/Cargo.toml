@@ -76,6 +76,7 @@ registry-reconciler = { path = "../registry-reconciler" }
 registry-token = { path = "../registry-token" }
 registry-zot = { path = "../registry-zot" }
 rpc-proto = { path = "../rpc-proto", default-features = false }
+rustix.workspace = true
 review-domain = { path = "../review-domain" }
 review-postgres = { path = "../review-postgres" }
 review-service = { path = "../review-service" }

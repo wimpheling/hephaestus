@@ -295,8 +295,9 @@ pub async fn persist_ui_publication(
         sqlx::query(
             "INSERT INTO release_ui_descriptors
              (release_id, ui_key, scope, label, icon, presentation, route_base,
-              entrypoint, ui_kit_version, cache, content_kind)
-             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)",
+              entrypoint, ui_kit_version, cache, content_kind,
+              repository_git_access)
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)",
         )
         .bind(release_id.as_uuid())
         .bind(ui.key.as_str())
@@ -309,6 +310,7 @@ pub async fn persist_ui_publication(
         .bind(i32::from(ui.ui_kit_version))
         .bind(ui_cache_name(ui.cache))
         .bind(content_kind)
+        .bind(ui.repository_git_access.as_str())
         .execute(&mut **transaction)
         .await?;
 

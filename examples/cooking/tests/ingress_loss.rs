@@ -4,14 +4,23 @@
 //! complete response, then closes the client socket before sending response
 //! bytes. SQL is read-only evidence for durable publication and delivery.
 
+use base64::Engine as _;
 use runtime_types::RunId;
+use rustls::{ClientConfig, RootCertStore, pki_types::CertificateDer};
 use sqlx::PgPool;
-use std::{io, net::SocketAddr, time::Duration};
+use std::{
+    fs, io,
+    net::SocketAddr,
+    path::{Path, PathBuf},
+    sync::Arc,
+    time::Duration,
+};
 use tokio::{
-    io::{AsyncReadExt, AsyncWriteExt},
+    io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt},
     net::{TcpListener, TcpStream},
     sync::oneshot,
 };
+use tokio_rustls::{TlsConnector, rustls::pki_types::ServerName};
 use uuid::Uuid;
 
 use super::cooking::CookingRun;
@@ -31,6 +40,9 @@ pub struct IngressLossContext<'a> {
 pub struct IngressLossProxy {
     listener: TcpListener,
     upstream: SocketAddr,
+    upstream_host: String,
+    upstream_tls: bool,
+    ca_path: Option<PathBuf>,
     url: String,
     committed: Option<oneshot::Sender<()>>,
 }
@@ -39,11 +51,24 @@ impl IngressLossProxy {
     pub async fn bind(
         caddy_public_url: &str,
     ) -> Result<Self, Box<dyn std::error::Error + Send + Sync>> {
+        let ca_path = std::env::var_os("HEPHAESTUS_CADDY_TEST_CA_CERT").map(PathBuf::from);
+        Self::bind_with_ca(caddy_public_url, ca_path).await
+    }
+
+    async fn bind_with_ca(
+        caddy_public_url: &str,
+        ca_path: Option<PathBuf>,
+    ) -> Result<Self, Box<dyn std::error::Error + Send + Sync>> {
         let upstream_url = reqwest::Url::parse(caddy_public_url)?;
         let host = upstream_url.host_str().ok_or("Caddy URL has no host")?;
+        let upstream_host = host.to_owned();
         let port = upstream_url
             .port_or_known_default()
             .ok_or("Caddy URL has no port")?;
+        let upstream_tls = upstream_url.scheme() == "https";
+        if !upstream_tls && upstream_url.scheme() != "http" {
+            return Err(format!("unsupported Caddy URL scheme: {}", upstream_url.scheme()).into());
+        }
         let upstream = tokio::net::lookup_host((host, port))
             .await?
             .next()
@@ -53,6 +78,9 @@ impl IngressLossProxy {
         Ok(Self {
             listener,
             upstream,
+            upstream_host,
+            upstream_tls,
+            ca_path,
             url,
             committed: None,
         })
@@ -75,27 +103,74 @@ impl IngressLossProxy {
         let operation = async {
             let (mut client, _) = self.listener.accept().await?;
             let request = read_http_message(&mut client, timeout).await?;
-            let mut upstream = TcpStream::connect(self.upstream).await?;
-            upstream.write_all(&request).await?;
-            let response = read_http_message(&mut upstream, timeout).await?;
-            let status = response
-                .split(|byte| *byte == b' ')
-                .nth(1)
-                .and_then(|value| std::str::from_utf8(value).ok())
-                .unwrap_or_default();
-            assert_eq!(status, "200", "Caddy did not accept the forwarded ingress");
-            if let Some(signal) = self.committed.take() {
-                let _ = signal.send(());
+            let upstream = TcpStream::connect(self.upstream).await?;
+            if self.upstream_tls {
+                let ca_path = self
+                    .ca_path
+                    .as_deref()
+                    .ok_or("HEPHAESTUS_CADDY_TEST_CA_CERT is required for HTTPS ingress loss")?;
+                let connector = caddy_tls_connector(ca_path)?;
+                let server_name = ServerName::try_from(self.upstream_host.clone())
+                    .map_err(|error| io::Error::new(io::ErrorKind::InvalidInput, error))?;
+                let upstream = connector.connect(server_name, upstream).await?;
+                self.forward_upstream(&mut client, upstream, request, timeout)
+                    .await?;
+            } else {
+                self.forward_upstream(&mut client, upstream, request, timeout)
+                    .await?;
             }
-            // Deliberately close before writing even one response byte. The
-            // caller therefore observes a transport error after the upstream
-            // commit.
-            client.shutdown().await?;
             Ok::<(), Box<dyn std::error::Error + Send + Sync>>(())
         };
         tokio::time::timeout(timeout, operation).await??;
         Ok(())
     }
+
+    async fn forward_upstream<S>(
+        &mut self,
+        client: &mut TcpStream,
+        mut upstream: S,
+        request: Vec<u8>,
+        timeout: Duration,
+    ) -> Result<(), Box<dyn std::error::Error + Send + Sync>>
+    where
+        S: AsyncRead + AsyncWrite + Unpin,
+    {
+        upstream.write_all(&request).await?;
+        let response = read_http_message(&mut upstream, timeout).await?;
+        let status = response
+            .split(|byte| *byte == b' ')
+            .nth(1)
+            .and_then(|value| std::str::from_utf8(value).ok())
+            .unwrap_or_default();
+        assert_eq!(status, "200", "Caddy did not accept the forwarded ingress");
+        if let Some(signal) = self.committed.take() {
+            let _ = signal.send(());
+        }
+        // Deliberately close before writing even one response byte. The
+        // caller therefore observes a transport error after the upstream
+        // commit.
+        client.shutdown().await?;
+        Ok(())
+    }
+}
+
+fn caddy_tls_connector(
+    ca_path: &Path,
+) -> Result<TlsConnector, Box<dyn std::error::Error + Send + Sync>> {
+    let pem = fs::read_to_string(ca_path)?;
+    let encoded = pem
+        .lines()
+        .filter(|line| !line.starts_with("-----"))
+        .collect::<String>();
+    let der = base64::engine::general_purpose::STANDARD.decode(encoded)?;
+    let mut roots = RootCertStore::empty();
+    roots.add(CertificateDer::from(der))?;
+    let config =
+        ClientConfig::builder_with_provider(Arc::new(rustls::crypto::ring::default_provider()))
+            .with_safe_default_protocol_versions()?
+            .with_root_certificates(roots)
+            .with_no_client_auth();
+    Ok(TlsConnector::from(Arc::new(config)))
 }
 
 /// Sends Alice update 42 through the loss proxy concurrently with Bob update
@@ -117,7 +192,7 @@ pub async fn exercise(
     let proxy_task = tokio::spawn(async move {
         tokio::time::timeout(proxy_timeout, proxy.forward_and_drop(proxy_timeout)).await?
     });
-    let client = reqwest::Client::builder().timeout(ctx.timeout).build()?;
+    let client = super::cooking::caddy_gateway_client_with_timeout(ctx.timeout);
     let request = client
         .post(&proxy_url)
         .header("host", caddy_host(ctx.caddy_public_url)?)
@@ -333,10 +408,13 @@ fn caddy_host(url: &str) -> Result<String, Box<dyn std::error::Error + Send + Sy
         .map_or_else(|| host.to_owned(), |port| format!("{host}:{port}")))
 }
 
-async fn read_http_message(
-    stream: &mut TcpStream,
+async fn read_http_message<S>(
+    stream: &mut S,
     timeout: Duration,
-) -> Result<Vec<u8>, Box<dyn std::error::Error + Send + Sync>> {
+) -> Result<Vec<u8>, Box<dyn std::error::Error + Send + Sync>>
+where
+    S: AsyncRead + Unpin,
+{
     let mut data = Vec::new();
     let mut chunk = [0_u8; 4096];
     let header_end;
@@ -384,4 +462,133 @@ async fn read_http_message(
     }
     data.truncate(message_end);
     Ok(data)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use rcgen::{BasicConstraints, CertificateParams, IsCa, KeyPair};
+    use tokio_rustls::TlsAcceptor;
+
+    async fn start_tls_server() -> (String, String, tokio::task::JoinHandle<()>) {
+        let mut ca_parameters = CertificateParams::default();
+        ca_parameters.is_ca = IsCa::Ca(BasicConstraints::Unconstrained);
+        let ca_key = KeyPair::generate().expect("generate ingress-loss CA key");
+        let ca = ca_parameters
+            .self_signed(&ca_key)
+            .expect("self-sign ingress-loss CA");
+        let leaf_parameters =
+            CertificateParams::new(vec![String::from("127.0.0.1")]).expect("loopback identity");
+        let leaf_key = KeyPair::generate().expect("generate ingress-loss leaf key");
+        let leaf = leaf_parameters
+            .signed_by(&leaf_key, &ca, &ca_key)
+            .expect("sign ingress-loss leaf");
+        let tls = rustls::ServerConfig::builder_with_provider(Arc::new(
+            rustls::crypto::ring::default_provider(),
+        ))
+        .with_safe_default_protocol_versions()
+        .expect("ingress-loss safe TLS protocol versions")
+        .with_no_client_auth()
+        .with_single_cert(
+            vec![CertificateDer::from(leaf.der().to_vec())],
+            rustls::pki_types::PrivateKeyDer::Pkcs8(leaf_key.serialize_der().into()),
+        )
+        .expect("ingress-loss TLS server configuration");
+        let listener = TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("bind ingress-loss TLS server");
+        let port = listener
+            .local_addr()
+            .expect("ingress-loss TLS server address")
+            .port();
+        let server = tokio::spawn(async move {
+            let Ok((stream, _)) = listener.accept().await else {
+                return;
+            };
+            let Ok(mut stream) = TlsAcceptor::from(Arc::new(tls)).accept(stream).await else {
+                return;
+            };
+            let mut request = Vec::new();
+            let mut chunk = [0_u8; 1024];
+            loop {
+                let Ok(read) = stream.read(&mut chunk).await else {
+                    return;
+                };
+                if read == 0 {
+                    return;
+                }
+                request.extend_from_slice(&chunk[..read]);
+                if request.windows(4).any(|window| window == b"\r\n\r\n") {
+                    break;
+                }
+            }
+            let _ = stream
+                .write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 0\r\nConnection: close\r\n\r\n")
+                .await;
+        });
+        (format!("https://127.0.0.1:{port}"), ca.pem(), server)
+    }
+
+    #[tokio::test]
+    async fn https_proxy_requires_joined_ca_before_commit() {
+        let temp = tempfile::tempdir().expect("ingress-loss TLS fixture directory");
+        let (trusted_url, trusted_ca, trusted_server) = start_tls_server().await;
+        let trusted_path = temp.path().join("trusted-ca.pem");
+        fs::write(&trusted_path, trusted_ca).expect("write trusted ingress-loss CA");
+        let mut proxy = IngressLossProxy::bind_with_ca(&trusted_url, Some(trusted_path.clone()))
+            .await
+            .expect("bind trusted HTTPS ingress-loss proxy");
+        let committed = proxy.arm_commit_signal();
+        let proxy_url = proxy.url().to_owned();
+        let proxy_task =
+            tokio::spawn(async move { proxy.forward_and_drop(Duration::from_secs(5)).await });
+        let response = reqwest::Client::new()
+            .post(proxy_url)
+            .body("trusted ingress")
+            .send()
+            .await;
+        assert!(
+            response.is_err(),
+            "response-loss client received a response"
+        );
+        committed.await.expect("trusted HTTPS proxy commit signal");
+        proxy_task
+            .await
+            .expect("trusted HTTPS proxy task")
+            .expect("trusted HTTPS proxy forwarding");
+        trusted_server.await.expect("trusted HTTPS server task");
+
+        let (wrong_url, _wrong_ca, wrong_server) = start_tls_server().await;
+        let mut wrong_proxy = IngressLossProxy::bind_with_ca(&wrong_url, Some(trusted_path))
+            .await
+            .expect("bind wrong-CA HTTPS ingress-loss proxy");
+        let wrong_committed = wrong_proxy.arm_commit_signal();
+        let wrong_proxy_url = wrong_proxy.url().to_owned();
+        let wrong_proxy_task =
+            tokio::spawn(async move { wrong_proxy.forward_and_drop(Duration::from_secs(5)).await });
+        let wrong_response = reqwest::Client::new()
+            .post(wrong_proxy_url)
+            .body("wrong CA ingress")
+            .send()
+            .await;
+        assert!(
+            wrong_response.is_err(),
+            "wrong-CA client received a response"
+        );
+        assert!(
+            !matches!(
+                tokio::time::timeout(Duration::from_secs(1), wrong_committed).await,
+                Ok(Ok(()))
+            ),
+            "wrong CA must fail before the commit signal"
+        );
+        assert!(
+            wrong_proxy_task
+                .await
+                .expect("wrong-CA proxy task")
+                .is_err(),
+            "wrong CA must fail the HTTPS upstream handshake"
+        );
+        wrong_server.await.expect("wrong-CA HTTPS server task");
+    }
 }

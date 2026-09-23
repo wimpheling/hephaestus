@@ -1331,6 +1331,7 @@ dependencies = [
  "authz-postgres",
  "axum",
  "base64",
+ "capability-domain",
  "forge-domain",
  "forge-service",
  "futures-util",
@@ -1344,6 +1345,9 @@ dependencies = [
  "run-domain",
  "run-orchestrator",
  "run-postgres",
+ "runtime-git-authority",
+ "runtime-git-authority-postgres",
+ "runtime-handoff-local",
  "runtime-types",
  "serde_json",
  "serial_test",
@@ -2444,6 +2448,7 @@ dependencies = [
  "runtime-git-authority-postgres",
  "runtime-handoff-local",
  "runtime-types",
+ "rustix",
  "rustls",
  "secret-application",
  "secret-broker",
@@ -5729,6 +5734,7 @@ name = "vm-libkrun"
 version = "0.1.0"
 dependencies = [
  "async-trait",
+ "base64",
  "brokered-egress-client",
  "bytes",
  "ciborium",
@@ -6161,6 +6167,7 @@ name = "workspace-domain"
 version = "0.1.0"
 dependencies = [
  "async-trait",
+ "git-capability-domain",
  "run-domain",
  "runtime-types",
  "serde",

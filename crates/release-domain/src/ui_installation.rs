@@ -244,17 +244,64 @@ impl UiInstallationInputDigest {
         ui_key: &UiKey,
         expected_organization: Option<OrganizationId>,
     ) -> Self {
+        Self::install_with_expected_organization_and_git_ack(
+            target,
+            release_id,
+            ui_key,
+            expected_organization,
+            false,
+        )
+    }
+
+    /// Digests an install request including its explicit Git authority approval.
+    #[must_use]
+    pub fn install_with_expected_organization_and_git_ack(
+        target: UiInstallationTarget,
+        release_id: ReleaseId,
+        ui_key: &UiKey,
+        expected_organization: Option<OrganizationId>,
+        acknowledge_repository_git_access: bool,
+    ) -> Self {
+        if !acknowledge_repository_git_access {
+            return expected_organization.map_or_else(
+                || Self::install(target, release_id, ui_key),
+                |organization| {
+                    Self::derive(
+                        "ui-installation-input-v2/install",
+                        &[
+                            target.scope_name().as_bytes(),
+                            target.as_uuid().as_bytes(),
+                            organization.as_uuid().as_bytes(),
+                            release_id.as_uuid().as_bytes(),
+                            ui_key.as_str().as_bytes(),
+                        ],
+                    )
+                },
+            );
+        }
         expected_organization.map_or_else(
-            || Self::install(target, release_id, ui_key),
-            |organization| {
+            || {
                 Self::derive(
                     "ui-installation-input-v2/install",
+                    &[
+                        target.scope_name().as_bytes(),
+                        target.as_uuid().as_bytes(),
+                        release_id.as_uuid().as_bytes(),
+                        ui_key.as_str().as_bytes(),
+                        &[u8::from(acknowledge_repository_git_access)],
+                    ],
+                )
+            },
+            |organization| {
+                Self::derive(
+                    "ui-installation-input-v3/install",
                     &[
                         target.scope_name().as_bytes(),
                         target.as_uuid().as_bytes(),
                         organization.as_uuid().as_bytes(),
                         release_id.as_uuid().as_bytes(),
                         ui_key.as_str().as_bytes(),
+                        &[u8::from(acknowledge_repository_git_access)],
                     ],
                 )
             },
@@ -489,6 +536,14 @@ mod tests {
         let none = UiInstallationInputDigest::install_with_expected_organization(
             target, release, &ui_key, None,
         );
+        let acknowledged =
+            UiInstallationInputDigest::install_with_expected_organization_and_git_ack(
+                target, release, &ui_key, None, true,
+            );
+        let acknowledged_replay =
+            UiInstallationInputDigest::install_with_expected_organization_and_git_ack(
+                target, release, &ui_key, None, true,
+            );
         let scoped_a = UiInstallationInputDigest::install_with_expected_organization(
             target,
             release,
@@ -502,6 +557,8 @@ mod tests {
             Some(organization_b),
         );
         assert_eq!(legacy, none);
+        assert_ne!(none, acknowledged);
+        assert_eq!(acknowledged, acknowledged_replay);
         assert_ne!(legacy, scoped_a);
         assert_ne!(scoped_a, scoped_b);
     }

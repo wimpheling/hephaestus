@@ -1,6 +1,6 @@
-#![cfg(feature = "test-fixtures")]
-
 //! Receive/manual UI capture ordering through two real application-role pools.
+
+#![cfg(feature = "test-fixtures")]
 
 use authz_postgres::PostgresMelangeAuthorizer;
 use control_plane_postgres::build::{BuildApplication, BuildError, RequestBuild};

@@ -55,8 +55,11 @@ set -e
     printf 'expected fixed harness validation status 1, got %s\n' "${client_status}" >&2
     exit 1
 }
-[[ ! -s "${client_log}" && ! -s "${host_log}" ]] || {
-    printf 'bridge smoke emitted unexpected output\n' >&2
+grep -q 'HEPH_GCP_FAILURE phase=browser-post-operation command_id=playwright-run exit_code=1 diagnostic_source=playwright-log diagnostic_error=playwright-failed' \
+    "${client_log}"
+[[ "$(grep -c 'HEPH_GCP_FAILURE ' "${client_log}")" -eq 1 ]]
+[[ ! -s "${host_log}" ]] || {
+    printf 'bridge smoke emitted unexpected host output\n' >&2
     exit 1
 }
 if compgen -G "${bridge_dir}/request.*" >/dev/null || compgen -G "${bridge_dir}/response.*" >/dev/null; then
@@ -67,7 +70,7 @@ printf 'host browser bridge smoke passed\n'
 
 # Exercise the failure path with diagnostics enabled.  The fake external
 # child emits one safe line and two credential-shaped lines; the bridge must
-# preserve status 1, expose the safe line, and suppress the sensitive lines.
+# preserve status 17, expose the safe line, and suppress the sensitive lines.
 diagnostics_root="$(mktemp -d /tmp/heph-browser-bridge-diagnostics.XXXXXX)"
 fake_repo="${diagnostics_root}/repo"
 fake_scripts="${fake_repo}/scripts"
@@ -85,7 +88,7 @@ cat >"${fake_scripts}/run-ui-e2e-external.sh" <<'SH'
 printf '%s\n' 'safe browser failure diagnostic'
 printf '%s\n' 'Authorization: Bearer definitely-secret'
 printf '%s\n' 'password=definitely-password'
-exit 1
+exit 17
 SH
 chmod 700 -- "${fake_scripts}/run-ui-e2e-host-bridge.sh" "${fake_scripts}/run-ui-e2e-external.sh"
 printf '{}\n' >"${diagnostics_bridge}/fixture.json"
@@ -123,19 +126,21 @@ set -e
 kill "${diagnostic_watcher_pid}" >/dev/null 2>&1 || true
 wait "${diagnostic_watcher_pid}" 2>/dev/null || true
 diagnostic_watcher_pid=""
-[[ "${diagnostics_client_status}" -eq 1 ]] || {
-    printf 'diagnostic bridge returned %s, expected 1\n' "${diagnostics_client_status}" >&2
+[[ "${diagnostics_client_status}" -eq 17 ]] || {
+    printf 'diagnostic bridge returned %s, expected 17\n' "${diagnostics_client_status}" >&2
     exit 1
 }
-grep -q 'HEPH_BROWSER_BRIDGE event=external-failure status=1 diagnostics-scan=0' \
+grep -q 'HEPH_BROWSER_BRIDGE event=external-failure status=17 diagnostics-scan=0' \
     "${diagnostics_host_log}"
+grep -q 'HEPH_GCP_FAILURE phase=browser-post-operation command_id=playwright-run exit_code=17 diagnostic_source=playwright-log diagnostic_error=playwright-failed' \
+    "${diagnostics_client_log}"
+[[ "$(grep -c 'HEPH_GCP_FAILURE ' "${diagnostics_client_log}")" -eq 1 ]]
 grep -q 'safe browser failure diagnostic' "${diagnostics_host_log}"
 if grep -q 'definitely-secret\|definitely-password\|Authorization: Bearer' \
     "${diagnostics_host_log}"; then
     printf 'diagnostic bridge leaked credential-shaped output\n' >&2
     exit 1
 fi
-[[ ! -s "${diagnostics_client_log}" ]]
 printf 'host browser bridge failure diagnostics smoke passed\n'
 
 # Exercise an early web readiness failure.  The external harness must retain
@@ -200,7 +205,9 @@ grep -q 'curl: (7)' "${retained_host_log}"
 grep -q 'synthetic web startup failure' "${retained_host_log}"
 grep -q 'synthetic service bind failure' "${retained_host_log}"
 grep -q 'playwright was not started' "${retained_host_log}"
-[[ ! -s "${retained_client_log}" ]]
+grep -q 'HEPH_GCP_FAILURE phase=browser-initial command_id=playwright-run exit_code=7 diagnostic_source=playwright-log diagnostic_error=playwright-failed' \
+    "${retained_client_log}"
+[[ "$(grep -c 'HEPH_GCP_FAILURE ' "${retained_client_log}")" -eq 1 ]]
 printf 'host browser bridge retained-log diagnostics smoke passed\n'
 
 # The fail-closed branch must suppress the entire excerpt when the stream
@@ -262,7 +269,9 @@ if grep -q 'safe line must be withheld\|cooking-inbound-only-fixture-sentinel' \
     printf 'scanner bridge emitted output after credential scan failure\n' >&2
     exit 1
 fi
-[[ ! -s "${scanner_client_log}" ]]
+grep -q 'HEPH_GCP_FAILURE phase=browser-post-operation command_id=playwright-run exit_code=1 diagnostic_source=playwright-log diagnostic_error=playwright-failed' \
+    "${scanner_client_log}"
+[[ "$(grep -c 'HEPH_GCP_FAILURE ' "${scanner_client_log}")" -eq 1 ]]
 printf 'host browser bridge fail-closed diagnostics smoke passed\n'
 
 # Exercise the external harness readiness contract with command mocks: a
@@ -276,6 +285,7 @@ mkdir -p -- "${readiness_repo}/scripts" "${readiness_repo}/e2e/playwright" \
     "${readiness_bin}" "${readiness_diag}"
 cp -- "${script_dir}/run-ui-e2e-external.sh" "${readiness_repo}/scripts/"
 cp -- "${script_dir}/check-browser-evidence.py" "${readiness_repo}/scripts/"
+cp -- "${script_dir}/project-playwright-browser-summary.py" "${readiness_repo}/scripts/"
 cat >"${readiness_root}/fixture.json" <<'JSON'
 {"project_id":"project","release_id":"release","release_agent_id":"agent","instance_id":"instance","mailbox_id":"mailbox","gateway_id":"gateway"}
 JSON
@@ -312,7 +322,13 @@ exit 0
 SH
 cat >"${readiness_bin}/npx" <<'SH'
 #!/usr/bin/env bash
-exit 0
+if [[ "${MOCK_NPX_WRITE_SUMMARY:-0}" == 1 && -n "${PLAYWRIGHT_JSON_OUTPUT_FILE:-}" ]]; then
+    cat >"${PLAYWRIGHT_JSON_OUTPUT_FILE}" <<'JSON'
+{"config":{"rootDir":"/repo/e2e/playwright"},"suites":[{"file":"cooking-tests/cooking-live-review.spec.ts","specs":[{"file":"cooking-tests/cooking-live-review.spec.ts","title":"cooking release install, mailbox, gateway configure, and binding","tests":[{"results":[{"status":"failed","error":{"message":"expect(locator).toContainText()"},"errorLocation":{"file":"/repo/e2e/playwright/cooking-tests/cooking-live-review.spec.ts","line":36,"column":41}}]}]}]}]}
+JSON
+fi
+printf '%s\n' 'secret=private-only-output'
+exit "${MOCK_NPX_STATUS:-0}"
 SH
 chmod 700 -- "${readiness_bin}/podman" "${readiness_bin}/curl" \
     "${readiness_bin}/npm" "${readiness_bin}/npx"
@@ -349,7 +365,47 @@ run_readiness_case delayed delayed running "$(( $(date +%s) + 10 ))" 0
 grep -q -- '--connect-timeout 2 --max-time 2' "${readiness_root}/delayed.args"
 run_readiness_case dead fail exited "$(( $(date +%s) + 10 ))" 1
 grep -q 'browser web container stopped state=exited 0 status=7' "${readiness_root}/dead.log"
+grep -q 'HEPH_GCP_BROWSER_FAILURE phase=initial test_id=unknown error_class=unknown matcher=unknown source_file=unknown source_line=0 source_column=0 exit_code=1' \
+    "${readiness_root}/dead.log"
 run_readiness_case timeout fail running "$(( $(date +%s) + 1 ))" 124
 grep -q 'browser web readiness deadline elapsed' "${readiness_root}/timeout.log"
 grep -q -- '--connect-timeout 1 --max-time 1' "${readiness_root}/timeout.args"
 printf 'external browser readiness deadline/liveness smoke passed\n'
+
+# The actual Playwright exit must survive as a typed browser-initial failure,
+# rather than being replaced by the outer golden process's generic status.
+printf '0\n' >"${readiness_root}/playwright-failure.count"
+: >"${readiness_root}/playwright-failure.args"
+set +e
+PATH="${readiness_bin}:${PATH}" \
+MOCK_CURL_MODE=delayed \
+MOCK_CURL_COUNT_FILE="${readiness_root}/playwright-failure.count" \
+MOCK_CURL_ARG_LOG="${readiness_root}/playwright-failure.args" \
+MOCK_NPX_STATUS=17 \
+MOCK_NPX_WRITE_SUMMARY=1 \
+HEPHAESTUS_E2E_COOKING_FIXTURE="${readiness_root}/fixture.json" \
+HEPHAESTUS_E2E_EXTERNAL_DATABASE_URL='postgres://bridge-smoke.invalid/test' \
+HEPHAESTUS_E2E_EXTERNAL_RPC_ENDPOINT='http://127.0.0.1:1' \
+HEPHAESTUS_E2E_EXTERNAL_RPC_SECRET='bridge-smoke-secret-with-sufficient-entropy' \
+HEPHAESTUS_E2E_EXTERNAL_OIDC_ISSUER='http://127.0.0.1:1' \
+HEPHAESTUS_E2E_EXTERNAL_WEB_PORT=4000 \
+HEPHAESTUS_E2E_COOKING_PHASE=initial \
+HEPHAESTUS_COOKING_DIAGNOSTICS_DIR="${readiness_diag}" \
+HEPHAESTUS_COOKING_BROWSER_DEADLINE_EPOCH="$(( $(date +%s) + 10 ))" \
+    "${readiness_external}" >"${readiness_root}/playwright-failure.log" 2>&1
+playwright_failure_status="$?"
+set -e
+[[ "${playwright_failure_status}" -eq 17 ]] || {
+    printf 'direct Playwright failure returned %s, expected 17\n' "${playwright_failure_status}" >&2
+    exit 1
+}
+grep -q 'HEPH_GCP_FAILURE phase=browser-initial command_id=playwright-run exit_code=17 diagnostic_source=playwright-log diagnostic_error=playwright-failed' \
+    "${readiness_root}/playwright-failure.log"
+[[ "$(grep -c 'HEPH_GCP_FAILURE ' "${readiness_root}/playwright-failure.log")" -eq 1 ]]
+grep -q 'HEPH_GCP_BROWSER_FAILURE phase=initial test_id=cooking-live-review error_class=assertion matcher=toContainText source_file=e2e/playwright/cooking-tests/cooking-live-review.spec.ts source_line=36 source_column=41 exit_code=17' \
+    "${readiness_root}/playwright-failure.log"
+! grep -q 'secret=private-only-output' "${readiness_root}/playwright-failure.log"
+raw_playwright_log="$(find "${readiness_diag}" -path '*/playwright.log' -type f -print -quit)"
+[[ -n "${raw_playwright_log}" ]]
+grep -q 'secret=private-only-output' "${raw_playwright_log}"
+printf 'direct browser failure attribution smoke passed\n'

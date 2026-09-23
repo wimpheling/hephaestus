@@ -21,10 +21,13 @@ use vm_libkrun::protocol::{
     GuestStateVolume, HostMessage, MAX_FRAME_SIZE, MAX_GATEWAY_HANDLER_OUTPUT_BYTES,
     MAX_PRIVATE_HTTP_BODY_BYTES, MAX_PRIVATE_HTTP_HEADERS, PROTOCOL_VERSION,
     PrivateHttpRequestMessage, PrivateHttpResponseMessage, RUNTIME_AUTHORITY_PATH_ENV,
+    RUNTIME_GIT_CREDENTIAL_HELPER, RUNTIME_GIT_HOST_ENV, RUNTIME_GIT_PATH_ENV,
     RuntimeAuthorityMessage,
 };
 use zeroize::Zeroizing;
 
+#[path = "heph-init/git_bridge.rs"]
+mod git_bridge;
 #[path = "heph-init/service.rs"]
 mod service;
 
@@ -60,12 +63,13 @@ fn run() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     )?;
     let HostMessage::Start {
         version,
-        command,
+        mut command,
         mounts,
         state_volume,
         runtime_authority,
         gateway_handler,
         private_http_service,
+        runtime_git_bridge,
     } = read_frame(&mut control)?
     else {
         return Err("host did not send the start command".into());
@@ -80,6 +84,34 @@ fn run() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         .inspect_err(|error| {
             send_guest_error(&mut control, "private-http-service", error);
         })?;
+    let git_bridge_config = runtime_git_bridge
+        .as_ref()
+        .map(git_bridge::Config::try_from)
+        .transpose()
+        .inspect_err(|error| {
+            send_guest_error(&mut control, "runtime-git-bridge", error);
+        })?;
+    if git_bridge_config.is_some()
+        && runtime_authority
+            .as_ref()
+            .and_then(|authority| authority.runtime_git_credential.as_ref())
+            .is_none()
+    {
+        let error = io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "runtime Git bridge requires a runtime Git credential",
+        );
+        send_guest_error(&mut control, "runtime-git-bridge", &error);
+        return Err(error.into());
+    }
+    if git_bridge_config.is_some() && gateway_handler {
+        let error = io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "runtime Git bridge cannot use a gateway handler",
+        );
+        send_guest_error(&mut control, "runtime-git-bridge", &error);
+        return Err(error.into());
+    }
     if service_config.is_some() && (gateway_handler || runtime_authority.is_some()) {
         let error = io::Error::new(
             io::ErrorKind::InvalidInput,
@@ -140,6 +172,50 @@ fn run() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
                 generation,
             },
         )?;
+    }
+
+    let git_proxy = git_bridge_config
+        .map(git_bridge::Supervisor::start)
+        .transpose()?;
+    if let Some(config) = git_bridge_config {
+        let host = format!("127.0.0.1:{}", config.loopback_port);
+        command.env.insert(String::from(RUNTIME_GIT_HOST_ENV), host);
+        command.env.insert(
+            String::from(RUNTIME_GIT_PATH_ENV),
+            config.repository_id.to_string(),
+        );
+        // The host materializes the managed worktree before the guest starts,
+        // so its numeric owner may differ from AGENT_UID. Restrict Git's
+        // ownership exception to this one runtime-managed path.
+        command
+            .env
+            .insert(String::from("GIT_CONFIG_COUNT"), String::from("3"));
+        command.env.insert(
+            String::from("GIT_CONFIG_KEY_0"),
+            String::from("credential.helper"),
+        );
+        command.env.insert(
+            String::from("GIT_CONFIG_VALUE_0"),
+            String::from(RUNTIME_GIT_CREDENTIAL_HELPER),
+        );
+        command.env.insert(
+            String::from("GIT_CONFIG_KEY_1"),
+            String::from("credential.useHttpPath"),
+        );
+        command
+            .env
+            .insert(String::from("GIT_CONFIG_VALUE_1"), String::from("true"));
+        command.env.insert(
+            String::from("GIT_CONFIG_KEY_2"),
+            String::from("safe.directory"),
+        );
+        command.env.insert(
+            String::from("GIT_CONFIG_VALUE_2"),
+            String::from("/workspace/git"),
+        );
+        command
+            .env
+            .insert(String::from("GIT_TERMINAL_PROMPT"), String::from("0"));
     }
 
     if gateway_handler {
@@ -205,6 +281,9 @@ fn run() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let mut child = match child.spawn() {
         Ok(child) => child,
         Err(error) => {
+            if let Some(proxy) = git_proxy {
+                proxy.stop();
+            }
             send_guest_error(&mut control, "command-spawn", &error);
             return Err(error.into());
         }
@@ -242,6 +321,9 @@ fn run() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     );
 
     let status = wait_command(&mut child)?;
+    if let Some(proxy) = git_proxy {
+        proxy.stop();
+    }
     if let Some(supervisor) = service_supervisor.as_ref() {
         supervisor.cancel();
     }

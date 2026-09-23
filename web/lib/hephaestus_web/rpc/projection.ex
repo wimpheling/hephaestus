@@ -22,7 +22,14 @@ defmodule HephaestusWeb.RPC.Projection do
   alias Hephaestus.Instance.V1.{InstanceRevision, RefSelector, SecretImport, UpdateEvent}
   alias Hephaestus.Release.V1.{Release, ReleaseUiDescriptor}
   alias Hephaestus.Run.V1.{Run, RunEvent}
-  alias Hephaestus.Secret.V1.{GrantSummary, ImportSummary, SecretSummary, SecretTarget}
+
+  alias Hephaestus.Secret.V1.{
+    GrantSummary,
+    ImportSummary,
+    SecretPolicy,
+    SecretSummary,
+    SecretTarget
+  }
 
   @enum_prefixes ~w(
     SECRET_SLOT_DELIVERY_MODE_
@@ -63,6 +70,7 @@ defmodule HephaestusWeb.RPC.Projection do
     RELEASE_UI_ICON_
     RELEASE_UI_PRESENTATION_
     RELEASE_UI_CACHE_POLICY_
+    RELEASE_UI_REPOSITORY_GIT_ACCESS_
     UI_INSTALLATION_LIFECYCLE_
     UI_INSTALLATION_CONTENT_KIND_
   )
@@ -123,7 +131,7 @@ defmodule HephaestusWeb.RPC.Projection do
     |> message_map()
     |> Map.drop(["target", "policy"])
     |> Map.merge(to_value(target))
-    |> Map.merge(message_map(policy))
+    |> Map.merge(policy_value(policy))
     |> rename("state", "status")
     |> rename("import_state", "import_status")
   end
@@ -133,7 +141,7 @@ defmodule HephaestusWeb.RPC.Projection do
     |> message_map()
     |> Map.drop(["target", "policy"])
     |> Map.merge(to_value(target))
-    |> Map.merge(message_map(policy))
+    |> Map.merge(policy_value(policy))
     |> rename("state", "status")
     |> rename("secret_state", "secret_status")
   end
@@ -143,9 +151,20 @@ defmodule HephaestusWeb.RPC.Projection do
     |> message_map()
     |> Map.drop(["target", "policy"])
     |> Map.merge(to_value(target))
-    |> Map.merge(message_map(policy))
+    |> Map.merge(policy_value(policy))
     |> rename("state", "status")
     |> rename("secret_state", "secret_status")
+  end
+
+  def to_value(%SecretPolicy{} = policy) do
+    policy
+    |> message_map()
+    |> Map.update(
+      "delivery_modes",
+      [],
+      &Enum.map(&1, fn value -> normalize_delivery_mode(value) end)
+    )
+    |> Map.update("phases", [], &Enum.map(&1, fn value -> normalize_delivery_phase(value) end))
   end
 
   def to_value(%RefSelector{selector: {:exact, value}}), do: value
@@ -276,6 +295,21 @@ defmodule HephaestusWeb.RPC.Projection do
   defp message_map(message) when is_map(message) do
     Map.new(message, fn {key, value} -> {to_string(key), to_value(value)} end)
   end
+
+  defp policy_value(nil), do: %{}
+  defp policy_value(policy), do: to_value(policy)
+
+  defp normalize_delivery_mode(value) when is_binary(value), do: value
+  defp normalize_delivery_mode(0), do: "unspecified"
+  defp normalize_delivery_mode(1), do: "raw"
+  defp normalize_delivery_mode(2), do: "brokered"
+  defp normalize_delivery_mode(_unknown), do: "unspecified"
+
+  defp normalize_delivery_phase(value) when is_binary(value), do: value
+  defp normalize_delivery_phase(0), do: "unspecified"
+  defp normalize_delivery_phase(1), do: "normal"
+  defp normalize_delivery_phase(2), do: "update"
+  defp normalize_delivery_phase(_unknown), do: "unspecified"
 
   defp parameter_document(values) do
     Map.new(values, fn value -> {value.name, parameter_value(value.value)} end)

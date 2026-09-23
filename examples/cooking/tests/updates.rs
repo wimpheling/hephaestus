@@ -278,7 +278,7 @@ pub async fn exercise_barrier_update_sequence(
 ) -> UpdateSequence {
     let public = std::env::var("HEPHAESTUS_CADDY_TEST_PUBLIC_URL").expect("public Caddy URL");
     let url = format!("{public}/gateway/cooking/telegram");
-    let client = reqwest::Client::new();
+    let client = super::cooking::caddy_gateway_client();
     let held = super::cooking::send_update(&client, &url, 47, 1001, "stew").await;
     assert_eq!(held.status(), reqwest::StatusCode::OK);
     held.bytes().await.expect("held cooking acknowledgement");

@@ -1,14 +1,19 @@
 //! Opt-in real-PostgreSQL secret lifecycle and non-disclosure coverage.
 
-use authz_postgres::PostgresMelangeAuthorizer;
+use authz_postgres::{AUTHORIZATION_MODEL_VERSION, PostgresMelangeAuthorizer};
+use capability_domain::{
+    CapabilityBinding, CapabilityBindingId, CapabilityOperation, CapabilityRequirement,
+    CapabilityRequirementId, CapabilityResource, CapabilityResourceKind, CapabilitySlotKey,
+};
 use forge_domain::{CommitSha, GitRef, ProjectId, RepositoryId};
 use identity_domain::{AuthenticatedIdentity, OrganizationId, RequestId, UserId};
-use release_domain::AgentAttachmentId;
+use release_domain::{AgentAttachmentId, AgentInstanceId, AgentInstanceRevisionId};
 use runtime_types::RunId;
 use secret_application::{
     AcceptSecretImport, BindSecret, BrokerAdapter, BrokerAdapterError, BrokerRequest,
     BrokerResponse, BrokerStatus, CreateSecret, DeclareBrokeredHttpsRule,
     GrantAndAcceptSecretImport, GrantSecret, ResolveRunSecrets, RotateSecret, SecretServiceError,
+    VerifiedBrokeredHttpsRule,
 };
 use secret_domain::{
     AgentSecretBindingId, DeliveryMode, ExecutionPhase, SecretAlias, SecretCommandKey,
@@ -21,7 +26,7 @@ use serde_json::json;
 use serial_test::serial;
 use sqlx::{PgPool, postgres::PgPoolOptions};
 use std::sync::{
-    Arc,
+    Arc, Mutex,
     atomic::{AtomicBool, Ordering},
 };
 use std::time::Duration;
@@ -29,6 +34,45 @@ use tokio::sync::Notify;
 use uuid::Uuid;
 
 const SENTINEL: &str = "postgres-secret-sentinel-2747dcb8";
+
+type TypedGitAuthority = (
+    Vec<String>,
+    Vec<String>,
+    Vec<String>,
+    i64,
+    i64,
+    i32,
+    i32,
+    bool,
+    Vec<u8>,
+);
+type CarriedTypedGitAuthority = (
+    Uuid,
+    Vec<String>,
+    Vec<String>,
+    Vec<String>,
+    i64,
+    i64,
+    i32,
+    i32,
+    bool,
+    Vec<u8>,
+);
+type BrokeredRuleReceipt = (
+    Uuid,
+    Uuid,
+    Uuid,
+    Uuid,
+    String,
+    Option<String>,
+    String,
+    String,
+    String,
+    String,
+    i64,
+    Uuid,
+    Uuid,
+);
 
 struct Fixture {
     owner: UserId,
@@ -53,6 +97,10 @@ struct FailingBroker;
 
 struct ObservedBroker {
     observed: Arc<AtomicBool>,
+}
+
+struct ObservedVerifiedBroker {
+    observed: Arc<Mutex<Option<VerifiedBrokeredHttpsRule>>>,
 }
 
 struct PausingBroker {
@@ -91,6 +139,35 @@ impl BrokerAdapter for ObservedBroker {
         Ok(BrokerResponse {
             status: BrokerStatus::Succeeded,
             body: br#"{"result":"unexpected"}"#.to_vec(),
+        })
+    }
+}
+
+#[async_trait::async_trait]
+impl BrokerAdapter for ObservedVerifiedBroker {
+    async fn invoke(
+        &self,
+        _credential: &SecretValue,
+        _destination: &str,
+        _operation: &str,
+        _body: &[u8],
+    ) -> Result<BrokerResponse, BrokerAdapterError> {
+        Ok(BrokerResponse {
+            status: BrokerStatus::Succeeded,
+            body: br#"{"result":"unexpected"}"#.to_vec(),
+        })
+    }
+
+    async fn invoke_verified_https(
+        &self,
+        _credential: &SecretValue,
+        _request: &BrokerRequest,
+        rule: &VerifiedBrokeredHttpsRule,
+    ) -> Result<BrokerResponse, BrokerAdapterError> {
+        *self.observed.lock().expect("verified rule lock") = Some(rule.clone());
+        Ok(BrokerResponse {
+            status: BrokerStatus::Succeeded,
+            body: br#"{"result":"sanitized"}"#.to_vec(),
         })
     }
 }
@@ -799,6 +876,33 @@ async fn encrypted_rotation_delegation_revocation_and_purge_are_atomic() {
         attachment_id,
     )
     .await;
+    // Model the orchestrator's independent provenance ensure: secret dispatch
+    // must consume and validate this row rather than own its target capture.
+    sqlx::query(
+        "INSERT INTO run_instance_provenance
+           (run_id, instance_id, instance_revision_id, release_id,
+            release_agent_id, attachment_id, target_repository_id,
+            target_ref, target_commit, parameter_hash,
+            platform_policy_version, phase, authorization_model_version)
+         SELECT run.id, run.instance_id, run.instance_revision_id,
+                run.release_id, run.release_agent_id, run.attachment_id,
+                attachment.repository_id, 'refs/heads/main', repeat('b', 40),
+                revision.parameter_hash, revision.platform_policy_version,
+                'normal', $2
+           FROM runs AS run
+           JOIN agent_instance_revisions AS revision
+             ON revision.id = run.instance_revision_id
+            AND revision.instance_id = run.instance_id
+           JOIN agent_attachments AS attachment
+             ON attachment.id = run.attachment_id
+            AND attachment.instance_id = run.instance_id
+          WHERE run.id = $1",
+    )
+    .bind(run_id.as_uuid())
+    .bind(AUTHORIZATION_MODEL_VERSION)
+    .execute(&pool)
+    .await
+    .expect("preexisting immutable dispatch provenance");
     let brokered_binding_id: Uuid = sqlx::query_scalar(
         "SELECT id FROM agent_secret_bindings
           WHERE instance_revision_id = $1 AND slot_key = 'model' AND status = 'active'",
@@ -807,10 +911,45 @@ async fn encrypted_rotation_delegation_revocation_and_purge_are_atomic() {
     .fetch_one(&pool)
     .await
     .expect("exact active brokered binding");
+    let previous_binding_event_version: i64 = sqlx::query_scalar(
+        "SELECT COALESCE(max(aggregate_version), 0)
+           FROM application_events
+          WHERE aggregate_type = 'agent_secret_binding'
+            AND aggregate_id = $1
+            AND scope_kind = 'agent_instance'
+            AND scope_id = $2",
+    )
+    .bind(brokered_binding_id)
+    .bind(instance_id.as_uuid())
+    .fetch_one(&pool)
+    .await
+    .expect("read binding event version before rule declaration");
+    let previous_binding_occurrence_id: Uuid = sqlx::query_scalar(
+        "SELECT occurrence_id
+           FROM application_events
+          WHERE aggregate_type = 'agent_secret_binding'
+            AND aggregate_id = $1
+            AND scope_kind = 'agent_instance'
+            AND scope_id = $2
+          ORDER BY cursor DESC
+          LIMIT 1",
+    )
+    .bind(brokered_binding_id)
+    .bind(instance_id.as_uuid())
+    .fetch_one(&pool)
+    .await
+    .expect("read binding occurrence before rule declaration");
+    let rule_identity = ordinary_member
+        .clone()
+        .with_idempotency_id(RequestId::new());
+    assert_ne!(
+        rule_identity.idempotency_id.as_uuid(),
+        previous_binding_occurrence_id
+    );
     let brokered_rule_id = Uuid::new_v4();
     service
         .declare_brokered_https_rule(
-            &ordinary_member,
+            &rule_identity,
             DeclareBrokeredHttpsRule {
                 command_key: key("declare-brokered-rule", brokered_rule_id),
                 rule_id: brokered_rule_id,
@@ -822,6 +961,107 @@ async fn encrypted_rotation_delegation_revocation_and_purge_are_atomic() {
         )
         .await
         .expect("declare exact immutable brokered HTTPS rule");
+    let receipt: BrokeredRuleReceipt = sqlx::query_as(
+        "SELECT id, occurrence_id, actor_id, scope_id, actor_type, safe_state,
+                    aggregate_type, scope_kind, event_type, change_kind,
+                    aggregate_version, related_id_one, related_id_two
+               FROM application_events
+              WHERE occurrence_id = $1
+                AND actor_id = $2
+                AND aggregate_type = 'agent_secret_binding'
+                AND scope_kind = 'agent_instance'
+                AND scope_id = $4
+                AND aggregate_id = $3
+                AND actor_type = 'user'
+                AND safe_state = 'active'
+              ORDER BY cursor DESC
+              LIMIT 1",
+    )
+    .bind(rule_identity.idempotency_id.as_uuid())
+    .bind(rule_identity.user_id.as_uuid())
+    .bind(brokered_binding_id)
+    .bind(instance_id.as_uuid())
+    .fetch_one(&pool)
+    .await
+    .expect("load brokered rule mutation receipt event");
+    assert_eq!(receipt.1, rule_identity.idempotency_id.as_uuid());
+    assert_eq!(receipt.2, rule_identity.user_id.as_uuid());
+    assert_eq!(receipt.3, instance_id.as_uuid());
+    assert_eq!(receipt.4, "user");
+    assert_eq!(receipt.5.as_deref(), Some("active"));
+    assert_eq!(receipt.6, "agent_secret_binding");
+    assert_eq!(receipt.7, "agent_instance");
+    assert_eq!(receipt.8, "agent_secret_binding.changed");
+    assert_eq!(receipt.9, "updated");
+    assert_eq!(receipt.10, previous_binding_event_version + 1);
+    assert_eq!(receipt.11, instance_id.as_uuid());
+    let binding_import_id: Uuid =
+        sqlx::query_scalar("SELECT import_id FROM agent_secret_bindings WHERE id = $1")
+            .bind(brokered_binding_id)
+            .fetch_one(&pool)
+            .await
+            .expect("load brokered binding import relation");
+    assert_eq!(receipt.12, binding_import_id);
+    let outbox_count: i64 =
+        sqlx::query_scalar("SELECT count(*) FROM product_event_outbox WHERE event_id = $1")
+            .bind(receipt.0)
+            .fetch_one(&pool)
+            .await
+            .expect("load committed brokered rule event outbox row");
+    assert_eq!(outbox_count, 1);
+    let replayed_rule = service
+        .declare_brokered_https_rule(
+            &rule_identity,
+            DeclareBrokeredHttpsRule {
+                command_key: key("declare-brokered-rule", brokered_rule_id),
+                rule_id: Uuid::new_v4(),
+                binding_id: AgentSecretBindingId::from_uuid(brokered_binding_id),
+                destination: String::from("https://api.example.test"),
+                header: String::from("authorization"),
+                header_prefix: Some(String::from("Bearer ")),
+            },
+        )
+        .await
+        .expect("same command key should replay stored rule id");
+    assert_eq!(replayed_rule, brokered_rule_id);
+    let replay_event: (Uuid, i64) = sqlx::query_as(
+        "SELECT id, count(*) OVER ()
+           FROM application_events
+          WHERE occurrence_id = $1
+            AND actor_id = $2
+            AND aggregate_type = 'agent_secret_binding'
+            AND scope_kind = 'agent_instance'
+            AND scope_id = $4
+            AND aggregate_id = $3
+            AND change_kind = 'updated'
+            AND actor_type = 'user'
+            AND safe_state = 'active'
+          ORDER BY cursor DESC
+          LIMIT 1",
+    )
+    .bind(rule_identity.idempotency_id.as_uuid())
+    .bind(rule_identity.user_id.as_uuid())
+    .bind(brokered_binding_id)
+    .bind(instance_id.as_uuid())
+    .fetch_one(&pool)
+    .await
+    .expect("load replayed brokered rule receipt event");
+    assert_eq!(replay_event.0, receipt.0);
+    assert_eq!(replay_event.1, 1);
+    let collision = service
+        .declare_brokered_https_rule(
+            &ordinary_member,
+            DeclareBrokeredHttpsRule {
+                command_key: key("declare-brokered-rule-collision", brokered_rule_id),
+                rule_id: brokered_rule_id,
+                binding_id: AgentSecretBindingId::from_uuid(brokered_binding_id),
+                destination: String::from("https://api.example.test"),
+                header: String::from("authorization"),
+                header_prefix: Some(String::from("Bearer ")),
+            },
+        )
+        .await;
+    assert!(matches!(collision, Err(SecretServiceError::Persistence)));
     let resolve_key = key("resolve", run_id.as_uuid());
     let authority = service
         .resolve_for_dispatch(
@@ -950,6 +1190,10 @@ async fn encrypted_rotation_delegation_revocation_and_purge_are_atomic() {
     assert!(adapter.observed.load(Ordering::SeqCst));
     let https_body = serde_json::to_vec(&json!({ "rule_id": brokered_rule_id }))
         .expect("brokered HTTPS request");
+    let verified_rule_observed = Arc::new(Mutex::new(None));
+    let verified_rule_adapter = ObservedVerifiedBroker {
+        observed: Arc::clone(&verified_rule_observed),
+    };
     let https_response = runtime
         .use_brokered(
             &authority.credential,
@@ -960,11 +1204,23 @@ async fn encrypted_rotation_delegation_revocation_and_purge_are_atomic() {
                 operation: String::from("https_v1"),
                 body: https_body.clone(),
             },
-            &AcceptingBroker,
+            &verified_rule_adapter,
         )
         .await
         .expect("exact brokered HTTPS snapshot should authorize");
     assert_eq!(https_response.status, BrokerStatus::Succeeded);
+    assert_eq!(
+        verified_rule_observed
+            .lock()
+            .expect("verified rule lock")
+            .as_ref(),
+        Some(&VerifiedBrokeredHttpsRule {
+            rule_id: brokered_rule_id,
+            destination_origin: String::from("https://api.example.test"),
+            header_name: String::from("authorization"),
+            header_prefix: Some(String::from("Bearer ")),
+        })
+    );
     let actual_calls: i64 = sqlx::query_scalar(
         "SELECT count(*) FROM brokered_secret_audit_events decision
          JOIN brokered_secret_audit_events outcome ON outcome.request_id = decision.request_id
@@ -1024,31 +1280,45 @@ async fn encrypted_rotation_delegation_revocation_and_purge_are_atomic() {
     .await
     .expect("denied HTTPS evidence");
     assert_eq!(denied_calls, 1);
-    for request in [
-        BrokerRequest {
-            run_id,
-            slot: SecretSlotKey::parse("model").expect("slot should validate"),
-            destination: String::from("api.example.test"),
-            operation: String::from("https_v1"),
-            body: serde_json::to_vec(&json!({ "rule_id": Uuid::new_v4() }))
-                .expect("unbound rule request"),
-        },
-        BrokerRequest {
-            run_id: RunId::new(),
-            slot: SecretSlotKey::parse("model").expect("slot should validate"),
-            destination: String::from("api.example.test"),
-            operation: String::from("https_v1"),
-            body: https_body,
-        },
-    ] {
-        assert!(matches!(
-            runtime
-                .use_brokered(&authority.credential, &request, &AcceptingBroker)
-                .await,
-            Err(SecretServiceError::BrokerRequestDenied
-                | SecretServiceError::RuntimeAuthenticationDenied)
-        ));
-    }
+    let wrong_rule_observed = Arc::new(AtomicBool::new(false));
+    let wrong_rule_result = runtime
+        .use_brokered(
+            &authority.credential,
+            &BrokerRequest {
+                run_id,
+                slot: SecretSlotKey::parse("model").expect("slot should validate"),
+                destination: String::from("api.example.test"),
+                operation: String::from("https_v1"),
+                body: serde_json::to_vec(&json!({ "rule_id": Uuid::new_v4() }))
+                    .expect("unbound rule request"),
+            },
+            &ObservedBroker {
+                observed: Arc::clone(&wrong_rule_observed),
+            },
+        )
+        .await;
+    assert!(matches!(
+        wrong_rule_result,
+        Err(SecretServiceError::BrokerRequestDenied)
+    ));
+    assert!(!wrong_rule_observed.load(Ordering::SeqCst));
+    let revoked_run_result = runtime
+        .use_brokered(
+            &authority.credential,
+            &BrokerRequest {
+                run_id: RunId::new(),
+                slot: SecretSlotKey::parse("model").expect("slot should validate"),
+                destination: String::from("api.example.test"),
+                operation: String::from("https_v1"),
+                body: https_body,
+            },
+            &AcceptingBroker,
+        )
+        .await;
+    assert!(matches!(
+        revoked_run_result,
+        Err(SecretServiceError::RuntimeAuthenticationDenied)
+    ));
     let alternate_destination = runtime
         .use_brokered(
             &authority.credential,
@@ -2034,6 +2304,434 @@ async fn encrypted_rotation_delegation_revocation_and_purge_are_atomic() {
         .await
         .expect("purged tombstone");
     assert_eq!(status, "purged");
+}
+
+#[tokio::test]
+#[serial]
+async fn bind_secret_carries_runtime_git_authority_to_new_revision() {
+    let Some(pool) = pool().await else {
+        return;
+    };
+    sqlx::migrate!("../../migrations")
+        .run(&pool)
+        .await
+        .expect("apply application migrations");
+    let fixture = seed(&pool).await;
+    let (_seeded_instance_id, _seeded_revision_id, _seeded_attachment_id, _) =
+        seed_instance(&pool, &fixture).await;
+
+    let build_id = Uuid::new_v4();
+    let release_id = Uuid::new_v4();
+    let release_agent_id = Uuid::new_v4();
+    let family_id = Uuid::new_v4();
+    let source_commit = "b".repeat(40);
+    let agent_key = format!("runtime_git_{}", release_agent_id.simple());
+    sqlx::query(
+        "INSERT INTO build_requests
+          (id, repository_id, source_commit, source_ref,
+           build_definition_hash, state)
+          VALUES ($1, $2, $3, 'refs/heads/main', $4, 'succeeded')",
+    )
+    .bind(build_id)
+    .bind(fixture.target_repository.as_uuid())
+    .bind(&source_commit)
+    .bind([11_u8; 32].as_slice())
+    .execute(&pool)
+    .await
+    .expect("seed runtime Git release build");
+    sqlx::query(
+        "INSERT INTO agent_families (id, repository_id, agent_key)
+          VALUES ($1, $2, $3)",
+    )
+    .bind(family_id)
+    .bind(fixture.target_repository.as_uuid())
+    .bind(&agent_key)
+    .execute(&pool)
+    .await
+    .expect("seed runtime Git agent family");
+    sqlx::query(
+        "INSERT INTO releases
+          (id, repository_id, version, source_commit, source_ref,
+           build_request_id, build_definition_hash, configuration,
+           configuration_hash, manifest_hash, state)
+          VALUES ($1, $2, $3, $4, 'refs/heads/main', $5, $6,
+                  '{}', $7, $8, 'draft')",
+    )
+    .bind(release_id)
+    .bind(fixture.target_repository.as_uuid())
+    .bind(format!("runtime-git-{}", release_id.simple()))
+    .bind(&source_commit)
+    .bind(build_id)
+    .bind([11_u8; 32].as_slice())
+    .bind([12_u8; 32].as_slice())
+    .bind([13_u8; 32].as_slice())
+    .execute(&pool)
+    .await
+    .expect("seed runtime Git draft release");
+    let mut tx = pool
+        .begin()
+        .await
+        .expect("begin runtime Git release fixture");
+    sqlx::query(
+        "INSERT INTO release_agents
+          (id, release_id, family_id, agent_key, display_name,
+           runtime_contract, runtime_contract_hash, parameter_schema,
+           secret_slot_schema, requires_state, publication_mode,
+           publication_repository_slot)
+          VALUES ($1, $2, $3, $4, 'Runtime Git fixture', $5, $6, '[]', $7,
+                  false, 'runtime_git', 'session')",
+    )
+    .bind(release_agent_id)
+    .bind(release_id)
+    .bind(family_id)
+    .bind(&agent_key)
+    .bind(json!({
+        "policy_ceiling": {
+            "vcpus": 2,
+            "memory_mib": 1024,
+            "network": "broker_only"
+        }
+    }))
+    .bind([14_u8; 32].as_slice())
+    .bind(json!([{
+        "key": "model",
+        "purpose": "Call model",
+        "required": true,
+        "delivery_modes": ["brokered"],
+        "phases": ["normal"],
+        "destinations": ["api.example.test"]
+    }]))
+    .execute(&mut *tx)
+    .await
+    .expect("seed runtime Git release agent");
+    let instance_id = AgentInstanceId::new();
+    let initial_revision_id = AgentInstanceRevisionId::new();
+    let attachment_id = Uuid::new_v4();
+    sqlx::query(
+        "INSERT INTO agent_instances
+          (id, project_id, family_id, name, state, active_revision_id,
+           created_by)
+          VALUES ($1, $2, $3, $4, 'active', NULL, $5)",
+    )
+    .bind(instance_id.as_uuid())
+    .bind(fixture.target_project.as_uuid())
+    .bind(family_id)
+    .bind(format!("runtime_git_{}", instance_id.as_uuid().simple()))
+    .bind(fixture.target_manager.as_uuid())
+    .execute(&mut *tx)
+    .await
+    .expect("seed runtime Git instance");
+    let requirement_id = Uuid::new_v4();
+    let requirement = CapabilityRequirement::new(
+        CapabilityRequirementId::from_uuid(requirement_id),
+        CapabilitySlotKey::parse("session").expect("session capability slot"),
+        CapabilityResourceKind::Repository,
+        [CapabilityOperation::GitRead, CapabilityOperation::UpdateRef],
+        [],
+        true,
+    )
+    .expect("runtime Git capability requirement");
+    let requirement_hash = requirement.normalized_hash();
+    let source_binding_id = CapabilityBindingId::new();
+    let source_binding = CapabilityBinding::bind(
+        source_binding_id,
+        &requirement,
+        CapabilityResource::new(
+            CapabilityResourceKind::Repository,
+            fixture.target_repository.as_uuid(),
+        ),
+        [CapabilityOperation::GitRead, CapabilityOperation::UpdateRef],
+    )
+    .expect("runtime Git capability binding");
+    let source_binding_hash = source_binding.normalized_hash();
+
+    // This fresh draft release is made runtime-Git capable through the same
+    // immutable catalog rows that a published release carries.
+    sqlx::query(
+        "INSERT INTO release_capability_requirements
+           (id, release_agent_id, slot_key, purpose, resource_kind,
+            required_operations, optional_operations, slot_required,
+            normalized_hash)
+         VALUES ($1, $2, 'session', 'Session repository', 'repository',
+                 ARRAY['git_read', 'update_ref'], ARRAY[]::text[], true, $3)",
+    )
+    .bind(requirement_id)
+    .bind(release_agent_id)
+    .bind(requirement_hash.as_bytes().as_slice())
+    .execute(&mut *tx)
+    .await
+    .expect("insert runtime Git capability requirement");
+    sqlx::query(
+        "INSERT INTO release_git_capability_ceilings
+           (requirement_id, release_agent_id, grammar_version, git_operations,
+            ref_globs, changed_path_globs, branch_update_policy, branch_create,
+            branch_delete, tag_create, tag_update, tag_delete, other_create,
+            other_update, other_delete, request_bytes, pack_bytes, object_count,
+            ref_updates, exact_parent_required, normalized_hash)
+         VALUES ($1, $2, 1, ARRAY['discover', 'fetch', 'receive'],
+                 ARRAY['refs/heads/main'], ARRAY['.heph/session/**'],
+                 'fast_forward_only', false, false, false, false, false, false,
+                 false, false, 1048576, 8388608, 10000, 8, true, $3)",
+    )
+    .bind(requirement_id)
+    .bind(release_agent_id)
+    .bind([31_u8; 32].as_slice())
+    .execute(&mut *tx)
+    .await
+    .expect("insert runtime Git capability ceiling");
+    sqlx::query("UPDATE releases SET state = 'published', published_at = now() WHERE id = $1")
+        .bind(release_id)
+        .execute(&mut *tx)
+        .await
+        .expect("publish runtime Git fixture");
+    tx.commit()
+        .await
+        .expect("commit runtime Git release fixture");
+    seed_attachment(&pool, &fixture, instance_id, attachment_id).await;
+
+    sqlx::query(
+        "WITH inserted_revision AS (
+             INSERT INTO agent_instance_revisions
+               (id, instance_id, release_agent_id, parameters, parameter_hash,
+                secret_bindings, resource_selection, network_restriction,
+                effective_runtime_policy, effective_policy_hash,
+                platform_policy_version, publication_mode,
+                publication_repository_binding_id, runnable, diagnostics,
+                created_by)
+             VALUES ($1, $2, $3, '{}', $4, '[]', $5, $6, $5, $7,
+                     'platform/v1', 'runtime_git', $8, false, $9, $10)
+             RETURNING id
+         ), inserted_binding AS (
+             INSERT INTO agent_capability_bindings
+               (id, instance_revision_id, release_agent_id, requirement_id,
+                requirement_hash, slot_key, resource_kind, resource_id,
+                granted_operations, normalized_hash, authorization_model_version,
+                created_by)
+             SELECT $8, id, $3, $11, $12, 'session', 'repository', $13,
+                    ARRAY['git_read', 'update_ref'], $14, 'authz/v1', $10
+             FROM inserted_revision
+             RETURNING id, instance_revision_id
+         )
+         INSERT INTO agent_git_capability_bindings
+           (binding_id, instance_revision_id, requirement_id, grammar_version,
+            git_operations, ref_globs, changed_path_globs,
+            branch_update_policy, branch_create, branch_delete, tag_create,
+            tag_update, tag_delete, other_create, other_update, other_delete,
+            request_bytes, pack_bytes, object_count, ref_updates,
+            exact_parent_required, normalized_hash)
+         SELECT id, instance_revision_id, $11, 1,
+                ARRAY['discover', 'fetch', 'receive'],
+                ARRAY['refs/heads/main'], ARRAY['.heph/session/**'],
+                'fast_forward_only', false, false, false, false, false,
+                false, false, false, 1048576, 8388608, 10000, 8, true, $15
+         FROM inserted_binding",
+    )
+    .bind(initial_revision_id.as_uuid())
+    .bind(instance_id.as_uuid())
+    .bind(release_agent_id)
+    .bind([5_u8; 32].as_slice())
+    .bind(json!({"vcpus": 1, "memory_mib": 512, "network": "broker_only"}))
+    .bind(json!({"network": "broker_only"}))
+    .bind([6_u8; 32].as_slice())
+    .bind(source_binding_id.as_uuid())
+    .bind(json!([{
+        "code": "required_secret_binding_missing",
+        "field": "secret_slots.model"
+    }]))
+    .bind(fixture.target_manager.as_uuid())
+    .bind(requirement_id)
+    .bind(requirement_hash.as_bytes().as_slice())
+    .bind(fixture.target_repository.as_uuid())
+    .bind(source_binding_hash.as_bytes().as_slice())
+    .bind([31_u8; 32].as_slice())
+    .execute(&pool)
+    .await
+    .expect("seed runtime Git revision and typed authority");
+    sqlx::query("UPDATE agent_instances SET active_revision_id = $2 WHERE id = $1")
+        .bind(instance_id.as_uuid())
+        .bind(initial_revision_id.as_uuid())
+        .execute(&pool)
+        .await
+        .expect("activate runtime Git revision");
+
+    let secret_service = SecretService::new(
+        pool.clone(),
+        EncryptedStore::new(
+            LocalKeyProvider::new("test/v1", [("test/v1", [7_u8; 32])])
+                .expect("fixture key should validate"),
+        ),
+        Arc::new(PostgresMelangeAuthorizer),
+    );
+    let owner_identity = identity(fixture.owner);
+    let identity = identity(fixture.target_manager);
+    let secret_id = SecretId::new();
+    let version_id = SecretVersionId::new();
+    secret_service
+        .create(
+            &owner_identity,
+            CreateSecret {
+                command_key: key("git-carry-secret", secret_id.as_uuid()),
+                secret_id,
+                version_id,
+                owner: SecretOwner::Organization(fixture.organization),
+                name: SecretName::parse(format!("git_carry_{secret_id}"))
+                    .expect("fixture secret name"),
+                allowed_delivery_modes: vec![DeliveryMode::Brokered],
+                value: SecretValue::new(SENTINEL).expect("fixture secret value"),
+            },
+        )
+        .await
+        .expect("create carry-forward secret");
+    let import_id = SecretImportId::new();
+    let grant_id = SecretGrantId::new();
+    secret_service
+        .grant(
+            &owner_identity,
+            GrantSecret {
+                command_key: key("git-carry-grant", grant_id.as_uuid()),
+                grant_id,
+                secret_id,
+                target: SecretTarget::Project(fixture.target_project),
+                policy: SecretUsePolicy {
+                    delivery_modes: vec![DeliveryMode::Brokered],
+                    phases: vec![ExecutionPhase::Normal],
+                    destinations: vec![String::from("api.example.test")],
+                },
+                expires_at: None,
+            },
+        )
+        .await
+        .expect("grant carry-forward secret");
+    secret_service
+        .accept_import(
+            &identity,
+            AcceptSecretImport {
+                command_key: key("git-carry-import", import_id.as_uuid()),
+                import_id,
+                grant_id,
+                target: SecretTarget::Project(fixture.target_project),
+                alias: SecretAlias::parse("model").expect("fixture secret alias"),
+            },
+        )
+        .await
+        .expect("accept carry-forward secret");
+    let new_revision_id = AgentInstanceRevisionId::new();
+    let new_secret_binding_id = AgentSecretBindingId::new();
+    secret_service
+        .bind_secret(
+            &identity,
+            BindSecret {
+                command_key: key("git-carry-bind", new_revision_id.as_uuid()),
+                binding_id: new_secret_binding_id,
+                instance_id,
+                expected_revision_id: initial_revision_id,
+                new_revision_id,
+                import_id,
+                slot: SecretSlotKey::parse("model").expect("model slot"),
+                mode: DeliveryMode::Brokered,
+                phases: vec![ExecutionPhase::Normal],
+                attachment_ids: vec![attachment_id],
+                destinations: vec![String::from("api.example.test")],
+            },
+        )
+        .await
+        .expect("bind secret while carrying typed Git authority");
+
+    let source_typed: TypedGitAuthority = sqlx::query_as(
+        "SELECT git_operations, ref_globs, changed_path_globs, request_bytes,
+                    pack_bytes, object_count, ref_updates, exact_parent_required,
+                    normalized_hash
+               FROM agent_git_capability_bindings
+              WHERE binding_id = $1 AND instance_revision_id = $2",
+    )
+    .bind(source_binding_id.as_uuid())
+    .bind(initial_revision_id.as_uuid())
+    .fetch_one(&pool)
+    .await
+    .expect("source typed Git authority");
+    let carried_typed: CarriedTypedGitAuthority = sqlx::query_as(
+        "SELECT binding_id, git_operations, ref_globs, changed_path_globs,
+                    request_bytes, pack_bytes, object_count, ref_updates,
+                    exact_parent_required, normalized_hash
+               FROM agent_git_capability_bindings
+              WHERE instance_revision_id = $1",
+    )
+    .bind(new_revision_id.as_uuid())
+    .fetch_one(&pool)
+    .await
+    .expect("carried typed Git authority");
+    assert_ne!(carried_typed.0, source_binding_id.as_uuid());
+    assert_eq!(
+        (
+            carried_typed.1,
+            carried_typed.2,
+            carried_typed.3,
+            carried_typed.4,
+            carried_typed.5,
+            carried_typed.6,
+            carried_typed.7,
+            carried_typed.8,
+            carried_typed.9,
+        ),
+        source_typed,
+    );
+    let source_generic_hash: Vec<u8> = sqlx::query_scalar(
+        "SELECT normalized_hash FROM agent_capability_bindings
+           WHERE id = $1 AND instance_revision_id = $2",
+    )
+    .bind(source_binding_id.as_uuid())
+    .bind(initial_revision_id.as_uuid())
+    .fetch_one(&pool)
+    .await
+    .expect("source generic capability hash");
+    let carried_generic_hash: Vec<u8> = sqlx::query_scalar(
+        "SELECT normalized_hash FROM agent_capability_bindings
+           WHERE id = $1 AND instance_revision_id = $2",
+    )
+    .bind(carried_typed.0)
+    .bind(new_revision_id.as_uuid())
+    .fetch_one(&pool)
+    .await
+    .expect("carried generic capability hash");
+    let carried_binding = CapabilityBinding::bind(
+        CapabilityBindingId::from_uuid(carried_typed.0),
+        &requirement,
+        CapabilityResource::new(
+            CapabilityResourceKind::Repository,
+            fixture.target_repository.as_uuid(),
+        ),
+        [CapabilityOperation::GitRead, CapabilityOperation::UpdateRef],
+    )
+    .expect("recompute carried runtime Git capability binding");
+    assert_eq!(source_generic_hash, source_binding_hash.as_bytes());
+    assert_eq!(
+        carried_generic_hash,
+        carried_binding.normalized_hash().as_bytes()
+    );
+    assert_ne!(source_generic_hash, carried_generic_hash);
+    let (new_publication_binding, new_secret_revision): (Uuid, Uuid) = sqlx::query_as(
+        "SELECT revision.publication_repository_binding_id, instance.active_revision_id
+           FROM agent_instances AS instance
+           JOIN agent_instance_revisions AS revision
+             ON revision.id = instance.active_revision_id
+          WHERE instance.id = $1",
+    )
+    .bind(instance_id.as_uuid())
+    .fetch_one(&pool)
+    .await
+    .expect("new active publication binding");
+    assert_eq!(new_secret_revision, new_revision_id.as_uuid());
+    assert_eq!(new_publication_binding, carried_typed.0);
+    let old_count: i64 = sqlx::query_scalar(
+        "SELECT count(*) FROM agent_git_capability_bindings
+          WHERE binding_id = $1 AND instance_revision_id = $2",
+    )
+    .bind(source_binding_id.as_uuid())
+    .bind(initial_revision_id.as_uuid())
+    .fetch_one(&pool)
+    .await
+    .expect("historical typed Git authority");
+    assert_eq!(old_count, 1);
 }
 
 async fn assert_https_inspection(

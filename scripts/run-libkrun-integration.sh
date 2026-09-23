@@ -193,6 +193,9 @@ prepare_guest_root() {
         "${cargo_target_dir}/${GUEST_TARGET}/release/heph-init" \
         "${root}/usr/libexec/hephaestus/heph-init"
     install -D -m 0755 \
+        "${cargo_target_dir}/${GUEST_TARGET}/release/heph-git-credential" \
+        "${root}/usr/libexec/hephaestus/heph-git-credential"
+    install -D -m 0755 \
         "${cargo_target_dir}/${GUEST_TARGET}/release/heph-integration-check" \
         "${root}/usr/libexec/hephaestus/integration-check.payload"
     # libkrun's embedded DHCP setup runs before this workload. Keep the
@@ -478,11 +481,11 @@ diagnostics_body() {
     fi
     for service in "${postgres_container_name}" "${nats_container_name}" "${zot_container_name}"; do
         [[ -n "${service}" ]] || continue
-        if podman container exists "${service}" 2>/dev/null; then
-            podman inspect --format \
+        if timeout --kill-after=2s 8s podman container exists "${service}" 2>/dev/null; then
+            timeout --kill-after=2s 8s podman inspect --format \
                 '  container={{.Name}} state={{.State.Status}} exit={{.State.ExitCode}}' \
                 "${service}" 2>&1 || true
-            podman logs "${service}" 2>&1 | tail -100 || true
+            timeout --kill-after=2s 8s podman logs "${service}" 2>&1 | tail -100 || true
         fi
     done
 }
@@ -733,7 +736,10 @@ failure_diagnostics() {
 
 cleanup() {
     local status=$?
-    trap - EXIT INT TERM
+    # Keep cleanup running if the outer runner sends TERM while bounded
+    # diagnostics are being collected. Clearing the traps here would restore
+    # the default action and strand the disposable service containers.
+    trap '' EXIT INT TERM
     set +e
     phase_timing_finish_open "${status}"
     heph_shell_failure_on_exit "${status}" "${LINENO}"
@@ -743,16 +749,16 @@ cleanup() {
     fi
     cleanup_cgroup
     if [[ -n "${container_name}" ]]; then
-        podman rm --force "${container_name}" >/dev/null 2>&1
+        timeout --kill-after=2s 8s podman rm --force "${container_name}" >/dev/null 2>&1 || true
     fi
     if [[ -n "${nats_container_name}" ]]; then
-        podman rm --force "${nats_container_name}" >/dev/null 2>&1
+        timeout --kill-after=2s 8s podman rm --force "${nats_container_name}" >/dev/null 2>&1 || true
     fi
     if [[ -n "${zot_container_name}" ]]; then
-        podman rm --force "${zot_container_name}" >/dev/null 2>&1 || true
+        timeout --kill-after=2s 8s podman rm --force "${zot_container_name}" >/dev/null 2>&1 || true
     fi
     if [[ -n "${postgres_container_name}" ]]; then
-        podman rm --force "${postgres_container_name}" >/dev/null 2>&1
+        timeout --kill-after=2s 8s podman rm --force "${postgres_container_name}" >/dev/null 2>&1 || true
     fi
     if [[ "${builder_image_loaded}" == "true" ]]; then
         podman rmi "${builder_vm_image}" >/dev/null 2>&1 || true
@@ -822,6 +828,7 @@ cargo build \
     --release \
     --package vm-libkrun \
     --bin heph-init \
+    --bin heph-git-credential \
     --bin heph-integration-check \
     --features integration-guest \
     --target "${GUEST_TARGET}"
@@ -908,6 +915,18 @@ if command -v rpm >/dev/null 2>&1; then
     rpm -q libkrun libkrunfw
 fi
 if [[ "${HEPHAESTUS_APP_LIBKRUN_E2E:-0}" == "1" ]]; then
+    if [[ "${HEPHAESTUS_APP_SESSION_CHAT_NEGATIVE_E2E:-0}" == "1" ]]; then
+        [[ "${HEPHAESTUS_APP_SESSION_CHAT_E2E:-0}" == "1" ]] ||
+            die "session-chat negative E2E requires the session-chat scenario"
+        for required_flag in \
+            HEPHAESTUS_APP_SESSION_CHAT_BROWSER_E2E \
+            HEPHAESTUS_APP_SESSION_CHAT_RESTART_E2E \
+            HEPHAESTUS_APP_SESSION_CHAT_CONCURRENT_E2E \
+            HEPHAESTUS_APP_SESSION_CHAT_FORK_E2E; do
+            [[ "${!required_flag:-0}" == "1" ]] ||
+                die "session-chat negative E2E requires ${required_flag}=1"
+        done
+    fi
     printf 'Running daemon golden E2E with pinned image %s\n' "${ubuntu_image}"
     phase_timing_start gateway-services-ready
     start_golden_services
@@ -917,6 +936,13 @@ if [[ "${HEPHAESTUS_APP_LIBKRUN_E2E:-0}" == "1" ]]; then
         --manifest-path "${repo_root}/Cargo.toml" \
         --package vm-libkrun \
         --bin hephaestus-vm-libkrun-worker
+    if [[ "${HEPHAESTUS_APP_SESSION_CHAT_E2E:-0}" == "1" ]]; then
+        cargo build \
+            --manifest-path "${repo_root}/Cargo.toml" \
+            --package git-http \
+            --bin pre-receive
+        export HEPHAESTUS_GIT_PRE_RECEIVE_HOOK="${cargo_target_dir}/debug/pre-receive"
+    fi
     if [[ "${HEPHAESTUS_APP_GATEWAY_SERVICE_EXTERNAL_E2E:-0}" == "1" ]]; then
         cargo build \
             --manifest-path "${repo_root}/Cargo.toml" \
@@ -964,6 +990,109 @@ if [[ "${HEPHAESTUS_APP_LIBKRUN_E2E:-0}" == "1" ]]; then
         "${golden_features[@]}" \
         -- --nocapture
     phase_timing_end golden-tests passed
+    if [[ "${HEPHAESTUS_APP_SESSION_CHAT_NEGATIVE_E2E:-0}" == "1" ]]; then
+        # Keep the negative proof in a fresh golden process. The canonical
+        # browser process owns a six-request broker fixture and its daemon
+        # lifecycle; a second process gets a fresh database, broker, and VM
+        # observer while reusing this disposable service/guest environment.
+        # Disable child timing so this outer phase is the sole owner of the
+        # negative-process outcome and cannot create duplicate phase records.
+        phase_timing_start guest-negative-capability
+        negative_evidence_root="${diagnostics_dir:-${fixture_root}/negative-evidence}"
+        mkdir -p -- "${negative_evidence_root}"
+        chmod 0700 -- "${negative_evidence_root}"
+        negative_private_log="$(mktemp "${negative_evidence_root}/session-chat-negative.XXXXXX.log")"
+        chmod 0600 -- "${negative_private_log}"
+        negative_summary="${negative_evidence_root}/session-chat-negative-summary.json"
+        set +e
+        run_as_guest_owner env \
+            -u HEPHAESTUS_APP_SESSION_CHAT_BROWSER_E2E \
+            -u HEPHAESTUS_APP_SESSION_CHAT_RESTART_E2E \
+            -u HEPHAESTUS_APP_SESSION_CHAT_CONCURRENT_E2E \
+            -u HEPHAESTUS_APP_SESSION_CHAT_FORK_E2E \
+            -u HEPHAESTUS_COOKING_BROWSER_E2E \
+            -u HEPHAESTUS_COOKING_INSTALLED_UI_FIXTURE \
+            -u HEPHAESTUS_CADDY_TEST_TLS \
+            -u HEPHAESTUS_CADDY_TEST_ADMIN_URL \
+            -u HEPHAESTUS_CADDY_TEST_PUBLIC_URL \
+            -u HEPHAESTUS_CADDY_TEST_LISTEN \
+            -u HEPHAESTUS_CADDY_TEST_PUBLIC_PORT \
+            -u HEPHAESTUS_CADDY_TEST_CA_CERT \
+            -u HEPHAESTUS_CADDY_TEST_IMAGE \
+            -u HEPHAESTUS_PLATFORM_HTTPS_ORIGIN \
+            -u HEPHAESTUS_COOKING_BROWSER_OIDC_ISSUER \
+            -u HEPHAESTUS_COOKING_BROWSER_FIXTURE_OUTPUT \
+            -u HEPHAESTUS_COOKING_BROWSER_BRIDGE_DIR \
+            -u HEPHAESTUS_COOKING_BROWSER_DEADLINE_EPOCH \
+            -u HEPHAESTUS_COOKING_BRIDGE_DEADLINE_EPOCH \
+            -u HEPHAESTUS_E2E_EXTERNAL_OIDC_ISSUER \
+            -u HEPHAESTUS_E2E_EXTERNAL_WEB_PORT \
+            -u HEPHAESTUS_E2E_OIDC_ISSUER \
+            -u HEPHAESTUS_E2E_OIDC_PORT \
+            -u HEPHAESTUS_E2E_WEB_URL \
+            -u HEPHAESTUS_E2E_OIDC_REVIEWER_SUBJECT \
+            -u HEPHAESTUS_E2E_BROWSER_RUNNER \
+            -u HEPHAESTUS_INSTALLED_UI_BROWSER_GREP \
+            -u HEPH_GCP_PHASE_TIMING_PATH \
+            -u HEPH_GCP_PHASE_TIMING_SOURCE_SHA \
+            -u HEPH_GCP_PHASE_TIMING_RUN_ID \
+            -u HEPH_GCP_PHASE_TIMING_ATTEMPT \
+            -u HEPH_GCP_PHASE_TIMING_IMAGE_FINGERPRINT \
+            HEPHAESTUS_APP_LIBKRUN_E2E=1 \
+            HEPHAESTUS_APP_SESSION_CHAT_E2E=1 \
+            HEPHAESTUS_APP_SESSION_CHAT_DENIAL_PROBE_E2E=1 \
+            HEPHAESTUS_APP_SESSION_CHAT_NEGATIVE_E2E=1 \
+            HEPHAESTUS_APP_COOKING_BUILD_PROOF=1 \
+            HEPHAESTUS_POSTGRES_TEST_URL="${postgres_url}" \
+            HEPHAESTUS_NATS_TEST_URL="${nats_url}" \
+            HEPHAESTUS_LIBKRUN_RUNTIME_ROOT="${runtime_root}" \
+            HEPHAESTUS_LIBKRUN_IMAGE_ROOT="${fixture_root}" \
+            HEPHAESTUS_LIBKRUN_RUST_BUILDER_ROOT="${rust_builder_root}" \
+            HEPHAESTUS_LIBKRUN_ROOTFS="${fixture_root}/rootfs" \
+            HEPHAESTUS_LIBKRUN_DISK_ROOT="${fixture_root}/disks" \
+            HEPHAESTUS_LIBKRUN_MOUNT_ROOT="${fixture_root}/mounts" \
+            HEPHAESTUS_LIBKRUN_CGROUP_ROOT="${cgroup_root}" \
+            HEPHAESTUS_LIBKRUN_WORKER="${target_directory:-${cargo_target_dir}}/debug/hephaestus-vm-libkrun-worker" \
+            HEPHAESTUS_GUEST_INIT_BINARY="${cargo_target_dir}/${GUEST_TARGET}/release/heph-init" \
+            HEPHAESTUS_TEST_OCI_BUILDER_VM_IMAGE="${builder_vm_image}" \
+            HEPHAESTUS_TEST_OCI_VERIFIER_VM_IMAGE="${verifier_vm_image}" \
+            HEPHAESTUS_TEST_OCI_BASE_LAYOUT_MANIFEST="${base_layout_manifest}" \
+            HEPHAESTUS_TEST_OCI_BUILDER_LAYOUT="${builder_layout}" \
+            HEPHAESTUS_TEST_OCI_VERIFIER_LAYOUT="${verifier_layout}" \
+            HEPHAESTUS_TEST_OCI_BUILDER_ROOT="${builder_operation_root}" \
+            HEPHAESTUS_TEST_OCI_VERIFIER_ROOT="${verifier_operation_root}" \
+            HEPHAESTUS_TEST_OCI_ROOTFS_ROOT="${fixture_root}" \
+            cargo test \
+            --manifest-path "${repo_root}/Cargo.toml" \
+            --package hephaestus-app \
+            --test golden \
+            "${golden_features[@]}" \
+            bearer_push_starts_run_through_production_bootstrap \
+            -- --exact --nocapture >"${negative_private_log}" 2>&1
+        negative_status=$?
+        set -e
+        set +e
+        python3 "${repo_root}/scripts/project-session-chat-negative-summary.py" \
+            --private-log "${negative_private_log}" \
+            --exit-status "${negative_status}" \
+            --output "${negative_summary}" >/dev/null 2>&1
+        negative_projection_status=$?
+        set -e
+        if ((negative_status != 0)); then
+            phase_timing_end guest-negative-capability failed
+            printf 'HEPH_SESSION_CHAT_NEGATIVE status=failed reason=runner exit_code=%s\n' \
+                "${negative_status}"
+            exit "${negative_status}"
+        fi
+        if ((negative_projection_status != 0)); then
+            phase_timing_end guest-negative-capability failed
+            printf 'HEPH_SESSION_CHAT_NEGATIVE status=failed reason=projection exit_code=%s\n' \
+                "${negative_projection_status}"
+            exit "${negative_projection_status}"
+        fi
+        phase_timing_end guest-negative-capability passed
+        printf 'HEPH_SESSION_CHAT_NEGATIVE status=passed evidence=typed-summary\n'
+    fi
     # Reuse the same disposable authority database and JetStream fixture for
     # the gateway publication persistence, RLS, and recovery proof. Keeping
     # it here makes the joined wrapper one complete operator command.

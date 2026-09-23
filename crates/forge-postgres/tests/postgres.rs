@@ -1,7 +1,9 @@
 //! Opt-in `PostgreSQL` and `JetStream` receive-processing coverage.
 
 use authz_postgres::PostgresMelangeAuthorizer;
-use forge_domain::{CommitSha, GitRef, OrganizationId, ReceiveId, RefUpdate, Repository};
+use forge_domain::{
+    CommitSha, GitRef, OrganizationId, ReceiveId, RefUpdate, Repository, RuntimeReceiveProvenance,
+};
 use forge_postgres::PgForgeRepository;
 use forge_service::{
     CreateRepository, ForgeNatsOutboxPublisher, GitStorage, INSTANCE_RUN_REQUESTED_SUBJECT,
@@ -127,6 +129,219 @@ async fn accepted_ui_capture_links_build_and_replays_without_git() {
         .await
         .expect("replay without Git storage");
     assert_eq!(replay.build_requests, first.build_requests);
+    assert_eq!(replay.run_requests, first.run_requests);
+
+    cleanup(&pool, repository).await;
+}
+
+#[tokio::test]
+#[serial]
+async fn runtime_receive_persists_provenance_suppresses_origin_and_replays() {
+    let Some((pool, service, repository, temporary)) = fixture().await else {
+        return;
+    };
+    seed_reusable_attachment(&pool, &repository).await;
+    let (origin_attachment, instance_id, project_id): (Uuid, Uuid, Uuid) = sqlx::query_as(
+        "SELECT id, instance_id, project_id
+         FROM agent_attachments
+         WHERE repository_id = $1
+         ORDER BY id
+         LIMIT 1",
+    )
+    .bind(repository.id.as_uuid())
+    .fetch_one(&pool)
+    .await
+    .expect("origin attachment");
+    let sibling_attachment = Uuid::new_v4();
+    sqlx::query(
+        "INSERT INTO agent_attachments
+         (id, instance_id, project_id, repository_id, ref_selector, trigger_policy)
+         VALUES ($1, $2, $3, $4, 'refs/heads/*', 'push')",
+    )
+    .bind(sibling_attachment)
+    .bind(instance_id)
+    .bind(project_id)
+    .bind(repository.id.as_uuid())
+    .execute(&pool)
+    .await
+    .expect("sibling attachment");
+
+    let (revision_id, release_id, release_agent_id): (Uuid, Uuid, Uuid) = sqlx::query_as(
+        "SELECT revision.id, release.id, release_agent.id
+         FROM agent_instance_revisions AS revision
+         JOIN release_agents AS release_agent ON release_agent.id = revision.release_agent_id
+         JOIN releases AS release ON release.id = release_agent.release_id
+         WHERE revision.instance_id = $1",
+    )
+    .bind(instance_id)
+    .fetch_one(&pool)
+    .await
+    .expect("origin revision");
+    let run_id = Uuid::new_v4();
+    let command_id = Uuid::new_v4();
+    sqlx::query(
+        "INSERT INTO runs
+         (id, command_id, state, created_at, updated_at,
+          instance_id, instance_revision_id, release_id, release_agent_id,
+          attachment_id, run_kind, requires_state)
+         VALUES ($1, $2, 'queued', now(), now(), $3, $4, $5, $6, $7,
+                 'normal', false)",
+    )
+    .bind(run_id)
+    .bind(command_id)
+    .bind(instance_id)
+    .bind(revision_id)
+    .bind(release_id)
+    .bind(release_agent_id)
+    .bind(origin_attachment)
+    .execute(&pool)
+    .await
+    .expect("runtime run");
+    let snapshot_id = Uuid::new_v4();
+    sqlx::query(
+        "INSERT INTO run_authorization_snapshots
+         (id, run_id, instance_id, instance_revision_id,
+          authorization_model_version, normalized_hash)
+         VALUES ($1, $2, $3, $4, 'test/v1', $5)",
+    )
+    .bind(snapshot_id)
+    .bind(run_id)
+    .bind(instance_id)
+    .bind(revision_id)
+    .bind([1_u8; 32].as_slice())
+    .execute(&pool)
+    .await
+    .expect("runtime snapshot");
+    let runtime_session_id = Uuid::new_v4();
+    let runtime_credential_hash =
+        [Uuid::new_v4().into_bytes(), Uuid::new_v4().into_bytes()].concat();
+    sqlx::query(
+        "INSERT INTO runtime_authority_sessions
+         (id, snapshot_id, run_id, instance_id, instance_revision_id,
+          attachment_id, identity_hash, snapshot_hash, issuance_generation,
+          credential_hash, status, issued_at, expires_at, acknowledged_at)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, 1, $9, 'active',
+                 now(), now() + interval '10 minutes', now())",
+    )
+    .bind(runtime_session_id)
+    .bind(snapshot_id)
+    .bind(run_id)
+    .bind(instance_id)
+    .bind(revision_id)
+    .bind(origin_attachment)
+    .bind([2_u8; 32].as_slice())
+    .bind([1_u8; 32].as_slice())
+    .bind(runtime_credential_hash.as_slice())
+    .execute(&pool)
+    .await
+    .expect("runtime session");
+
+    let (_, update) = commit_and_update(
+        &temporary,
+        &repository,
+        &valid_config(repository.id.as_uuid()),
+    )
+    .await;
+    seed_runtime_receive_authority_rows(
+        &pool,
+        run_id,
+        instance_id,
+        revision_id,
+        release_id,
+        release_agent_id,
+        origin_attachment,
+        repository.id.as_uuid(),
+        update.new_commit.as_ref().expect("runtime commit").as_str(),
+        snapshot_id,
+    )
+    .await;
+    let receive_id = ReceiveId::new();
+    let first = service
+        .accept_runtime_receive(
+            &repository,
+            receive_id,
+            RuntimeReceiveProvenance { runtime_session_id },
+            std::slice::from_ref(&update),
+        )
+        .await
+        .expect("runtime receive");
+    assert!(first.run_requests.is_empty());
+
+    let stored: (Option<Uuid>, Option<Uuid>) = sqlx::query_as(
+        "SELECT runtime_session_id, runtime_attachment_id
+         FROM git_receives WHERE id = $1",
+    )
+    .bind(receive_id.as_uuid())
+    .fetch_one(&pool)
+    .await
+    .expect("runtime receive provenance");
+    assert_eq!(stored, (Some(runtime_session_id), Some(origin_attachment)));
+
+    let wrong_repository = forge_domain::RepositoryId::new();
+    let wrong_repository_resolution: Option<(Option<Uuid>,)> =
+        sqlx::query_as("SELECT * FROM resolve_runtime_receive_attachment($1, $2)")
+            .bind(runtime_session_id)
+            .bind(wrong_repository.as_uuid())
+            .fetch_optional(&pool)
+            .await
+            .expect("wrong repository resolution");
+    assert!(wrong_repository_resolution.is_none());
+
+    let detached_session = seed_detached_runtime_session(
+        &pool,
+        &repository,
+        instance_id,
+        revision_id,
+        release_id,
+        release_agent_id,
+    )
+    .await;
+    let detached = service
+        .accept_runtime_receive(
+            &repository,
+            ReceiveId::new(),
+            RuntimeReceiveProvenance {
+                runtime_session_id: detached_session,
+            },
+            std::slice::from_ref(&update),
+        )
+        .await
+        .expect("runtime receive without originating attachment");
+    assert!(detached.run_requests.is_empty());
+    let detached_provenance: Option<Uuid> = sqlx::query_scalar(
+        "SELECT runtime_attachment_id FROM git_receives
+         WHERE runtime_session_id = $1",
+    )
+    .bind(detached_session)
+    .fetch_one(&pool)
+    .await
+    .expect("detached runtime provenance");
+    assert_eq!(detached_provenance, None);
+
+    let duplicate_session = service
+        .accept_runtime_receive(
+            &repository,
+            receive_id,
+            RuntimeReceiveProvenance {
+                runtime_session_id: detached_session,
+            },
+            std::slice::from_ref(&update),
+        )
+        .await;
+    assert!(matches!(
+        duplicate_session,
+        Err(forge_service::ForgeRepositoryError::ReceiveConflict(_))
+    ));
+
+    let replay = service
+        .accept_runtime_receive(
+            &repository,
+            receive_id,
+            RuntimeReceiveProvenance { runtime_session_id },
+            std::slice::from_ref(&update),
+        )
+        .await
+        .expect("runtime receive replay");
     assert_eq!(replay.run_requests, first.run_requests);
 
     cleanup(&pool, repository).await;
@@ -828,6 +1043,7 @@ impl VmSpecFactory for TestSpecFactory {
                 working_dir: None,
             },
             runtime_authority: None,
+            runtime_git_bridge: None,
             private_http_service: None,
             labels: BTreeMap::new(),
         })
@@ -1124,6 +1340,175 @@ async fn seed_attached_instance(
     .execute(pool)
     .await
     .expect("seed attachment");
+}
+
+// This fixture uses a superuser-only replica-mode insert for the immutable
+// typed Git snapshot because forge-postgres does not own release capability
+// publication. Production rows are created by the runtime authority adapter;
+// the receive test only needs the persisted join graph to exercise its
+// security-definer lookup against a real PostgreSQL body.
+#[allow(clippy::too_many_arguments)]
+async fn seed_runtime_receive_authority_rows(
+    pool: &PgPool,
+    run_id: Uuid,
+    instance_id: Uuid,
+    revision_id: Uuid,
+    release_id: Uuid,
+    release_agent_id: Uuid,
+    attachment_id: Uuid,
+    repository_id: Uuid,
+    commit: &str,
+    snapshot_id: Uuid,
+) {
+    let mut transaction = pool.begin().await.expect("begin authority fixture");
+    sqlx::query("SET LOCAL session_replication_role = 'replica'")
+        .execute(&mut *transaction)
+        .await
+        .expect("enable fixture replica mode");
+    sqlx::query(
+        "INSERT INTO run_git_authority_snapshots
+         (snapshot_id, instance_revision_id, binding_id, repository_id,
+          grammar_version, git_operations, ref_globs, changed_path_globs,
+          branch_update_policy, branch_create, branch_delete, tag_create,
+          tag_update, tag_delete, other_create, other_update, other_delete,
+          request_bytes, pack_bytes, object_count, ref_updates,
+          exact_parent_required, expected_parent, normalized_hash)
+         VALUES ($1, $2, $3, $4, 1, ARRAY['receive'],
+                 ARRAY['refs/heads/*'], ARRAY['**'], 'fast_forward_only',
+                 false, false, false, false, false, false, false, false,
+                 1, 1, 1, 1, false, NULL, $5)",
+    )
+    .bind(snapshot_id)
+    .bind(revision_id)
+    .bind(Uuid::new_v4())
+    .bind(repository_id)
+    .bind([9_u8; 32].as_slice())
+    .execute(&mut *transaction)
+    .await
+    .expect("typed Git authority snapshot");
+    sqlx::query(
+        "INSERT INTO run_instance_provenance
+         (run_id, instance_id, instance_revision_id, release_id,
+          release_agent_id, attachment_id, target_repository_id, target_ref,
+          target_commit, parameter_hash, platform_policy_version, phase,
+          authorization_model_version)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, 'refs/heads/main', $8, $9,
+                 'platform/v1', 'normal', 'test/v1')",
+    )
+    .bind(run_id)
+    .bind(instance_id)
+    .bind(revision_id)
+    .bind(release_id)
+    .bind(release_agent_id)
+    .bind(attachment_id)
+    .bind(repository_id)
+    .bind(commit)
+    .bind([8_u8; 32].as_slice())
+    .execute(&mut *transaction)
+    .await
+    .expect("run provenance");
+    transaction
+        .commit()
+        .await
+        .expect("commit authority fixture");
+}
+
+async fn seed_detached_runtime_session(
+    pool: &PgPool,
+    repository: &Repository,
+    instance_id: Uuid,
+    revision_id: Uuid,
+    release_id: Uuid,
+    release_agent_id: Uuid,
+) -> Uuid {
+    let run_id = Uuid::new_v4();
+    let snapshot_id = Uuid::new_v4();
+    let session_id = Uuid::new_v4();
+    let now = time::OffsetDateTime::now_utc();
+    let expires_at = now + time::Duration::minutes(10);
+    sqlx::query(
+        "INSERT INTO runs
+         (id, command_id, state, created_at, updated_at,
+          instance_id, instance_revision_id, release_id, release_agent_id,
+          attachment_id, run_kind, requires_state)
+         VALUES ($1, $2, 'queued', $3, $3, $4, $5, $6, $7, NULL, 'update', false)",
+    )
+    .bind(run_id)
+    .bind(Uuid::new_v4())
+    .bind(now)
+    .bind(instance_id)
+    .bind(revision_id)
+    .bind(release_id)
+    .bind(release_agent_id)
+    .execute(pool)
+    .await
+    .expect("detached runtime run");
+    sqlx::query(
+        "INSERT INTO run_authorization_snapshots
+         (id, run_id, instance_id, instance_revision_id,
+          authorization_model_version, normalized_hash)
+         VALUES ($1, $2, $3, $4, 'test/v1', $5)",
+    )
+    .bind(snapshot_id)
+    .bind(run_id)
+    .bind(instance_id)
+    .bind(revision_id)
+    .bind([14_u8; 32].as_slice())
+    .execute(pool)
+    .await
+    .expect("detached runtime snapshot");
+    let credential_hash = [Uuid::new_v4().into_bytes(), Uuid::new_v4().into_bytes()].concat();
+    sqlx::query(
+        "INSERT INTO runtime_authority_sessions
+         (id, snapshot_id, run_id, instance_id, instance_revision_id,
+          attachment_id, identity_hash, snapshot_hash, issuance_generation,
+          credential_hash, status, issued_at, expires_at, acknowledged_at)
+         VALUES ($1, $2, $3, $4, $5, NULL, $6, $7, 1, $8, 'active', $9, $10, $9)",
+    )
+    .bind(session_id)
+    .bind(snapshot_id)
+    .bind(run_id)
+    .bind(instance_id)
+    .bind(revision_id)
+    .bind([15_u8; 32].as_slice())
+    .bind([14_u8; 32].as_slice())
+    .bind(credential_hash.as_slice())
+    .bind(now)
+    .bind(expires_at)
+    .execute(pool)
+    .await
+    .expect("detached runtime session");
+    let mut transaction = pool.begin().await.expect("begin detached runtime graph");
+    sqlx::query("SET LOCAL session_replication_role = 'replica'")
+        .execute(&mut *transaction)
+        .await
+        .expect("enable detached fixture mode");
+    sqlx::query(
+        "INSERT INTO run_git_authority_snapshots
+         (snapshot_id, instance_revision_id, binding_id, repository_id,
+          grammar_version, git_operations, ref_globs, changed_path_globs,
+          branch_update_policy, branch_create, branch_delete, tag_create,
+          tag_update, tag_delete, other_create, other_update, other_delete,
+          request_bytes, pack_bytes, object_count, ref_updates,
+          exact_parent_required, expected_parent, normalized_hash)
+         VALUES ($1, $2, $3, $4, 1, ARRAY['receive'],
+                 ARRAY['refs/heads/main'], ARRAY['**'], 'fast_forward_only',
+                 false, false, false, false, false, false, false, false,
+                 1, 1, 1, 1, false, NULL, $5)",
+    )
+    .bind(snapshot_id)
+    .bind(revision_id)
+    .bind(Uuid::new_v4())
+    .bind(repository.id.as_uuid())
+    .bind([16_u8; 32].as_slice())
+    .execute(&mut *transaction)
+    .await
+    .expect("detached runtime Git snapshot");
+    transaction
+        .commit()
+        .await
+        .expect("commit detached runtime graph");
+    session_id
 }
 
 async fn commit_and_update(

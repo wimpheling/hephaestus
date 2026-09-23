@@ -811,6 +811,195 @@ impl ::buffa::Enumeration for ReleaseUiCachePolicy {
 }
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
 #[repr(i32)]
+pub enum ReleaseUiRepositoryGitAccess {
+    RELEASE_UI_REPOSITORY_GIT_ACCESS_UNSPECIFIED = 0i32,
+    RELEASE_UI_REPOSITORY_GIT_ACCESS_NONE = 1i32,
+    RELEASE_UI_REPOSITORY_GIT_ACCESS_READ = 2i32,
+    RELEASE_UI_REPOSITORY_GIT_ACCESS_READ_WRITE = 3i32,
+}
+impl ReleaseUiRepositoryGitAccess {
+    ///Idiomatic alias for [`Self::RELEASE_UI_REPOSITORY_GIT_ACCESS_UNSPECIFIED`]; `Debug` prints the variant name.
+    #[allow(non_upper_case_globals)]
+    pub const Unspecified: Self = Self::RELEASE_UI_REPOSITORY_GIT_ACCESS_UNSPECIFIED;
+    ///Idiomatic alias for [`Self::RELEASE_UI_REPOSITORY_GIT_ACCESS_NONE`]; `Debug` prints the variant name.
+    #[allow(non_upper_case_globals)]
+    pub const None: Self = Self::RELEASE_UI_REPOSITORY_GIT_ACCESS_NONE;
+    ///Idiomatic alias for [`Self::RELEASE_UI_REPOSITORY_GIT_ACCESS_READ`]; `Debug` prints the variant name.
+    #[allow(non_upper_case_globals)]
+    pub const Read: Self = Self::RELEASE_UI_REPOSITORY_GIT_ACCESS_READ;
+    ///Idiomatic alias for [`Self::RELEASE_UI_REPOSITORY_GIT_ACCESS_READ_WRITE`]; `Debug` prints the variant name.
+    #[allow(non_upper_case_globals)]
+    pub const ReadWrite: Self = Self::RELEASE_UI_REPOSITORY_GIT_ACCESS_READ_WRITE;
+}
+impl ::core::default::Default for ReleaseUiRepositoryGitAccess {
+    fn default() -> Self {
+        Self::RELEASE_UI_REPOSITORY_GIT_ACCESS_UNSPECIFIED
+    }
+}
+impl ::serde::Serialize for ReleaseUiRepositoryGitAccess {
+    fn serialize<S: ::serde::Serializer>(
+        &self,
+        s: S,
+    ) -> ::core::result::Result<S::Ok, S::Error> {
+        s.serialize_str(::buffa::Enumeration::proto_name(self))
+    }
+}
+impl<'de> ::serde::Deserialize<'de> for ReleaseUiRepositoryGitAccess {
+    fn deserialize<D: ::serde::Deserializer<'de>>(
+        d: D,
+    ) -> ::core::result::Result<Self, D::Error> {
+        struct _V;
+        impl ::serde::de::Visitor<'_> for _V {
+            type Value = ReleaseUiRepositoryGitAccess;
+            fn expecting(
+                &self,
+                f: &mut ::core::fmt::Formatter<'_>,
+            ) -> ::core::fmt::Result {
+                f.write_str(
+                    concat!(
+                        "a string, integer, or null for ",
+                        stringify!(ReleaseUiRepositoryGitAccess)
+                    ),
+                )
+            }
+            fn visit_str<E: ::serde::de::Error>(
+                self,
+                v: &str,
+            ) -> ::core::result::Result<ReleaseUiRepositoryGitAccess, E> {
+                <ReleaseUiRepositoryGitAccess as ::buffa::Enumeration>::from_proto_name(
+                        v,
+                    )
+                    .ok_or_else(|| { ::serde::de::Error::unknown_variant(v, &[]) })
+            }
+            fn visit_i64<E: ::serde::de::Error>(
+                self,
+                v: i64,
+            ) -> ::core::result::Result<ReleaseUiRepositoryGitAccess, E> {
+                let v32 = i32::try_from(v)
+                    .map_err(|_| {
+                        ::serde::de::Error::custom(
+                            ::buffa::alloc::format!("enum value {v} out of i32 range"),
+                        )
+                    })?;
+                <ReleaseUiRepositoryGitAccess as ::buffa::Enumeration>::from_i32(v32)
+                    .ok_or_else(|| {
+                        ::serde::de::Error::custom(
+                            ::buffa::alloc::format!("unknown enum value {v32}"),
+                        )
+                    })
+            }
+            fn visit_u64<E: ::serde::de::Error>(
+                self,
+                v: u64,
+            ) -> ::core::result::Result<ReleaseUiRepositoryGitAccess, E> {
+                let v32 = i32::try_from(v)
+                    .map_err(|_| {
+                        ::serde::de::Error::custom(
+                            ::buffa::alloc::format!("enum value {v} out of i32 range"),
+                        )
+                    })?;
+                <ReleaseUiRepositoryGitAccess as ::buffa::Enumeration>::from_i32(v32)
+                    .ok_or_else(|| {
+                        ::serde::de::Error::custom(
+                            ::buffa::alloc::format!("unknown enum value {v32}"),
+                        )
+                    })
+            }
+            fn visit_unit<E: ::serde::de::Error>(
+                self,
+            ) -> ::core::result::Result<ReleaseUiRepositoryGitAccess, E> {
+                ::core::result::Result::Ok(::core::default::Default::default())
+            }
+        }
+        d.deserialize_any(_V)
+    }
+}
+impl ::buffa::json_helpers::ProtoElemJson for ReleaseUiRepositoryGitAccess {
+    fn serialize_proto_json<S: ::serde::Serializer>(
+        v: &Self,
+        s: S,
+    ) -> ::core::result::Result<S::Ok, S::Error> {
+        ::serde::Serialize::serialize(v, s)
+    }
+    fn deserialize_proto_json<'de, D: ::serde::Deserializer<'de>>(
+        d: D,
+    ) -> ::core::result::Result<Self, D::Error> {
+        <Self as ::serde::Deserialize>::deserialize(d)
+    }
+}
+impl ::buffa::Enumeration for ReleaseUiRepositoryGitAccess {
+    fn from_i32(value: i32) -> ::core::option::Option<Self> {
+        match value {
+            0i32 => {
+                ::core::option::Option::Some(
+                    Self::RELEASE_UI_REPOSITORY_GIT_ACCESS_UNSPECIFIED,
+                )
+            }
+            1i32 => {
+                ::core::option::Option::Some(Self::RELEASE_UI_REPOSITORY_GIT_ACCESS_NONE)
+            }
+            2i32 => {
+                ::core::option::Option::Some(Self::RELEASE_UI_REPOSITORY_GIT_ACCESS_READ)
+            }
+            3i32 => {
+                ::core::option::Option::Some(
+                    Self::RELEASE_UI_REPOSITORY_GIT_ACCESS_READ_WRITE,
+                )
+            }
+            _ => ::core::option::Option::None,
+        }
+    }
+    fn to_i32(&self) -> i32 {
+        *self as i32
+    }
+    fn proto_name(&self) -> &'static str {
+        match self {
+            Self::RELEASE_UI_REPOSITORY_GIT_ACCESS_UNSPECIFIED => {
+                "RELEASE_UI_REPOSITORY_GIT_ACCESS_UNSPECIFIED"
+            }
+            Self::RELEASE_UI_REPOSITORY_GIT_ACCESS_NONE => {
+                "RELEASE_UI_REPOSITORY_GIT_ACCESS_NONE"
+            }
+            Self::RELEASE_UI_REPOSITORY_GIT_ACCESS_READ => {
+                "RELEASE_UI_REPOSITORY_GIT_ACCESS_READ"
+            }
+            Self::RELEASE_UI_REPOSITORY_GIT_ACCESS_READ_WRITE => {
+                "RELEASE_UI_REPOSITORY_GIT_ACCESS_READ_WRITE"
+            }
+        }
+    }
+    fn from_proto_name(name: &str) -> ::core::option::Option<Self> {
+        match name {
+            "RELEASE_UI_REPOSITORY_GIT_ACCESS_UNSPECIFIED" => {
+                ::core::option::Option::Some(
+                    Self::RELEASE_UI_REPOSITORY_GIT_ACCESS_UNSPECIFIED,
+                )
+            }
+            "RELEASE_UI_REPOSITORY_GIT_ACCESS_NONE" => {
+                ::core::option::Option::Some(Self::RELEASE_UI_REPOSITORY_GIT_ACCESS_NONE)
+            }
+            "RELEASE_UI_REPOSITORY_GIT_ACCESS_READ" => {
+                ::core::option::Option::Some(Self::RELEASE_UI_REPOSITORY_GIT_ACCESS_READ)
+            }
+            "RELEASE_UI_REPOSITORY_GIT_ACCESS_READ_WRITE" => {
+                ::core::option::Option::Some(
+                    Self::RELEASE_UI_REPOSITORY_GIT_ACCESS_READ_WRITE,
+                )
+            }
+            _ => ::core::option::Option::None,
+        }
+    }
+    fn values() -> &'static [Self] {
+        &[
+            Self::RELEASE_UI_REPOSITORY_GIT_ACCESS_UNSPECIFIED,
+            Self::RELEASE_UI_REPOSITORY_GIT_ACCESS_NONE,
+            Self::RELEASE_UI_REPOSITORY_GIT_ACCESS_READ,
+            Self::RELEASE_UI_REPOSITORY_GIT_ACCESS_READ_WRITE,
+        ]
+    }
+}
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
+#[repr(i32)]
 pub enum UiInstallationLifecycle {
     UI_INSTALLATION_LIFECYCLE_UNSPECIFIED = 0i32,
     UI_INSTALLATION_LIFECYCLE_ENABLED = 1i32,
@@ -2767,6 +2956,14 @@ pub struct ReleaseUiDescriptor {
         deserialize_with = "::buffa::json_helpers::null_as_default"
     )]
     pub apis: ::buffa::alloc::vec::Vec<ReleaseUiApiBinding>,
+    /// Field 13: `repository_git_access`
+    #[serde(
+        rename = "repositoryGitAccess",
+        alias = "repository_git_access",
+        with = "::buffa::json_helpers::proto_enum",
+        skip_serializing_if = "::buffa::json_helpers::skip_if::is_default_enum_value"
+    )]
+    pub repository_git_access: ::buffa::EnumValue<ReleaseUiRepositoryGitAccess>,
     #[serde(flatten)]
     pub content: ::core::option::Option<__buffa::oneof::release_ui_descriptor::Content>,
     #[serde(skip)]
@@ -2786,6 +2983,7 @@ impl ::core::fmt::Debug for ReleaseUiDescriptor {
             .field("ui_kit_version", &self.ui_kit_version)
             .field("cache", &self.cache)
             .field("apis", &self.apis)
+            .field("repository_git_access", &self.repository_git_access)
             .field("content", &self.content)
             .finish()
     }
@@ -2883,6 +3081,12 @@ impl ::buffa::Message for ReleaseUiDescriptor {
                 += 1u32 + ::buffa::encoding::varint_len(inner_size as u64) as u32
                     + inner_size;
         }
+        {
+            let val = self.repository_git_access.to_i32();
+            if val != 0 {
+                size += 1u32 + ::buffa::types::int32_encoded_len(val) as u32;
+            }
+        }
         size += self.__buffa_unknown_fields.encoded_len() as u32;
         size
     }
@@ -2955,6 +3159,12 @@ impl ::buffa::Message for ReleaseUiDescriptor {
         for v in &self.apis {
             ::buffa::types::put_len_delimited_header(12u32, __cache.consume_next(), buf);
             v.write_to(__cache, buf);
+        }
+        {
+            let val = self.repository_git_access.to_i32();
+            if val != 0 {
+                ::buffa::types::put_int32_field(13u32, val, buf);
+            }
         }
         self.__buffa_unknown_fields.write_to(buf);
     }
@@ -3091,6 +3301,15 @@ impl ::buffa::Message for ReleaseUiDescriptor {
                 ::buffa::Message::merge_length_delimited(&mut elem, buf, ctx)?;
                 self.apis.push(elem);
             }
+            13u32 => {
+                ::buffa::encoding::check_wire_type(
+                    tag,
+                    ::buffa::encoding::WireType::Varint,
+                )?;
+                self.repository_git_access = ::buffa::EnumValue::from(
+                    ::buffa::types::decode_int32(buf)?,
+                );
+            }
             _ => {
                 self.__buffa_unknown_fields
                     .push(::buffa::encoding::decode_unknown_field(tag, buf, ctx)?);
@@ -3110,6 +3329,7 @@ impl ::buffa::Message for ReleaseUiDescriptor {
         self.cache = ::buffa::EnumValue::from(0);
         self.content = ::core::option::Option::None;
         self.apis.clear();
+        self.repository_git_access = ::buffa::EnumValue::from(0);
         self.__buffa_unknown_fields.clear();
     }
 }
@@ -3164,6 +3384,9 @@ impl<'de> serde::Deserialize<'de> for ReleaseUiDescriptor {
                 > = None;
                 let mut __f_apis: ::core::option::Option<
                     ::buffa::alloc::vec::Vec<ReleaseUiApiBinding>,
+                > = None;
+                let mut __f_repository_git_access: ::core::option::Option<
+                    ::buffa::EnumValue<ReleaseUiRepositoryGitAccess>,
                 > = None;
                 let mut __oneof_content: ::core::option::Option<
                     __buffa::oneof::release_ui_descriptor::Content,
@@ -3347,6 +3570,26 @@ impl<'de> serde::Deserialize<'de> for ReleaseUiDescriptor {
                                 map.next_value_seed(_S)?
                             });
                         }
+                        "repositoryGitAccess" | "repository_git_access" => {
+                            __f_repository_git_access = Some({
+                                struct _S;
+                                impl<'de> serde::de::DeserializeSeed<'de> for _S {
+                                    type Value = ::buffa::EnumValue<
+                                        ReleaseUiRepositoryGitAccess,
+                                    >;
+                                    fn deserialize<D: serde::Deserializer<'de>>(
+                                        self,
+                                        d: D,
+                                    ) -> ::core::result::Result<
+                                        ::buffa::EnumValue<ReleaseUiRepositoryGitAccess>,
+                                        D::Error,
+                                    > {
+                                        ::buffa::json_helpers::proto_enum::deserialize(d)
+                                    }
+                                }
+                                map.next_value_seed(_S)?
+                            });
+                        }
                         "staticContent" | "static_content" => {
                             let v: ::core::option::Option<ReleaseUiStaticContent> = map
                                 .next_value_seed(
@@ -3430,6 +3673,9 @@ impl<'de> serde::Deserialize<'de> for ReleaseUiDescriptor {
                 }
                 if let ::core::option::Option::Some(v) = __f_apis {
                     __r.apis = v;
+                }
+                if let ::core::option::Option::Some(v) = __f_repository_git_access {
+                    __r.repository_git_access = v;
                 }
                 __r.content = __oneof_content;
                 Ok(__r)
@@ -4677,6 +4923,16 @@ pub struct InstallUiRequest {
         skip_serializing_if = "::buffa::json_helpers::skip_if::is_empty_str"
     )]
     pub ui_key: ::buffa::alloc::string::String,
+    /// Required acknowledgement when the descriptor declares repository Git access.
+    ///
+    /// Field 6: `acknowledge_repository_git_access`
+    #[serde(
+        rename = "acknowledgeRepositoryGitAccess",
+        alias = "acknowledge_repository_git_access",
+        with = "::buffa::json_helpers::proto_bool",
+        skip_serializing_if = "::buffa::json_helpers::skip_if::is_false"
+    )]
+    pub acknowledge_repository_git_access: bool,
     #[serde(skip)]
     #[doc(hidden)]
     pub __buffa_unknown_fields: ::buffa::UnknownFields,
@@ -4689,6 +4945,10 @@ impl ::core::fmt::Debug for InstallUiRequest {
             .field("target", &self.target)
             .field("release_id", &self.release_id)
             .field("ui_key", &self.ui_key)
+            .field(
+                "acknowledge_repository_git_access",
+                &self.acknowledge_repository_git_access,
+            )
             .finish()
     }
 }
@@ -4752,6 +5012,9 @@ impl ::buffa::Message for InstallUiRequest {
         if !self.ui_key.is_empty() {
             size += 1u32 + ::buffa::types::string_encoded_len(&self.ui_key) as u32;
         }
+        if self.acknowledge_repository_git_access {
+            size += 1u32 + ::buffa::types::BOOL_ENCODED_LEN as u32;
+        }
         size += self.__buffa_unknown_fields.encoded_len() as u32;
         size
     }
@@ -4780,6 +5043,13 @@ impl ::buffa::Message for InstallUiRequest {
         }
         if !self.ui_key.is_empty() {
             ::buffa::types::put_string_field(5u32, &self.ui_key, buf);
+        }
+        if self.acknowledge_repository_git_access {
+            ::buffa::types::put_bool_field(
+                6u32,
+                self.acknowledge_repository_git_access,
+                buf,
+            );
         }
         self.__buffa_unknown_fields.write_to(buf);
     }
@@ -4845,6 +5115,15 @@ impl ::buffa::Message for InstallUiRequest {
                 )?;
                 ::buffa::types::merge_string(&mut self.ui_key, buf)?;
             }
+            6u32 => {
+                ::buffa::encoding::check_wire_type(
+                    tag,
+                    ::buffa::encoding::WireType::Varint,
+                )?;
+                self.acknowledge_repository_git_access = ::buffa::types::decode_bool(
+                    buf,
+                )?;
+            }
             _ => {
                 self.__buffa_unknown_fields
                     .push(::buffa::encoding::decode_unknown_field(tag, buf, ctx)?);
@@ -4858,6 +5137,7 @@ impl ::buffa::Message for InstallUiRequest {
         self.target = ::buffa::MessageField::none();
         self.release_id = ::buffa::MessageField::none();
         self.ui_key.clear();
+        self.acknowledge_repository_git_access = false;
         self.__buffa_unknown_fields.clear();
     }
 }

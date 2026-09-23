@@ -266,6 +266,39 @@ pub fn assert_state_snapshot_has_no_credentials(directory: &Path) {
     }
 }
 
+/// Verify static table coverage and execute the scan on a migrated fixture
+/// database without requiring the full Cooking VM journey.
+pub async fn assert_static_storage_scan_matches_catalog(pool: &PgPool) {
+    let catalog: BTreeSet<String> = sqlx::query_scalar(
+        "SELECT c.relname
+         FROM pg_catalog.pg_class AS c
+         JOIN pg_catalog.pg_namespace AS n ON n.oid = c.relnamespace
+         WHERE n.nspname = 'public'
+           AND c.relkind IN ('r', 'p')
+           AND c.relname NOT IN ('_sqlx_migrations', 'melange_migrations')
+         ORDER BY c.relname",
+    )
+    .fetch_all(pool)
+    .await
+    .expect("enumerate migrated storage surfaces")
+    .into_iter()
+    .collect();
+    let covered: BTreeSet<_> = include_str!("confinement.sql")
+        .lines()
+        .filter_map(|line| line.strip_prefix("SELECT '")?.split('\'').next())
+        .map(str::to_owned)
+        .collect();
+    assert_eq!(
+        covered, catalog,
+        "update static storage scan for schema changes"
+    );
+
+    sqlx::query_as::<_, (String, String)>(include_str!("confinement.sql"))
+        .fetch_all(pool)
+        .await
+        .expect("execute static storage scan against migrated schema");
+}
+
 /// Scan stored rows through the fixture administrator pool supplied by the
 /// golden harness. This administrative storage scan is independent of tenant
 /// projections and the runtime worker role, so every public application table

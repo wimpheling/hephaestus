@@ -45,6 +45,8 @@ SELECT 'build_request_images' AS surface, row_to_json(stored)::text AS payload F
 UNION ALL
 SELECT 'build_request_sources' AS surface, row_to_json(stored)::text AS payload FROM public.build_request_sources stored
 UNION ALL
+SELECT 'build_request_ui_source_manifests' AS surface, row_to_json(stored)::text AS payload FROM public.build_request_ui_source_manifests stored
+UNION ALL
 SELECT 'build_requests' AS surface, row_to_json(stored)::text AS payload FROM public.build_requests stored
 UNION ALL
 SELECT 'build_state_transitions' AS surface, row_to_json(stored)::text AS payload FROM public.build_state_transitions stored
@@ -95,6 +97,16 @@ SELECT 'gateway_routes' AS surface, row_to_json(stored)::text AS payload FROM pu
 UNION ALL
 SELECT 'gateway_runtime_authority_sessions' AS surface, row_to_json(stored)::text AS payload FROM public.gateway_runtime_authority_sessions stored
 UNION ALL
+SELECT 'gateway_service_instances' AS surface, row_to_json(stored)::text AS payload FROM public.gateway_service_instances stored
+UNION ALL
+SELECT 'gateway_service_log_chunks' AS surface, row_to_json(stored)::text AS payload FROM public.gateway_service_log_chunks stored
+UNION ALL
+SELECT 'gateway_service_log_epochs' AS surface, row_to_json(stored)::text AS payload FROM public.gateway_service_log_epochs stored
+UNION ALL
+SELECT 'gateway_service_log_project_usage' AS surface, row_to_json(stored)::text AS payload FROM public.gateway_service_log_project_usage stored
+UNION ALL
+SELECT 'gateway_service_retry_state' AS surface, row_to_json(stored)::text AS payload FROM public.gateway_service_retry_state stored
+UNION ALL
 SELECT 'gateway_secret_bindings' AS surface, row_to_json(stored)::text AS payload FROM public.gateway_secret_bindings stored
 UNION ALL
 SELECT 'gateway_secret_leases' AS surface, row_to_json(stored)::text AS payload FROM public.gateway_secret_leases stored
@@ -106,6 +118,10 @@ UNION ALL
 SELECT 'git_ref_updates' AS surface, row_to_json(stored)::text AS payload FROM public.git_ref_updates stored
 UNION ALL
 SELECT 'git_refs' AS surface, row_to_json(stored)::text AS payload FROM public.git_refs stored
+UNION ALL
+SELECT 'human_browser_session_revocations' AS surface, row_to_json(stored)::text AS payload FROM public.human_browser_session_revocations stored
+UNION ALL
+SELECT 'human_browser_sessions' AS surface, row_to_json(stored)::text AS payload FROM public.human_browser_sessions stored
 UNION ALL
 SELECT 'mailbox_allocation_commands' AS surface, row_to_json(stored)::text AS payload FROM public.mailbox_allocation_commands stored
 UNION ALL
@@ -171,6 +187,16 @@ SELECT 'release_git_capability_ceilings' AS surface, row_to_json(stored)::text A
 UNION ALL
 SELECT 'releases' AS surface, row_to_json(stored)::text AS payload FROM public.releases stored
 UNION ALL
+SELECT 'release_ui_api_bindings' AS surface, row_to_json(stored)::text AS payload FROM public.release_ui_api_bindings stored
+UNION ALL
+SELECT 'release_ui_descriptors' AS surface, row_to_json(stored)::text AS payload FROM public.release_ui_descriptors stored
+UNION ALL
+SELECT 'release_ui_managed_services' AS surface, row_to_json(stored)::text AS payload FROM public.release_ui_managed_services stored
+UNION ALL
+SELECT 'release_ui_source_snapshots' AS surface, row_to_json(stored)::text AS payload FROM public.release_ui_source_snapshots stored
+UNION ALL
+SELECT 'release_ui_static_files' AS surface, row_to_json(stored)::text AS payload FROM public.release_ui_static_files stored
+UNION ALL
 SELECT 'repositories' AS surface, row_to_json(stored)::text AS payload FROM public.repositories stored
 UNION ALL
 SELECT 'repository_managers' AS surface, row_to_json(stored)::text AS payload FROM public.repository_managers stored
@@ -230,5 +256,21 @@ UNION ALL
 SELECT 'secrets' AS surface, row_to_json(stored)::text AS payload FROM public.secrets stored
 UNION ALL
 SELECT 'user_profiles' AS surface, row_to_json(stored)::text AS payload FROM public.user_profiles stored
+UNION ALL
+SELECT 'ui_browser_handoffs' AS surface, row_to_json(stored)::text AS payload FROM public.ui_browser_handoffs stored
+UNION ALL
+SELECT 'ui_browser_sessions' AS surface, row_to_json(stored)::text AS payload FROM public.ui_browser_sessions stored
+UNION ALL
+SELECT 'ui_installation_bindings' AS surface, row_to_json(stored)::text AS payload FROM public.ui_installation_bindings stored
+UNION ALL
+SELECT 'ui_installation_commands' AS surface, row_to_json(stored)::text AS payload FROM public.ui_installation_commands stored
+UNION ALL
+SELECT 'ui_installation_generations' AS surface, row_to_json(stored)::text AS payload FROM public.ui_installation_generations stored
+UNION ALL
+SELECT 'ui_installations' AS surface, row_to_json(stored)::text AS payload FROM public.ui_installations stored
+UNION ALL
+SELECT 'ui_request_audit_events' AS surface, row_to_json(stored)::text AS payload FROM public.ui_request_audit_events stored
+UNION ALL
+SELECT 'ui_source_manifest_revisions' AS surface, row_to_json(stored)::text AS payload FROM public.ui_source_manifest_revisions stored
 UNION ALL
 SELECT 'users' AS surface, row_to_json(stored)::text AS payload FROM public.users stored

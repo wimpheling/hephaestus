@@ -4,7 +4,7 @@ use serde::{Deserialize, Serialize};
 use std::{collections::BTreeMap, path::PathBuf};
 
 /// Current host-to-guest protocol version.
-pub const PROTOCOL_VERSION: u16 = 8;
+pub const PROTOCOL_VERSION: u16 = 9;
 /// Maximum private HTTP body carried by the authenticated control protocol.
 pub const MAX_PRIVATE_HTTP_BODY_BYTES: usize = 1_048_576;
 /// Maximum private HTTP headers carried by one request or response.
@@ -52,6 +52,19 @@ pub const PRIVATE_SERVICE_CHALLENGE_BYTES: usize = 32;
 /// Parent-owned Unix socket mapped to [`PRIVATE_SERVICE_VSOCK_PORT`].
 pub(crate) const PRIVATE_SERVICE_SOCKET_NAME: &str = "private-service.sock";
 
+/// Dedicated guest-to-host runtime-Git bridge port. It is separate from the
+/// secret broker and the host-to-guest private service transport.
+pub const RUNTIME_GIT_VSOCK_PORT: u32 = 19_003;
+/// Default guest loopback port for the token-free runtime-Git remote.
+pub const RUNTIME_GIT_LOOPBACK_PORT: u16 = 19_100;
+/// Guest helper installed in approved images and selected through Git config
+/// environment variables, never by embedding a credential in configuration.
+pub const RUNTIME_GIT_CREDENTIAL_HELPER: &str = "/usr/libexec/hephaestus/heph-git-credential";
+/// Guest-local environment variable naming the expected proxy host.
+pub const RUNTIME_GIT_HOST_ENV: &str = "HEPH_RUNTIME_GIT_HOST";
+/// Guest-local environment variable naming the exact repository route.
+pub const RUNTIME_GIT_PATH_ENV: &str = "HEPH_RUNTIME_GIT_PATH";
+
 /// A single-use private service handshake challenge.
 #[derive(Clone, Eq, PartialEq, Serialize, Deserialize)]
 pub struct PrivateServiceChallenge(pub [u8; PRIVATE_SERVICE_CHALLENGE_BYTES]);
@@ -88,6 +101,16 @@ pub struct PrivateHttpServiceMessage {
     pub max_connections: u32,
     /// Maximum time allowed to connect to the guest loopback server.
     pub connect_timeout_ms: u64,
+}
+
+/// Wire metadata for the guest-local runtime-Git proxy. It contains no
+/// repository authority or bearer material.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
+pub struct RuntimeGitBridgeMessage {
+    /// Repository UUID whose route and credential are authorized for this VM.
+    pub repository_id: uuid::Uuid,
+    /// Guest loopback port on which `heph-init` accepts Git HTTP bytes.
+    pub loopback_port: u16,
 }
 
 /// `AF_VSOCK` port used by `heph-init` to connect to the host worker.
@@ -141,6 +164,9 @@ pub enum HostMessage {
         /// Optional long-lived private HTTP service declaration.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         private_http_service: Option<PrivateHttpServiceMessage>,
+        /// Optional exact-run guest-to-host runtime-Git proxy declaration.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        runtime_git_bridge: Option<RuntimeGitBridgeMessage>,
     },
     /// Opens one authorized guest-initiated private service connection.
     OpenPrivateServiceConnection {

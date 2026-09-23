@@ -3,7 +3,7 @@ use authz_domain::{AuthorizationDecision, ObjectRef, ObjectType, Permission, Sub
 use authz_postgres::{PostgresMelangeAuthorizer, audit_decision, begin_actor_transaction};
 use forge_domain::{
     AgentConfigRevisionId, CommitSha, GitRef, OrganizationId, Project, ProjectId, ReceiveId,
-    RefUpdate, Repository, RepositoryId, RunRequestId,
+    RefUpdate, Repository, RepositoryId, RunRequestId, RuntimeReceiveProvenance,
 };
 use forge_service::{
     CreateRepository, ForgeRepositoryError, OutboxRecord, ReceiveResult, RunRequest,
@@ -420,12 +420,6 @@ impl PgForgeRepository {
     /// # Errors
     ///
     /// Returns the same failures as [`Self::accept_receive`].
-    // Keeping this transactional workflow together makes the all-or-nothing
-    // receive invariant directly auditable.
-    #[allow(clippy::too_many_lines)]
-    // The receive transaction deliberately keeps authorization, ref
-    // validation, persistence, and outbox publication in one auditable path.
-    #[allow(clippy::cognitive_complexity)]
     pub async fn accept_receive_as(
         &self,
         repository: &Repository,
@@ -433,6 +427,57 @@ impl PgForgeRepository {
         principal: &str,
         identity: Option<&AuthenticatedIdentity>,
         updates: &[RefUpdate],
+    ) -> Result<ReceiveResult, ForgeRepositoryError> {
+        self.accept_receive_inner(repository, receive_id, principal, identity, updates, None)
+            .await
+    }
+
+    /// Records an accepted receive authenticated by one exact runtime Git
+    /// authority session.
+    ///
+    /// The optional originating attachment is resolved from the durable
+    /// runtime session inside the same receive transaction. The caller cannot
+    /// supply an attachment or use a principal string to influence trigger
+    /// routing.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the runtime session cannot be resolved to the
+    /// received repository and immutable authority snapshot, or when receive
+    /// persistence fails.
+    pub async fn accept_runtime_receive(
+        &self,
+        repository: &Repository,
+        receive_id: ReceiveId,
+        provenance: RuntimeReceiveProvenance,
+        updates: &[RefUpdate],
+    ) -> Result<ReceiveResult, ForgeRepositoryError> {
+        let principal = format!("runtime:{}", provenance.runtime_session_id);
+        self.accept_receive_inner(
+            repository,
+            receive_id,
+            &principal,
+            None,
+            updates,
+            Some(provenance),
+        )
+        .await
+    }
+
+    // Keeping this transactional workflow together makes the all-or-nothing
+    // receive invariant directly auditable.
+    #[allow(clippy::too_many_lines)]
+    // The receive transaction deliberately keeps authorization, ref
+    // validation, persistence, and outbox publication in one auditable path.
+    #[allow(clippy::cognitive_complexity)]
+    async fn accept_receive_inner(
+        &self,
+        repository: &Repository,
+        receive_id: ReceiveId,
+        principal: &str,
+        identity: Option<&AuthenticatedIdentity>,
+        updates: &[RefUpdate],
+        runtime_provenance: Option<RuntimeReceiveProvenance>,
     ) -> Result<ReceiveResult, ForgeRepositoryError> {
         if identity.is_some() && self.authorizer.is_none() {
             return Err(ForgeRepositoryError::AuthorizationUnavailable);
@@ -443,12 +488,31 @@ impl PgForgeRepository {
                 .map_err(storage)?,
             None => self.pool.begin().await.map_err(storage)?,
         };
+        let runtime_attachment_id = if let Some(provenance) = runtime_provenance {
+            let resolved = sqlx::query_as::<_, (Option<Uuid>,)>(
+                "SELECT * FROM resolve_runtime_receive_attachment($1, $2)",
+            )
+            .bind(provenance.runtime_session_id)
+            .bind(repository.id.as_uuid())
+            .fetch_optional(&mut *transaction)
+            .await
+            .map_err(storage)?;
+            let Some((attachment,)) = resolved else {
+                return Err(ForgeRepositoryError::InvalidStoredData(
+                    "runtime receive provenance",
+                ));
+            };
+            attachment
+        } else {
+            None
+        };
         let now = OffsetDateTime::now_utc();
         let inserted = sqlx::query(
             "INSERT INTO git_receives
              (id, repository_id, actor_id, principal, request_id,
+              runtime_session_id, runtime_attachment_id,
               status, accepted_at, created_at)
-             VALUES ($1, $2, $3, $4, $5, 'accepted', $6, $6)
+             VALUES ($1, $2, $3, $4, $5, $6, $7, 'accepted', $8, $8)
              ON CONFLICT (id) DO NOTHING",
         )
         .bind(receive_id.as_uuid())
@@ -456,18 +520,28 @@ impl PgForgeRepository {
         .bind(identity.map(|value| value.user_id.as_uuid()))
         .bind(principal)
         .bind(identity.map(|value| value.request_id.as_uuid()))
+        .bind(runtime_provenance.map(|value| value.runtime_session_id))
+        .bind(runtime_attachment_id)
         .bind(now)
         .execute(&mut *transaction)
         .await
         .map_err(storage)?;
         if inserted.rows_affected() == 0 {
-            let existing_repository: Uuid =
-                sqlx::query_scalar("SELECT repository_id FROM git_receives WHERE id = $1")
-                    .bind(receive_id.as_uuid())
-                    .fetch_one(&mut *transaction)
-                    .await
-                    .map_err(storage)?;
-            if existing_repository != repository.id.as_uuid() {
+            let existing = sqlx::query_as::<_, ExistingReceiveProvenance>(
+                "SELECT repository_id AS repository,
+                        runtime_session_id AS runtime_session,
+                        runtime_attachment_id AS runtime_attachment
+                 FROM git_receives WHERE id = $1",
+            )
+            .bind(receive_id.as_uuid())
+            .fetch_one(&mut *transaction)
+            .await
+            .map_err(storage)?;
+            if existing.repository != repository.id.as_uuid()
+                || existing.runtime_session
+                    != runtime_provenance.map(|value| value.runtime_session_id)
+                || existing.runtime_attachment != runtime_attachment_id
+            {
                 return Err(ForgeRepositoryError::ReceiveConflict(receive_id));
             }
             let rows = sqlx::query_as::<_, RunRequestRow>(
@@ -712,6 +786,8 @@ impl PgForgeRepository {
             updates,
             self.authorizer.as_deref(),
             now,
+            runtime_attachment_id,
+            runtime_provenance.is_some(),
         )
         .await?;
         let rows = sqlx::query_as::<_, RunRequestRow>(
@@ -1406,6 +1482,8 @@ async fn persist_instance_triggers(
     updates: &[RefUpdate],
     authorizer: Option<&PostgresMelangeAuthorizer>,
     now: OffsetDateTime,
+    originating_attachment_id: Option<Uuid>,
+    runtime_receive: bool,
 ) -> Result<(), ForgeRepositoryError> {
     if !repository.agent_runs_enabled {
         return Ok(());
@@ -1433,6 +1511,7 @@ async fn persist_instance_triggers(
                ON release_agent.id = revision.release_agent_id
              JOIN releases AS release ON release.id = release_agent.release_id
              WHERE attachment.repository_id = $1
+               AND ($3::uuid IS NULL OR attachment.id <> $3)
                AND attachment.enabled AND attachment.removed_at IS NULL
                AND attachment.trigger_policy IN ('push', 'push_and_manual')
                AND release.state = 'published'
@@ -1451,10 +1530,18 @@ async fn persist_instance_triggers(
         )
         .bind(repository.id.as_uuid())
         .bind(update.git_ref.as_str())
+        .bind(originating_attachment_id)
         .fetch_all(&mut **transaction)
         .await
         .map_err(storage)?;
         for candidate in candidates {
+            if runtime_receive {
+                // Runtime authorization snapshots currently expose workload,
+                // repository, and state-volume capabilities. They cannot
+                // prove human CanExecute/CanUse decisions for sibling
+                // attachments, so fail closed instead of inventing an actor.
+                continue;
+            }
             let mut permitted = true;
             if let (Some(identity), Some(authorizer)) = (identity, authorizer) {
                 for (permission, object) in [
@@ -1685,6 +1772,13 @@ struct RepositoryRow {
     is_public: bool,
     settings: Value,
     created_at: OffsetDateTime,
+}
+
+#[derive(FromRow)]
+struct ExistingReceiveProvenance {
+    repository: Uuid,
+    runtime_session: Option<Uuid>,
+    runtime_attachment: Option<Uuid>,
 }
 
 impl TryFrom<RepositoryRow> for Repository {

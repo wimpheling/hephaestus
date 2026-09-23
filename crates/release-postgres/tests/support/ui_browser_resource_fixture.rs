@@ -1,5 +1,4 @@
-//! Shared real-PostgreSQL fixture for focused UI resource tests.
-
+/// Shared real-PostgreSQL fixture for focused UI resource tests.
 use release_domain::ui_browser::UiBrowserSessionSecret;
 use sqlx::PgPool;
 use uuid::Uuid;
@@ -13,6 +12,7 @@ pub struct Fixture {
     pub organization: Uuid,
     pub project: Uuid,
     pub source_project: Uuid,
+    pub repository: Uuid,
     pub release: Uuid,
     pub release_agent: Uuid,
     pub other_organization: Uuid,
@@ -264,15 +264,20 @@ async fn seed_fixture_reusing_installation_helpers_with_publication(
         sqlx::query(
             "INSERT INTO release_ui_descriptors
              (release_id, ui_key, scope, label, icon, presentation, route_base,
-              entrypoint, ui_kit_version, cache, content_kind)
+              entrypoint, ui_kit_version, cache, content_kind, repository_git_access)
              VALUES ($1, $2, $5, $3, 'app', 'iframe', $4,
-                     'index.html', 1, 'no_store', 'static')",
+                     'index.html', 1, 'no_store', 'static', $6)",
         )
         .bind(release)
         .bind(ui_key)
         .bind(ui_key)
         .bind(route_base)
         .bind(scope)
+        .bind(if scope == "repository" {
+            "read_write"
+        } else {
+            "none"
+        })
         .execute(worker)
         .await
         .expect("seed release UI descriptor");
@@ -317,7 +322,8 @@ async fn seed_fixture_reusing_installation_helpers_with_publication(
         "INSERT INTO release_ui_static_files
          (release_id, ui_key, route, artifact_id, artifact_kind, artifact_media_type)
          VALUES ($1, 'schema-ui', 'index.html', $2, 'file', 'text/html'),
-                ($1, 'schema-global', 'index.html', $2, 'file', 'text/html')",
+                ($1, 'schema-global', 'index.html', $2, 'file', 'text/html'),
+                ($1, 'schema-repository', 'index.html', $2, 'file', 'text/html')",
     )
     .bind(release)
     .bind(artifact)
@@ -481,6 +487,7 @@ async fn seed_fixture_reusing_installation_helpers_with_publication(
         organization,
         project,
         source_project,
+        repository,
         release,
         release_agent,
         other_organization,
@@ -642,8 +649,9 @@ async fn seed_repository_installation(
     .expect("seed repository UI installation");
     sqlx::query(
         "INSERT INTO ui_installation_generations
-         (id, installation_id, generation_no, release_id, ui_key, ui_scope)
-         VALUES ($1, $2, 1, $3, $4, 'repository')",
+         (id, installation_id, generation_no, release_id, ui_key, ui_scope,
+          repository_git_access)
+         VALUES ($1, $2, 1, $3, $4, 'repository', 'read_write')",
     )
     .bind(generation_id)
     .bind(installation_id)
@@ -671,12 +679,34 @@ async fn insert_handoff(
     generation: Uuid,
     digest: Vec<u8>,
 ) -> Result<Uuid, sqlx::Error> {
+    insert_handoff_with_route(
+        pool,
+        fixture,
+        organization,
+        installation,
+        generation,
+        fixture.route,
+        digest,
+    )
+    .await
+}
+
+async fn insert_handoff_with_route(
+    pool: &PgPool,
+    fixture: &Fixture,
+    organization: Uuid,
+    installation: Uuid,
+    generation: Uuid,
+    route: &str,
+    digest: Vec<u8>,
+) -> Result<Uuid, sqlx::Error> {
     insert_handoff_with_times_for(
         pool,
         fixture,
         organization,
         installation,
         generation,
+        route,
         digest,
         "0 seconds",
         "60 seconds",
@@ -692,6 +722,7 @@ async fn insert_handoff_with_times_for(
     organization: Uuid,
     installation: Uuid,
     generation: Uuid,
+    route: &str,
     digest: Vec<u8>,
     issued_at: &str,
     expires_at: &str,
@@ -713,7 +744,7 @@ async fn insert_handoff_with_times_for(
     .bind(installation)
     .bind(generation)
     .bind(organization)
-    .bind(fixture.route)
+    .bind(route)
     .bind(issued_at)
     .bind(expires_at)
     .execute(pool)
@@ -737,6 +768,41 @@ pub async fn insert_authenticated_child(
     )
     .await
     .expect("insert authentication handoff");
+    insert_authenticated_child_for_handoff(pool, handoff, session_digest, child_expiry).await
+}
+
+// The helper keeps every installation identity explicit for scope-isolation tests.
+#[allow(clippy::too_many_arguments)]
+pub async fn insert_authenticated_child_for(
+    pool: &PgPool,
+    fixture: &Fixture,
+    organization: Uuid,
+    installation: Uuid,
+    generation: Uuid,
+    route: &str,
+    session_digest: Vec<u8>,
+    child_expiry: &str,
+) -> Uuid {
+    let handoff = insert_handoff_with_route(
+        pool,
+        fixture,
+        organization,
+        installation,
+        generation,
+        route,
+        digest(90),
+    )
+    .await
+    .expect("insert authentication handoff");
+    insert_authenticated_child_for_handoff(pool, handoff, session_digest, child_expiry).await
+}
+
+async fn insert_authenticated_child_for_handoff(
+    pool: &PgPool,
+    handoff: Uuid,
+    session_digest: Vec<u8>,
+    child_expiry: &str,
+) -> Uuid {
     let child_id = Uuid::new_v4();
     let mut tx = pool.begin().await.expect("begin authentication child");
     sqlx::query(

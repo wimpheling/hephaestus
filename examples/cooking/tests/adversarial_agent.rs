@@ -442,9 +442,7 @@ pub async fn exercise_adversarial_agent_probe(
         inbound_wire_credential,
         public_url,
     } = input;
-    let client = reqwest::Client::builder()
-        .timeout(context.timeout)
-        .build()?;
+    let client = super::cooking::caddy_gateway_client_with_timeout(context.timeout);
 
     let configured = cooking_builds::configure_cooking_gateway(
         context,

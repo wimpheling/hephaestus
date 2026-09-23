@@ -23,7 +23,7 @@ class LibkrunRuntimeRootTests(unittest.TestCase):
             source,
         )
         self.assertNotIn('${fixture_root}/runtime', source)
-        self.assertEqual(source.count('HEPHAESTUS_LIBKRUN_RUNTIME_ROOT="${runtime_root}"'), 3)
+        self.assertEqual(source.count('HEPHAESTUS_LIBKRUN_RUNTIME_ROOT="${runtime_root}"'), 4)
 
         parent = Path("/tmp/hephaestus-libkrun")
         parent.mkdir(mode=0o700, exist_ok=True)

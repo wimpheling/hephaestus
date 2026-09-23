@@ -214,7 +214,7 @@ fn validate_handler_structure(
     }
     if active.contains(&"RPC-NON_RPC-HTTP-ALLOWLIST") {
         for route in axum_routes(source) {
-            if !allowed_non_rpc_route(route) {
+            if !allowed_non_rpc_route(path, route) {
                 diagnostics.push(Diagnostic::new(
                     "RPC-NON_RPC-HTTP-ALLOWLIST",
                     format!("{} registers non-RPC HTTP route {route}", path.display()),
@@ -261,13 +261,17 @@ fn axum_routes(source: &str) -> Vec<&str> {
         .collect()
 }
 
-fn allowed_non_rpc_route(route: &str) -> bool {
-    route == "/healthz"
+fn allowed_non_rpc_route(path: &Path, route: &str) -> bool {
+    (route == "/" && path == Path::new("crates/hephaestus-app/src/runtime_git_listener.rs"))
+        || route == "/healthz"
         || route.starts_with("/git/")
         || route.contains(".git/")
         || matches!(
             route,
-            "/{repository}/info/refs"
+            "/_heph/git/{repository}/info/refs"
+                | "/_heph/git/{repository}/git-upload-pack"
+                | "/_heph/git/{repository}/git-receive-pack"
+                | "/{repository}/info/refs"
                 | "/{repository}/git-upload-pack"
                 | "/{repository}/git-receive-pack"
         )
@@ -367,6 +371,50 @@ mod tests {
             &mut diagnostics,
         );
         assert!(diagnostics.is_empty());
+    }
+
+    #[test]
+    fn runtime_and_ui_git_transport_routes_are_allowlisted_exactly() {
+        let mut diagnostics = Vec::new();
+        validate_source(
+            Path::new("crates/hephaestus-app/src/runtime_git_listener.rs"),
+            r#"
+                let _router = axum::Router::new()
+                    .route("/", axum::routing::get(handler))
+                    .route("/_heph/git/{repository}/info/refs", axum::routing::get(handler))
+                    .route("/_heph/git/{repository}/git-upload-pack", axum::routing::post(handler))
+                    .route("/_heph/git/{repository}/git-receive-pack", axum::routing::post(handler));
+            "#,
+            &active(),
+            &mut diagnostics,
+        );
+        assert!(diagnostics.is_empty());
+
+        let mut diagnostics = Vec::new();
+        validate_source(
+            Path::new("crates/hephaestus-app/src/git_transport.rs"),
+            r#"let _router = axum::Router::new().route("/", axum::routing::get(handler));"#,
+            &active(),
+            &mut diagnostics,
+        );
+        assert!(
+            diagnostics
+                .iter()
+                .any(|diagnostic| diagnostic.rule_id == "RPC-NON_RPC-HTTP-ALLOWLIST")
+        );
+
+        let mut diagnostics = Vec::new();
+        validate_source(
+            Path::new("crates/hephaestus-app/src/git_transport.rs"),
+            r#"let _router = axum::Router::new().route("/_heph/git/{repository}/other", axum::routing::get(handler));"#,
+            &active(),
+            &mut diagnostics,
+        );
+        assert!(
+            diagnostics
+                .iter()
+                .any(|diagnostic| diagnostic.rule_id == "RPC-NON_RPC-HTTP-ALLOWLIST")
+        );
     }
 
     #[test]

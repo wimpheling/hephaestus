@@ -7,6 +7,7 @@ rust-version.workspace = true
 
 [dependencies]
 async-trait.workspace = true
+authz-postgres = { path = "../authz-postgres" }
 run-domain = { path = "../run-domain" }
 run-orchestrator = { path = "../run-orchestrator" }
 runtime-types = { path = "../runtime-types" }
@@ -35,5 +36,6 @@ workspace = true
 [package.metadata.hephaestus]
 layer = "adapter"
 context = "run"
+allow_cross_context_dependencies = ["authz-postgres"]
 postgres_adapter = true
 database_context = "run"

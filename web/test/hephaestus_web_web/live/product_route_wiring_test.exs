@@ -48,6 +48,7 @@ defmodule HephaestusWebWeb.ProductRouteWiringTest do
     assert router =~ "OrganizationNewSecretLive"
     assert router =~ "OrganizationNewGrantLive"
     assert router =~ ~s(live "/projects/:project_id/agents", ProjectAgentsLive)
+    assert router =~ ~s(live "/projects/:project_id/session-chat/new", SessionChatNewLive)
     assert router =~ ~s(live "/projects/:project_id/runs", ProjectRunsLive)
     assert router =~ ~s(live "/projects/:project_id/settings", ProjectSettingsLive)
     assert router =~ ~s(live "/settings/git-credentials", PersonalAccessTokensLive)

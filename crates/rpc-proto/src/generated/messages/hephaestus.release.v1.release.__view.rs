@@ -2526,6 +2526,10 @@ pub struct ReleaseUiDescriptorView<'a> {
         'a,
         super::super::__buffa::view::ReleaseUiApiBindingView<'a>,
     >,
+    /// Field 13: `repository_git_access`
+    pub repository_git_access: ::buffa::EnumValue<
+        super::super::ReleaseUiRepositoryGitAccess,
+    >,
     pub content: ::core::option::Option<
         super::super::__buffa::view::oneof::release_ui_descriptor::Content<'a>,
     >,
@@ -2626,6 +2630,15 @@ impl<'a> ::buffa::MessageView<'a> for ReleaseUiDescriptorView<'a> {
                     ::buffa::encoding::WireType::Varint,
                 )?;
                 view.cache = ::buffa::EnumValue::from(
+                    ::buffa::types::decode_int32(&mut cur)?,
+                );
+            }
+            13u32 => {
+                ::buffa::encoding::check_wire_type(
+                    tag,
+                    ::buffa::encoding::WireType::Varint,
+                )?;
+                view.repository_git_access = ::buffa::EnumValue::from(
                     ::buffa::types::decode_int32(&mut cur)?,
                 );
             }
@@ -2748,6 +2761,7 @@ impl<'a> ::buffa::MessageView<'a> for ReleaseUiDescriptorView<'a> {
                 .iter()
                 .map(|v| v.to_owned_from_source(__buffa_src))
                 .collect::<::core::result::Result<_, ::buffa::DecodeError>>()?,
+            repository_git_access: self.repository_git_access,
             content: match self.content.as_ref() {
                 ::core::option::Option::Some(v) => {
                     ::core::option::Option::Some(
@@ -2858,6 +2872,12 @@ impl<'a> ::buffa::ViewEncode<'a> for ReleaseUiDescriptorView<'a> {
                 += 1u32 + ::buffa::encoding::varint_len(inner_size as u64) as u32
                     + inner_size;
         }
+        {
+            let val = self.repository_git_access.to_i32();
+            if val != 0 {
+                size += 1u32 + ::buffa::types::int32_encoded_len(val) as u32;
+            }
+        }
         size += self.__buffa_unknown_fields.encoded_len() as u32;
         size
     }
@@ -2936,6 +2956,12 @@ impl<'a> ::buffa::ViewEncode<'a> for ReleaseUiDescriptorView<'a> {
             ::buffa::types::put_len_delimited_header(12u32, __cache.consume_next(), buf);
             v.write_to(__cache, buf);
         }
+        {
+            let val = self.repository_git_access.to_i32();
+            if val != 0 {
+                ::buffa::types::put_int32_field(13u32, val, buf);
+            }
+        }
         self.__buffa_unknown_fields.write_to(buf);
     }
 }
@@ -2990,6 +3016,11 @@ impl<'__a> ::serde::Serialize for ReleaseUiDescriptorView<'__a> {
         }
         if !self.apis.is_empty() {
             __map.serialize_entry("apis", &*self.apis)?;
+        }
+        if !::buffa::json_helpers::skip_if::is_default_enum_value(
+            &self.repository_git_access,
+        ) {
+            __map.serialize_entry("repositoryGitAccess", &self.repository_git_access)?;
         }
         if let ::core::option::Option::Some(ref __ov) = self.content {
             match __ov {
@@ -3161,6 +3192,13 @@ impl ReleaseUiDescriptorOwnedView {
         super::super::__buffa::view::ReleaseUiApiBindingView<'_>,
     > {
         &self.0.reborrow().apis
+    }
+    /// Field 13: `repository_git_access`
+    #[must_use]
+    pub fn repository_git_access(
+        &self,
+    ) -> ::buffa::EnumValue<super::super::ReleaseUiRepositoryGitAccess> {
+        self.0.reborrow().repository_git_access
     }
     /// Oneof `content`.
     #[must_use]
@@ -5273,6 +5311,10 @@ pub struct InstallUiRequestView<'a> {
     ///
     /// Field 5: `ui_key`
     pub ui_key: &'a str,
+    /// Required acknowledgement when the descriptor declares repository Git access.
+    ///
+    /// Field 6: `acknowledge_repository_git_access`
+    pub acknowledge_repository_git_access: bool,
     pub __buffa_unknown_fields: ::buffa::UnknownFieldsView<'a>,
 }
 impl<'a> ::buffa::MessageView<'a> for InstallUiRequestView<'a> {
@@ -5393,6 +5435,15 @@ impl<'a> ::buffa::MessageView<'a> for InstallUiRequestView<'a> {
                 )?;
                 view.ui_key = ::buffa::types::borrow_str(&mut cur)?;
             }
+            6u32 => {
+                ::buffa::encoding::check_wire_type(
+                    tag,
+                    ::buffa::encoding::WireType::Varint,
+                )?;
+                view.acknowledge_repository_git_access = ::buffa::types::decode_bool(
+                    &mut cur,
+                )?;
+            }
             _ => {
                 ::buffa::encoding::skip_field_depth(tag, &mut cur, ctx.depth())?;
                 let span_len = before_tag.len() - cur.len();
@@ -5448,6 +5499,7 @@ impl<'a> ::buffa::MessageView<'a> for InstallUiRequestView<'a> {
                 None => ::buffa::MessageField::none(),
             },
             ui_key: self.ui_key.to_string(),
+            acknowledge_repository_git_access: self.acknowledge_repository_git_access,
             __buffa_unknown_fields: self.__buffa_unknown_fields.to_owned()?.into(),
             ..::core::default::Default::default()
         })
@@ -5494,6 +5546,9 @@ impl<'a> ::buffa::ViewEncode<'a> for InstallUiRequestView<'a> {
         if !self.ui_key.is_empty() {
             size += 1u32 + ::buffa::types::string_encoded_len(&self.ui_key) as u32;
         }
+        if self.acknowledge_repository_git_access {
+            size += 1u32 + ::buffa::types::BOOL_ENCODED_LEN as u32;
+        }
         size += self.__buffa_unknown_fields.encoded_len() as u32;
         size
     }
@@ -5523,6 +5578,13 @@ impl<'a> ::buffa::ViewEncode<'a> for InstallUiRequestView<'a> {
         }
         if !self.ui_key.is_empty() {
             ::buffa::types::put_string_field(5u32, &self.ui_key, buf);
+        }
+        if self.acknowledge_repository_git_access {
+            ::buffa::types::put_bool_field(
+                6u32,
+                self.acknowledge_repository_git_access,
+                buf,
+            );
         }
         self.__buffa_unknown_fields.write_to(buf);
     }
@@ -5567,6 +5629,13 @@ impl<'__a> ::serde::Serialize for InstallUiRequestView<'__a> {
         }
         if !::buffa::json_helpers::skip_if::is_empty_str(self.ui_key) {
             __map.serialize_entry("uiKey", self.ui_key)?;
+        }
+        if self.acknowledge_repository_git_access {
+            __map
+                .serialize_entry(
+                    "acknowledgeRepositoryGitAccess",
+                    &self.acknowledge_repository_git_access,
+                )?;
         }
         __map.end()
     }
@@ -5703,6 +5772,13 @@ impl InstallUiRequestOwnedView {
     #[must_use]
     pub fn ui_key(&self) -> &'_ str {
         self.0.reborrow().ui_key
+    }
+    /// Required acknowledgement when the descriptor declares repository Git access.
+    ///
+    /// Field 6: `acknowledge_repository_git_access`
+    #[must_use]
+    pub fn acknowledge_repository_git_access(&self) -> bool {
+        self.0.reborrow().acknowledge_repository_git_access
     }
 }
 impl ::core::convert::From<::buffa::OwnedView<InstallUiRequestView<'static>>>

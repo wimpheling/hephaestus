@@ -13,7 +13,10 @@ use vm_trait::{
 use volume_trait::{
     INSTANCE_STATE_DISK_ID, VolumeAttachment, VolumeError, VolumeLease, VolumeStore,
 };
-use workspace_domain::{DisabledWorkspaceManager, RunWorkspaceManager, WorkspaceError};
+use workspace_domain::{
+    DisabledWorkspaceManager, PreparedRuntimeGitWorkspace, RunWorkspaceManager,
+    RuntimeGitWorkspaceManager, WorkspaceError,
+};
 
 use crate::{RepositoryError, RunRepository, StoredVmEvent};
 
@@ -143,6 +146,27 @@ impl RunAuthorityManager for DisabledRunAuthorityManager {
     }
 
     async fn recover(&self) -> Result<usize, RunAuthorityError> {
+        Ok(0)
+    }
+}
+
+#[derive(Debug, Default)]
+struct DisabledRuntimeGitWorkspaceManager;
+
+#[async_trait]
+impl RuntimeGitWorkspaceManager for DisabledRuntimeGitWorkspaceManager {
+    async fn prepare_runtime_git(
+        &self,
+        _run: &Run,
+    ) -> Result<Option<PreparedRuntimeGitWorkspace>, WorkspaceError> {
+        Ok(None)
+    }
+
+    async fn abandon_runtime_git(&self, _run_id: RunId) -> Result<(), WorkspaceError> {
+        Ok(())
+    }
+
+    async fn recover_runtime_git(&self) -> Result<usize, WorkspaceError> {
         Ok(0)
     }
 }
@@ -382,6 +406,7 @@ pub struct RunOrchestrator {
     provider: Arc<dyn VmProvider>,
     spec_factory: Arc<dyn VmSpecFactory>,
     workspaces: Arc<dyn RunWorkspaceManager>,
+    runtime_git_workspace: Arc<dyn RuntimeGitWorkspaceManager>,
     runtimes: Arc<dyn RunRuntimeManager>,
     launch_authorizer: Arc<dyn RunLaunchAuthorizer>,
     resource_observer: Arc<dyn RunResourceObserver>,
@@ -410,6 +435,7 @@ impl RunOrchestrator {
             provider,
             spec_factory,
             workspaces: Arc::new(DisabledWorkspaceManager),
+            runtime_git_workspace: Arc::new(DisabledRuntimeGitWorkspaceManager),
             runtimes: Arc::new(DisabledRunRuntimeManager),
             launch_authorizer: Arc::new(DisabledRunLaunchAuthorizer),
             resource_observer: Arc::new(DisabledRunResourceObserver),
@@ -426,6 +452,16 @@ impl RunOrchestrator {
     #[must_use]
     pub fn with_workspace_manager(mut self, workspaces: Arc<dyn RunWorkspaceManager>) -> Self {
         self.workspaces = workspaces;
+        self
+    }
+
+    /// Installs the isolated runtime-Git worktree lifecycle manager.
+    #[must_use]
+    pub fn with_runtime_git_workspace_manager(
+        mut self,
+        runtime_git_workspace: Arc<dyn RuntimeGitWorkspaceManager>,
+    ) -> Self {
+        self.runtime_git_workspace = runtime_git_workspace;
         self
     }
 
@@ -564,6 +600,16 @@ impl RunOrchestrator {
                 )
                 .await;
         }
+        if let Err(error) = self.repository.ensure_runtime_git_provenance(&run).await {
+            return self
+                .fail_with_resources(
+                    command.run_id,
+                    attachment.as_ref().map(|value| &value.lease),
+                    None,
+                    &error.to_string(),
+                )
+                .await;
+        }
         let workspace = match self.workspaces.prepare(&run).await {
             Ok(workspace) => workspace,
             Err(error) => {
@@ -624,6 +670,23 @@ impl RunOrchestrator {
             .bootstrap
             .as_ref()
             .map(|bootstrap| (bootstrap.session_id(), bootstrap.generation()));
+        let runtime_git_workspace = match self.runtime_git_workspace.prepare_runtime_git(&run).await
+        {
+            Ok(workspace) => workspace,
+            Err(error) => {
+                return self
+                    .fail_with_resources(
+                        command.run_id,
+                        attachment.as_ref().map(|value| &value.lease),
+                        None,
+                        &error.to_string(),
+                    )
+                    .await;
+            }
+        };
+        if let Some(workspace) = &runtime_git_workspace {
+            mounts.push(workspace.mount.clone());
+        }
         if let Err(error) = self.resource_observer.record(&run).await {
             return self
                 .fail_with_resources(
@@ -648,6 +711,10 @@ impl RunOrchestrator {
             }
         };
         spec.runtime_authority = authority.bootstrap;
+        if let Some(workspace) = runtime_git_workspace {
+            spec.runtime_git_bridge = Some(workspace.bridge);
+            spec.command.working_dir = Some(workspace_domain::RUNTIME_GIT_GUEST_PATH.into());
+        }
         let execution_timeout = spec
             .labels
             .get("hephaestus.wall-clock-timeout-seconds")
@@ -976,6 +1043,9 @@ impl RunOrchestrator {
             recovered += 1;
         }
         recovered += self.completion.recover().await?;
+        // Runtime-Git mounts are removed only after stale VM cleanup above has
+        // stopped every possible guest that could still hold them.
+        recovered += self.runtime_git_workspace.recover_runtime_git().await?;
         Ok(recovered)
     }
 
@@ -1229,6 +1299,9 @@ impl RunOrchestrator {
             instance.destroy().await?;
         }
         self.active.lock().await.remove(&run_id);
+        self.runtime_git_workspace
+            .abandon_runtime_git(run_id)
+            .await?;
         self.authority.revoke_after_guest(run_id).await?;
         self.secrets.destroy_after_guest(run_id).await?;
         self.runtimes.destroy(run_id).await?;
@@ -1252,6 +1325,9 @@ impl RunOrchestrator {
     }
 
     async fn finish_recovered_run(&self, run: Run) -> Result<(), OrchestratorError> {
+        self.runtime_git_workspace
+            .abandon_runtime_git(run.id)
+            .await?;
         self.authority.revoke_after_guest(run.id).await?;
         self.secrets.destroy_after_guest(run.id).await?;
         self.runtimes.destroy(run.id).await?;

@@ -2,7 +2,8 @@
 
 use agent_config::ui::{MAX_UI_APIS, MAX_UI_FILES};
 use release_domain::ui::{
-    UiIcon, UiKey, UiLabel, UiMediaType, UiPresentation, UiRoutePath, UiScope,
+    UiIcon, UiKey, UiLabel, UiMediaType, UiPresentation, UiRepositoryGitAccess, UiRoutePath,
+    UiScope,
 };
 use sqlx::{FromRow, Postgres, Transaction};
 use std::collections::BTreeMap;
@@ -36,6 +37,8 @@ pub struct ReleaseUiDescriptor {
     pub ui_kit_version: u16,
     /// Browser/intermediary cache policy.
     pub cache: UiCachePolicy,
+    /// Explicit generic repository Git authority.
+    pub repository_git_access: UiRepositoryGitAccess,
     /// Immutable content binding.
     pub content: ReleaseUiContent,
     /// Explicit gateway API bindings.
@@ -105,6 +108,7 @@ struct DescriptorRow {
     entrypoint: String,
     ui_kit_version: i32,
     cache: String,
+    repository_git_access: String,
     content_kind: String,
 }
 
@@ -142,7 +146,7 @@ pub(crate) async fn load_release_ui_descriptors(
 ) -> Result<Vec<ReleaseUiDescriptor>, super::ReleaseError> {
     let descriptor_rows = sqlx::query_as::<_, DescriptorRow>(
         "SELECT ui_key, scope, label, icon, presentation, route_base, entrypoint,
-                ui_kit_version, cache, content_kind
+                ui_kit_version, cache, repository_git_access, content_kind
          FROM release_ui_descriptors
          WHERE release_id = $1
            AND check_permission('user', hephaestus_actor_id(), 'can_read',
@@ -283,6 +287,7 @@ fn assemble(
                 entrypoint: metadata.entrypoint,
                 ui_kit_version: metadata.ui_kit_version,
                 cache: metadata.cache,
+                repository_git_access: metadata.repository_git_access,
                 content,
                 apis,
             },
@@ -310,6 +315,8 @@ fn parse_descriptors(rows: Vec<DescriptorRow>) -> Result<BTreeMap<UiKey, Descrip
                 entrypoint: UiRoutePath::parse(row.entrypoint).map_err(|_| ())?,
                 ui_kit_version: u16::try_from(row.ui_kit_version).map_err(|_| ())?,
                 cache: parse_cache(&row.cache)?,
+                repository_git_access: UiRepositoryGitAccess::parse(row.repository_git_access)
+                    .map_err(|_| ())?,
                 content_kind: row.content_kind,
             };
             if metadata.ui_kit_version != 1 {
@@ -394,6 +401,7 @@ struct DescriptorMetadata {
     entrypoint: UiRoutePath,
     ui_kit_version: u16,
     cache: UiCachePolicy,
+    repository_git_access: UiRepositoryGitAccess,
     content_kind: String,
 }
 

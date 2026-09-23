@@ -244,6 +244,17 @@ pub struct RefUpdate {
     pub new_commit: Option<CommitSha>,
 }
 
+/// Verified runtime identity attached to an accepted Git receive.
+///
+/// The session is resolved by the authenticated Git transport. The forge
+/// adapter resolves its originating attachment from the durable runtime
+/// session instead of trusting a caller-supplied principal name.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub struct RuntimeReceiveProvenance {
+    /// Exact runtime authority session that authenticated the receive.
+    pub runtime_session_id: Uuid,
+}
+
 #[cfg(test)]
 mod tests {
     use super::{CommitSha, GitRef};

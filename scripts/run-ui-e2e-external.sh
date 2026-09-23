@@ -17,10 +17,69 @@ oidc_client_id="${HEPHAESTUS_E2E_EXTERNAL_OIDC_CLIENT_ID:-hephaestus-web}"
 oidc_client_secret="${HEPHAESTUS_E2E_EXTERNAL_OIDC_CLIENT_SECRET:-development-secret}"
 web_port="${HEPHAESTUS_E2E_EXTERNAL_WEB_PORT:-4000}"
 phase="${HEPHAESTUS_E2E_COOKING_PHASE:-initial}"
-case "${phase}" in
-    initial) test_grep='cooking release install' ;;
-    post-operation) test_grep='cooking post-operation controls' ;;
-    *) printf 'unsupported cooking browser phase: %s\n' "${phase}" >&2; exit 1 ;;
+browser_runner="${HEPHAESTUS_E2E_BROWSER_RUNNER:-legacy}"
+failure_marker_emitted="${HEPH_GCP_FAILURE_EMITTED:-0}"
+gcp_failure_marker() {
+    if [[ "${failure_marker_emitted}" == 1 ]]; then
+        return 0
+    fi
+    failure_marker_emitted=1
+    local raw_phase="${HEPH_GCP_FAILURE_PHASE:-${phase}}"
+    local failure_phase
+    case "${raw_phase}" in
+        initial) failure_phase=browser-initial ;;
+        post-operation) failure_phase=browser-post-operation ;;
+        recovery) failure_phase=browser-recovery ;;
+        concurrency) failure_phase=browser-concurrency ;;
+        fork) failure_phase=browser-fork ;;
+        browser-setup|browser-initial|browser-post-operation|browser-recovery|browser-concurrency|browser-fork|unknown)
+            failure_phase="${raw_phase}" ;;
+        *) failure_phase=unknown ;;
+    esac
+    printf 'HEPH_GCP_FAILURE phase=%s command_id=%s exit_code=%s diagnostic_source=%s diagnostic_error=%s\n' \
+        "${failure_phase}" "$1" "$2" "$3" "$4" >&2
+}
+case "${browser_runner}" in
+    legacy)
+        case "${phase}" in
+            initial) test_grep='cooking release install' ;;
+            post-operation) test_grep='cooking post-operation controls' ;;
+            *) printf 'unsupported cooking browser phase: %s\n' "${phase}" >&2; exit 1 ;;
+        esac
+        ;;
+    installed-ui)
+        test_grep="${HEPHAESTUS_INSTALLED_UI_BROWSER_GREP:-cooking installed UI TLS}"
+        case "${phase}" in
+            initial|recovery|concurrency|fork) ;;
+            *) printf 'installed UI browser phase must be initial, recovery, concurrency, or fork: %s\n' "${phase}" >&2; exit 1 ;;
+        esac
+        if [[ "${phase}" == concurrency && "${test_grep}" != 'cooking concurrent session chat clients reconcile a stale Git push and preserve both turns' ]] ||
+            [[ "${test_grep}" == 'cooking concurrent session chat clients reconcile a stale Git push and preserve both turns' && "${phase}" != concurrency ]]; then
+            printf 'session-chat concurrency selector and phase must be paired\n' >&2
+            exit 1
+        fi
+        if [[ "${phase}" == fork && "${test_grep}" != 'cooking forked session chat preserves inherited history and receives a fresh response' ]] ||
+            [[ "${test_grep}" == 'cooking forked session chat preserves inherited history and receives a fresh response' && "${phase}" != fork ]]; then
+            printf 'session-chat fork selector and phase must be paired\n' >&2
+            exit 1
+        fi
+        [[ "${#test_grep}" -le 256 && "${test_grep}" != *$'\n'* && "${test_grep}" != *$'\r'* ]] || {
+            printf 'installed UI browser grep is invalid\n' >&2
+            exit 1
+        }
+        case "${test_grep}" in
+            "cooking installed UI TLS"|\
+            "cooking session-chat installed UI initializes and reconnects ordinary Git history"|\
+            "cooking new session chat creates and opens a real Git-backed browser session"|\
+            "cooking concurrent session chat clients reconcile a stale Git push and preserve both turns"|\
+            "cooking forked session chat preserves inherited history and receives a fresh response") ;;
+            *)
+                printf 'unsupported installed UI browser selector\n' >&2
+                exit 1
+                ;;
+        esac
+        ;;
+    *) printf 'unsupported browser runner: %s\n' "${browser_runner}" >&2; exit 1 ;;
 esac
 
 if [[ -n "${HEPHAESTUS_COOKING_BROWSER_BRIDGE_DIR:-}" ]]; then
@@ -39,13 +98,12 @@ if [[ -n "${HEPHAESTUS_COOKING_BROWSER_BRIDGE_DIR:-}" ]]; then
         printf 'browser fixture is outside the bridge directory\n' >&2
         exit 1
     }
-    browser_runner="${HEPHAESTUS_E2E_BROWSER_RUNNER:-legacy}"
     case "${browser_runner}" in
         legacy|installed-ui) ;;
         *) printf 'unsupported browser bridge runner\n' >&2; exit 1 ;;
     esac
-    if [[ "${browser_runner}" == installed-ui && "${phase}" != initial ]]; then
-        printf 'installed UI browser bridge supports only the initial phase\n' >&2
+    if [[ "${browser_runner}" == installed-ui && "${phase}" != initial && "${phase}" != recovery && "${phase}" != concurrency && "${phase}" != fork ]]; then
+        printf 'installed UI browser bridge supports only the initial, recovery, concurrency, or fork phase\n' >&2
         exit 1
     fi
     if [[ "${browser_runner}" == installed-ui ]]; then
@@ -170,6 +228,9 @@ payload = {
     "ui_namespace": os.environ["HEPHAESTUS_UI_NAMESPACE"],
     "ui_port": os.environ["HEPHAESTUS_UI_PORT"],
     "ca_cert": os.environ["HEPHAESTUS_BROWSER_CA_NAME"],
+    "installed_ui_browser_grep": os.environ.get(
+        "HEPHAESTUS_INSTALLED_UI_BROWSER_GREP", "cooking installed UI TLS"
+    ),
 }
 with open(sys.argv[1], "x", opener=lambda path, flags: os.open(path, flags, 0o600), encoding="utf-8") as stream:
     json.dump(payload, stream, separators=(",", ":"))
@@ -196,6 +257,9 @@ PY
         printf 'browser host bridge returned an invalid status\n' >&2
         exit 1
     }
+    if [[ "${status}" != 0 ]]; then
+        gcp_failure_marker playwright-run "${status}" playwright-log playwright-failed
+    fi
     exit "${status}"
 fi
 web_url="http://127.0.0.1:${web_port}"
@@ -224,6 +288,91 @@ print_readiness_error() {
     fi
 }
 
+emit_browser_failure_summary() {
+    local summary_path="$1" exit_code="$2"
+    local browser_phase="${phase}"
+    case "${browser_phase}" in
+        initial) browser_phase=initial ;;
+        post-operation|recovery|concurrency|fork) ;;
+        *) browser_phase=unknown ;;
+    esac
+    if [[ -s "${summary_path}" ]]; then
+        python3 - "${summary_path}" "${browser_phase}" "${exit_code}" <<'PY'
+import json
+import sys
+
+summary_path, fallback_phase, exit_code = sys.argv[1:]
+fallback = {
+    "phase": fallback_phase,
+    "test_id": "unknown",
+    "error_class": "unknown",
+    "matcher": "unknown",
+    "source_file": "unknown",
+    "source_line": "0",
+    "source_column": "0",
+    "exit_code": exit_code,
+}
+known_tests = {
+    "cooking-live-review": (
+        "initial",
+        "e2e/playwright/cooking-tests/cooking-live-review.spec.ts",
+    ),
+    "cooking-post-operation": (
+        "post-operation",
+        "e2e/playwright/cooking-tests/cooking-post-operation.spec.ts",
+    ),
+}
+try:
+    value = json.loads(open(summary_path, encoding="utf-8").read())
+    failures = value.get("failure_metadata") if isinstance(value, dict) else None
+    failure = failures[0] if isinstance(failures, list) and failures else None
+    if not isinstance(failure, dict):
+        raise ValueError
+    phase = failure.get("phase")
+    test_id = failure.get("test_id")
+    error_class = failure.get("error_class")
+    matcher = failure.get("matcher")
+    source_file = failure.get("source_file")
+    source_line = failure.get("source_line")
+    source_column = failure.get("source_column")
+    if (
+        not isinstance(test_id, str)
+        or test_id not in known_tests
+        or phase != known_tests[test_id][0]
+        or error_class not in {"assertion", "timeout", "hook", "runtime", "unknown"}
+        or matcher not in {"toBe", "toBeEmpty", "toBeVisible", "toContainText", "toHaveCount", "toHaveURL", "toMatch", "unknown"}
+        or source_file != known_tests[test_id][1]
+        or type(source_line) is not int
+        or not 1 <= source_line <= 100_000
+        or type(source_column) is not int
+        or not 1 <= source_column <= 10_000
+    ):
+        raise ValueError
+    fallback.update(
+        phase=phase,
+        test_id=test_id,
+        error_class=error_class,
+        matcher=matcher,
+        source_file=source_file,
+        source_line=str(source_line),
+        source_column=str(source_column),
+    )
+except (OSError, ValueError, TypeError, json.JSONDecodeError):
+    pass
+print(
+    "HEPH_GCP_BROWSER_FAILURE "
+    + " ".join(f"{key}={fallback[key]}" for key in (
+        "phase", "test_id", "error_class", "matcher", "source_file",
+        "source_line", "source_column", "exit_code",
+    ))
+)
+PY
+        return 0
+    fi
+    printf 'HEPH_GCP_BROWSER_FAILURE phase=%s test_id=unknown error_class=unknown matcher=unknown source_file=unknown source_line=0 source_column=0 exit_code=%s\n' \
+        "${browser_phase}" "${exit_code}"
+}
+
 cleanup() {
     local status="$?"
     # Stop the service before collecting its final logs, then check the same
@@ -231,9 +380,24 @@ cleanup() {
     podman stop --time 5 "${web_container}" >/dev/null 2>&1 || true
     podman logs "${web_container}" >"${fixture_root}/web-service.log" 2>&1 || true
     podman rm --force "${web_container}" >/dev/null 2>&1 || true
+    if [[ ! -s "${fixture_root}/browser-summary.json" && -f "${fixture_root}/playwright-report.json" ]]; then
+        # The projector consumes a root containing phase directories.  Isolate
+        # this phase so an earlier retained phase cannot turn a valid report
+        # into a misleading partial summary.
+        summary_input="${fixture_root}/.browser-summary-input"
+        mkdir -m 700 -p -- "${summary_input}/browser.current"
+        if cp -- "${fixture_root}/playwright-report.json" \
+            "${summary_input}/browser.current/playwright-report.json" &&
+            python3 "${repo_root}/scripts/project-playwright-browser-summary.py" \
+                "${summary_input}" "${fixture_root}/browser-summary.json" \
+                --scenario cooking >/dev/null 2>&1; then
+            :
+        fi
+        rm -rf -- "${summary_input}"
+    fi
     if python3 "${repo_root}/scripts/check-browser-evidence.py" "${fixture_root}"; then
-        if [[ "${status}" -ne 0 && -f "${fixture_root}/playwright.log" ]]; then
-            cat "${fixture_root}/playwright.log" >&2
+        if [[ "${status}" -ne 0 ]]; then
+            emit_browser_failure_summary "${fixture_root}/browser-summary.json" "${status}"
         fi
     else
         status=1
@@ -334,5 +498,6 @@ then
     browser_status=0
 else
     browser_status="$?"
+    gcp_failure_marker playwright-run "${browser_status}" playwright-log playwright-failed
 fi
 exit "${browser_status}"

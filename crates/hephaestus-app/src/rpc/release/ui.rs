@@ -82,6 +82,7 @@ pub(super) async fn install(
                 release_id,
                 ui_key,
                 expected_organization_id: Some(organization_id),
+                acknowledge_repository_git_access: request.acknowledge_repository_git_access,
             },
         )
         .await

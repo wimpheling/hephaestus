@@ -11,6 +11,26 @@ script_dir="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)"
 readonly script_dir
 repo_root="$(cd -- "${script_dir}/.." && pwd -P)"
 readonly repo_root
+
+# With no arguments this wrapper runs the historical libkrun integration
+# harness.  A command after `--` is run under the same disposable Caddy
+# environment, which lets a composed workload bootstrap Caddy before its
+# browser/OIDC setup.
+command_args=("${script_dir}/run-libkrun-integration.sh")
+if (($# > 0)); then
+    [[ "$1" == -- ]] || {
+        printf 'usage: %s [-- command [args...]]\n' "${BASH_SOURCE[0]}" >&2
+        exit 2
+    }
+    shift
+    (($# > 0)) || {
+        printf 'a command is required after --\n' >&2
+        exit 2
+    }
+    command_args=("$@")
+fi
+readonly command_args
+
 source "${repo_root}/scripts/shell-failure-diagnostics.sh"
 heph_shell_failure_init gateway-libkrun-e2e gateway
 caddy_image="${HEPHAESTUS_CADDY_TEST_IMAGE:-docker.io/library/caddy@sha256:d8c17a862962def15cde69863a3a463f25a2664942eafd7bdbf050e9c3116b83}"
@@ -89,6 +109,14 @@ case "${tls_enabled}" in
         exit 1
         ;;
 esac
+smoke_page="${HEPHAESTUS_CADDY_TEST_SMOKE_PAGE:-0}"
+case "${smoke_page}" in
+    0|1) ;;
+    *)
+        printf 'HEPHAESTUS_CADDY_TEST_SMOKE_PAGE must be 0 or 1\n' >&2
+        exit 1
+        ;;
+esac
 admin_url="http://127.0.0.1:${admin_port}"
 if [[ "${tls_enabled}" == 1 ]]; then
     public_url="https://127.0.0.1:${public_port}"
@@ -100,8 +128,13 @@ ca_cert_path="${fixture_root}/caddy-local-root.pem"
 readonly admin_port public_port tls_enabled admin_url public_url public_listen ca_cert_path
 
 if [[ "${tls_enabled}" == 1 ]]; then
+    response_status=503
+    [[ "${smoke_page}" == 1 ]] && response_status=200
     printf '{\n    auto_https disable_redirects\n    admin 127.0.0.1:%s\n}\n\nhttps://127.0.0.1:%s {\n    tls internal\n    respond "gateway configuration pending" 503\n}\n' \
         "${admin_port}" "${public_port}" >"${fixture_root}/Caddyfile"
+    if [[ "${smoke_page}" == 1 ]]; then
+        sed -i 's/respond "gateway configuration pending" 503/respond "heph-installed-ui-prerequisite" 200/' "${fixture_root}/Caddyfile"
+    fi
 else
     printf '{\n    auto_https off\n    admin 127.0.0.1:%s\n}\n\nhttp://%s {\n    respond "gateway configuration pending" 503\n}\n' \
         "${admin_port}" "${public_listen}" >"${fixture_root}/Caddyfile"
@@ -160,7 +193,7 @@ if [[ "${tls_enabled}" == 1 ]]; then
         if public_status="$(curl --silent --show-error --cacert "${ca_cert_path}" \
             --connect-timeout 2 --max-time 5 --output /dev/null \
             --write-out '%{http_code}' "${public_url}/" 2>/dev/null)" &&
-            [[ "${public_status}" == 503 ]]; then
+            [[ "${public_status}" == "${response_status}" ]]; then
             break
         fi
         if (( attempt == 30 )); then
@@ -178,6 +211,9 @@ integration_env=(
     "HEPHAESTUS_CADDY_TEST_ADMIN_URL=${admin_url}"
     "HEPHAESTUS_CADDY_TEST_PUBLIC_URL=${public_url}"
     "HEPHAESTUS_CADDY_TEST_LISTEN=${public_listen}"
+    "HEPHAESTUS_CADDY_TEST_PUBLIC_PORT=${public_port}"
+    "HEPHAESTUS_CADDY_TEST_ENV_COMPLETE=${tls_enabled}"
+    "HEPHAESTUS_CADDY_TEST_SMOKE_PAGE=${smoke_page}"
 )
 if [[ "${tls_enabled}" == 1 ]]; then
     integration_env+=(
@@ -185,4 +221,4 @@ if [[ "${tls_enabled}" == 1 ]]; then
         "HEPHAESTUS_CADDY_TEST_CA_CERT=${ca_cert_path}"
     )
 fi
-env "${integration_env[@]}" "${script_dir}/run-libkrun-integration.sh"
+env "${integration_env[@]}" "${command_args[@]}"
