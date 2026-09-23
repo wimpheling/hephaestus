@@ -30,7 +30,7 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
         with:
           toolchain: "1.88"
-          components: clippy,rustfmt
+          components: clippy,rustfmt,llvm-tools-preview
       - uses: Swatinem/rust-cache@v2
       - name: Install integration dependencies
         run: sudo apt-get update && sudo apt-get install -y e2fsprogs postgresql-client
@@ -69,6 +69,62 @@ jobs:
         run: scripts/check-authz.sh
       - name: Documentation
         run: cargo doc --workspace --all-features --no-deps
+      - name: Install cargo-llvm-cov
+        uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-llvm-cov@0.9.1
+      - name: Rust coverage
+        id: rust_coverage
+        run: |
+          set -Eeuo pipefail
+          mkdir -p coverage
+          cargo llvm-cov \
+            --workspace \
+            --all-features \
+            --html \
+            --output-dir coverage/html \
+            -- \
+            --test-threads=1
+          cargo llvm-cov report 2>&1 | tee coverage/summary.txt
+          cargo llvm-cov report \
+            --lcov \
+            --output-path coverage/lcov.info
+      - name: Retain Rust coverage reports
+        id: upload_rust_coverage
+        if: ${{ always() }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: rust-coverage-${{ github.run_id }}-${{ github.run_attempt }}
+          path: coverage
+          if-no-files-found: warn
+          retention-days: 7
+      - name: Publish Rust coverage summary
+        if: ${{ always() }}
+        env:
+          COVERAGE_OUTCOME: ${{ steps.rust_coverage.outcome }}
+          COVERAGE_ARTIFACT_URL: ${{ steps.upload_rust_coverage.outputs.artifact-url }}
+        run: |
+          {
+            echo '## Rust coverage'
+            echo
+            echo "Result: \`${COVERAGE_OUTCOME}\`"
+            echo
+            if [[ -s coverage/summary.txt ]]; then
+              echo '```text'
+              tail -n 30 coverage/summary.txt
+              echo '```'
+            else
+              echo 'No coverage summary was generated.'
+            fi
+            echo
+            echo 'Scope: the root `crates/*` workspace with `--workspace --all-features` and serialized tests.'
+            echo 'Focused integration scripts, doc tests, and standalone Cooking workspaces are outside this report.'
+            if [[ -n "${COVERAGE_ARTIFACT_URL}" ]]; then
+              echo "Coverage artifact: [download HTML and LCOV reports](${COVERAGE_ARTIFACT_URL})"
+            else
+              echo 'Coverage artifact URL unavailable.'
+            fi
+          } >> "$GITHUB_STEP_SUMMARY"
 
   cooking-applications:
     runs-on: ubuntu-24.04
