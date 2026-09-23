@@ -73,6 +73,41 @@ jobs:
         uses: taiki-e/install-action@v2
         with:
           tool: cargo-llvm-cov@0.9.1
+      - name: Prepare isolated Rust coverage services
+        run: |
+          set -Eeuo pipefail
+          coverage_database="hephaestus_coverage_${GITHUB_RUN_ID}_${GITHUB_RUN_ATTEMPT}"
+          postgres_url_without_query="${HEPHAESTUS_POSTGRES_TEST_URL%%\?*}"
+          postgres_query_suffix=""
+          if [[ "${HEPHAESTUS_POSTGRES_TEST_URL}" == *\?* ]]; then
+            postgres_query_suffix="?${HEPHAESTUS_POSTGRES_TEST_URL#*\?}"
+          fi
+          postgres_authority="${postgres_url_without_query%/*}"
+          coverage_maintenance_url="${postgres_authority}/postgres${postgres_query_suffix}"
+          coverage_database_url="${postgres_authority}/${coverage_database}${postgres_query_suffix}"
+          psql --no-psqlrc --set ON_ERROR_STOP=1 \
+            --dbname "${coverage_maintenance_url}" \
+            --command "CREATE DATABASE \"${coverage_database}\""
+          docker run --detach --rm \
+            --name hephaestus-nats-coverage \
+            --publish 127.0.0.1:4223:4222 \
+            docker.io/library/nats@sha256:e4bf19f15fd3218814a4e3c9e0064e1334bd8aa20d5984b9f1a0afd084f8cc00 \
+            -js
+          for attempt in $(seq 1 30); do
+            if docker logs hephaestus-nats-coverage 2>&1 | grep -q 'Server is ready'; then
+              break
+            fi
+            if [[ "${attempt}" == 30 ]]; then
+              docker logs hephaestus-nats-coverage >&2 || true
+              echo 'isolated coverage JetStream did not become ready' >&2
+              exit 1
+            fi
+            sleep 1
+          done
+          {
+            echo "HEPHAESTUS_POSTGRES_TEST_URL=${coverage_database_url}"
+            echo 'HEPHAESTUS_NATS_TEST_URL=nats://127.0.0.1:4223'
+          } >> "${GITHUB_ENV}"
       - name: Rust coverage
         id: rust_coverage
         run: |
@@ -125,6 +160,9 @@ jobs:
               echo 'Coverage artifact URL unavailable.'
             fi
           } >> "$GITHUB_STEP_SUMMARY"
+      - name: Cleanup isolated Rust coverage services
+        if: ${{ always() }}
+        run: docker rm --force hephaestus-nats-coverage >/dev/null 2>&1 || true
 
   cooking-applications:
     runs-on: ubuntu-24.04
