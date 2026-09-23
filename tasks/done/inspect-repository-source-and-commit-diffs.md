@@ -98,7 +98,7 @@ text, never as executable markup.
     anchors, source highlighting, and safe hostile source text.
   - [x] Split the broader real-Git, authorization, and browser regression
     matrix into the independently deliverable follow-up task
-    [`complete-repository-inspection-regression-matrix.md`](../todo/complete-repository-inspection-regression-matrix.md).
+    [`complete-repository-inspection-regression-matrix.md`](../todo/quality_improvements/complete-repository-inspection-regression-matrix.md).
 
 - [x] **6. Verify and document**
   - [x] Document source/highlighting limits, supported language inference,
@@ -130,4 +130,4 @@ The initial implementation and its focused tests are complete. The deliberately
 deferred regression matrix—true merge and timeout fixtures, direct
 revocation/cross-repository RPC coverage, and browser theme/highlighter,
 responsive, and revocation coverage—is tracked in
-[`complete-repository-inspection-regression-matrix.md`](../todo/complete-repository-inspection-regression-matrix.md).
+[`complete-repository-inspection-regression-matrix.md`](../todo/quality_improvements/complete-repository-inspection-regression-matrix.md).

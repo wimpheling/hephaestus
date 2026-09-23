@@ -210,8 +210,8 @@ The recorded fixture evidence must prove all of the following:
 - [Durable mailboxes](../../tasks/done/mvp-02-durable-agent-mailboxes-and-stateful-dispatch.md)
 - [Gateway ingress](../../tasks/done/mvp-03-event-ingress-and-caddy-routing.md)
 - [Brokered capabilities](../../tasks/done/mvp-04-brokered-model-and-outbound-capabilities.md)
-- [Gateway-to-mailbox publication](../../tasks/in-progress/gateway-to-mailbox-publication.md)
-- [Product definition](../../tasks/todo/define-own-the-loop-agent-platform.md)
+- [Gateway-to-mailbox publication](../../tasks/done/gateway-to-mailbox-publication.md)
+- [Product definition](../../tasks/todo/distribution/define-own-the-loop-agent-platform.md)
 
 ## Non-goals
 
@@ -234,8 +234,8 @@ This document remains the acceptance specification; the task records the
 sequencing and evidence used to close its scoped items.
 
 Scope decision, 2026-09-07: the user moved the exhaustive
-[host-daemon crash matrix](../../tasks/todo/complete-host-daemon-crash-recovery-matrix.md)
-and [expanded adversarial isolation matrix](../../tasks/todo/complete-adversarial-isolation-e2e-matrix.md)
+[host-daemon crash matrix](../../tasks/todo/quality_improvements/complete-host-daemon-crash-recovery-matrix.md)
+and [expanded adversarial isolation matrix](../../tasks/todo/quality_improvements/test_coverage/complete-adversarial-isolation-e2e-matrix.md)
 into separate tasks, outside MVP-05 completion criteria. Existing executable
 guest-crash, denial, isolation, rotation/revocation, retirement and confinement
 checks remain required. Known security defects remain blockers. This is an

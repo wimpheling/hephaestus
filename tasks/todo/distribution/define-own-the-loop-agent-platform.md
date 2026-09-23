@@ -732,13 +732,13 @@ understand, customize, secure, and govern.
 ## Dependencies and relationship to existing work
 
 This task refines and extends
-[`reusable-agent-releases-and-instances.md`](../done/reusable-agent-releases-and-instances.md).
+[`reusable-agent-releases-and-instances.md`](../../done/reusable-agent-releases-and-instances.md).
 The release/instance task supplies the immutable software and exact-run
 foundation. Before that task is completed, it should preserve extension seams
 for the accepted agent-principal, capability-binding, token-ceiling, and
 authorization-snapshot decisions without absorbing their implementation.
 
-[`manage-delegate-and-deliver-secrets.md`](../done/manage-delegate-and-deliver-secrets.md)
+[`manage-delegate-and-deliver-secrets.md`](../../done/manage-delegate-and-deliver-secrets.md)
 supplies encrypted secret storage, bindings, runtime leases, raw delivery, and
 the base non-disclosing broker. The MVP tasks below extend it for generic
 destination-bound HTTPS placeholder substitution. Interactive sessions, optimized fast
@@ -789,34 +789,34 @@ MVP 06 chat journey
 
 - [ ] **1. Establish agent principals and runtime authority**
   - [ ] Complete
-    [MVP 01: Agent capability requirements and instance permissions](../done/mvp-01-agent-principals-capabilities-and-runtime-authority.md).
+    [MVP 01: Agent capability requirements and instance permissions](../../done/mvp-01-agent-principals-capabilities-and-runtime-authority.md).
   - [ ] Verify the completed task extends the existing OpenFGA/Mélange, RLS,
     release, and secret-runtime models rather than creating parallel authority.
 
 - [ ] **2. Add durable mailboxes and serialized stateful dispatch**
   - [ ] Complete
-    [MVP 02: Durable agent mailboxes and stateful dispatch](mvp-02-durable-agent-mailboxes-and-stateful-dispatch.md).
+    [MVP 02: Durable agent mailboxes and stateful dispatch](../../done/mvp-02-durable-agent-mailboxes-and-stateful-dispatch.md).
   - [ ] Verify a stopped stateful instance can accept durable work, restart,
     serialize execution under its exclusive volume lease, and recover honestly
     from crashes.
 
 - [ ] **3. Add synchronous HTTP gateways**
   - [ ] Complete
-    [MVP 03: Gateway HTTP routing and invocation](mvp-03-event-ingress-and-caddy-routing.md).
+    [MVP 03: Gateway HTTP routing and invocation](../../done/mvp-03-event-ingress-and-caddy-routing.md).
   - [ ] Verify Caddy configuration is derived from authoritative bindings and a
     compromised gateway cannot acquire target-agent, repository, project-state,
     or Caddy-administration authority.
 
 - [ ] **4. Add destination-bound HTTPS egress and secret substitution**
   - [ ] Complete
-    [MVP 04: Destination-bound HTTPS egress and secret substitution](mvp-04-brokered-model-and-outbound-capabilities.md).
+    [MVP 04: Destination-bound HTTPS egress and secret substitution](../../done/mvp-04-brokered-model-and-outbound-capabilities.md).
   - [ ] Verify real credentials never enter guests, substitutions occur only on
     exact authorized destinations/routes, and direct egress cannot bypass the
     proxy.
 
 - [ ] **5. Prove the golden cooking-agent journey**
   - [ ] Complete
-    [MVP 05: Golden cooking-agent journey](../../examples/cooking/SCENARIO.md).
+    [MVP 05: Golden cooking-agent journey](../../../examples/cooking/SCENARIO.md).
   - [ ] Verify the deterministic real-system journey exercises authorized and
     denied users, gateway isolation, stateful operation, brokered credentials,
     controlled Git publication, release update, recovery, and complete
@@ -824,7 +824,7 @@ MVP 06 chat journey
 
 - [x] **6. Prove the Git-backed chat journey**
   - [x] Complete
-    [MVP 06: Git-backed session chat journey](../done/mvp-06-git-backed-session-chat-journey.md)
+    [MVP 06: Git-backed session chat journey](../../done/mvp-06-git-backed-session-chat-journey.md)
     after MVP 01.2 and MVP 04 only.
   - [x] Verify the selected chat release owns its session repository protocol;
     public gateways and outbound delivery are not prerequisites.
@@ -881,7 +881,7 @@ independently verifiable acceptance criteria before implementation.
   - [ ] Define mutable private skill provenance and promotion into immutable
     released software.
   - [ ] Complete or replace
-    [state-capability transitions](support-agent-state-capability-transitions.md)
+    [state-capability transitions](../structural/generic_capacity_trait/support-agent-state-capability-transitions.md)
     when transitions beyond the MVP reject-by-default contract are required.
   - [ ] Reconcile interactive-session work with the gateway HTTP contract and
     long-lived-service deferral before adding any shared routing behavior.

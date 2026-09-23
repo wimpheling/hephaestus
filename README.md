@@ -8,7 +8,7 @@ application source code, and a command that runs it through the real local stack
 The target distribution is: “Ship a Heph distribution whose primary entry point
 is an agent UI that helps users administer their Heph instance and create, code,
 and run projects for them.” See the [product roadmap](tasks/roadmap.md) and the
-[own-the-loop product definition](tasks/todo/define-own-the-loop-agent-platform.md)
+[own-the-loop product definition](tasks/todo/distribution/define-own-the-loop-agent-platform.md)
 for the target boundaries and sequencing. The current implementation remains a
 single-node Git forge and agent runtime proof of concept while this distribution
 is built.
@@ -26,7 +26,7 @@ is built.
   debugging boundaries.
 - [Repository-owned OCI image builds](docs/repository-image-builds.md)
 - [Product roadmap](tasks/roadmap.md)
-- [Own-the-loop product definition](tasks/todo/define-own-the-loop-agent-platform.md)
+- [Own-the-loop product definition](tasks/todo/distribution/define-own-the-loop-agent-platform.md)
 
 Hephaestus is a secure, developer-focused Git forge and autonomous agent
 runtime. It runs agents in isolated microVMs, manages repositories and pull

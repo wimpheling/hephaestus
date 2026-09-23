@@ -22,7 +22,7 @@ repository inspection feature.
 ## Dependencies
 
 - Completed repository inspection implementation in
-  [`inspect-repository-source-and-commit-diffs.md`](../done/inspect-repository-source-and-commit-diffs.md).
+  [`inspect-repository-source-and-commit-diffs.md`](../../done/inspect-repository-source-and-commit-diffs.md).
 - The PostgreSQL authorization fixtures, repository browser RPC, and existing
   Playwright E2E harness.
 

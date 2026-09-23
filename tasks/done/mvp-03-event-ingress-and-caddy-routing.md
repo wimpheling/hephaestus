@@ -41,7 +41,7 @@ code. Selecting or optimizing a fast isolate runtime is deliberately deferred.
 - [`mvp-01-agent-principals-capabilities-and-runtime-authority.md`](../done/mvp-01-agent-principals-capabilities-and-runtime-authority.md)
 - [`mvp-03.1-gateway-principals-and-authority.md`](mvp-03.1-gateway-principals-and-authority.md)
 - [`mvp-04-brokered-model-and-outbound-capabilities.md`](mvp-04-brokered-model-and-outbound-capabilities.md)
-- [`define-own-the-loop-agent-platform.md`](define-own-the-loop-agent-platform.md)
+- [`define-own-the-loop-agent-platform.md`](../todo/distribution/define-own-the-loop-agent-platform.md)
 
 ## Non-goals
 
@@ -52,7 +52,7 @@ Caddy admin access, custom domains, certificate lifecycle management, or a
 V8/WebAssembly/Unikraft runtime bakeoff.
 
 Persistent guest web servers and their local-development workflow are tracked
-separately in [Persistent gateway service runtime and development workflow](../in-progress/persistent-gateway-service-runtime-and-development-workflow.md).
+separately in [Persistent gateway service runtime and development workflow](../done/persistent-gateway-service-runtime-and-development-workflow.md).
 
 ## Implementation status (2026-08-09)
 

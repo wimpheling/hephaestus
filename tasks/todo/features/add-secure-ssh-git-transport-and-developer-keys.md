@@ -31,7 +31,7 @@ cooking-agent journey and must not delay or expand that application fixture.
 
 ## Dependencies
 
-- [`mvp-01.1-git-capabilities-and-developer-personal-access-tokens.md`](../done/mvp-01.1-git-capabilities-and-developer-personal-access-tokens.md): shared Git capability grammar, live enforcement, audit model, and developer credential foundation.
+- [`mvp-01.1-git-capabilities-and-developer-personal-access-tokens.md`](../../done/mvp-01.1-git-capabilities-and-developer-personal-access-tokens.md): shared Git capability grammar, live enforcement, audit model, and developer credential foundation.
 - Completion of the MVP-05 golden cooking-agent journey is not required. This
   task remains deferred from that journey and may be scheduled independently
   after its MVP 01.1 dependency is complete.

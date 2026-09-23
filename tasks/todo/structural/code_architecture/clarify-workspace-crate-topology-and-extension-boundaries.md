@@ -13,6 +13,11 @@ external registry integrations. The product composition root and development
 tooling remain separately visible as
 `crates/heph-app/` and `crates/heph-dev/`.
 
+The current workspace has 85 packages. Preserve all 85 existing package names
+and metadata; with the five proposed facade packages, the target workspace has
+90 packages unless the explicit reconciliation gate below identifies a
+necessary correction.
+
 Every existing package keeps its Cargo package name and Rust crate name. This
 is a directory/workspace-path reorganization, not an API rename. New facade
 packages provide the deliberate public seams for secret, runtime, run, forge,
@@ -23,7 +28,8 @@ and build code; implementation packages remain internal workspace details.
 ```text
 crates/
   heph-core/
-    platform/{agent-config,runtime-types,rpc-proto,control-plane-postgres}
+    platform/{agent-config,runtime-types,rpc-proto}
+    control-plane/postgres
     authorization/{authz-domain,capability-domain,capability-audit,runtime-authority,
                    runtime-git-authority,authz-postgres,capability-audit-postgres,
                    runtime-authority-postgres,runtime-git-authority-postgres}
@@ -31,28 +37,28 @@ crates/
     event/{application,postgres}
     gateway/{domain,postgres}
     mailbox/{domain,dispatch,postgres}
+    image/{domain,application,postgres}
     secret/{Cargo.toml,domain,store,application,service,brokered-egress-domain,
             brokered-egress-client,postgres}
     runtime/{Cargo.toml,vm/trait,volume/{trait,postgres},workspace/{domain,postgres}}
     run/{Cargo.toml,domain,orchestrator,postgres}
     forge/{Cargo.toml,domain,service,git-capability,pat,git-http,
            postgres,pat-postgres,
-           build/{Cargo.toml,orchestrator,postgres,oci-builder-postgres,
-                  builder-catalog/{domain,application,postgres}},
+           build/{Cargo.toml,orchestrator,postgres,oci-builder-postgres},
            release/{domain,service,artifact-store,postgres},
            review/{domain,service,postgres},
-           registry/{domain,notification,token,reconciler,release,postgres}}
+           registry/{domain,notification,token,reconciler,postgres}}
   heph-std/
     authorization/runtime-handoff-local
     identity/oidc
     gateway/edge
     secret/{runtime,broker}
-    runtime/{vm/{libkrun,fake,conformance},volume/local,workspace/local}
+    runtime/{vm/{libkrun,fake},volume/local,workspace/local}
     run/runtime-local
     forge/{build/{oci-builder-runtime-local,oci-builder-worker},
            registry/{http,notification-http,publisher,zot}}
-  heph-app/{Cargo.toml,bootstrap}
-  heph-dev/
+  heph-app/{Cargo.toml,bootstrap,registry/release}
+  heph-dev/{Cargo.toml,vm/conformance}
 ```
 
 Names in the tree are directory names. Existing package names remain unchanged
@@ -64,19 +70,23 @@ Names in the tree are directory names. Existing package names remain unchanged
 | Decision | Required implementation |
 | --- | --- |
 | `heph-core` holds product contracts, behavior, and mandatory infrastructure; `heph-std` holds provider implementations. | Keep PostgreSQL and Git packages in core because the product relies on PostgreSQL RLS, migrations, and transactional authority, and on Git repository semantics. Use architecture metadata to decide the remaining cases: a local/provider/external adapter belongs in standard; `composition` and `development` packages belong in app/dev. |
-| Bounded context is the primary grouping within each layer family. | Group packages by their existing `package.metadata.hephaestus.context`, rather than putting all `*-postgres` or all `*-domain` packages in global layer directories. |
+| Bounded context is the primary grouping within each layer family. | Group packages by their existing `package.metadata.hephaestus.context`, rather than putting all `*-postgres` or all `*-domain` packages in global layer directories. The physical `forge/` directory is an explicit umbrella for its build, release, review, and registry contexts; `control-plane` and `image` remain separate physical contexts. |
 | `build`, `release`, `review`, and `registry` are forge subcontexts. | Place their product contracts and PostgreSQL packages beneath `heph-core/forge/`; place only provider-specific build and registry implementations beneath `heph-std/forge/`. This is a workspace-discovery decision; it does not alter architecture-layer metadata or relax cross-context dependency restrictions. |
 | Facades define intended public seams. | Add `heph-secret`, `heph-runtime`, `heph-run`, `heph-forge`, and `heph-build` packages at the indicated parent paths. Each re-exports only explicitly approved types/operations; no blanket `pub use child::*`. |
 | `heph-core` must not import `heph-std`. | Add the hard-enabled `ARCH-CORE-NO-STD-DEPENDENCIES` rule. It rejects every normal, build, and development dependency from a package under `crates/heph-core/` to one under `crates/heph-std/`; direction from standard to core is permitted. |
+| PostgreSQL adapters retain both their package naming and explicit capability metadata. | Preserve the existing `*-postgres` package names and `postgres_adapter = true` / `database_context` metadata. SQLx authorization requires the suffix and the explicit adapter metadata together; the suffix alone grants no authorization. Implement that checker contract in the sibling [architecture linter hardening task](harden-architecture-linter-boundaries.md), without adding a second SQLx rule. |
 | Moving directories must not change behavior. | Preserve package names, package metadata, features, binaries, migration ownership, generated-code locations, and all public Rust paths of existing leaf packages. |
-| File length remains the existing architecture-policy concern. | Do not add Dylint. `ARCH-MAX-FILE-LENGTH` already has configured per-layer thresholds; activate or adjust it only in a distinct task after this move is complete. |
+| File length remains the existing architecture-policy concern. | Do not add Dylint. `ARCH-MAX-FILE-LENGTH` already has configured per-layer thresholds; the separate [350-line Rust limit task](enforce-350-line-rust-file-limit.md) activates a uniform limit after this move is complete. |
 
 ## Non-goals
 
 - Rename existing Cargo packages or force all consumers to use a facade in this
   migration.
-- Merge leaf crates, alter dependency direction, or change PostgreSQL, RPC,
-  event, or sensitive-data boundaries.
+- Merge leaf crates, change runtime behavior, or weaken PostgreSQL, RPC, event,
+  or sensitive-data boundaries. Dependency rewiring needed to enforce the new
+  core-to-standard direction is in scope.
+- Add broader semantic lint families; track those separately in the sibling
+  [architecture linter hardening task](harden-architecture-linter-boundaries.md).
 - Move `migrations/`, `proto/`, `web/`, `platform/`, or deployment assets.
 - Introduce a universal 300/350-line Rust-file limit or a Dylint dependency.
 
@@ -85,6 +95,12 @@ Names in the tree are directory names. Existing package names remain unchanged
 - [ ] **Prepare the workspace migration**
   - [ ] Move this task from `tasks/todo/` to `tasks/in-progress/` and record
     the active session in `Owner` before changing source or manifest paths.
+  - [ ] Capture the baseline `cargo metadata --format-version 1 --no-deps`
+    inventory of all 85 workspace packages. Reconcile every existing package
+    name exactly once after the move, preserve its version, features, binaries,
+    and architecture metadata, and account for exactly five new facades; the
+    expected target is 90 workspace packages unless this reconciliation finds
+    and documents a concrete correction.
   - [ ] Add the target directory structure without copying crate contents; use
     `git mv` for every existing package directory so history follows the move.
   - [ ] Replace `members = ["crates/*"]` with explicit recursive member globs
@@ -92,8 +108,16 @@ Names in the tree are directory names. Existing package names remain unchanged
     `heph-app` and `heph-dev` packages.
   - [ ] Update every internal path dependency, workspace dependency path, test
     fixture path, and package-specific command to its new relative location.
+    Include the root `vm-trait` workspace dependency path in `Cargo.toml`.
   - [ ] Update path references in scripts, CI, documentation, and architecture
-    checker fixtures; do not rewrite package-name dependencies unnecessarily.
+    checker fixtures and implementations; update path-scoped exceptions in
+    `architecture.toml` and checker assumptions for `hephaestus-app`,
+    `hephaestus-dev`, and `rpc-proto`. Do not rewrite package-name dependencies
+    unnecessarily.
+  - [ ] Keep the existing SQLx adapter, generated-RPC-type, committed-outbox,
+    and sensitive-protobuf-field architecture rules enabled after the move.
+    Update their path allowlists and valid/invalid fixtures where needed so
+    they retain the same enforcement rather than gaining broad exceptions.
   - [ ] Regenerate `Cargo.lock` only through Cargo after all manifest paths are
     valid; inspect the diff to confirm package identities and versions are
     unchanged.
@@ -101,6 +125,9 @@ Names in the tree are directory names. Existing package names remain unchanged
 - [ ] **Move core packages and opinionated product infrastructure**
   - [ ] Move platform packages: `agent-config`, `runtime-types`, and
     `rpc-proto` to `heph-core/platform/`.
+  - [ ] Move `control-plane-postgres` to
+    `heph-core/control-plane/postgres/`, preserving its `control-plane`
+    context.
   - [ ] Move authorization packages: `authz-domain`, `capability-domain`,
     `capability-audit`, `runtime-authority`, and `runtime-git-authority` to
     `heph-core/authorization/`.
@@ -110,23 +137,35 @@ Names in the tree are directory names. Existing package names remain unchanged
     context paths.
   - [ ] Move all secret packages listed under `heph-core/secret/`; retain the
     existing `secret-store` domain-layer classification.
+  - [ ] Move `builder-catalog-domain`, `builder-catalog-application`, and
+    `builder-catalog-postgres` to `heph-core/image/{domain,application,postgres}/`,
+    preserving their `image` context.
   - [ ] Move `vm-trait`, `volume-trait`, and `workspace-domain` under
     `heph-core/runtime/`, and `run-domain` and `run-orchestrator` under
     `heph-core/run/`.
-  - [ ] Move all forge, build, release, review, and registry core packages to
-    the exact `heph-core/forge/` paths in the target tree.
-  - [ ] Move every PostgreSQL adapter to the matching `heph-core` bounded
-    context path, including control-plane, authorization, identity, event,
-    gateway, mailbox, secret, runtime, run, forge, build, release, review,
-    and registry adapters.
+  - [ ] Move the forge, build, release, review, and registry product contracts
+    and PostgreSQL adapters to the exact `heph-core/forge/` paths in the target
+    tree. `registry-release` is excluded because it is a composition binary;
+    move it to `heph-app/registry/release/` below.
+  - [ ] Move every adapter-layer PostgreSQL package to the matching `heph-core`
+    bounded context path, including control-plane, authorization, identity,
+    event, gateway, mailbox, image, secret, runtime, run, forge, build,
+    release, review, and registry adapters. `bootstrap-postgres` remains a
+    composition package under `heph-app`.
   - [ ] Keep Git-specific product packages in core: `git-http`,
     `git-capability-domain`, `git-credential-hephaestus`, and the forge and
     PAT PostgreSQL packages. Do not represent Git as an optional provider
     boundary in this migration.
+  - [ ] Keep `DB-SQLX-ONLY-IN-POSTGRES-ADAPTERS` enabled. All 22 current
+    `postgres_adapter = true` packages are named `*-postgres`; preserve those
+    names, their `postgres_adapter` / `database_context` and other architecture
+    metadata, and require both the suffix and explicit metadata for SQLx
+    authorization. The sibling [architecture linter hardening task](harden-architecture-linter-boundaries.md)
+    owns this checker enforcement; do not add a duplicate SQLx boundary rule.
 
 - [ ] **Move genuinely replaceable standard implementations**
   - [ ] Move local and provider implementations to their target contexts:
-    `vm-libkrun`, `vm-fake`, `vm-conformance`, `volume-local`,
+    `vm-libkrun`, `vm-fake`, `volume-local`,
     `workspace-local`, `run-runtime-local`, `secret-runtime`, `secret-broker`,
     `gateway-edge`, `identity-oidc`, `oci-builder-runtime-local`, and
     `oci-builder-worker`.
@@ -151,15 +190,20 @@ Names in the tree are directory names. Existing package names remain unchanged
   - [ ] Add valid checker fixtures for core-to-core, standard-to-core, and
     app-to-core-and-standard dependencies, plus invalid fixtures for each of
     normal, build, and development core-to-standard dependency edges.
-  - [ ] Remove the existing core-to-standard edges before enabling the rule:
-    replace `secret-postgres` → `secret-runtime`, `gateway-postgres` →
-    `gateway-edge`, and `git-http` → `identity-oidc` with core ports and
-    composition-root wiring.
-  - [ ] Relocate tests that currently make core packages depend on local
-    providers—such as the `run-postgres` VM/volume tests and the
-    `workspace-postgres` local-workspace tests—to `heph-app` integration tests
-    or to the relevant `heph-std` provider package. Keep core tests dependent
-    only on core fakes/contracts.
+  - [ ] Remove all known core-to-standard edges before enabling the rule.
+    Resolve normal dependencies `secret-postgres` → `secret-runtime`,
+    `gateway-postgres` → `gateway-edge`, `git-http` → `identity-oidc`, and
+    `oci-builder-postgres` → `oci-builder-worker` through core ports or
+    composition-root wiring. `registry-release` → `registry-publisher` is a
+    current normal edge, but moving `registry-release` to `heph-app` removes it
+    from the forbidden core-to-standard graph.
+  - [ ] Relocate all known core development dependencies on standard packages:
+    `forge-postgres` → `runtime-handoff-local`, `vm-fake`, and `volume-local`;
+    `identity-postgres` → `identity-oidc`; `run-postgres` → `vm-libkrun` and
+    `volume-local`; `volume-postgres` → `volume-local`; and
+    `workspace-postgres` → `workspace-local`. Move these integration tests to
+    `heph-app` or the relevant `heph-std` provider package. Keep core tests
+    dependent only on core fakes/contracts.
   - [ ] Audit the complete post-move Cargo metadata graph and remove every
     remaining `heph-core` → `heph-std` edge rather than adding exceptions.
 
@@ -184,8 +228,14 @@ Names in the tree are directory names. Existing package names remain unchanged
     `hephaestusd` binary and composition-layer metadata.
   - [ ] Move `bootstrap-postgres` to `crates/heph-app/bootstrap/`, preserving
     its operator and E2E-seed binaries and composition-layer metadata.
+  - [ ] Move `registry-release` to `crates/heph-app/registry/release/`,
+    preserving its `registry` context, composition-layer metadata, binary, and
+    allowed dependency on the standard `registry-publisher` adapter.
   - [ ] Move `hephaestus-dev` to `crates/heph-dev/`, including all architecture
     fixtures and path-sensitive tests.
+  - [ ] Move `vm-conformance` to `crates/heph-dev/vm/conformance/`, preserving
+    its `development` layer and `vm` context; keep provider conformance tests
+    usable from the standard VM adapters.
   - [ ] Update root README crate links to the new locations and add a concise
     `heph-core`/`heph-std` navigation section that directs contributors to the
     facades and concrete adapters.
@@ -210,7 +260,8 @@ Names in the tree are directory names. Existing package names remain unchanged
 ## Completion evidence
 
 - [ ] Record the before/after `cargo metadata` package inventory and the final
-  workspace member patterns.
+  workspace member patterns; confirm all 85 existing package identities and
+  metadata remain present and the five facades bring the target to 90 packages.
 - [ ] Record the facade API tests and all required verification commands with
   their passing results.
 - [ ] Record any intentional direct leaf dependencies remaining in the

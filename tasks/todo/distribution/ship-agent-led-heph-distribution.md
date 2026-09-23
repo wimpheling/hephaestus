@@ -28,8 +28,8 @@ The repository already has these foundations:
 
 | Area | Current evidence | Status for this outcome |
 | --- | --- | --- |
-| Isolated execution | Exact-commit releases and instances, capability ceilings, runtime authorization, and VM execution are implemented in [MVP-01](../done/mvp-01-agent-principals-capabilities-and-runtime-authority.md) and [releases and instances](../../docs/releases-and-instances.md). | Implemented foundation; integrated assistant journey is not proven. |
-| Coding and results | Writable per-run workspaces, safe sealing/import, Git result publication, artifacts, and provenance are implemented in [workspaces and results](../../docs/workspaces-and-results.md). | Implemented foundation; assistant-driven project coding/run flow is not proven. |
+| Isolated execution | Exact-commit releases and instances, capability ceilings, runtime authorization, and VM execution are implemented in [MVP-01](../../done/mvp-01-agent-principals-capabilities-and-runtime-authority.md) and [releases and instances](../../../docs/releases-and-instances.md). | Implemented foundation; integrated assistant journey is not proven. |
+| Coding and results | Writable per-run workspaces, safe sealing/import, Git result publication, artifacts, and provenance are implemented in [workspaces and results](../../../docs/workspaces-and-results.md). | Implemented foundation; assistant-driven project coding/run flow is not proven. |
 | Manual management | Phoenix provides organization/project/repository/agent inspection and controls through the typed control plane. | Implemented foundation; this does not establish a packaged assistant entry point. |
 | Interactive session | MVP-06 specifies a release-owned Git-backed chat reference journey. | Completed precursor; final paired Cooking/session-chat evidence is recorded in the done task and GCP runbook. |
 | Default distribution | No bundled bootstrap/default assistant has been proven to install and open as the primary entry point. | Missing. |
@@ -44,16 +44,20 @@ batch project runs.
 
 ## Dependencies
 
-- [Product roadmap](../roadmap.md) and [own-the-loop product definition](define-own-the-loop-agent-platform.md).
+- [Product roadmap](../../roadmap.md) and [own-the-loop product definition](define-own-the-loop-agent-platform.md).
+- Complete the roadmap's [ordered prerequisites](../../roadmap.md#ordered-prerequisites)
+  for code architecture, generic resource capabilities, and parent-scoped slugs
+  before starting distribution implementation. This is the chosen product
+  sequence; these tasks are not all runtime dependencies of the UI.
 - Completed release, capability, runtime Git, workspace/result, and control-plane
-  foundations, especially [MVP-01](../done/mvp-01-agent-principals-capabilities-and-runtime-authority.md),
-  [MVP-01.2](../done/mvp-01.2-replace-controlled-result-publication-with-runtime-git.md),
-  and [MVP-04](../done/mvp-04-brokered-model-and-outbound-capabilities.md).
-- [Release-owned distribution UI surfaces](../done/release-owned-distribution-ui-surfaces.md),
+  foundations, especially [MVP-01](../../done/mvp-01-agent-principals-capabilities-and-runtime-authority.md),
+  [MVP-01.2](../../done/mvp-01.2-replace-controlled-result-publication-with-runtime-git.md),
+  and [MVP-04](../../done/mvp-04-brokered-model-and-outbound-capabilities.md).
+- [Release-owned distribution UI surfaces](../../done/release-owned-distribution-ui-surfaces.md),
   including explicitly authorized global-interface registration.
-- The completed [MVP-06 Git-backed session chat journey](../done/mvp-06-git-backed-session-chat-journey.md)
+- The completed [MVP-06 Git-backed session chat journey](../../done/mvp-06-git-backed-session-chat-journey.md)
   as an interaction precursor; MVP-06 is not itself completion of this outcome.
-- [Browser reconnect and restart verification](verify-browser-reconnect-and-restart.md)
+- [Browser reconnect and restart verification](../quality_improvements/test_coverage/verify-browser-reconnect-and-restart.md)
   for the durable visible journey.
 
 ## Locked boundaries
@@ -150,7 +154,7 @@ arbitrary agents. It does not make a functioning assistant necessary for
 installation, recovery, grants, deployment approvals, or break-glass operation.
 
 It does not require persistent gateway service mode for batch project runs;
-that remains the separately scoped [persistent gateway runtime task](../done/persistent-gateway-service-runtime-and-development-workflow.md).
+that remains the separately scoped [persistent gateway runtime task](../../done/persistent-gateway-service-runtime-and-development-workflow.md).
 
 ## Verification and completion evidence
 

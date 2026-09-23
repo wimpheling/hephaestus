@@ -82,7 +82,7 @@ Affected plans: [MVP 03](mvp-03-event-ingress-and-caddy-routing.md),
 
 Decision recorded: session-history integrity is repository/release-owned, not a
 Hephaestus receive-time protocol. The focused follow-up is
-[Draft: Repository-owned Git session protocol](draft-git-backed-session-history-integrity.md).
+[Draft: Repository-owned Git session protocol](../todo/quality_improvements/draft-git-backed-session-history-integrity.md).
 Hephaestus supplies generic scoped Git access and authenticated receive
 attribution; MVP 06's selected release owns its session layout and rules.
 
@@ -92,7 +92,7 @@ Decision recorded: turn ordering, concurrent writers, conflict handling,
 retry, and causal semantics are repository/release responsibilities. Hephaestus
 enforces only generic repository/ref/path and Git-transition capabilities. The
 selected chat release owns these rules in
-[Draft: Repository-owned Git session protocol](draft-git-backed-session-history-integrity.md).
+[Draft: Repository-owned Git session protocol](../todo/quality_improvements/draft-git-backed-session-history-integrity.md).
 
 ## 6. Reconcile gateway revision cutover semantics
 
@@ -115,7 +115,7 @@ for MVP 01, 01.1, 01.2, 02, 03, 04, 05, and 06. MVP 06 is an active journey
 that depends only on runtime Git and MVP 04's generic destination-bound HTTPS
 egress. The roadmap distinguishes runtime Git from proposal-mode publication.
 
-Affected plan: [Define the own-the-loop agent platform](define-own-the-loop-agent-platform.md).
+Affected plan: [Define the own-the-loop agent platform](../todo/distribution/define-own-the-loop-agent-platform.md).
 
 ## 8. Decouple chat prerequisites and include proposal-mode migration
 

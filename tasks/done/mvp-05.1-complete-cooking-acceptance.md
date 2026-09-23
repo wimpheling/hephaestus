@@ -23,8 +23,8 @@ prerequisites.
 ## Scope decision and main-thread handoff, 2026-09-07
 
 The user explicitly moved the exhaustive
-[host-daemon crash matrix](../todo/complete-host-daemon-crash-recovery-matrix.md)
-and [expanded adversarial isolation matrix](../todo/complete-adversarial-isolation-e2e-matrix.md)
+[host-daemon crash matrix](../todo/quality_improvements/complete-host-daemon-crash-recovery-matrix.md)
+and [expanded adversarial isolation matrix](../todo/quality_improvements/test_coverage/complete-adversarial-isolation-e2e-matrix.md)
 into separate todo tasks. They are no longer MVP-05 completion blockers.
 Do not integrate their external drafts as part of finishing this task.
 
@@ -673,9 +673,9 @@ guest-crash and authority checks, deterministic outbound faults, browser
 evidence, secret confinement and local/CI execution. Real Telegram remains
 excluded. The exhaustive host-daemon crash matrix and expanded adversarial
 isolation matrix remain deliberately open in
-[`tasks/todo/complete-host-daemon-crash-recovery-matrix.md`](../todo/complete-host-daemon-crash-recovery-matrix.md)
+[`tasks/todo/quality_improvements/complete-host-daemon-crash-recovery-matrix.md`](../todo/quality_improvements/complete-host-daemon-crash-recovery-matrix.md)
 and
-[`tasks/todo/complete-adversarial-isolation-e2e-matrix.md`](../todo/complete-adversarial-isolation-e2e-matrix.md);
+[`tasks/todo/quality_improvements/test_coverage/complete-adversarial-isolation-e2e-matrix.md`](../todo/quality_improvements/test_coverage/complete-adversarial-isolation-e2e-matrix.md);
 their open checklists are not MVP-05 blockers. No post-merge `main` KVM run is
 claimed from the PR checks; the observed KVM result is the successful PR run
 above.
