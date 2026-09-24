@@ -204,6 +204,29 @@ formatting/Clippy/tests/docs, Phoenix checks, UI checks, and their focused
 integration tests. Individual `cargo dev check <family>` commands remain useful
 for fast iteration.
 
+Run Rust coverage with `cargo dev coverage [--output-dir PATH]`. The default
+output directory is the git-ignored `target/coverage`; it contains
+`html/index.html`, `summary.txt`, `lcov.info`,
+`rust-coverage-by-crate.csv`, and `rust-coverage-by-crate.md`. Install
+`cargo-llvm-cov`, the Rust `llvm-tools-preview` component, and Python 3.11 or
+newer before running it:
+
+```sh
+cargo install cargo-llvm-cov
+rustup component add llvm-tools-preview
+cargo dev coverage
+```
+
+When both `HEPHAESTUS_POSTGRES_TEST_URL` and `HEPHAESTUS_NATS_TEST_URL` are
+unset, the command starts disposable PostgreSQL and NATS JetStream services
+with Podman (falling back to Docker), passes their URLs to the tests, and
+cleans them up afterward. When both URLs are supplied, the command uses those
+services. Supplying only one URL is an error. CI runs the same command with
+`cargo dev coverage --output-dir coverage`.
+
+The report covers Cargo tests in the main workspace, excluding generated RPC
+sources and the separate Cooking and session-chat flows.
+
 The UI family (`cargo dev check ui`, and therefore `cargo dev quality`) also
 runs `npm test` in the [release UI kit](web/assets/release_ui_kit/README.md)
 using Node and npm. The kit has no npm dependencies and the gate does not run
