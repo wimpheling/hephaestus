@@ -16,7 +16,7 @@ import unittest
 ROOT = Path(__file__).parent
 HELPER_PATH = ROOT / "gcp_phase_timing.py"
 COLLECTOR_PATH = ROOT / "collect-cooking-diagnostics.py"
-GOLDEN_PATH = ROOT.parent / "crates/hephaestus-app/tests/golden.rs"
+GOLDEN_PATH = ROOT.parent / "crates/heph-app/tests/golden.rs"
 SOURCE_SHA = "a" * 40
 IMAGE_FINGERPRINT = "b" * 32
 

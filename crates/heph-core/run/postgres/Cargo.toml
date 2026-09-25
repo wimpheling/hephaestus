@@ -1,0 +1,39 @@
+[package]
+name = "run-postgres"
+description = "PostgreSQL persistence adapter for durable Hephaestus runs"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+async-trait.workspace = true
+authz-postgres = { path = "../../authorization/authz-postgres" }
+run-domain = { path = "../domain" }
+run-orchestrator = { path = "../orchestrator" }
+runtime-types = { path = "../../platform/runtime-types" }
+serde_json.workspace = true
+sha2.workspace = true
+sqlx.workspace = true
+time.workspace = true
+uuid.workspace = true
+vm-trait.workspace = true
+
+[dev-dependencies]
+authz-postgres = { path = "../../authorization/authz-postgres" }
+release-domain = { path = "../../forge/release/domain" }
+release-service = { path = "../../forge/release/service" }
+release-postgres = { path = "../../forge/release/postgres" }
+serial_test = "3"
+tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }
+volume-postgres = { path = "../../runtime/volume/postgres" }
+volume-trait = { path = "../../runtime/volume/trait" }
+
+[lints]
+workspace = true
+
+[package.metadata.hephaestus]
+layer = "adapter"
+context = "run"
+allow_cross_context_dependencies = ["authz-postgres"]
+postgres_adapter = true
+database_context = "run"

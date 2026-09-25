@@ -1,0 +1,49 @@
+[package]
+name = "gateway-postgres"
+description = "PostgreSQL installation authority for repository-declared HTTP gateways"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+
+[package.metadata.hephaestus]
+layer = "adapter"
+context = "gateway"
+allow_cross_context_dependencies = ["authz-postgres", "runtime-authority"]
+postgres_adapter = true
+database_context = "gateway"
+
+[dependencies]
+agent-config = { path = "../../platform/agent-config" }
+authz-domain = { path = "../../authorization/authz-domain" }
+authz-postgres = { path = "../../authorization/authz-postgres" }
+async-trait.workspace = true
+capability-domain = { path = "../../authorization/capability-domain" }
+forge-domain = { path = "../../forge/domain" }
+gateway-edge = { path = "../../../heph-std/gateway/edge" }
+gateway-domain = { path = "../domain" }
+http.workspace = true
+identity-domain = { path = "../../identity/domain" }
+mailbox-domain = { path = "../../mailbox/domain" }
+release-domain = { path = "../../forge/release/domain" }
+runtime-authority = { path = "../../authorization/runtime-authority" }
+serde.workspace = true
+serde_json.workspace = true
+sha2.workspace = true
+sqlx.workspace = true
+time.workspace = true
+tokio = { workspace = true, features = ["sync"] }
+thiserror.workspace = true
+tracing.workspace = true
+uuid.workspace = true
+vm-trait = { path = "../../runtime/vm/trait" }
+
+[dev-dependencies]
+async-nats.workspace = true
+futures-util.workspace = true
+mailbox-dispatch = { path = "../../mailbox/dispatch" }
+mailbox-postgres = { path = "../../mailbox/postgres" }
+serial_test = "3"
+tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }
+
+[lints]
+workspace = true

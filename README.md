@@ -96,41 +96,71 @@ again if its file is absent.
 The runtime starts with a provider-neutral VM interface and provider-specific
 implementations:
 
+### Context navigation
+
+Context facades are the intended entry points for cross-context APIs. Keep
+provider wiring in the concrete adapters beneath them:
+
+- [`heph-secret`](crates/heph-core/secret/) groups secret contracts and the
+  [`secret-postgres`](crates/heph-core/secret/postgres) adapter; host adapters
+  live in [`secret-runtime`](crates/heph-std/secret/runtime) and
+  [`secret-broker`](crates/heph-std/secret/broker).
+- [`heph-runtime`](crates/heph-core/runtime/) groups runtime contracts;
+  [`vm-libkrun`](crates/heph-std/runtime/vm/libkrun),
+  [`vm-fake`](crates/heph-std/runtime/vm/fake),
+  [`volume-local`](crates/heph-std/runtime/volume/local), and
+  [`workspace-local`](crates/heph-std/runtime/workspace/local) are concrete
+  adapters.
+- [`heph-run`](crates/heph-core/run/) groups run APIs; persistence is in
+  [`run-postgres`](crates/heph-core/run/postgres) and local execution is in
+  [`run-runtime-local`](crates/heph-std/run/runtime-local).
+- [`heph-forge`](crates/heph-core/forge/) groups forge APIs and infrastructure;
+  [`forge-postgres`](crates/heph-core/forge/postgres),
+  [`git-http`](crates/heph-core/forge/git-http),
+  [`registry-publisher`](crates/heph-std/forge/registry/publisher), and
+  [`registry-zot`](crates/heph-std/forge/registry/zot) provide concrete
+  integrations.
+- [`heph-build`](crates/heph-core/forge/build/) groups build APIs;
+  [`oci-builder-postgres`](crates/heph-core/forge/build/oci-builder-postgres),
+  [`oci-builder-runtime-local`](crates/heph-std/forge/build/oci-builder-runtime-local),
+  and [`oci-builder-worker`](crates/heph-std/forge/build/oci-builder-worker)
+  provide concrete build adapters.
+
 | Crate | Purpose |
 | --- | --- |
-| [`vm-trait`](crates/vm-trait) | Shared abstractions for VM providers |
-| [`vm-fake`](crates/vm-fake) | Deterministic provider for lifecycle and orchestration tests |
-| [`vm-conformance`](crates/vm-conformance) | Reusable behavioral contract tests for every VM provider |
-| [`vm-libkrun`](crates/vm-libkrun) | Local microVM provider backed by libkrun |
-| [`runtime-types`](crates/runtime-types) | Stable identifiers shared by runtime domains |
-| [`volume-trait`](crates/volume-trait) | Provider-neutral persistent-volume and lease contracts |
-| [`volume-local`](crates/volume-local) | Single-host raw volumes with PostgreSQL metadata |
-| [`run-domain`](crates/run-domain) | Durable run states and commands |
-| [`run-orchestrator`](crates/run-orchestrator) | Provider-neutral VM, volume, repository, runtime-catalog, and JetStream coordination |
-| [`run-postgres`](crates/run-postgres) | PostgreSQL run persistence and exact-runtime catalog adapter |
-| [`run-runtime-local`](crates/run-runtime-local) | SQL-free local runtime artifact materialization and recovery |
-| [`forge-domain`](crates/forge-domain) | Project, repository, receive, and run-request domain values |
-| [`agent-config`](crates/agent-config) | Versioned `agent.toml` parsing and validation |
-| [`release-domain`](crates/release-domain) | Immutable releases, project instances, revisions, attachments, updates, and typed policy |
-| [`release-artifact-store`](crates/release-artifact-store) | One-way safe import into opaque immutable artifact storage |
-| [`release-service`](crates/release-service) | Release publication, instance management, attachments, updates, and deferred triggers |
-| [`build-orchestrator`](crates/build-orchestrator) | Exact-commit isolated builds and crash-safe draft release finalization |
-| [`secret-domain`](crates/secret-domain) | Redacted secret ownership, delegation, binding, and lease contracts |
-| [`secret-store`](crates/secret-store) | Authenticated encrypted immutable secret-version storage |
-| [`secret-service`](crates/secret-service) | Grants, imports, bindings, exact dispatch resolution, rotation, revocation, and purge |
-| [`secret-runtime`](crates/secret-runtime) | Ephemeral raw mounts and exact runtime secret authority |
-| [`secret-broker`](crates/secret-broker) | Host-only semantic broker transport and bounded adapters |
-| [`forge-service`](crates/forge-service) | Bare Git storage, PostgreSQL receive processing, and forge outbox |
-| [`git-http`](crates/git-http) | Authorized streaming Git smart-HTTP transport |
-| [`identity-domain`](crates/identity-domain) | Internal authenticated principal and tenant identifiers |
-| [`identity-oidc`](crates/identity-oidc) | OIDC verification and identity mapping |
-| [`authz-domain`](crates/authz-domain) | Typed provider-neutral authorization contract |
-| [`authz-postgres`](crates/authz-postgres) | PostgreSQL/Mélange authorization and command auditing |
-| [`workspace-domain`](crates/workspace-domain) | Provider-neutral exact-commit workspace and result contracts |
-| [`workspace-local`](crates/workspace-local) | Safe local materialization, sealing, artifacts, and controlled Git result publication |
-| [`review-domain`](crates/review-domain) | Durable review proposal and human-control commands |
-| [`review-service`](crates/review-service) | Authorized cancel/retry/reject controls and CAS result-ref approval |
-| [`hephaestus-app`](crates/hephaestus-app) | Production composition root and `hephaestusd` daemon |
+| [`vm-trait`](crates/heph-core/runtime/vm/trait) | Shared abstractions for VM providers |
+| [`vm-fake`](crates/heph-std/runtime/vm/fake) | Deterministic provider for lifecycle and orchestration tests |
+| [`vm-conformance`](crates/heph-dev/vm/conformance) | Reusable behavioral contract tests for every VM provider |
+| [`vm-libkrun`](crates/heph-std/runtime/vm/libkrun) | Local microVM provider backed by libkrun |
+| [`runtime-types`](crates/heph-core/platform/runtime-types) | Stable identifiers shared by runtime domains |
+| [`volume-trait`](crates/heph-core/runtime/volume/trait) | Provider-neutral persistent-volume and lease contracts |
+| [`volume-local`](crates/heph-std/runtime/volume/local) | Single-host raw volumes with PostgreSQL metadata |
+| [`run-domain`](crates/heph-core/run/domain) | Durable run states and commands |
+| [`run-orchestrator`](crates/heph-core/run/orchestrator) | Provider-neutral VM, volume, repository, runtime-catalog, and JetStream coordination |
+| [`run-postgres`](crates/heph-core/run/postgres) | PostgreSQL run persistence and exact-runtime catalog adapter |
+| [`run-runtime-local`](crates/heph-std/run/runtime-local) | SQL-free local runtime artifact materialization and recovery |
+| [`forge-domain`](crates/heph-core/forge/domain) | Project, repository, receive, and run-request domain values |
+| [`agent-config`](crates/heph-core/platform/agent-config) | Versioned `agent.toml` parsing and validation |
+| [`release-domain`](crates/heph-core/forge/release/domain) | Immutable releases, project instances, revisions, attachments, updates, and typed policy |
+| [`release-artifact-store`](crates/heph-core/forge/release/artifact-store) | One-way safe import into opaque immutable artifact storage |
+| [`release-service`](crates/heph-core/forge/release/service) | Release publication, instance management, attachments, updates, and deferred triggers |
+| [`build-orchestrator`](crates/heph-core/forge/build/orchestrator) | Exact-commit isolated builds and crash-safe draft release finalization |
+| [`secret-domain`](crates/heph-core/secret/domain) | Redacted secret ownership, delegation, binding, and lease contracts |
+| [`secret-store`](crates/heph-core/secret/store) | Authenticated encrypted immutable secret-version storage |
+| [`secret-service`](crates/heph-core/secret/service) | Grants, imports, bindings, exact dispatch resolution, rotation, revocation, and purge |
+| [`secret-runtime`](crates/heph-std/secret/runtime) | Ephemeral raw mounts and exact runtime secret authority |
+| [`secret-broker`](crates/heph-std/secret/broker) | Host-only semantic broker transport and bounded adapters |
+| [`forge-service`](crates/heph-core/forge/service) | Bare Git storage, PostgreSQL receive processing, and forge outbox |
+| [`git-http`](crates/heph-core/forge/git-http) | Authorized streaming Git smart-HTTP transport |
+| [`identity-domain`](crates/heph-core/identity/domain) | Internal authenticated principal and tenant identifiers |
+| [`identity-oidc`](crates/heph-std/identity/oidc) | OIDC verification and identity mapping |
+| [`authz-domain`](crates/heph-core/authorization/authz-domain) | Typed provider-neutral authorization contract |
+| [`authz-postgres`](crates/heph-core/authorization/authz-postgres) | PostgreSQL/Mélange authorization and command auditing |
+| [`workspace-domain`](crates/heph-core/runtime/workspace/domain) | Provider-neutral exact-commit workspace and result contracts |
+| [`workspace-local`](crates/heph-std/runtime/workspace/local) | Safe local materialization, sealing, artifacts, and controlled Git result publication |
+| [`review-domain`](crates/heph-core/forge/review/domain) | Durable review proposal and human-control commands |
+| [`review-service`](crates/heph-core/forge/review/service) | Authorized cancel/retry/reject controls and CAS result-ref approval |
+| [`hephaestus-app`](crates/heph-app) | Production composition root and `hephaestusd` daemon |
 | [`web`](web) | OIDC-authenticated Phoenix LiveView review control plane |
 | [`e2e/playwright`](e2e/playwright) | Real browser golden path across the complete local stack |
 

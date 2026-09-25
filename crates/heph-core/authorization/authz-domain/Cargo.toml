@@ -1,0 +1,21 @@
+[package]
+name = "authz-domain"
+description = "Typed provider-neutral authorization boundary for Hephaestus"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+
+[package.metadata.hephaestus]
+layer = "domain"
+context = "authorization"
+
+[dependencies]
+async-trait.workspace = true
+identity-domain = { path = "../../identity/domain" }
+runtime-types = { path = "../../platform/runtime-types" }
+serde.workspace = true
+thiserror.workspace = true
+uuid.workspace = true
+
+[lints]
+workspace = true

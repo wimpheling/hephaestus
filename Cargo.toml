@@ -1,5 +1,51 @@
 [workspace]
-members = ["crates/*"]
+members = [
+    "crates/heph-core/platform/*",
+    "crates/heph-core/control-plane/*",
+    "crates/heph-core/authorization/*",
+    "crates/heph-core/identity/*",
+    "crates/heph-core/event/*",
+    "crates/heph-core/gateway/*",
+    "crates/heph-core/mailbox/*",
+    "crates/heph-core/image/*",
+    "crates/heph-core/secret/*",
+    "crates/heph-core/runtime/vm/*",
+    "crates/heph-core/runtime/volume/*",
+    "crates/heph-core/runtime/workspace/*",
+    "crates/heph-core/run",
+    "crates/heph-core/run/domain",
+    "crates/heph-core/run/orchestrator",
+    "crates/heph-core/run/postgres",
+    "crates/heph-core/forge/domain",
+    "crates/heph-core/forge/service",
+    "crates/heph-core/forge/git-capability",
+    "crates/heph-core/forge/pat",
+    "crates/heph-core/forge/git-http",
+    "crates/heph-core/forge/postgres",
+    "crates/heph-core/forge/pat-postgres",
+    "crates/heph-core/forge/build",
+    "crates/heph-core/forge/build/oci-builder-postgres",
+    "crates/heph-core/forge/build/orchestrator",
+    "crates/heph-core/forge/build/postgres",
+    "crates/heph-core/forge/release/*",
+    "crates/heph-core/forge/review/*",
+    "crates/heph-core/forge/registry/*",
+    "crates/heph-std/authorization/*",
+    "crates/heph-std/identity/*",
+    "crates/heph-std/gateway/*",
+    "crates/heph-std/secret/*",
+    "crates/heph-std/runtime/vm/*",
+    "crates/heph-std/runtime/volume/*",
+    "crates/heph-std/runtime/workspace/*",
+    "crates/heph-std/run/*",
+    "crates/heph-std/forge/build/*",
+    "crates/heph-std/forge/registry/*",
+    "crates/heph-app",
+    "crates/heph-app/bootstrap",
+    "crates/heph-app/registry/*",
+    "crates/heph-dev",
+    "crates/heph-dev/vm/*",
+]
 resolver = "3"
 
 [workspace.package]
@@ -65,7 +111,7 @@ tokio-util = { version = "0.7", features = ["rt"] }
 toml = "0.9"
 tracing = "0.1"
 uuid = { version = "1", features = ["serde", "v4", "v5"] }
-vm-trait = { path = "crates/vm-trait" }
+vm-trait = { path = "crates/heph-core/runtime/vm/trait" }
 zeroize = "1"
 
 [workspace.lints.rust]

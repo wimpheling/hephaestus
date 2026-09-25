@@ -1,0 +1,32 @@
+[package]
+name = "workspace-local"
+description = "Local exact-commit workspaces and trusted Git result publication"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+
+[package.metadata.hephaestus]
+layer = "adapter"
+context = "workspace"
+
+[dependencies]
+agent-config = { path = "../../../../heph-core/platform/agent-config" }
+async-trait.workspace = true
+forge-domain = { path = "../../../../heph-core/forge/domain" }
+run-domain = { path = "../../../../heph-core/run/domain" }
+runtime-types = { path = "../../../../heph-core/platform/runtime-types" }
+serde.workspace = true
+serde_json.workspace = true
+sha2.workspace = true
+thiserror.workspace = true
+time.workspace = true
+tokio = { workspace = true, features = ["fs", "process", "rt"] }
+uuid.workspace = true
+vm-trait.workspace = true
+workspace-domain = { path = "../../../../heph-core/runtime/workspace/domain" }
+
+[dev-dependencies]
+tempfile = "3"
+
+[lints]
+workspace = true

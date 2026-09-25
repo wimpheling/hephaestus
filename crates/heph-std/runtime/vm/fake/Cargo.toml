@@ -1,0 +1,25 @@
+[package]
+name = "vm-fake"
+description = "Deterministic in-memory VM provider for Hephaestus testing"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+
+[package.metadata.hephaestus]
+layer = "adapter"
+context = "vm"
+
+[dependencies]
+async-trait.workspace = true
+tokio.workspace = true
+vm-trait.workspace = true
+
+[dev-dependencies]
+bytes.workspace = true
+http.workspace = true
+tempfile = "3"
+tokio = { workspace = true, features = ["macros", "rt"] }
+vm-conformance = { path = "../../../../heph-dev/vm/conformance" }
+
+[lints]
+workspace = true

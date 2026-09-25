@@ -1,0 +1,64 @@
+[package]
+name = "vm-libkrun"
+description = "A libkrun-backed virtual machine provider for Hephaestus"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+
+[package.metadata.hephaestus]
+layer = "adapter"
+context = "vm"
+
+[features]
+integration-guest = []
+
+[dependencies]
+async-trait.workspace = true
+base64.workspace = true
+brokered-egress-client = { path = "../../../../heph-core/secret/brokered-egress-client" }
+ciborium.workspace = true
+bytes.workspace = true
+http.workspace = true
+libloading.workspace = true
+libc.workspace = true
+rustix.workspace = true
+rusqlite.workspace = true
+runtime-types = { path = "../../../../heph-core/platform/runtime-types" }
+serde.workspace = true
+serde_json.workspace = true
+subtle.workspace = true
+thiserror.workspace = true
+tokio = { workspace = true, features = [
+    "fs",
+    "io-util",
+    "macros",
+    "net",
+    "process",
+    "rt",
+    "sync",
+    "time",
+] }
+tracing.workspace = true
+uuid.workspace = true
+vm-trait.workspace = true
+zeroize.workspace = true
+
+[[bin]]
+name = "heph-integration-check"
+path = "src/bin/heph-integration-check.rs"
+required-features = ["integration-guest"]
+
+[dev-dependencies]
+async-trait.workspace = true
+gateway-domain = { path = "../../../../heph-core/gateway/domain" }
+gateway-edge = { path = "../../../gateway/edge" }
+secret-broker = { path = "../../../secret/broker" }
+secret-domain = { path = "../../../../heph-core/secret/domain" }
+secret-runtime = { path = "../../../secret/runtime" }
+tempfile = "3"
+tokio = { workspace = true, features = ["rt-multi-thread", "test-util"] }
+tokio-util.workspace = true
+vm-conformance = { path = "../../../../heph-dev/vm/conformance" }
+
+[lints]
+workspace = true

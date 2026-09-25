@@ -55,8 +55,8 @@ buf generate --template buf.gen.rust.yaml
 # Cargo fmt follows declared modules but not every file reached through an
 # include! in generated package shards. Format the two declared module roots.
 rustup run 1.88.0 rustfmt --edition 2024 \
-  crates/rpc-proto/src/generated/messages/mod.rs \
-  crates/rpc-proto/src/generated/connect/mod.rs
+  crates/heph-core/platform/rpc-proto/src/generated/messages/mod.rs \
+  crates/heph-core/platform/rpc-proto/src/generated/connect/mod.rs
 
 podman run --rm \
   --volume "${repository_root}:/workspace:z" \
@@ -66,4 +66,4 @@ podman run --rm \
   "${elixir_image}" \
   sh -lc 'export PATH=/root/.mix/escripts:$PATH; /protobuf-tools/buf generate --template buf.gen.elixir.yaml; find web/lib/hephaestus_web/rpc/generated -type f -name "*.ex" -print0 | xargs -0 mix format'
 
-buf build --output crates/rpc-proto/src/generated/descriptor.binpb
+buf build --output crates/heph-core/platform/rpc-proto/src/generated/descriptor.binpb

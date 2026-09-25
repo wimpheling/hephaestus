@@ -104,6 +104,11 @@ Names in the tree are directory names. Existing package names remain unchanged
     Baseline captured in `workspace-package-inventory.before.json` (85 packages,
     22 declared PostgreSQL adapters); use
     `scripts/reconcile-workspace-package-inventory.py` for post-move reconciliation.
+    One necessary metadata correction is pending in reconciliation: removing
+    `git-http`'s `identity-oidc` cross-context allowlist entry after replacing
+    that dependency with the core `identity-application` verification port.
+    Keeping the unused entry fails `ARCH-CRATE-LAYERS`; all other existing
+    architecture metadata must match the baseline exactly.
   - [ ] Add the target directory structure without copying crate contents; use
     `git mv` for every existing package directory so history follows the move.
   - [ ] Replace `members = ["crates/*"]` with explicit recursive member globs

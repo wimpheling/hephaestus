@@ -367,7 +367,7 @@ finish
             self._archive(root)
             runtime = root / "bundle" / "sources" / "runtime-structured"
             runtime.write_text(
-                "HEPH_GCP_TEST test=rust-panic location=crates/hephaestus-app/tests/../../../examples/cooking/tests/confinement.rs:431:49\n"
+                "HEPH_GCP_TEST test=rust-panic location=crates/heph-app/tests/../../../examples/cooking/tests/confinement.rs:431:49\n"
                 "HEPH_GCP_RUNTIME error=not-found errno=ENOENT\n"
                 "HEPH_GCP_COOKING event=workload-result operation=cooking-workload phase=cooking status=failed exit_code=1\n"
                 "HEPHAESTUS_GCP_COOKING: FAIL phase=gcp-cooking exit=1 revision=" + "a" * 40 + "\n"
