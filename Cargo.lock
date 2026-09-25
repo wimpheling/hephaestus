@@ -6220,7 +6220,6 @@ dependencies = [
  "tokio",
  "uuid",
  "workspace-domain",
- "workspace-local",
 ]
 
 [[package]]

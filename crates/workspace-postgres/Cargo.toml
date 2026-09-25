@@ -25,7 +25,6 @@ run-postgres = { path = "../run-postgres" }
 serial_test = "3"
 tempfile = "3"
 tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }
-workspace-local = { path = "../workspace-local" }
 
 [package.metadata.hephaestus]
 layer = "adapter"
