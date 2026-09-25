@@ -645,7 +645,7 @@ fn is_legacy_command_outbox(path: &Path) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use super::{validate_event_contract, validate_reducer_manifest, validate_source, RULES};
+    use super::{RULES, validate_event_contract, validate_reducer_manifest, validate_source};
     use crate::checks::architecture::Diagnostic;
     use std::path::Path;
 

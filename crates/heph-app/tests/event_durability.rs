@@ -1,5 +1,8 @@
 //! Structural regression tests for the durable product-event boundary.
 
+use event_application::ProductEventOutbox;
+use event_postgres::PostgresProductEventOutbox;
+
 const MIGRATION: &str = include_str!("../../../migrations/0010_durable_application_events.sql");
 const GATEWAY_EVENTS_MIGRATION: &str =
     include_str!("../../../migrations/0044_gateway_product_events.sql");
@@ -257,6 +260,11 @@ async fn postgres_events_are_atomic_ordered_versioned_and_multi_scope() {
         .execute(&mut *transaction)
         .await
         .expect("update rolled-back project");
+    let injected_failure = sqlx::query("SELECT 1 / 0").execute(&mut *transaction).await;
+    assert!(
+        injected_failure.is_err(),
+        "failure injection unexpectedly succeeded"
+    );
     transaction
         .rollback()
         .await
@@ -277,6 +285,19 @@ async fn postgres_events_are_atomic_ordered_versioned_and_multi_scope() {
             .await
             .expect("rolled-back event query");
     assert!(!leaked);
+    let leaked_outbox: bool = sqlx::query_scalar(
+        "SELECT EXISTS(
+             SELECT 1
+             FROM product_event_outbox outbox
+             JOIN application_events event ON event.id = outbox.event_id
+             WHERE event.request_id = $1
+         )",
+    )
+    .bind(rolled_back_request)
+    .fetch_one(&pool)
+    .await
+    .expect("rolled-back outbox query");
+    assert!(!leaked_outbox);
 
     let first_request = uuid::Uuid::new_v4();
     let second_request = uuid::Uuid::new_v4();
@@ -300,6 +321,20 @@ async fn postgres_events_are_atomic_ordered_versioned_and_multi_scope() {
     assert_eq!(ordered.len(), 2);
     assert_eq!(ordered[1].0, ordered[0].0 + 1);
     assert_eq!(ordered[1].1, ordered[0].1 + 1);
+    let first_pending: i64 = sqlx::query_scalar(
+        "SELECT count(*)
+         FROM product_event_outbox outbox
+         JOIN application_events event ON event.id = outbox.event_id
+         WHERE event.request_id = $1 AND outbox.published_at IS NULL
+           AND outbox.dead_lettered_at IS NULL",
+    )
+    .bind(first_request)
+    .fetch_one(&pool)
+    .await
+    .expect("first pending product event");
+    // A project mutation intentionally captures both its project and
+    // organization scopes; each committed scope has one pending outbox row.
+    assert_eq!(first_pending, 2);
 
     let secret = uuid::Uuid::new_v4();
     let secret_request = uuid::Uuid::new_v4();
@@ -334,6 +369,104 @@ async fn postgres_events_are_atomic_ordered_versioned_and_multi_scope() {
     assert_eq!(occurrences[0].1, secret_request);
     assert_eq!(occurrences[0].0, "organization");
     assert_eq!(occurrences[1].0, "project");
+}
+
+#[tokio::test]
+#[serial_test::serial]
+async fn open_transaction_is_invisible_to_event_publisher_until_commit() {
+    let Ok(database_url) = std::env::var("HEPHAESTUS_POSTGRES_TEST_URL") else {
+        return;
+    };
+    let pool = sqlx::postgres::PgPoolOptions::new()
+        .max_connections(2)
+        .connect(&database_url)
+        .await
+        .expect("connect event visibility PostgreSQL");
+    sqlx::migrate!("../../migrations")
+        .run(&pool)
+        .await
+        .expect("apply event visibility migrations");
+
+    let actor = uuid::Uuid::new_v4();
+    let organization = uuid::Uuid::new_v4();
+    let project = uuid::Uuid::new_v4();
+    let request = uuid::Uuid::new_v4();
+    sqlx::query("INSERT INTO users (id, display_name) VALUES ($1, 'Event Visibility Actor')")
+        .bind(actor)
+        .execute(&pool)
+        .await
+        .expect("seed visibility actor");
+    sqlx::query("INSERT INTO organizations (id, name) VALUES ($1, $2)")
+        .bind(organization)
+        .bind(format!("event-visibility-{organization}"))
+        .execute(&pool)
+        .await
+        .expect("seed visibility organization");
+    sqlx::query(
+        "INSERT INTO organization_members (organization_id, user_id, role)
+           VALUES ($1, $2, 'owner')",
+    )
+    .bind(organization)
+    .bind(actor)
+    .execute(&pool)
+    .await
+    .expect("seed visibility membership");
+    sqlx::query("INSERT INTO projects (id, organization_id, name) VALUES ($1, $2, $3)")
+        .bind(project)
+        .bind(organization)
+        .bind(format!("event-visibility-{project}"))
+        .execute(&pool)
+        .await
+        .expect("seed visibility project");
+
+    let mut transaction = pool.begin().await.expect("begin visibility transaction");
+    set_actor(&mut transaction, actor, request).await;
+    sqlx::query("UPDATE users SET display_name = 'Event Visibility Updated' WHERE id = $1")
+        .bind(actor)
+        .execute(&mut *transaction)
+        .await
+        .expect("update uncommitted project");
+
+    let publisher = PostgresProductEventOutbox::new(pool.clone());
+    let before_events: i64 =
+        sqlx::query_scalar("SELECT count(*) FROM application_events WHERE request_id = $1")
+            .bind(request)
+            .fetch_one(&pool)
+            .await
+            .expect("read uncommitted events");
+    assert_eq!(before_events, 0);
+    let before_pending = publisher
+        .pending(10_000)
+        .await
+        .expect("read pending events before commit");
+    assert!(
+        !before_pending
+            .iter()
+            .any(|event| event.request_id == Some(request))
+    );
+
+    transaction
+        .commit()
+        .await
+        .expect("commit visibility transaction");
+    let after_events: i64 =
+        sqlx::query_scalar("SELECT count(*) FROM application_events WHERE request_id = $1")
+            .bind(request)
+            .fetch_one(&pool)
+            .await
+            .expect("read committed event");
+    assert_eq!(after_events, 1);
+    let after_pending = publisher
+        .pending(10_000)
+        .await
+        .expect("read pending event after commit");
+    assert_eq!(
+        after_pending
+            .iter()
+            .filter(|event| event.request_id == Some(request))
+            .count(),
+        1
+    );
 }
 
 #[tokio::test]

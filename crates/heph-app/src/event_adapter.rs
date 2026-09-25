@@ -202,11 +202,16 @@ fn provider(error: impl std::error::Error + Send + Sync + 'static) -> EventPubli
 #[cfg(test)]
 mod tests {
     use super::{
-        PRODUCT_EVENT_DUPLICATE_WINDOW, PRODUCT_EVENT_MAX_AGE, PRODUCT_EVENT_MAX_BYTES,
-        PRODUCT_EVENT_MAX_MESSAGE_SIZE, PRODUCT_EVENT_MAX_MESSAGES, PRODUCT_EVENT_STREAM,
-        PRODUCT_EVENT_SUBJECT, product_event_stream_config,
+        EventPublisher, PRODUCT_EVENT_DUPLICATE_WINDOW, PRODUCT_EVENT_MAX_AGE,
+        PRODUCT_EVENT_MAX_BYTES, PRODUCT_EVENT_MAX_MESSAGE_SIZE, PRODUCT_EVENT_MAX_MESSAGES,
+        PRODUCT_EVENT_STREAM, PRODUCT_EVENT_SUBJECT, ensure_topology, product_event_stream_config,
     };
     use async_nats::jetstream::stream::{RetentionPolicy, StorageType};
+    use async_trait::async_trait;
+    use event_application::{MutationReceiptError, ProductEventOutbox, ProductEventRecord};
+    use std::sync::{Arc, Mutex};
+    use time::OffsetDateTime;
+    use uuid::Uuid;
 
     #[test]
     fn product_event_stream_has_finite_transport_retention() {
@@ -224,5 +229,118 @@ mod tests {
         assert!(config.duplicate_window <= config.max_age);
         assert!(config.max_message_size > 0);
         assert!(config.max_bytes >= i64::from(config.max_message_size));
+    }
+
+    #[derive(Debug, PartialEq, Eq)]
+    enum OutboxCall {
+        Failed(String),
+        Published(Uuid),
+    }
+
+    #[derive(Default)]
+    struct RecordingOutbox {
+        calls: Mutex<Vec<OutboxCall>>,
+    }
+
+    #[async_trait]
+    impl ProductEventOutbox for RecordingOutbox {
+        async fn pending(
+            &self,
+            _limit: i64,
+        ) -> Result<Vec<ProductEventRecord>, MutationReceiptError> {
+            Ok(vec![ProductEventRecord {
+                id: Uuid::new_v4(),
+                scope_kind: String::from("project"),
+                scope_id: Uuid::new_v4(),
+                cursor: 1,
+                aggregate_type: String::from("project"),
+                aggregate_id: Uuid::new_v4(),
+                aggregate_version: 1,
+                event_type: String::from("project.changed"),
+                schema_version: 1,
+                change_kind: String::from("updated"),
+                safe_state: Some(String::from("active")),
+                related_id_one: Some(Uuid::new_v4()),
+                related_id_two: None,
+                actor_id: Some(Uuid::new_v4()),
+                request_id: Some(Uuid::new_v4()),
+                occurred_at: OffsetDateTime::now_utc(),
+            }])
+        }
+
+        async fn mark_published(&self, event_id: Uuid) -> Result<(), MutationReceiptError> {
+            self.calls
+                .lock()
+                .expect("recording outbox lock")
+                .push(OutboxCall::Published(event_id));
+            Ok(())
+        }
+
+        async fn mark_failed(
+            &self,
+            _event_id: Uuid,
+            message: &str,
+        ) -> Result<(), MutationReceiptError> {
+            self.calls
+                .lock()
+                .expect("recording outbox lock")
+                .push(OutboxCall::Failed(message.to_owned()));
+            Ok(())
+        }
+
+        async fn dead_letter(
+            &self,
+            _event_id: Uuid,
+            _reason: &str,
+        ) -> Result<(), MutationReceiptError> {
+            Ok(())
+        }
+    }
+
+    #[tokio::test]
+    #[serial_test::serial]
+    async fn failed_publish_is_recorded_before_retry_acknowledgement() {
+        let Ok(nats_url) = std::env::var("HEPHAESTUS_NATS_TEST_URL") else {
+            return;
+        };
+        let client = async_nats::connect(&nats_url)
+            .await
+            .expect("connect event adapter NATS");
+        let context = async_nats::jetstream::new(client);
+        let _ = context.delete_stream(PRODUCT_EVENT_STREAM).await;
+        let outbox = Arc::new(RecordingOutbox::default());
+        let publisher = EventPublisher::new(context.clone(), outbox.clone(), [7; 32]);
+
+        let first = publisher.publish_pending(10).await;
+        assert!(matches!(first, Err(super::EventPublishError::JetStream(_))));
+        assert!(matches!(
+            outbox
+                .calls
+                .lock()
+                .expect("recording outbox lock")
+                .as_slice(),
+            [OutboxCall::Failed(_)]
+        ));
+
+        ensure_topology(&context)
+            .await
+            .expect("create event adapter stream");
+        publisher
+            .publish_pending(10)
+            .await
+            .expect("retry product-event publication");
+        let call_order_is_correct = {
+            let calls = outbox.calls.lock().expect("recording outbox lock");
+            matches!(
+                calls.as_slice(),
+                [OutboxCall::Failed(_), OutboxCall::Published(_)]
+            )
+        };
+        assert!(call_order_is_correct);
+
+        context
+            .delete_stream(PRODUCT_EVENT_STREAM)
+            .await
+            .expect("delete event adapter stream");
     }
 }
