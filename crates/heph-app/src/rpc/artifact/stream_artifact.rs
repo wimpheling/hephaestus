@@ -1,3 +1,27 @@
+use std::{future::Future, pin::Pin};
+
+use connectrpc::ConnectError;
+use control_plane_postgres::artifact::{ArtifactCancellation, ArtifactChunk, ArtifactError};
+use rpc_proto::messages::hephaestus::{artifact::v1::StreamArtifactResponse, common::v1::Cursor};
+use tokio_util::sync::CancellationToken;
+
+#[derive(Clone)]
+struct RequestCancellation(CancellationToken);
+
+impl ArtifactCancellation for RequestCancellation {
+    fn is_cancelled(&self) -> bool {
+        self.0.is_cancelled()
+    }
+
+    fn cancel(&self) {
+        self.0.cancel();
+    }
+
+    fn cancelled<'a>(&'a self) -> Pin<Box<dyn Future<Output = ()> + Send + 'a>> {
+        Box::pin(self.0.cancelled())
+    }
+}
+
 pub(super) async fn handle(
     service: &super::ArtifactRpc,
     ctx: connectrpc::RequestContext,
@@ -12,9 +36,6 @@ pub(super) async fn handle(
 > {
     use crate::application::artifact::StreamArtifact;
     use futures_util::stream;
-    use rpc_proto::messages::hephaestus::{
-        artifact::v1::StreamArtifactResponse, common::v1::Cursor,
-    };
     use uuid::Uuid;
 
     use super::super::{RpcError, into_connect_error, request as shared_request};
@@ -27,9 +48,10 @@ pub(super) async fn handle(
     let artifact_id = shared_request::required_id(request.artifact_id.as_option())
         .and_then(|value| Uuid::parse_str(&value).map_err(|_| RpcError::InvalidArgument))
         .map_err(into_connect_error)?;
-    let result = service
-        .application
-        .stream_artifact(
+    let budget = shared_request::RequestBudget::from_transport(&ctx);
+    let result = shared_request::run_with_budget(
+        &budget,
+        service.application.stream_artifact_with_budget(
             &identity,
             StreamArtifact {
                 artifact_id,
@@ -41,15 +63,37 @@ pub(super) async fn handle(
                 max_total_bytes: request.max_total_bytes,
                 max_chunk_bytes: request.max_chunk_bytes,
             },
-        )
-        .await
-        .map_err(super::model::application_error)
-        .map_err(into_connect_error)?;
+            RequestCancellation(budget.cancellation_token()),
+            ctx.deadline(),
+        ),
+    )
+    .await
+    .map_err(into_connect_error)?
+    .map_err(super::model::application_error)
+    .map_err(into_connect_error)?;
     let receiver = result.receiver;
-    let response = stream::unfold(receiver, |mut receiver| async move {
-        let item = receiver.recv().await?;
-        let item = item
-            .map(|chunk| StreamArtifactResponse {
+    let response = stream::unfold(
+        (receiver, budget, false),
+        |(mut receiver, budget, deadline_sent)| async move {
+            let (item, deadline_sent) =
+                next_response(&mut receiver, &budget, deadline_sent).await?;
+            Some((item, (receiver, budget, deadline_sent)))
+        },
+    );
+    connectrpc::Response::ok(Box::pin(response))
+}
+
+async fn next_response(
+    receiver: &mut tokio::sync::mpsc::Receiver<Result<ArtifactChunk, ArtifactError>>,
+    budget: &super::super::request::RequestBudget,
+    deadline_sent: bool,
+) -> Option<(Result<StreamArtifactResponse, ConnectError>, bool)> {
+    if deadline_sent {
+        return None;
+    }
+    match super::super::request::run_with_budget(budget, receiver.recv()).await {
+        Ok(Some(Ok(chunk))) => Some((
+            Ok(StreamArtifactResponse {
                 sequence: chunk.sequence,
                 contents: chunk.contents,
                 committed_cursor: Cursor {
@@ -60,10 +104,80 @@ pub(super) async fn handle(
                 end_of_artifact: chunk.end_of_artifact,
                 media_type: chunk.media_type,
                 ..Default::default()
-            })
-            .map_err(super::model::application_error)
-            .map_err(into_connect_error);
-        Some((item, receiver))
-    });
-    connectrpc::Response::ok(Box::pin(response))
+            }),
+            false,
+        )),
+        Ok(Some(Err(ArtifactError::DeadlineExceeded)))
+        | Err(super::super::RpcError::DeadlineExceeded) => {
+            budget.cancel();
+            Some((
+                Err(super::super::into_connect_error(
+                    super::super::RpcError::DeadlineExceeded,
+                )),
+                true,
+            ))
+        }
+        Ok(Some(Err(error))) => Some((
+            Err(super::super::into_connect_error(
+                super::model::application_error(error),
+            )),
+            false,
+        )),
+        Err(_) | Ok(None) => None,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::next_response;
+    use crate::rpc::request::RequestBudget;
+    use control_plane_postgres::artifact::{ArtifactChunk, ArtifactError};
+    use std::time::{Duration, Instant};
+    use tokio::sync::mpsc;
+
+    #[tokio::test]
+    async fn response_stream_emits_one_deadline_after_channel_is_empty() {
+        let budget = RequestBudget::from_deadline(Some(
+            Instant::now()
+                .checked_sub(Duration::from_millis(1))
+                .expect("instant supports subtraction"),
+        ));
+        let (sender, mut receiver) = mpsc::channel::<Result<ArtifactChunk, ArtifactError>>(1);
+        let (first, deadline_sent) = next_response(&mut receiver, &budget, false)
+            .await
+            .expect("deadline response");
+        assert_eq!(
+            first.expect_err("deadline must be an error").code,
+            connectrpc::ErrorCode::DeadlineExceeded
+        );
+        assert!(
+            next_response(&mut receiver, &budget, deadline_sent)
+                .await
+                .is_none()
+        );
+        drop(sender);
+    }
+
+    #[tokio::test]
+    async fn response_stream_treats_adapter_deadline_as_terminal() {
+        let budget = RequestBudget::unbounded();
+        let (sender, mut receiver) = mpsc::channel::<Result<ArtifactChunk, ArtifactError>>(1);
+        sender
+            .send(Err(ArtifactError::DeadlineExceeded))
+            .await
+            .expect("receiver is alive");
+
+        let (first, deadline_sent) = next_response(&mut receiver, &budget, false)
+            .await
+            .expect("deadline response");
+        assert_eq!(
+            first.expect_err("deadline must be an error").code,
+            connectrpc::ErrorCode::DeadlineExceeded
+        );
+        assert!(
+            next_response(&mut receiver, &budget, deadline_sent)
+                .await
+                .is_none()
+        );
+    }
 }

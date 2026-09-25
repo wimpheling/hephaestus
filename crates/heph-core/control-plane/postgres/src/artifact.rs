@@ -3,17 +3,25 @@
 use authz_domain::{ObjectRef, ObjectType, Permission, Subject};
 use authz_postgres::{PostgresMelangeAuthorizer, audit_decision, begin_actor_transaction};
 use identity_domain::AuthenticatedIdentity;
-use release_artifact_store::{ArtifactStoreError, LocalArtifactStore};
+use release_artifact_store::LocalArtifactStore;
 use serde_json::Value;
-use sha2::{Digest, Sha256};
 use sqlx::{FromRow, PgPool};
 use std::path::PathBuf;
 use tokio::{
     fs::File,
     io::{AsyncReadExt, AsyncSeekExt},
-    sync::mpsc,
 };
 use uuid::Uuid;
+
+#[path = "artifact/cursor.rs"]
+mod cursor;
+#[path = "artifact/model.rs"]
+mod model;
+#[path = "artifact/stream.rs"]
+mod stream;
+use cursor::decode_cursor;
+pub use model::{ArtifactError, ArtifactMetadata, ArtifactPreview};
+pub use stream::{ArtifactCancellation, ArtifactChunk, ArtifactStream, StreamArtifact};
 
 pub const DEFAULT_PREVIEW_BYTES: u32 = 64 * 1024;
 pub const MAX_PREVIEW_BYTES: u32 = 1024 * 1024;
@@ -21,84 +29,6 @@ pub const DEFAULT_STREAM_TOTAL_BYTES: u64 = 8 * 1024 * 1024;
 pub const MAX_STREAM_TOTAL_BYTES: u64 = 64 * 1024 * 1024;
 pub const DEFAULT_STREAM_CHUNK_BYTES: u32 = 64 * 1024;
 pub const MAX_STREAM_CHUNK_BYTES: u32 = 256 * 1024;
-
-const CURSOR_DOMAIN: &[u8] = b"hephaestus.artifact-cursor.v1\0";
-
-/// Immutable metadata returned with artifact contents.
-#[derive(Debug, Clone)]
-pub struct ArtifactMetadata {
-    pub id: Uuid,
-    pub release_id: Uuid,
-    pub build_id: Uuid,
-    pub source_commit: String,
-    pub path: String,
-    pub kind: String,
-    pub mode: u32,
-    pub sha256: String,
-    pub size_bytes: u64,
-    pub media_type: String,
-}
-
-/// Bounded UTF-8 artifact preview.
-pub struct ArtifactPreview {
-    pub artifact: ArtifactMetadata,
-    pub utf8_contents: String,
-    pub truncated: bool,
-}
-
-/// Validated artifact stream request.
-pub struct StreamArtifact {
-    pub artifact_id: Uuid,
-    pub resume_cursor: Option<String>,
-    pub max_total_bytes: u64,
-    pub max_chunk_bytes: u32,
-}
-
-/// One committed chunk from the immutable artifact object.
-pub struct ArtifactChunk {
-    pub sequence: u64,
-    pub contents: Vec<u8>,
-    pub committed_cursor: String,
-    pub end_of_artifact: bool,
-    pub media_type: String,
-}
-
-/// A cancellation-aware stream receiver for an authorized artifact.
-pub struct ArtifactStream {
-    pub receiver: mpsc::Receiver<Result<ArtifactChunk, ArtifactError>>,
-}
-
-/// Typed artifact application failure.
-#[derive(Debug, thiserror::Error)]
-pub enum ArtifactError {
-    /// No authorized artifact row matched the identifier.
-    #[error("artifact was not found")]
-    NotFound,
-    /// A caller-supplied size limit or cursor was invalid.
-    #[error("artifact request is invalid")]
-    InvalidArgument,
-    /// A caller-supplied bound exceeded the service maximum.
-    #[error("artifact request exceeds a service bound")]
-    ResourceExhausted,
-    /// Previewed bytes were not valid UTF-8.
-    #[error("artifact preview is not UTF-8")]
-    InvalidUtf8,
-    /// Persistence failed while evaluating the authorized query.
-    #[error("artifact persistence failed")]
-    Persistence(#[source] sqlx::Error),
-    /// The canonical artifact store rejected the durable object.
-    #[error("artifact storage failed")]
-    Storage(#[source] ArtifactStoreError),
-    /// Reading an already-authorized immutable object failed.
-    #[error("artifact read failed")]
-    Io(#[source] std::io::Error),
-    /// Durable metadata did not match the canonical object.
-    #[error("artifact metadata is inconsistent")]
-    InvalidStoredData,
-    /// The authorization evaluator could not decide whether the release is readable.
-    #[error("artifact authorization failed")]
-    Authorization(#[source] authz_domain::AuthzError),
-}
 
 /// Executes artifact reads after RLS authorization and safe-store resolution.
 pub struct ArtifactApplication {
@@ -161,6 +91,21 @@ impl ArtifactApplication {
         identity: &AuthenticatedIdentity,
         request: StreamArtifact,
     ) -> Result<ArtifactStream, ArtifactError> {
+        self.stream_artifact_with_budget(identity, request, stream::NoCancellation, None)
+            .await
+    }
+
+    /// Starts an artifact stream with a transport cancellation and deadline.
+    pub async fn stream_artifact_with_budget<Cancellation>(
+        &self,
+        identity: &AuthenticatedIdentity,
+        request: StreamArtifact,
+        cancellation: Cancellation,
+        deadline: Option<std::time::Instant>,
+    ) -> Result<ArtifactStream, ArtifactError>
+    where
+        Cancellation: ArtifactCancellation,
+    {
         let total_limit = if request.max_total_bytes == 0 {
             DEFAULT_STREAM_TOTAL_BYTES
         } else {
@@ -196,30 +141,21 @@ impl ArtifactApplication {
             .await
             .map_err(ArtifactError::Io)?;
 
-        let (sender, receiver) = mpsc::channel(2);
-        let cursor_key = self.cursor_key;
-        let actor_id = identity.user_id.as_uuid();
-        let media_type = artifact.media_type.clone();
-        let size_bytes = artifact.size_bytes;
-        let artifact_id = artifact.id;
-        tokio::spawn(async move {
-            stream_file(
-                file,
-                sender,
-                StreamState {
-                    artifact_id,
-                    actor_id,
-                    cursor_key,
-                    media_type,
-                    offset,
-                    size_bytes,
-                    total_limit,
-                    chunk_limit,
-                },
-            )
-            .await;
-        });
-        Ok(ArtifactStream { receiver })
+        Ok(stream::spawn_reader(
+            file,
+            stream::StreamState {
+                artifact_id: artifact.id,
+                actor_id: identity.user_id.as_uuid(),
+                cursor_key: self.cursor_key,
+                media_type: artifact.media_type,
+                offset,
+                size_bytes: artifact.size_bytes,
+                total_limit,
+                chunk_limit,
+            },
+            cancellation,
+            deadline,
+        ))
     }
 
     async fn authorize_artifact(
@@ -324,139 +260,16 @@ impl TryFrom<ArtifactRow> for ArtifactMetadata {
     }
 }
 
-struct StreamState {
-    artifact_id: Uuid,
-    actor_id: Uuid,
-    cursor_key: [u8; 32],
-    media_type: String,
-    offset: u64,
-    size_bytes: u64,
-    total_limit: u64,
-    chunk_limit: u32,
-}
-
-async fn stream_file(
-    mut file: File,
-    sender: mpsc::Sender<Result<ArtifactChunk, ArtifactError>>,
-    mut state: StreamState,
-) {
-    let mut sent = 0_u64;
-    let mut sequence = 0_u64;
-    if state.offset == state.size_bytes {
-        let cursor = encode_cursor(
-            &state.cursor_key,
-            state.actor_id,
-            state.artifact_id,
-            state.offset,
-        );
-        let _result = sender
-            .send(Ok(ArtifactChunk {
-                sequence,
-                contents: Vec::new(),
-                committed_cursor: cursor,
-                end_of_artifact: true,
-                media_type: state.media_type,
-            }))
-            .await;
-        return;
-    }
-    while sent < state.total_limit && state.offset < state.size_bytes {
-        let remaining = (state.total_limit - sent).min(state.size_bytes - state.offset);
-        let length = remaining.min(u64::from(state.chunk_limit));
-        let Ok(length) = usize::try_from(length) else {
-            let _result = sender.send(Err(ArtifactError::ResourceExhausted)).await;
-            return;
-        };
-        let mut contents = vec![0_u8; length];
-        if let Err(error) = file.read_exact(&mut contents).await {
-            let _result = sender.send(Err(ArtifactError::Io(error))).await;
-            return;
-        }
-        let Ok(length) = u64::try_from(contents.len()) else {
-            let _result = sender.send(Err(ArtifactError::ResourceExhausted)).await;
-            return;
-        };
-        state.offset += length;
-        sent += length;
-        let end_of_artifact = state.offset == state.size_bytes;
-        let cursor = encode_cursor(
-            &state.cursor_key,
-            state.actor_id,
-            state.artifact_id,
-            state.offset,
-        );
-        if sender
-            .send(Ok(ArtifactChunk {
-                sequence,
-                contents,
-                committed_cursor: cursor,
-                end_of_artifact,
-                media_type: state.media_type.clone(),
-            }))
-            .await
-            .is_err()
-        {
-            return;
-        }
-        sequence += 1;
-    }
-}
-
-async fn open_validated(path: &PathBuf, expected_size: u64) -> Result<File, ArtifactError> {
+pub(super) async fn open_validated(
+    path: &PathBuf,
+    expected_size: u64,
+) -> Result<File, ArtifactError> {
     let file = File::open(path).await.map_err(ArtifactError::Io)?;
     let metadata = file.metadata().await.map_err(ArtifactError::Io)?;
     if !metadata.is_file() || metadata.len() != expected_size {
         return Err(ArtifactError::InvalidStoredData);
     }
     Ok(file)
-}
-
-fn encode_cursor(key: &[u8; 32], actor_id: Uuid, artifact_id: Uuid, offset: u64) -> String {
-    let digest = cursor_digest(key, actor_id, artifact_id, offset);
-    format!("v1.{offset}.{}", encode_hex(&digest))
-}
-
-fn decode_cursor(
-    value: &str,
-    key: &[u8; 32],
-    actor_id: &Uuid,
-    artifact_id: Uuid,
-) -> Result<u64, ArtifactError> {
-    let mut parts = value.split('.');
-    if parts.next() != Some("v1") {
-        return Err(ArtifactError::InvalidArgument);
-    }
-    let offset = parts
-        .next()
-        .and_then(|part| part.parse().ok())
-        .ok_or(ArtifactError::InvalidArgument)?;
-    let supplied = parts.next().ok_or(ArtifactError::InvalidArgument)?;
-    if parts.next().is_some()
-        || supplied != encode_hex(&cursor_digest(key, *actor_id, artifact_id, offset))
-    {
-        return Err(ArtifactError::InvalidArgument);
-    }
-    Ok(offset)
-}
-
-fn cursor_digest(key: &[u8; 32], actor_id: Uuid, artifact_id: Uuid, offset: u64) -> [u8; 32] {
-    let mut digest = Sha256::new();
-    digest.update(CURSOR_DOMAIN);
-    digest.update(key);
-    digest.update(actor_id.as_bytes());
-    digest.update(artifact_id.as_bytes());
-    digest.update(offset.to_be_bytes());
-    digest.finalize().into()
-}
-
-fn encode_hex(value: &[u8]) -> String {
-    use std::fmt::Write as _;
-
-    let mut output = String::with_capacity(value.len() * 2);
-    for byte in value {
-        write!(&mut output, "{byte:02x}").expect("writing to a String cannot fail");
-    }
-    output
 }
 
 fn utf8_prefix(mut contents: Vec<u8>, truncated: bool) -> Result<String, ArtifactError> {
@@ -472,7 +285,7 @@ fn utf8_prefix(mut contents: Vec<u8>, truncated: bool) -> Result<String, Artifac
 
 #[cfg(test)]
 mod tests {
-    use super::{decode_cursor, encode_cursor, utf8_prefix};
+    use super::{cursor::encode_cursor, decode_cursor, utf8_prefix};
     use uuid::Uuid;
 
     #[test]
