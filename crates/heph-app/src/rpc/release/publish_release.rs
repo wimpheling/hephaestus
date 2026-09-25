@@ -14,6 +14,7 @@ pub(super) async fn handle(
 
     const AUDIENCE: &str = "/hephaestus.release.v1.ReleaseService/PublishRelease";
 
+    let budget = shared_request::RequestBudget::from_transport(&ctx);
     let request = request.to_owned_message();
     let identity = shared_request::mutation_identity(
         &ctx,
@@ -27,26 +28,34 @@ pub(super) async fn handle(
             Uuid::parse_str(&value).map_err(|_| super::super::RpcError::InvalidArgument)
         })
         .map_err(into_connect_error)?;
-    service
-        .application
-        .publish_release(&identity, release_id)
-        .await
-        .map_err(super::model::application_error)
-        .map_err(into_connect_error)?;
-    let release = service
-        .application
-        .get_release(&identity, release_id)
-        .await
-        .map_err(super::model::application_error)
-        .map_err(into_connect_error)?;
-    let receipt = crate::rpc::mutation_receipt(
-        &service.receipts,
-        identity.idempotency_id,
-        identity.user_id,
-        "release",
-        "repository",
+    shared_request::run_with_budget(
+        &budget,
+        service.application.publish_release(&identity, release_id),
     )
-    .await?;
+    .await
+    .map_err(into_connect_error)?
+    .map_err(super::model::application_error)
+    .map_err(into_connect_error)?;
+    let release = shared_request::run_with_budget(
+        &budget,
+        service.application.get_release(&identity, release_id),
+    )
+    .await
+    .map_err(into_connect_error)?
+    .map_err(super::model::application_error)
+    .map_err(into_connect_error)?;
+    let receipt = shared_request::run_with_budget(
+        &budget,
+        crate::rpc::mutation_receipt(
+            &service.receipts,
+            identity.idempotency_id,
+            identity.user_id,
+            "release",
+            "repository",
+        ),
+    )
+    .await
+    .map_err(into_connect_error)??;
     connectrpc::Response::ok(PublishReleaseResponse {
         release: super::model::release(release).into(),
         receipt: receipt.into(),

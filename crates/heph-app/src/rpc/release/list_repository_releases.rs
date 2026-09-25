@@ -20,6 +20,7 @@ pub(super) async fn handle(
     const DEFAULT_PAGE_SIZE: u32 = 50;
     const MAX_PAGE_SIZE: u32 = 100;
 
+    let budget = shared_request::RequestBudget::from_transport(&ctx);
     let identity = shared_request::query_identity(&ctx, &service.authenticator, AUDIENCE)
         .map_err(into_connect_error)?;
     let request = request.to_owned_message();
@@ -43,19 +44,21 @@ pub(super) async fn handle(
         .map(|page| decode_cursor(&page.page_token).ok_or(RpcError::InvalidArgument))
         .transpose()
         .map_err(into_connect_error)?;
-    let result = service
-        .application
-        .list_repository_releases(
+    let result = shared_request::run_with_budget(
+        &budget,
+        service.application.list_repository_releases(
             &identity,
             repository_id,
             ReleasePage {
                 size: i64::from(page_size),
                 after,
             },
-        )
-        .await
-        .map_err(super::model::application_error)
-        .map_err(into_connect_error)?;
+        ),
+    )
+    .await
+    .map_err(into_connect_error)?
+    .map_err(super::model::application_error)
+    .map_err(into_connect_error)?;
     connectrpc::Response::ok(ListRepositoryReleasesResponse {
         releases: result
             .releases

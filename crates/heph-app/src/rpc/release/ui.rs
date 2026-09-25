@@ -53,6 +53,7 @@ pub(super) async fn install(
     ctx: RequestContext,
     request: ServiceRequest<'_, InstallUiRequest>,
 ) -> ServiceResult<InstallUiResponse> {
+    let budget = request::RequestBudget::from_transport(&ctx);
     let request = request.to_owned_message();
     let identity = request::mutation_identity(
         &ctx,
@@ -72,9 +73,9 @@ pub(super) async fn install(
     let release_id = release_id(request.release_id.as_option())?;
     let ui_key = release_domain::ui::UiKey::parse(request.ui_key)
         .map_err(|_| into_connect_error(RpcError::InvalidArgument))?;
-    let result = service
-        .ui_installations
-        .install_ui(
+    let result = request::run_with_budget(
+        &budget,
+        service.ui_installations.install_ui(
             &identity,
             InstallUi {
                 caller_key,
@@ -84,18 +85,24 @@ pub(super) async fn install(
                 expected_organization_id: Some(organization_id),
                 acknowledge_repository_git_access: request.acknowledge_repository_git_access,
             },
-        )
-        .await
-        .map_err(install_error)
-        .map_err(into_connect_error)?;
-    let receipt = mutation_receipt(
-        &service.receipts,
-        RequestId::from_uuid(result.idempotency_id),
-        identity.user_id,
-        target.aggregate_type(),
-        target.primary_scope_kind(),
+        ),
     )
-    .await?;
+    .await
+    .map_err(into_connect_error)?
+    .map_err(install_error)
+    .map_err(into_connect_error)?;
+    let receipt = request::run_with_budget(
+        &budget,
+        mutation_receipt(
+            &service.receipts,
+            RequestId::from_uuid(result.idempotency_id),
+            identity.user_id,
+            target.aggregate_type(),
+            target.primary_scope_kind(),
+        ),
+    )
+    .await
+    .map_err(into_connect_error)??;
     Response::ok(InstallUiResponse {
         installation_id: opaque(result.installation_id.as_uuid()).into(),
         generation_id: opaque(result.generation_id.as_uuid()).into(),
@@ -111,6 +118,7 @@ pub(super) async fn activate(
     ctx: RequestContext,
     request: ServiceRequest<'_, ActivateUiRequest>,
 ) -> ServiceResult<ActivateUiResponse> {
+    let budget = request::RequestBudget::from_transport(&ctx);
     let request = request.to_owned_message();
     let (identity, caller_key) = mutation_context(
         &ctx,
@@ -118,9 +126,9 @@ pub(super) async fn activate(
         "/hephaestus.release.v1.ReleaseService/ActivateUi",
         request.context.as_option(),
     )?;
-    let result = service
-        .ui_installations
-        .activate_ui_installation(
+    let result = request::run_with_budget(
+        &budget,
+        service.ui_installations.activate_ui_installation(
             &identity,
             ActivateUiInstallation {
                 caller_key,
@@ -131,17 +139,23 @@ pub(super) async fn activate(
                 release_id: release_id(request.release_id.as_option())?,
                 ui_key: ui_key(request.ui_key)?,
             },
-        )
-        .await
-        .map_err(install_error)
-        .map_err(into_connect_error)?;
-    let receipt = lifecycle_receipt(
-        service,
-        &identity,
-        result.idempotency_id,
-        result.receipt_scope,
+        ),
     )
-    .await?;
+    .await
+    .map_err(into_connect_error)?
+    .map_err(install_error)
+    .map_err(into_connect_error)?;
+    let receipt = request::run_with_budget(
+        &budget,
+        lifecycle_receipt(
+            service,
+            &identity,
+            result.idempotency_id,
+            result.receipt_scope,
+        ),
+    )
+    .await
+    .map_err(into_connect_error)??;
     Response::ok(ActivateUiResponse {
         installation_id: opaque(result.installation_id.as_uuid()).into(),
         generation_id: opaque(result.generation_id.as_uuid()).into(),
@@ -157,6 +171,7 @@ pub(super) async fn rollback(
     ctx: RequestContext,
     request: ServiceRequest<'_, RollbackUiRequest>,
 ) -> ServiceResult<RollbackUiResponse> {
+    let budget = request::RequestBudget::from_transport(&ctx);
     let request = request.to_owned_message();
     let (identity, caller_key) = mutation_context(
         &ctx,
@@ -164,9 +179,9 @@ pub(super) async fn rollback(
         "/hephaestus.release.v1.ReleaseService/RollbackUi",
         request.context.as_option(),
     )?;
-    let result = service
-        .ui_installations
-        .rollback_ui_installation(
+    let result = request::run_with_budget(
+        &budget,
+        service.ui_installations.rollback_ui_installation(
             &identity,
             RollbackUiInstallation {
                 caller_key,
@@ -177,17 +192,23 @@ pub(super) async fn rollback(
                 release_id: release_id(request.release_id.as_option())?,
                 ui_key: ui_key(request.ui_key)?,
             },
-        )
-        .await
-        .map_err(install_error)
-        .map_err(into_connect_error)?;
-    let receipt = lifecycle_receipt(
-        service,
-        &identity,
-        result.idempotency_id,
-        result.receipt_scope,
+        ),
     )
-    .await?;
+    .await
+    .map_err(into_connect_error)?
+    .map_err(install_error)
+    .map_err(into_connect_error)?;
+    let receipt = request::run_with_budget(
+        &budget,
+        lifecycle_receipt(
+            service,
+            &identity,
+            result.idempotency_id,
+            result.receipt_scope,
+        ),
+    )
+    .await
+    .map_err(into_connect_error)??;
     Response::ok(RollbackUiResponse {
         installation_id: opaque(result.installation_id.as_uuid()).into(),
         generation_id: opaque(result.generation_id.as_uuid()).into(),
@@ -203,6 +224,7 @@ pub(super) async fn disable(
     ctx: RequestContext,
     request: ServiceRequest<'_, DisableUiRequest>,
 ) -> ServiceResult<DisableUiResponse> {
+    let budget = request::RequestBudget::from_transport(&ctx);
     let request = request.to_owned_message();
     let (identity, caller_key) = mutation_context(
         &ctx,
@@ -210,9 +232,9 @@ pub(super) async fn disable(
         "/hephaestus.release.v1.ReleaseService/DisableUi",
         request.context.as_option(),
     )?;
-    let result = service
-        .ui_installations
-        .disable_ui_installation(
+    let result = request::run_with_budget(
+        &budget,
+        service.ui_installations.disable_ui_installation(
             &identity,
             DisableUiInstallation {
                 caller_key,
@@ -221,17 +243,23 @@ pub(super) async fn disable(
                     request.expected_generation_id.as_option(),
                 )?),
             },
-        )
-        .await
-        .map_err(install_error)
-        .map_err(into_connect_error)?;
-    let receipt = lifecycle_receipt(
-        service,
-        &identity,
-        result.idempotency_id,
-        result.receipt_scope,
+        ),
     )
-    .await?;
+    .await
+    .map_err(into_connect_error)?
+    .map_err(install_error)
+    .map_err(into_connect_error)?;
+    let receipt = request::run_with_budget(
+        &budget,
+        lifecycle_receipt(
+            service,
+            &identity,
+            result.idempotency_id,
+            result.receipt_scope,
+        ),
+    )
+    .await
+    .map_err(into_connect_error)??;
     Response::ok(DisableUiResponse {
         installation_id: opaque(result.installation_id.as_uuid()).into(),
         generation_id: opaque(result.generation_id.as_uuid()).into(),
@@ -247,6 +275,7 @@ pub(super) async fn remove(
     ctx: RequestContext,
     request: ServiceRequest<'_, RemoveUiRequest>,
 ) -> ServiceResult<RemoveUiResponse> {
+    let budget = request::RequestBudget::from_transport(&ctx);
     let request = request.to_owned_message();
     let (identity, caller_key) = mutation_context(
         &ctx,
@@ -254,9 +283,9 @@ pub(super) async fn remove(
         "/hephaestus.release.v1.ReleaseService/RemoveUi",
         request.context.as_option(),
     )?;
-    let result = service
-        .ui_installations
-        .remove_ui_installation(
+    let result = request::run_with_budget(
+        &budget,
+        service.ui_installations.remove_ui_installation(
             &identity,
             RemoveUiInstallation {
                 caller_key,
@@ -265,17 +294,23 @@ pub(super) async fn remove(
                     request.expected_generation_id.as_option(),
                 )?),
             },
-        )
-        .await
-        .map_err(install_error)
-        .map_err(into_connect_error)?;
-    let receipt = lifecycle_receipt(
-        service,
-        &identity,
-        result.idempotency_id,
-        result.receipt_scope,
+        ),
     )
-    .await?;
+    .await
+    .map_err(into_connect_error)?
+    .map_err(install_error)
+    .map_err(into_connect_error)?;
+    let receipt = request::run_with_budget(
+        &budget,
+        lifecycle_receipt(
+            service,
+            &identity,
+            result.idempotency_id,
+            result.receipt_scope,
+        ),
+    )
+    .await
+    .map_err(into_connect_error)??;
     Response::ok(RemoveUiResponse {
         installation_id: opaque(result.installation_id.as_uuid()).into(),
         generation_id: opaque(result.generation_id.as_uuid()).into(),
@@ -291,6 +326,7 @@ pub(super) async fn list(
     ctx: RequestContext,
     request: ServiceRequest<'_, ListUiInstallationsRequest>,
 ) -> ServiceResult<ListUiInstallationsResponse> {
+    let budget = request::RequestBudget::from_transport(&ctx);
     let request = request.to_owned_message();
     let identity = request::query_identity(&ctx, &service.authenticator, LIST_AUDIENCE)
         .map_err(into_connect_error)?;
@@ -321,9 +357,9 @@ pub(super) async fn list(
                 .map_err(into_connect_error)?,
         )
     };
-    let result = service
-        .ui_navigator
-        .list_ui_installations(
+    let result = request::run_with_budget(
+        &budget,
+        service.ui_navigator.list_ui_installations(
             &identity,
             ListUiInstallations {
                 organization_id,
@@ -333,10 +369,12 @@ pub(super) async fn list(
                     after,
                 },
             },
-        )
-        .await
-        .map_err(navigation_error)
-        .map_err(into_connect_error)?;
+        ),
+    )
+    .await
+    .map_err(into_connect_error)?
+    .map_err(navigation_error)
+    .map_err(into_connect_error)?;
     let next_page_token = result.next.map(|id| {
         service
             .ui_cursor_codec
@@ -366,6 +404,7 @@ pub(super) async fn handoff(
         rpc_proto::messages::hephaestus::release::v1::CreateUiBrowserHandoffRequest,
     >,
 ) -> ServiceResult<rpc_proto::messages::hephaestus::release::v1::CreateUiBrowserHandoffResponse> {
+    let budget = request::RequestBudget::from_transport(&ctx);
     let request = request.to_owned_message();
     if let Some(marker) = ctx.extensions().get::<UiHandoffAuditMarker>() {
         marker.mark_handler_reached();
@@ -378,6 +417,7 @@ pub(super) async fn handoff(
     else {
         return Err(audit_handoff_denial(
             service,
+            &budget,
             &ctx,
             request.context.as_option(),
             actor_hint,
@@ -389,6 +429,7 @@ pub(super) async fn handoff(
     let Ok(verified) = request::verified_mediator_session(&ctx) else {
         return Err(audit_handoff_denial(
             service,
+            &budget,
             &ctx,
             request.context.as_option(),
             Some(identity.user_id),
@@ -400,6 +441,7 @@ pub(super) async fn handoff(
     let Some(parent_session_id) = verified.parent_session_id else {
         return Err(audit_handoff_denial(
             service,
+            &budget,
             &ctx,
             request.context.as_option(),
             Some(identity.user_id),
@@ -411,6 +453,7 @@ pub(super) async fn handoff(
     let Some(context) = request.context.as_option() else {
         return Err(audit_handoff_denial(
             service,
+            &budget,
             &ctx,
             None,
             Some(identity.user_id),
@@ -422,6 +465,7 @@ pub(super) async fn handoff(
     if !context.idempotency_key.is_empty() {
         return Err(audit_handoff_denial(
             service,
+            &budget,
             &ctx,
             Some(context),
             Some(identity.user_id),
@@ -433,6 +477,7 @@ pub(super) async fn handoff(
     let Ok(request_id_text) = request::required_id(context.request_id.as_option()) else {
         return Err(audit_handoff_denial(
             service,
+            &budget,
             &ctx,
             Some(context),
             Some(identity.user_id),
@@ -444,6 +489,7 @@ pub(super) async fn handoff(
     let Ok(caller_request_id) = RequestId::from_str(&request_id_text) else {
         return Err(audit_handoff_denial(
             service,
+            &budget,
             &ctx,
             Some(context),
             Some(identity.user_id),
@@ -463,6 +509,7 @@ pub(super) async fn handoff(
     let Ok(secret) = parse_handoff_secret(&request.handoff_secret) else {
         return Err(audit_handoff_denial(
             service,
+            &budget,
             &ctx,
             Some(context),
             Some(identity.user_id),
@@ -474,6 +521,7 @@ pub(super) async fn handoff(
     let Ok(installation_id) = installation_id(request.installation_id.as_option()) else {
         return Err(audit_handoff_denial(
             service,
+            &budget,
             &ctx,
             Some(context),
             Some(identity.user_id),
@@ -485,6 +533,7 @@ pub(super) async fn handoff(
     let Ok(generation_id) = generation_id(request.generation_id.as_option()) else {
         return Err(audit_handoff_denial(
             service,
+            &budget,
             &ctx,
             Some(context),
             Some(identity.user_id),
@@ -496,6 +545,7 @@ pub(super) async fn handoff(
     let Ok(route) = UiBrowserRoute::parse(request.route) else {
         return Err(audit_handoff_denial(
             service,
+            &budget,
             &ctx,
             Some(context),
             Some(identity.user_id),
@@ -504,20 +554,24 @@ pub(super) async fn handoff(
         )
         .await);
     };
-    let created = service
-        .ui_browser
-        .create_ui_browser_handoff(CreateUiBrowserHandoff {
-            request_id,
-            actor_id: identity.user_id,
-            parent_session_id,
-            installation_id,
-            generation_id,
-            route,
-            secret,
-        })
-        .await
-        .map_err(handoff_error)
-        .map_err(into_connect_error)?;
+    let created = request::run_with_budget(
+        &budget,
+        service
+            .ui_browser
+            .create_ui_browser_handoff(CreateUiBrowserHandoff {
+                request_id,
+                actor_id: identity.user_id,
+                parent_session_id,
+                installation_id,
+                generation_id,
+                route,
+                secret,
+            }),
+    )
+    .await
+    .map_err(into_connect_error)?
+    .map_err(handoff_error)
+    .map_err(into_connect_error)?;
     Response::ok(
         rpc_proto::messages::hephaestus::release::v1::CreateUiBrowserHandoffResponse {
             handoff_id: opaque(created.handoff_id.as_uuid()).into(),
@@ -532,18 +586,22 @@ pub(super) async fn handoff(
 
 async fn audit_handoff_denial(
     service: &ReleaseRpc,
+    budget: &request::RequestBudget,
     transport_context: &RequestContext,
     request_context: Option<&rpc_proto::messages::hephaestus::common::v1::RequestContext>,
     actor_id: Option<UserId>,
     transport_error: RpcError,
     reason: UiRequestAuditReason,
 ) -> connectrpc::ConnectError {
-    append_handoff_denial(
-        service.ui_request_audit.as_ref(),
-        transport_context.extensions().get::<UiHandoffAuditMarker>(),
-        request_context,
-        actor_id,
-        reason,
+    let _ = request::run_with_budget(
+        budget,
+        append_handoff_denial(
+            service.ui_request_audit.as_ref(),
+            transport_context.extensions().get::<UiHandoffAuditMarker>(),
+            request_context,
+            actor_id,
+            reason,
+        ),
     )
     .await;
     into_connect_error(transport_error)
