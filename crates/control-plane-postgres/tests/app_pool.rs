@@ -1,6 +1,9 @@
 //! Application pool role isolation against real `PostgreSQL`.
 
+use authz_postgres::begin_actor_transaction;
 use control_plane_postgres::connect_app;
+use identity_domain::{AuthenticatedIdentity, RequestId, UserId};
+use serde_json::json;
 use sqlx::postgres::PgPoolOptions;
 
 #[tokio::test]
@@ -86,4 +89,119 @@ async fn connect_app_sets_role_on_two_connections_and_denies_worker_paths() {
         .as_database_error()
         .expect("worker table denial must be a database error");
     assert_eq!(database_error.code().as_deref(), Some("42501"));
+}
+
+#[tokio::test]
+async fn actor_context_is_cleared_when_an_app_pool_connection_is_reused() {
+    let Ok(database_url) = std::env::var("HEPHAESTUS_POSTGRES_TEST_URL") else {
+        eprintln!("skipping actor context pool test: test URL is unset");
+        return;
+    };
+
+    let bootstrap = PgPoolOptions::new()
+        .max_connections(1)
+        .connect(&database_url)
+        .await
+        .expect("connect PostgreSQL bootstrap pool");
+    sqlx::migrate!("../../migrations")
+        .run(&bootstrap)
+        .await
+        .expect("apply migrations");
+
+    let pool = connect_app(&database_url, 1)
+        .await
+        .expect("connect single-connection application-role pool");
+    let request_id = RequestId::new();
+    let occurrence_id = RequestId::new();
+    let identity = AuthenticatedIdentity::new(
+        UserId::new(),
+        "https://issuer.example",
+        "rls-context-test",
+        json!({"email_verified": true}),
+        request_id,
+    )
+    .with_idempotency_id(occurrence_id);
+    let expected_actor_id = identity.user_id.to_string();
+    let expected_request_id = identity.request_id.to_string();
+    let expected_occurrence_id = identity.idempotency_id.to_string();
+
+    let mut transaction = begin_actor_transaction(&pool, &identity)
+        .await
+        .expect("begin canonical actor transaction");
+    let (
+        backend_pid,
+        current_user,
+        actor_id,
+        subject_type,
+        current_request_id,
+        current_occurrence_id,
+    ): (
+        i32,
+        String,
+        Option<String>,
+        Option<String>,
+        Option<String>,
+        Option<String>,
+    ) = sqlx::query_as(
+        "SELECT pg_backend_pid(), current_user,
+                current_setting('hephaestus.actor_id', true),
+                current_setting('hephaestus.subject_type', true),
+                current_setting('hephaestus.request_id', true),
+                current_setting('hephaestus.occurrence_id', true)",
+    )
+    .fetch_one(&mut *transaction)
+    .await
+    .expect("read actor context inside transaction");
+    assert_eq!(current_user, "hephaestus_app");
+    assert_eq!(actor_id.as_deref(), Some(expected_actor_id.as_str()));
+    assert_eq!(subject_type.as_deref(), Some("user"));
+    assert_eq!(
+        current_request_id.as_deref(),
+        Some(expected_request_id.as_str())
+    );
+    assert_eq!(
+        current_occurrence_id.as_deref(),
+        Some(expected_occurrence_id.as_str())
+    );
+    transaction
+        .commit()
+        .await
+        .expect("commit actor transaction");
+
+    let mut rolled_back = begin_actor_transaction(&pool, &identity)
+        .await
+        .expect("begin second canonical actor transaction");
+    let rollback_subject_type: Option<String> =
+        sqlx::query_scalar("SELECT current_setting('hephaestus.subject_type', true)")
+            .fetch_one(&mut *rolled_back)
+            .await
+            .expect("read actor context before rollback");
+    assert_eq!(rollback_subject_type.as_deref(), Some("user"));
+    rolled_back
+        .rollback()
+        .await
+        .expect("rollback actor transaction");
+
+    let mut connection = pool.acquire().await.expect("reacquire app connection");
+    let (reused_backend_pid, actor_id, subject_type, current_request_id, current_occurrence_id): (
+        i32,
+        Option<String>,
+        Option<String>,
+        Option<String>,
+        Option<String>,
+    ) = sqlx::query_as(
+        "SELECT pg_backend_pid(),
+                NULLIF(current_setting('hephaestus.actor_id', true), ''),
+                NULLIF(current_setting('hephaestus.subject_type', true), ''),
+                NULLIF(current_setting('hephaestus.request_id', true), ''),
+                NULLIF(current_setting('hephaestus.occurrence_id', true), '')",
+    )
+    .fetch_one(&mut *connection)
+    .await
+    .expect("read actor context after pool reuse");
+    assert_eq!(reused_backend_pid, backend_pid);
+    assert!(actor_id.is_none());
+    assert!(subject_type.is_none());
+    assert!(current_request_id.is_none());
+    assert!(current_occurrence_id.is_none());
 }
