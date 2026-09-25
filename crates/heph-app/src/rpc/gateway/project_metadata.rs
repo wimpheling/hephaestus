@@ -1,7 +1,7 @@
 //! Connect adapter for project-wide service-log loss metadata.
 
 use super::{GatewayRpc, id, query};
-use crate::rpc::{RpcError, into_connect_error};
+use crate::rpc::{RpcError, into_connect_error, request};
 use connectrpc::{RequestContext, Response, ServiceRequest, ServiceResult};
 use gateway_edge::GatewayServiceLogProjectMetadata as ReaderMetadata;
 use gateway_postgres::GatewayServiceLogReaderError;
@@ -15,14 +15,18 @@ pub(super) async fn handle(
     ctx: RequestContext,
     message: ServiceRequest<'_, GetProjectServiceLogMetadataRequest>,
 ) -> ServiceResult<GetProjectServiceLogMetadataResponse> {
+    let budget = request::RequestBudget::from_transport(&ctx);
     let identity = query(&ctx, &rpc.authenticator, "GetProjectServiceLogMetadata")?;
     let request = message.to_owned_message();
-    let metadata = rpc
-        .service_logs
-        .get_project_metadata(&identity, id(request.project_id.as_option())?)
-        .await
-        .map_err(map_error)
-        .map_err(into_connect_error)?;
+    let metadata = request::run_with_budget(
+        &budget,
+        rpc.service_logs
+            .get_project_metadata(&identity, id(request.project_id.as_option())?),
+    )
+    .await
+    .map_err(into_connect_error)?
+    .map_err(map_error)
+    .map_err(into_connect_error)?;
     Response::ok(GetProjectServiceLogMetadataResponse {
         metadata: Some(metadata_message(metadata)).into(),
         ..Default::default()

@@ -16,6 +16,7 @@ pub(super) async fn handle(
     ctx: RequestContext,
     message: ServiceRequest<'_, ProtoRequest>,
 ) -> ServiceResult<ConfigureGatewayResponse> {
+    let budget = request::RequestBudget::from_transport(&ctx);
     let request = message.to_owned_message();
     let identity = request::mutation_identity(
         &ctx,
@@ -42,20 +43,24 @@ pub(super) async fn handle(
             })
             .collect::<Result<_, connectrpc::ConnectError>>()?,
     };
-    let result = service
-        .application
-        .configure(&identity, command)
-        .await
-        .map_err(|error| map_error(&error))
-        .map_err(into_connect_error)?;
-    let receipt = mutation_receipt(
-        &service.receipts,
-        identity.idempotency_id,
-        identity.user_id,
-        "gateway",
-        "project",
+    let result =
+        request::run_with_budget(&budget, service.application.configure(&identity, command))
+            .await
+            .map_err(into_connect_error)?
+            .map_err(|error| map_error(&error))
+            .map_err(into_connect_error)?;
+    let receipt = request::run_with_budget(
+        &budget,
+        mutation_receipt(
+            &service.receipts,
+            identity.idempotency_id,
+            identity.user_id,
+            "gateway",
+            "project",
+        ),
     )
-    .await?;
+    .await
+    .map_err(into_connect_error)??;
     Response::ok(ConfigureGatewayResponse {
         revision_id: super::opaque(result.revision_id).into(),
         receipt: receipt.into(),

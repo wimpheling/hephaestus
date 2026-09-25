@@ -32,25 +32,34 @@ pub(super) async fn handle(
         .context
         .as_option()
         .ok_or_else(|| into_connect_error(RpcError::InvalidArgument))?;
-    let result = service
-        .browser_sessions
-        .revoke_browser_session(RevokeBrowserSession {
-            request_id: identity.request_id,
-            idempotency_seed: mutation_idempotency_seed(AUDIENCE, &context.idempotency_key),
-            user_id: identity.user_id,
-            sid: session.sid,
-        })
-        .await
-        .map_err(|error| map_error(&error))
-        .map_err(into_connect_error)?;
-    let receipt = mutation_receipt(
-        &service.receipts,
-        result.idempotency_id,
-        identity.user_id,
-        "identity_profile",
-        "identity",
+    let budget = request::RequestBudget::from_transport(&ctx);
+    let result = request::run_with_budget(
+        &budget,
+        service
+            .browser_sessions
+            .revoke_browser_session(RevokeBrowserSession {
+                request_id: identity.request_id,
+                idempotency_seed: mutation_idempotency_seed(AUDIENCE, &context.idempotency_key),
+                user_id: identity.user_id,
+                sid: session.sid,
+            }),
     )
-    .await?;
+    .await
+    .map_err(into_connect_error)?
+    .map_err(|error| map_error(&error))
+    .map_err(into_connect_error)?;
+    let receipt = request::run_with_budget(
+        &budget,
+        mutation_receipt(
+            &service.receipts,
+            result.idempotency_id,
+            identity.user_id,
+            "identity_profile",
+            "identity",
+        ),
+    )
+    .await
+    .map_err(into_connect_error)??;
     Response::ok(RevokeBrowserSessionResponse {
         receipt: receipt.into(),
         ..Default::default()

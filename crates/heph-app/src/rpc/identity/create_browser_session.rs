@@ -1,7 +1,7 @@
 //! Bootstrap RPC for creating a durable browser session.
 
 use super::IdentityRpc;
-use crate::rpc::{RpcError, into_connect_error, mutation_receipt};
+use crate::rpc::{RpcError, into_connect_error, mutation_receipt, request};
 use connectrpc::{RequestContext, Response, ServiceRequest, ServiceResult};
 use identity_application::{
     CreateBrowserSession, CreateBrowserSessionError, VerifiedBrowserIdentity,
@@ -24,6 +24,7 @@ pub(super) async fn handle(
     ctx: RequestContext,
     message: ServiceRequest<'_, CreateBrowserSessionRequest>,
 ) -> ServiceResult<CreateBrowserSessionResponse> {
+    let budget = request::RequestBudget::from_transport(&ctx);
     let request = message.to_owned_message();
     validate(&request).map_err(into_connect_error)?;
     service
@@ -46,29 +47,37 @@ pub(super) async fn handle(
         Uuid::from_slice(&request.sid)
             .map_err(|_| into_connect_error(RpcError::InvalidArgument))?,
     );
-    let result = service
-        .browser_sessions
-        .create_browser_session(CreateBrowserSession {
-            request_id,
-            idempotency_seed: mutation_idempotency_seed(AUDIENCE, &context.idempotency_key),
-            verified: VerifiedBrowserIdentity {
-                issuer: request.issuer,
-                subject: request.subject,
-            },
-            sid,
-        })
-        .await
-        .map_err(|error| map_error(&error))
-        .map_err(into_connect_error)?;
-    let metadata = result.metadata;
-    let receipt = mutation_receipt(
-        &service.receipts,
-        result.idempotency_id,
-        metadata.user_id(),
-        "identity_profile",
-        "identity",
+    let result = request::run_with_budget(
+        &budget,
+        service
+            .browser_sessions
+            .create_browser_session(CreateBrowserSession {
+                request_id,
+                idempotency_seed: mutation_idempotency_seed(AUDIENCE, &context.idempotency_key),
+                verified: VerifiedBrowserIdentity {
+                    issuer: request.issuer,
+                    subject: request.subject,
+                },
+                sid,
+            }),
     )
-    .await?;
+    .await
+    .map_err(into_connect_error)?
+    .map_err(|error| map_error(&error))
+    .map_err(into_connect_error)?;
+    let metadata = result.metadata;
+    let receipt = request::run_with_budget(
+        &budget,
+        mutation_receipt(
+            &service.receipts,
+            result.idempotency_id,
+            metadata.user_id(),
+            "identity_profile",
+            "identity",
+        ),
+    )
+    .await
+    .map_err(into_connect_error)??;
     Response::ok(CreateBrowserSessionResponse {
         user_id: OpaqueId {
             value: metadata.user_id().to_string(),

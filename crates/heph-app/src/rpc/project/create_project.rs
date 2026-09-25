@@ -120,8 +120,11 @@ mod tests {
     }
 
     fn expired_transport() -> TransportContext {
-        TransportContext::new(HeaderMap::new())
-            .with_deadline(Some(Instant::now() - Duration::from_millis(1)))
+        TransportContext::new(HeaderMap::new()).with_deadline(Some(
+            Instant::now()
+                .checked_sub(Duration::from_millis(1))
+                .expect("instant supports a one millisecond subtraction"),
+        ))
     }
 
     #[tokio::test]

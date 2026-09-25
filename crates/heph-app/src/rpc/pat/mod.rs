@@ -75,6 +75,7 @@ impl PersonalAccessTokenService for PersonalAccessTokenRpc {
         ctx: RequestContext,
         request: ServiceRequest<'_, ListPersonalAccessTokensRequest>,
     ) -> ServiceResult<ListPersonalAccessTokensResponse> {
+        let budget = request::RequestBudget::from_transport(&ctx);
         let identity = request::query_identity(
             &ctx,
             &self.authenticator,
@@ -100,10 +101,9 @@ impl PersonalAccessTokenService for PersonalAccessTokenRpc {
             .map(|page| PersonalAccessTokenId::from_str(&page.page_token))
             .transpose()
             .map_err(|_| into_connect_error(RpcError::InvalidArgument))?;
-        let values = self
-            .application
-            .list(&identity)
+        let values = request::run_with_budget(&budget, self.application.list(&identity))
             .await
+            .map_err(into_connect_error)?
             .map_err(application_error)?;
         let start = match after {
             Some(after) => values
@@ -132,6 +132,7 @@ impl PersonalAccessTokenService for PersonalAccessTokenRpc {
         ctx: RequestContext,
         request: ServiceRequest<'_, CreatePersonalAccessTokenRequest>,
     ) -> ServiceResult<CreatePersonalAccessTokenResponse> {
+        let budget = request::RequestBudget::from_transport(&ctx);
         let request = request.to_owned_message();
         let identity = mutation_identity(
             &ctx,
@@ -139,9 +140,9 @@ impl PersonalAccessTokenService for PersonalAccessTokenRpc {
             "CreatePersonalAccessToken",
             &request.context,
         )?;
-        let issued = self
-            .application
-            .create(
+        let issued = request::run_with_budget(
+            &budget,
+            self.application.create(
                 &identity,
                 CreateCommand {
                     label: PersonalAccessTokenLabel::parse(request.label)
@@ -149,10 +150,15 @@ impl PersonalAccessTokenService for PersonalAccessTokenRpc {
                     scope: scope(request.scope.as_option())?,
                     expires_at: timestamp(request.expires_at.as_option())?,
                 },
-            )
-            .await
-            .map_err(application_error)?;
-        let receipt = identity_receipt(&self.receipts, &identity).await?;
+            ),
+        )
+        .await
+        .map_err(into_connect_error)?
+        .map_err(application_error)?;
+        let receipt =
+            request::run_with_budget(&budget, identity_receipt(&self.receipts, &identity))
+                .await
+                .map_err(into_connect_error)??;
         Response::ok(CreatePersonalAccessTokenResponse {
             token: metadata(&issued.metadata).into(),
             value: PersonalAccessTokenValue {
@@ -170,6 +176,7 @@ impl PersonalAccessTokenService for PersonalAccessTokenRpc {
         ctx: RequestContext,
         request: ServiceRequest<'_, RotatePersonalAccessTokenRequest>,
     ) -> ServiceResult<RotatePersonalAccessTokenResponse> {
+        let budget = request::RequestBudget::from_transport(&ctx);
         let request = request.to_owned_message();
         let identity = mutation_identity(
             &ctx,
@@ -177,9 +184,9 @@ impl PersonalAccessTokenService for PersonalAccessTokenRpc {
             "RotatePersonalAccessToken",
             &request.context,
         )?;
-        let issued = self
-            .application
-            .rotate(
+        let issued = request::run_with_budget(
+            &budget,
+            self.application.rotate(
                 &identity,
                 RotateCommand {
                     token_id: token_id(request.token_id.as_option())?,
@@ -188,10 +195,15 @@ impl PersonalAccessTokenService for PersonalAccessTokenRpc {
                     scope: scope(request.scope.as_option())?,
                     expires_at: timestamp(request.expires_at.as_option())?,
                 },
-            )
-            .await
-            .map_err(application_error)?;
-        let receipt = identity_receipt(&self.receipts, &identity).await?;
+            ),
+        )
+        .await
+        .map_err(into_connect_error)?
+        .map_err(application_error)?;
+        let receipt =
+            request::run_with_budget(&budget, identity_receipt(&self.receipts, &identity))
+                .await
+                .map_err(into_connect_error)??;
         Response::ok(RotatePersonalAccessTokenResponse {
             token: metadata(&issued.metadata).into(),
             value: PersonalAccessTokenValue {
@@ -209,6 +221,7 @@ impl PersonalAccessTokenService for PersonalAccessTokenRpc {
         ctx: RequestContext,
         request: ServiceRequest<'_, RevokePersonalAccessTokenRequest>,
     ) -> ServiceResult<RevokePersonalAccessTokenResponse> {
+        let budget = request::RequestBudget::from_transport(&ctx);
         let request = request.to_owned_message();
         let identity = mutation_identity(
             &ctx,
@@ -216,12 +229,18 @@ impl PersonalAccessTokenService for PersonalAccessTokenRpc {
             "RevokePersonalAccessToken",
             &request.context,
         )?;
-        let revoked = self
-            .application
-            .revoke(&identity, token_id(request.token_id.as_option())?)
-            .await
-            .map_err(application_error)?;
-        let receipt = identity_receipt(&self.receipts, &identity).await?;
+        let revoked = request::run_with_budget(
+            &budget,
+            self.application
+                .revoke(&identity, token_id(request.token_id.as_option())?),
+        )
+        .await
+        .map_err(into_connect_error)?
+        .map_err(application_error)?;
+        let receipt =
+            request::run_with_budget(&budget, identity_receipt(&self.receipts, &identity))
+                .await
+                .map_err(into_connect_error)??;
         Response::ok(RevokePersonalAccessTokenResponse {
             token: metadata(&revoked).into(),
             receipt: receipt.into(),

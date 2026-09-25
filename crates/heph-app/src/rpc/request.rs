@@ -34,7 +34,7 @@ impl RequestBudget {
     }
 
     #[cfg(test)]
-    fn deadline(&self) -> Option<Instant> {
+    const fn deadline(&self) -> Option<Instant> {
         self.deadline
     }
 }

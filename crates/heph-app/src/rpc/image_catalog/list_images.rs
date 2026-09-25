@@ -14,6 +14,7 @@ pub(super) async fn handle(
     ctx: RequestContext,
     request_message: ServiceRequest<'_, ListImagesRequest>,
 ) -> ServiceResult<ListImagesResponse> {
+    let budget = request::RequestBudget::from_transport(&ctx);
     let identity = request::query_identity(&ctx, &service.authenticator, LIST_AUDIENCE)
         .map_err(into_connect_error)?;
     let request = request_message.to_owned_message();
@@ -34,12 +35,14 @@ pub(super) async fn handle(
                 .map_err(|_| crate::rpc::RpcError::InvalidArgument)
         })
         .map_err(into_connect_error)?;
-    let images = service
-        .application
-        .list_image_publications(&identity)
-        .await
-        .map_err(map_catalog_error)
-        .map_err(into_connect_error)?;
+    let images = request::run_with_budget(
+        &budget,
+        service.application.list_image_publications(&identity),
+    )
+    .await
+    .map_err(into_connect_error)?
+    .map_err(map_catalog_error)
+    .map_err(into_connect_error)?;
     let page_size = usize::try_from(page_size).expect("bounded page size fits usize");
     let mut images = images.into_iter().skip(offset).collect::<Vec<_>>();
     let has_more = images.len() > page_size;

@@ -11,6 +11,7 @@ pub(super) async fn handle(
     ctx: RequestContext,
     request_message: ServiceRequest<'_, GetImageRequest>,
 ) -> ServiceResult<GetImageResponse> {
+    let budget = request::RequestBudget::from_transport(&ctx);
     let identity = request::query_identity(&ctx, &service.authenticator, GET_AUDIENCE)
         .map_err(into_connect_error)?;
     let id = request_message
@@ -22,12 +23,16 @@ pub(super) async fn handle(
             Uuid::from_str(&value.value).map_err(|_| crate::rpc::RpcError::InvalidArgument)
         })
         .map_err(into_connect_error)?;
-    let image = service
-        .application
-        .get_image_publication(&identity, OciImageId::from_uuid(id))
-        .await
-        .map_err(map_catalog_error)
-        .map_err(into_connect_error)?;
+    let image = request::run_with_budget(
+        &budget,
+        service
+            .application
+            .get_image_publication(&identity, OciImageId::from_uuid(id)),
+    )
+    .await
+    .map_err(into_connect_error)?
+    .map_err(map_catalog_error)
+    .map_err(into_connect_error)?;
     Response::ok(GetImageResponse {
         image: to_proto_with_registry(image.image, image.registry_publication).into(),
         ..Default::default()

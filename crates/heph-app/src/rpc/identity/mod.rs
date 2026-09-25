@@ -5,7 +5,7 @@ mod revoke_browser_session;
 
 use super::{
     BootstrapIdentity, MediatorAuthenticator, MutationReceipts, RpcError, into_connect_error,
-    mutation_receipt,
+    mutation_receipt, request,
 };
 use crate::application::identity::{IdentityApplication, ResolveIdentity, ResolveIdentityError};
 use connectrpc::{RequestContext, Response, ServiceRequest, ServiceResult};
@@ -68,6 +68,7 @@ impl IdentityService for IdentityRpc {
             impl connectrpc::Encodable<ResolveIdentityResponse> + Send + use<'a>,
         >,
     > + Send {
+        let budget = request::RequestBudget::from_transport(&ctx);
         let request = request.to_owned_message();
         async move {
             validate_identity_fields(&request).map_err(into_connect_error)?;
@@ -93,9 +94,9 @@ impl IdentityService for IdentityRpc {
                     .expect("validated request context")
                     .idempotency_key,
             );
-            let resolved = self
-                .application
-                .resolve_identity(ResolveIdentity {
+            let resolved = request::run_with_budget(
+                &budget,
+                self.application.resolve_identity(ResolveIdentity {
                     request_id,
                     idempotency_seed,
                     issuer: request.issuer,
@@ -103,18 +104,24 @@ impl IdentityService for IdentityRpc {
                     display_name: request.display_name,
                     email: request.email,
                     email_verified: request.email_verified,
-                })
-                .await
-                .map_err(map_application_error)
-                .map_err(into_connect_error)?;
-            let receipt = mutation_receipt(
-                &self.receipts,
-                resolved.idempotency_id,
-                resolved.user_id,
-                "identity_profile",
-                "identity",
+                }),
             )
-            .await?;
+            .await
+            .map_err(into_connect_error)?
+            .map_err(map_application_error)
+            .map_err(into_connect_error)?;
+            let receipt = request::run_with_budget(
+                &budget,
+                mutation_receipt(
+                    &self.receipts,
+                    resolved.idempotency_id,
+                    resolved.user_id,
+                    "identity_profile",
+                    "identity",
+                ),
+            )
+            .await
+            .map_err(into_connect_error)??;
             Response::ok(ResolveIdentityResponse {
                 user_id: OpaqueId {
                     value: resolved.user_id.to_string(),

@@ -1,7 +1,7 @@
 //! Connect adapter for the authorized persistent service-log reader.
 
 use super::{GatewayRpc, id, query, timestamp};
-use crate::rpc::{RpcError, into_connect_error};
+use crate::rpc::{RpcError, into_connect_error, request};
 use connectrpc::{RequestContext, Response, ServiceRequest, ServiceResult};
 use gateway_edge::{
     GatewayServiceLogReadRecord, GatewayServiceLogReadRequest, GatewayServiceLogReadScope,
@@ -21,6 +21,7 @@ pub(super) async fn handle(
     ctx: RequestContext,
     message: ServiceRequest<'_, ListGatewayServiceLogsRequest>,
 ) -> ServiceResult<ListGatewayServiceLogsResponse> {
+    let budget = request::RequestBudget::from_transport(&ctx);
     let identity = query(&ctx, &rpc.authenticator, "ListGatewayServiceLogs")?;
     let request = message.to_owned_message();
     let scope = read_scope(request.scope.as_option())?;
@@ -32,10 +33,9 @@ pub(super) async fn handle(
         .transpose()
         .map_err(|_| invalid())?;
     let request = GatewayServiceLogReadRequest::new(scope, limit, after).map_err(|_| invalid())?;
-    let page = rpc
-        .service_logs
-        .get_page(&identity, request)
+    let page = request::run_with_budget(&budget, rpc.service_logs.get_page(&identity, request))
         .await
+        .map_err(into_connect_error)?
         .map_err(map_error)
         .map_err(into_connect_error)?;
 

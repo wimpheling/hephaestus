@@ -110,18 +110,21 @@ impl GatewayService for GatewayRpc {
         ctx: RequestContext,
         message: ServiceRequest<'_, ListProjectGatewaysRequest>,
     ) -> ServiceResult<ListProjectGatewaysResponse> {
+        let budget = request::RequestBudget::from_transport(&ctx);
         let identity = query(&ctx, &self.authenticator, "ListProjectGateways")?;
         let request = message.to_owned_message();
-        let values = self
-            .application
-            .list_project(
+        let values = request::run_with_budget(
+            &budget,
+            self.application.list_project(
                 &identity,
                 id(request.project_id.as_option())?,
                 page(request.page.as_option())?,
-            )
-            .await
-            .map_err(|error| map_error(&error))
-            .map_err(into_connect_error)?;
+            ),
+        )
+        .await
+        .map_err(into_connect_error)?
+        .map_err(|error| map_error(&error))
+        .map_err(into_connect_error)?;
         Response::ok(ListProjectGatewaysResponse {
             gateways: values.into_iter().map(summary).collect(),
             page: PageResponse {
@@ -138,14 +141,18 @@ impl GatewayService for GatewayRpc {
         ctx: RequestContext,
         message: ServiceRequest<'_, GetGatewayRequest>,
     ) -> ServiceResult<GetGatewayResponse> {
+        let budget = request::RequestBudget::from_transport(&ctx);
         let identity = query(&ctx, &self.authenticator, "GetGateway")?;
         let request = message.to_owned_message();
-        let (gateway, revisions) = self
-            .application
-            .get(&identity, id(request.gateway_id.as_option())?)
-            .await
-            .map_err(|error| map_error(&error))
-            .map_err(into_connect_error)?;
+        let (gateway, revisions) = request::run_with_budget(
+            &budget,
+            self.application
+                .get(&identity, id(request.gateway_id.as_option())?),
+        )
+        .await
+        .map_err(into_connect_error)?
+        .map_err(|error| map_error(&error))
+        .map_err(into_connect_error)?;
         Response::ok(GetGatewayResponse {
             gateway: summary(gateway).into(),
             revisions: revisions.into_iter().map(revision).collect(),
@@ -195,18 +202,21 @@ impl GatewayService for GatewayRpc {
         ctx: RequestContext,
         message: ServiceRequest<'_, ListGatewayIngressRequest>,
     ) -> ServiceResult<ListGatewayIngressResponse> {
+        let budget = request::RequestBudget::from_transport(&ctx);
         let identity = query(&ctx, &self.authenticator, "ListGatewayIngress")?;
         let request = message.to_owned_message();
-        let values = self
-            .application
-            .ingress(
+        let values = request::run_with_budget(
+            &budget,
+            self.application.ingress(
                 &identity,
                 id(request.gateway_id.as_option())?,
                 page(request.page.as_option())?,
-            )
-            .await
-            .map_err(|error| map_error(&error))
-            .map_err(into_connect_error)?;
+            ),
+        )
+        .await
+        .map_err(into_connect_error)?
+        .map_err(|error| map_error(&error))
+        .map_err(into_connect_error)?;
         Response::ok(ListGatewayIngressResponse {
             ingress: values.iter().map(ingress).collect(),
             page: PageResponse {
@@ -223,6 +233,7 @@ impl GatewayService for GatewayRpc {
         ctx: RequestContext,
         message: ServiceRequest<'_, SetGatewayLifecycleRequest>,
     ) -> ServiceResult<SetGatewayLifecycleResponse> {
+        let budget = request::RequestBudget::from_transport(&ctx);
         let request = message.to_owned_message();
         let identity = request::mutation_identity(
             &ctx,
@@ -232,9 +243,9 @@ impl GatewayService for GatewayRpc {
         )
         .map_err(into_connect_error)?;
         let gateway_id = id(request.gateway_id.as_option())?;
-        let changed = self
-            .application
-            .transition(
+        let changed = request::run_with_budget(
+            &budget,
+            self.application.transition(
                 &identity,
                 gateway_id,
                 lifecycle(
@@ -249,27 +260,33 @@ impl GatewayService for GatewayRpc {
                         .as_known()
                         .ok_or_else(|| into_connect_error(RpcError::InvalidArgument))?,
                 )?,
-            )
-            .await
-            .map_err(|error| map_error(&error))
-            .map_err(into_connect_error)?;
+            ),
+        )
+        .await
+        .map_err(into_connect_error)?
+        .map_err(|error| map_error(&error))
+        .map_err(into_connect_error)?;
         if !changed {
             return Err(into_connect_error(RpcError::FailedPrecondition));
         }
-        let (gateway, _) = self
-            .application
-            .get(&identity, gateway_id)
-            .await
-            .map_err(|error| map_error(&error))
-            .map_err(into_connect_error)?;
-        let receipt = mutation_receipt(
-            &self.receipts,
-            identity.idempotency_id,
-            identity.user_id,
-            "gateway",
-            "project",
+        let (gateway, _) =
+            request::run_with_budget(&budget, self.application.get(&identity, gateway_id))
+                .await
+                .map_err(into_connect_error)?
+                .map_err(|error| map_error(&error))
+                .map_err(into_connect_error)?;
+        let receipt = request::run_with_budget(
+            &budget,
+            mutation_receipt(
+                &self.receipts,
+                identity.idempotency_id,
+                identity.user_id,
+                "gateway",
+                "project",
+            ),
         )
-        .await?;
+        .await
+        .map_err(into_connect_error)??;
         Response::ok(SetGatewayLifecycleResponse {
             gateway: summary(gateway).into(),
             receipt: receipt.into(),
@@ -282,6 +299,7 @@ impl GatewayService for GatewayRpc {
         ctx: RequestContext,
         message: ServiceRequest<'_, CreateMailboxBindingRequest>,
     ) -> ServiceResult<CreateMailboxBindingResponse> {
+        let budget = request::RequestBudget::from_transport(&ctx);
         let request = message.to_owned_message();
         let identity = mutation(
             &ctx,
@@ -289,19 +307,23 @@ impl GatewayService for GatewayRpc {
             "CreateMailboxBinding",
             request.context.as_option(),
         )?;
-        let binding = self
-            .application
-            .create_mailbox_binding(
+        let binding = request::run_with_budget(
+            &budget,
+            self.application.create_mailbox_binding(
                 &identity,
                 id(request.gateway_revision_id.as_option())?,
                 &request.slot_key,
                 id(request.mailbox_id.as_option())?,
                 &request.producer_id,
-            )
+            ),
+        )
+        .await
+        .map_err(into_connect_error)?
+        .map_err(|error| map_error(&error))
+        .map_err(into_connect_error)?;
+        let receipt = request::run_with_budget(&budget, receipt(&self.receipts, &identity))
             .await
-            .map_err(|error| map_error(&error))
-            .map_err(into_connect_error)?;
-        let receipt = receipt(&self.receipts, &identity).await?;
+            .map_err(into_connect_error)??;
         Response::ok(CreateMailboxBindingResponse {
             binding: mailbox_binding(binding).into(),
             receipt: receipt.into(),
@@ -314,6 +336,7 @@ impl GatewayService for GatewayRpc {
         ctx: RequestContext,
         message: ServiceRequest<'_, RevokeMailboxBindingGrantRequest>,
     ) -> ServiceResult<RevokeMailboxBindingGrantResponse> {
+        let budget = request::RequestBudget::from_transport(&ctx);
         let request = message.to_owned_message();
         let identity = mutation(
             &ctx,
@@ -321,13 +344,18 @@ impl GatewayService for GatewayRpc {
             "RevokeMailboxBindingGrant",
             request.context.as_option(),
         )?;
-        let binding = self
-            .application
-            .revoke_mailbox_binding_grant(&identity, id(request.binding_id.as_option())?)
+        let binding = request::run_with_budget(
+            &budget,
+            self.application
+                .revoke_mailbox_binding_grant(&identity, id(request.binding_id.as_option())?),
+        )
+        .await
+        .map_err(into_connect_error)?
+        .map_err(|error| map_error(&error))
+        .map_err(into_connect_error)?;
+        let receipt = request::run_with_budget(&budget, receipt(&self.receipts, &identity))
             .await
-            .map_err(|error| map_error(&error))
-            .map_err(into_connect_error)?;
-        let receipt = receipt(&self.receipts, &identity).await?;
+            .map_err(into_connect_error)??;
         Response::ok(RevokeMailboxBindingGrantResponse {
             binding: mailbox_binding(binding).into(),
             receipt: receipt.into(),
@@ -340,18 +368,21 @@ impl GatewayService for GatewayRpc {
         ctx: RequestContext,
         message: ServiceRequest<'_, ListMailboxBindingsRequest>,
     ) -> ServiceResult<ListMailboxBindingsResponse> {
+        let budget = request::RequestBudget::from_transport(&ctx);
         let identity = query(&ctx, &self.authenticator, "ListMailboxBindings")?;
         let request = message.to_owned_message();
-        let bindings = self
-            .application
-            .mailbox_bindings(
+        let bindings = request::run_with_budget(
+            &budget,
+            self.application.mailbox_bindings(
                 &identity,
                 id(request.gateway_revision_id.as_option())?,
                 page(request.page.as_option())?,
-            )
-            .await
-            .map_err(|error| map_error(&error))
-            .map_err(into_connect_error)?;
+            ),
+        )
+        .await
+        .map_err(into_connect_error)?
+        .map_err(|error| map_error(&error))
+        .map_err(into_connect_error)?;
         Response::ok(ListMailboxBindingsResponse {
             bindings: bindings.into_iter().map(mailbox_binding).collect(),
             page: PageResponse {
@@ -368,18 +399,21 @@ impl GatewayService for GatewayRpc {
         ctx: RequestContext,
         message: ServiceRequest<'_, ListMailboxPublicationsRequest>,
     ) -> ServiceResult<ListMailboxPublicationsResponse> {
+        let budget = request::RequestBudget::from_transport(&ctx);
         let identity = query(&ctx, &self.authenticator, "ListMailboxPublications")?;
         let request = message.to_owned_message();
-        let publications = self
-            .application
-            .mailbox_publications(
+        let publications = request::run_with_budget(
+            &budget,
+            self.application.mailbox_publications(
                 &identity,
                 id(request.gateway_id.as_option())?,
                 page(request.page.as_option())?,
-            )
-            .await
-            .map_err(|error| map_error(&error))
-            .map_err(into_connect_error)?;
+            ),
+        )
+        .await
+        .map_err(into_connect_error)?
+        .map_err(|error| map_error(&error))
+        .map_err(into_connect_error)?;
         Response::ok(ListMailboxPublicationsResponse {
             publications: publications.into_iter().map(mailbox_publication).collect(),
             page: PageResponse {
