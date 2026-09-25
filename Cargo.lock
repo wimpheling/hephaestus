@@ -4213,9 +4213,7 @@ dependencies = [
  "time",
  "tokio",
  "uuid",
- "vm-libkrun",
  "vm-trait",
- "volume-local",
  "volume-postgres",
  "volume-trait",
 ]
