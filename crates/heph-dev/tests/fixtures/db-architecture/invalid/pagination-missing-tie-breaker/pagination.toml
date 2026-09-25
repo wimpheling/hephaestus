@@ -1,0 +1,7 @@
+[[queries]]
+item = "list"
+query_index = 1
+order = ["items.name ASC", "items.id ASC"]
+cursor_keys = ["items.name", "items.id"]
+cursor_operator = ">"
+unique_tie_breaker = "items.name"
