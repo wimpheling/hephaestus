@@ -1,5 +1,14 @@
 use async_nats::Client;
 
-async fn publish_committed_outbox(client: &Client) {
-    client.publish("product.changed", "typed".into()).await.unwrap();
+const PRODUCT_EVENT_SUBJECT: &str = "hephaestus.product.event.v1";
+
+struct EventPublisher;
+
+impl EventPublisher {
+    async fn publish_pending(&self, client: &Client) {
+        client
+            .publish(PRODUCT_EVENT_SUBJECT, "typed".into())
+            .await
+            .unwrap();
+    }
 }
