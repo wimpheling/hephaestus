@@ -18,18 +18,21 @@ pub(super) async fn handle(
     .map_err(into_connect_error)?;
     let request = message.to_owned_message();
     let id = parse_id(request.repository_id.as_option()).map_err(into_connect_error)?;
-    let (_, entry, contents) = service
-        .application
-        .blob(
+    let budget = request::RequestBudget::from_transport(&ctx);
+    let (_, entry, contents) = request::run_with_budget(
+        &budget,
+        service.application.blob(
             &identity,
             id,
             &request.branch,
             &request.path,
             MAX_FILE_BYTES,
-        )
-        .await
-        .map_err(map_error)
-        .map_err(into_connect_error)?;
+        ),
+    )
+    .await
+    .map_err(into_connect_error)?
+    .map_err(map_error)
+    .map_err(into_connect_error)?;
     let contents =
         String::from_utf8(contents).map_err(|_| into_connect_error(RpcError::InvalidArgument))?;
     if contents.contains('\0') {

@@ -40,12 +40,17 @@ pub(super) async fn handle(
         .transpose()
         .map_err(into_connect_error)?;
     let skip = cursor.as_ref().map_or(0, |(_, offset)| *offset);
-    let (selected, mut values) = service
-        .application
-        .commits(&identity, id, &request.branch, skip, size + 1)
-        .await
-        .map_err(map_error)
-        .map_err(into_connect_error)?;
+    let budget = request::RequestBudget::from_transport(&ctx);
+    let (selected, mut values) = request::run_with_budget(
+        &budget,
+        service
+            .application
+            .commits(&identity, id, &request.branch, skip, size + 1),
+    )
+    .await
+    .map_err(into_connect_error)?
+    .map_err(map_error)
+    .map_err(into_connect_error)?;
     if cursor
         .as_ref()
         .is_some_and(|(anchor, _)| anchor != &selected.commit)

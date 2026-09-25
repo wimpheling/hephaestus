@@ -40,12 +40,15 @@ pub(super) async fn handle(
         .transpose()
         .map_err(into_connect_error)?;
     let offset = cursor.as_ref().map_or(0, |(_, offset)| *offset);
-    let (selected, values) = service
-        .application
-        .tree(&identity, id, &request.branch)
-        .await
-        .map_err(map_error)
-        .map_err(into_connect_error)?;
+    let budget = request::RequestBudget::from_transport(&ctx);
+    let (selected, values) = request::run_with_budget(
+        &budget,
+        service.application.tree(&identity, id, &request.branch),
+    )
+    .await
+    .map_err(into_connect_error)?
+    .map_err(map_error)
+    .map_err(into_connect_error)?;
     if cursor
         .as_ref()
         .is_some_and(|(anchor, _)| anchor != &selected.commit)

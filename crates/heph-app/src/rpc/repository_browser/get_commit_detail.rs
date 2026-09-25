@@ -41,9 +41,10 @@ pub(super) async fn handle(
         .transpose()
         .map_err(into_connect_error)?;
     let skip = cursor.as_ref().map_or(0, |(_, _, offset)| *offset);
-    let (selected, detail, has_more) = service
-        .application
-        .commit_detail(
+    let budget = request::RequestBudget::from_transport(&ctx);
+    let (selected, detail, has_more) = request::run_with_budget(
+        &budget,
+        service.application.commit_detail(
             &identity,
             id,
             CommitDetailRequest {
@@ -53,10 +54,12 @@ pub(super) async fn handle(
                 skip,
                 limit: size,
             },
-        )
-        .await
-        .map_err(map_error)
-        .map_err(into_connect_error)?;
+        ),
+    )
+    .await
+    .map_err(into_connect_error)?
+    .map_err(map_error)
+    .map_err(into_connect_error)?;
     if cursor.as_ref().is_some_and(|(commit, parent, _)| {
         commit != &request.commit || parent != &parent_cursor_component(&detail.selected_parent)
     }) {

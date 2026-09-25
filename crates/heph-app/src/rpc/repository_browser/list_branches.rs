@@ -45,10 +45,10 @@ pub(super) async fn handle(
         })
         .transpose()
         .map_err(into_connect_error)?;
-    let values = service
-        .application
-        .branches(&identity, id)
+    let budget = request::RequestBudget::from_transport(&ctx);
+    let values = request::run_with_budget(&budget, service.application.branches(&identity, id))
         .await
+        .map_err(into_connect_error)?
         .map_err(map_error)
         .map_err(into_connect_error)?;
     let mut filtered = values

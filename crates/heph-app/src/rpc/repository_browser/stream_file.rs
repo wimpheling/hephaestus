@@ -6,6 +6,9 @@ use rpc_proto::messages::hephaestus::{
     common::v1::Cursor,
     repository_browser::v1::{StreamFileRequest, StreamFileResponse},
 };
+use std::time::Instant;
+use tokio::{sync::mpsc, time::sleep_until};
+use tokio_util::sync::CancellationToken;
 
 const DEFAULT_TOTAL: usize = 16 * 1_048_576;
 const MAX_TOTAL: usize = 16 * 1_048_576;
@@ -40,12 +43,17 @@ pub(super) async fn handle(
     if total > MAX_TOTAL || chunk == 0 || chunk > MAX_CHUNK {
         return Err(into_connect_error(RpcError::InvalidArgument));
     }
-    let (selected, entry, contents) = service
-        .application
-        .blob(&identity, id, &request.branch, &request.path, MAX_TOTAL)
-        .await
-        .map_err(map_error)
-        .map_err(into_connect_error)?;
+    let budget = request::RequestBudget::from_transport(&ctx);
+    let (selected, entry, contents) = request::run_with_budget(
+        &budget,
+        service
+            .application
+            .blob(&identity, id, &request.branch, &request.path, MAX_TOTAL),
+    )
+    .await
+    .map_err(into_connect_error)?
+    .map_err(map_error)
+    .map_err(into_connect_error)?;
     let offset = parse_cursor(
         request
             .resume_cursor
@@ -89,7 +97,114 @@ pub(super) async fn handle(
             ..Default::default()
         }));
     }
-    Response::stream_ok(stream::iter(responses))
+    Response::ok(response_stream(responses, budget, ctx.deadline()))
+}
+
+fn response_stream(
+    responses: Vec<Result<StreamFileResponse, connectrpc::ConnectError>>,
+    budget: request::RequestBudget,
+    deadline: Option<Instant>,
+) -> ServiceStream<StreamFileResponse> {
+    let (sender, receiver) = mpsc::channel(2);
+    let cancellation = budget.cancellation_token();
+    tokio::spawn(produce(sender, responses, cancellation, deadline));
+    let response = stream::unfold(
+        (receiver, budget, false),
+        |(mut receiver, budget, terminal)| async move {
+            if terminal {
+                return None;
+            }
+            match request::run_with_budget(&budget, receiver.recv()).await {
+                Ok(Some(Ok(response))) => Some((Ok(response), (receiver, budget, false))),
+                Ok(Some(Err(error))) => {
+                    let terminal = error.code == connectrpc::ErrorCode::DeadlineExceeded;
+                    if terminal {
+                        budget.cancel();
+                    }
+                    Some((Err(error), (receiver, budget, terminal)))
+                }
+                Err(RpcError::DeadlineExceeded) => {
+                    budget.cancel();
+                    Some((
+                        Err(into_connect_error(RpcError::DeadlineExceeded)),
+                        (receiver, budget, true),
+                    ))
+                }
+                Err(_) | Ok(None) => None,
+            }
+        },
+    );
+    Box::pin(response)
+}
+
+async fn produce(
+    sender: mpsc::Sender<Result<StreamFileResponse, connectrpc::ConnectError>>,
+    responses: Vec<Result<StreamFileResponse, connectrpc::ConnectError>>,
+    cancellation: CancellationToken,
+    deadline: Option<Instant>,
+) {
+    for response in responses {
+        match send_with_budget(&sender, response, &cancellation, deadline).await {
+            Ok(()) => {}
+            Err(Boundary::Deadline) => {
+                let _ = sender.try_send(Err(into_connect_error(RpcError::DeadlineExceeded)));
+                cancellation.cancel();
+                return;
+            }
+            Err(Boundary::Closed | Boundary::Canceled) => return,
+        }
+    }
+}
+
+#[derive(Debug, PartialEq, Eq)]
+enum Boundary {
+    Closed,
+    Canceled,
+    Deadline,
+}
+
+async fn send_with_budget(
+    sender: &mpsc::Sender<Result<StreamFileResponse, connectrpc::ConnectError>>,
+    response: Result<StreamFileResponse, connectrpc::ConnectError>,
+    cancellation: &CancellationToken,
+    deadline: Option<Instant>,
+) -> Result<(), Boundary> {
+    if cancellation.is_cancelled() {
+        return Err(Boundary::Canceled);
+    }
+    if deadline.is_some_and(|value| Instant::now() >= value) {
+        cancellation.cancel();
+        return Err(Boundary::Deadline);
+    }
+    let send = sender.send(response);
+    match deadline {
+        Some(deadline) => {
+            tokio::select! {
+                result = send => if result.is_ok() {
+                    Ok(())
+                } else {
+                    cancellation.cancel();
+                    Err(Boundary::Closed)
+                },
+                () = cancellation.cancelled() => Err(Boundary::Canceled),
+                () = sleep_until(deadline.into()) => {
+                    cancellation.cancel();
+                    Err(Boundary::Deadline)
+                }
+            }
+        }
+        None => {
+            tokio::select! {
+                result = send => if result.is_ok() {
+                    Ok(())
+                } else {
+                    cancellation.cancel();
+                    Err(Boundary::Closed)
+                },
+                () = cancellation.cancelled() => Err(Boundary::Canceled),
+            }
+        }
+    }
 }
 
 fn parse_cursor(
@@ -135,7 +250,9 @@ fn media_type(path: &str) -> &'static str {
 
 #[cfg(test)]
 mod tests {
-    use super::parse_cursor;
+    use super::{Boundary, parse_cursor, send_with_budget};
+    use std::time::{Duration, Instant};
+    use tokio::sync::mpsc;
     #[test]
     fn cursor_is_bound_to_commit_object_and_length() {
         assert_eq!(
@@ -144,5 +261,30 @@ mod tests {
         );
         assert!(parse_cursor(Some("v1:other:def:4"), "abc", "def", 8).is_err());
         assert!(parse_cursor(Some("v1:abc:def:9"), "abc", "def", 8).is_err());
+    }
+
+    #[tokio::test]
+    async fn producer_cancels_when_receiver_drops() {
+        let cancellation = tokio_util::sync::CancellationToken::new();
+        let (sender, receiver) = mpsc::channel(1);
+        drop(receiver);
+        let result = send_with_budget(&sender, Ok(Default::default()), &cancellation, None).await;
+        assert_eq!(result, Err(Boundary::Closed));
+        assert!(cancellation.is_cancelled());
+    }
+
+    #[tokio::test]
+    async fn producer_deadline_wins_before_ready_send() {
+        let cancellation = tokio_util::sync::CancellationToken::new();
+        let (sender, _receiver) = mpsc::channel(1);
+        let result = send_with_budget(
+            &sender,
+            Ok(Default::default()),
+            &cancellation,
+            Some(Instant::now() - Duration::from_millis(1)),
+        )
+        .await;
+        assert_eq!(result, Err(Boundary::Deadline));
+        assert!(cancellation.is_cancelled());
     }
 }
