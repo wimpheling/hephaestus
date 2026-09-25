@@ -3,7 +3,14 @@ use serde_json::json;
 use sqlx::PgPool;
 use uuid::Uuid;
 
-pub(crate) async fn seed_release_rows(pool: &PgPool, data: &SeedData) {
+pub(super) async fn seed_release_rows(pool: &PgPool, data: &SeedData) {
+    seed_release_records(pool, data).await;
+    seed_release_snapshots(pool, data).await;
+    seed_release_descriptors(pool, data).await;
+    seed_release_artifacts(pool, data).await;
+}
+
+async fn seed_release_records(pool: &PgPool, data: &SeedData) {
     sqlx::query(
         "INSERT INTO releases
              (id, repository_id, version, source_commit, source_ref, build_request_id,
@@ -50,18 +57,14 @@ pub(crate) async fn seed_release_rows(pool: &PgPool, data: &SeedData) {
         .await
         .expect("seed scoped UI release");
     }
-    sqlx::query(
-        "INSERT INTO release_ui_source_snapshots
-             (release_id, build_request_id, source_manifest_revision_id)
-             VALUES ($1, $2, $3)",
-    )
-    .bind(data.release_id)
-    .bind(data.build_id)
-    .bind(data.source_revision_id)
-    .execute(pool)
-    .await
-    .expect("seed UI release source snapshot");
-    for release in [data.global_release_id, data.repository_release_id] {
+}
+
+async fn seed_release_snapshots(pool: &PgPool, data: &SeedData) {
+    for release in [
+        data.release_id,
+        data.global_release_id,
+        data.repository_release_id,
+    ] {
         sqlx::query(
             "INSERT INTO release_ui_source_snapshots
                  (release_id, build_request_id, source_manifest_revision_id)
@@ -72,65 +75,43 @@ pub(crate) async fn seed_release_rows(pool: &PgPool, data: &SeedData) {
         .bind(data.source_revision_id)
         .execute(pool)
         .await
-        .expect("seed scoped UI release source snapshot");
+        .expect("seed UI release source snapshot");
     }
-    sqlx::query(
-        "INSERT INTO release_ui_descriptors
-             (release_id, ui_key, scope, label, icon, presentation, route_base,
-              entrypoint, ui_kit_version, cache, content_kind)
-             VALUES ($1, 'assistant', 'project', 'Assistant', 'app', 'full_page',
-                     'assistant', 'index.html', 1, 'no_store', 'static')",
-    )
-    .bind(data.release_id)
-    .execute(pool)
-    .await
-    .expect("seed UI descriptor");
-    sqlx::query(
-        "INSERT INTO release_ui_descriptors
-             (release_id, ui_key, scope, label, icon, presentation, route_base,
-              entrypoint, ui_kit_version, cache, content_kind)
-             VALUES ($1, 'assistant', 'global', 'Assistant', 'app', 'full_page',
-                     'assistant', 'index.html', 1, 'no_store', 'static')",
-    )
-    .bind(data.global_release_id)
-    .execute(pool)
-    .await
-    .expect("seed global UI descriptor");
-    sqlx::query(
-        "INSERT INTO release_ui_descriptors
-             (release_id, ui_key, scope, label, icon, presentation, route_base,
-              entrypoint, ui_kit_version, cache, content_kind)
-             VALUES ($1, 'assistant', 'repository', 'Assistant', 'app', 'full_page',
-                     'assistant', 'index.html', 1, 'no_store', 'static')",
-    )
-    .bind(data.repository_release_id)
-    .execute(pool)
-    .await
-    .expect("seed repository UI descriptor");
-    sqlx::query(
-        "INSERT INTO release_ui_descriptors
-             (release_id, ui_key, scope, label, icon, presentation, route_base,
-              entrypoint, ui_kit_version, cache, content_kind)
-             VALUES ($1, 'console', 'global', 'Console', 'app', 'full_page',
-                     'console', 'index.html', 1, 'no_store', 'static')",
-    )
-    .bind(data.global_release_id)
-    .execute(pool)
-    .await
-    .expect("seed second global UI descriptor");
-    sqlx::query(
-        "INSERT INTO release_artifacts
-             (id, release_id, path, kind, mode, content_hash, size_bytes, media_type, storage_key)
-             VALUES ($1, $2, 'index.html', 'file', 420, $3, 19, 'text/html', $4)",
-    )
-    .bind(data.artifact_id)
-    .bind(data.release_id)
-    .bind([7_u8; 32].as_slice())
-    .bind(Uuid::new_v4())
-    .execute(pool)
-    .await
-    .expect("seed UI artifact");
+}
+
+async fn seed_release_descriptors(pool: &PgPool, data: &SeedData) {
+    for (release, ui_key, scope, label) in [
+        (data.release_id, "assistant", "project", "Assistant"),
+        (data.global_release_id, "assistant", "global", "Assistant"),
+        (
+            data.repository_release_id,
+            "assistant",
+            "repository",
+            "Assistant",
+        ),
+        (data.global_release_id, "console", "global", "Console"),
+    ] {
+        sqlx::query(
+            "INSERT INTO release_ui_descriptors
+                 (release_id, ui_key, scope, label, icon, presentation, route_base,
+                  entrypoint, ui_kit_version, cache, content_kind)
+                 VALUES ($1, $2, $3, $4, 'app', 'full_page', $5, 'index.html',
+                         1, 'no_store', 'static')",
+        )
+        .bind(release)
+        .bind(ui_key)
+        .bind(scope)
+        .bind(label)
+        .bind(ui_key)
+        .execute(pool)
+        .await
+        .expect("seed UI descriptor");
+    }
+}
+
+async fn seed_release_artifacts(pool: &PgPool, data: &SeedData) {
     for (artifact, release) in [
+        (data.artifact_id, data.release_id),
         (data.global_artifact_id, data.global_release_id),
         (data.repository_artifact_id, data.repository_release_id),
     ] {
@@ -147,48 +128,30 @@ pub(crate) async fn seed_release_rows(pool: &PgPool, data: &SeedData) {
         .bind(Uuid::new_v4())
         .execute(pool)
         .await
-        .expect("seed scoped UI artifact");
+        .expect("seed UI artifact");
     }
-    sqlx::query(
-        "INSERT INTO release_ui_static_files
-             (release_id, ui_key, route, artifact_id, artifact_kind, artifact_media_type)
-             VALUES ($1, 'assistant', 'index.html', $2, 'file', 'text/html')",
-    )
-    .bind(data.release_id)
-    .bind(data.artifact_id)
-    .execute(pool)
-    .await
-    .expect("seed UI static file");
-    sqlx::query(
-        "INSERT INTO release_ui_static_files
-             (release_id, ui_key, route, artifact_id, artifact_kind, artifact_media_type)
-             VALUES ($1, 'assistant', 'index.html', $2, 'file', 'text/html')",
-    )
-    .bind(data.global_release_id)
-    .bind(data.global_artifact_id)
-    .execute(pool)
-    .await
-    .expect("seed global assistant UI static file");
-    sqlx::query(
-        "INSERT INTO release_ui_static_files
-             (release_id, ui_key, route, artifact_id, artifact_kind, artifact_media_type)
-             VALUES ($1, 'console', 'index.html', $2, 'file', 'text/html')",
-    )
-    .bind(data.global_release_id)
-    .bind(data.global_artifact_id)
-    .execute(pool)
-    .await
-    .expect("seed global UI static file");
-    sqlx::query(
-        "INSERT INTO release_ui_static_files
-             (release_id, ui_key, route, artifact_id, artifact_kind, artifact_media_type)
-             VALUES ($1, 'assistant', 'index.html', $2, 'file', 'text/html')",
-    )
-    .bind(data.repository_release_id)
-    .bind(data.repository_artifact_id)
-    .execute(pool)
-    .await
-    .expect("seed repository UI static file");
+    for (release, ui_key, artifact) in [
+        (data.release_id, "assistant", data.artifact_id),
+        (data.global_release_id, "assistant", data.global_artifact_id),
+        (data.global_release_id, "console", data.global_artifact_id),
+        (
+            data.repository_release_id,
+            "assistant",
+            data.repository_artifact_id,
+        ),
+    ] {
+        sqlx::query(
+            "INSERT INTO release_ui_static_files
+                 (release_id, ui_key, route, artifact_id, artifact_kind, artifact_media_type)
+                 VALUES ($1, $2, 'index.html', $3, 'file', 'text/html')",
+        )
+        .bind(release)
+        .bind(ui_key)
+        .bind(artifact)
+        .execute(pool)
+        .await
+        .expect("seed UI static file");
+    }
     sqlx::query(
         "UPDATE releases SET state = 'published', published_at = now()
              WHERE id = ANY($1)",

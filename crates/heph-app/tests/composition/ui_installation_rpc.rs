@@ -6,6 +6,9 @@
 mod app_fixture;
 
 #[cfg(test)]
+#[path = "ui_installation_rpc/handoff_validation.rs"]
+mod ui_installation_handoff_validation;
+#[cfg(test)]
 #[path = "ui_installation_rpc/scenario_handoff.rs"]
 mod ui_installation_scenario_handoff;
 #[cfg(test)]
@@ -62,19 +65,19 @@ mod ui_installation_transport {
     use uuid::Uuid;
 
     const SECRET: &[u8] = b"service-log-retention-test-signing-secret";
-    pub(crate) const UI_AUDIENCE: &str = "/hephaestus.release.v1.ReleaseService/InstallUi";
-    pub(crate) const ACTIVATE_AUDIENCE: &str = "/hephaestus.release.v1.ReleaseService/ActivateUi";
-    pub(crate) const ROLLBACK_AUDIENCE: &str = "/hephaestus.release.v1.ReleaseService/RollbackUi";
-    pub(crate) const DISABLE_AUDIENCE: &str = "/hephaestus.release.v1.ReleaseService/DisableUi";
-    pub(crate) const REMOVE_AUDIENCE: &str = "/hephaestus.release.v1.ReleaseService/RemoveUi";
-    pub(crate) const LIST_AUDIENCE: &str =
+    pub(super) const UI_AUDIENCE: &str = "/hephaestus.release.v1.ReleaseService/InstallUi";
+    pub(super) const ACTIVATE_AUDIENCE: &str = "/hephaestus.release.v1.ReleaseService/ActivateUi";
+    pub(super) const ROLLBACK_AUDIENCE: &str = "/hephaestus.release.v1.ReleaseService/RollbackUi";
+    pub(super) const DISABLE_AUDIENCE: &str = "/hephaestus.release.v1.ReleaseService/DisableUi";
+    pub(super) const REMOVE_AUDIENCE: &str = "/hephaestus.release.v1.ReleaseService/RemoveUi";
+    pub(super) const LIST_AUDIENCE: &str =
         "/hephaestus.release.v1.ReleaseService/ListUiInstallations";
-    pub(crate) const HANDOFF_AUDIENCE: &str =
+    pub(super) const HANDOFF_AUDIENCE: &str =
         "/hephaestus.release.v1.ReleaseService/CreateUiBrowserHandoff";
-    pub(crate) const HANDOFF_SENTINEL_TEXT: &str = "handoff-secret-sentinel-9e25143x";
-    pub(crate) const HANDOFF_SENTINEL: &[u8] = HANDOFF_SENTINEL_TEXT.as_bytes();
+    pub(super) const HANDOFF_SENTINEL_TEXT: &str = "handoff-secret-sentinel-9e25143x";
+    pub(super) const HANDOFF_SENTINEL: &[u8] = HANDOFF_SENTINEL_TEXT.as_bytes();
 
-    pub(crate) type InvalidSecretAudit = (
+    pub(super) type InvalidSecretAudit = (
         Uuid,
         String,
         String,
@@ -85,14 +88,14 @@ mod ui_installation_transport {
         Option<Uuid>,
     );
 
-    pub(crate) fn opaque(id: Uuid) -> OpaqueId {
+    pub(super) fn opaque(id: Uuid) -> OpaqueId {
         OpaqueId {
             value: id.to_string(),
             ..Default::default()
         }
     }
 
-    pub(crate) fn request_context(key: &str) -> RequestContext {
+    pub(super) fn request_context(key: &str) -> RequestContext {
         RequestContext {
             request_id: opaque(Uuid::new_v4()).into(),
             idempotency_key: key.to_owned(),
@@ -109,11 +112,11 @@ mod ui_installation_transport {
             .expect("test clock fits i64")
     }
 
-    pub(crate) fn session_token(user_id: Uuid, sid: BrowserSessionSid, audience: &str) -> String {
+    pub(super) fn session_token(user_id: Uuid, sid: BrowserSessionSid, audience: &str) -> String {
         session_token_for_lifetime(user_id, sid, audience, 25)
     }
 
-    pub(crate) fn session_token_for_lifetime(
+    pub(super) fn session_token_for_lifetime(
         user_id: Uuid,
         sid: BrowserSessionSid,
         audience: &str,
@@ -137,11 +140,11 @@ mod ui_installation_transport {
         .expect("sign browser session assertion")
     }
 
-    pub(crate) fn authorization(token: &str) -> CallOptions {
+    pub(super) fn authorization(token: &str) -> CallOptions {
         CallOptions::default().with_header("authorization", format!("Bearer {token}"))
     }
 
-    pub(crate) fn project_target(project_id: Uuid) -> UiInstallationTarget {
+    pub(super) fn project_target(project_id: Uuid) -> UiInstallationTarget {
         UiInstallationTarget {
             target: Some(ui_installation_target::Target::ProjectId(Box::new(opaque(
                 project_id,
@@ -150,14 +153,14 @@ mod ui_installation_transport {
         }
     }
 
-    pub(crate) fn organization_target() -> UiInstallationTarget {
+    pub(super) fn organization_target() -> UiInstallationTarget {
         UiInstallationTarget {
             target: Some(ui_installation_target::Target::Global(Box::default())),
             ..Default::default()
         }
     }
 
-    pub(crate) fn repository_target(repository_id: Uuid) -> UiInstallationTarget {
+    pub(super) fn repository_target(repository_id: Uuid) -> UiInstallationTarget {
         UiInstallationTarget {
             target: Some(ui_installation_target::Target::RepositoryId(Box::new(
                 opaque(repository_id),
@@ -180,7 +183,7 @@ mod ui_installation_transport {
         )
     }
 
-    pub(crate) async fn assert_receipt_scope(
+    pub(super) async fn assert_receipt_scope(
         pool: &PgPool,
         receipt: &MutationReceipt,
         expected_aggregate: &str,

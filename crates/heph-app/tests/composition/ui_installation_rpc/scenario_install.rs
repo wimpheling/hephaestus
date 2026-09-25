@@ -9,24 +9,62 @@ use super::{
 };
 use connectrpc::error::ErrorCode;
 use identity_domain::BrowserSessionSid;
-use rpc_proto::messages::hephaestus::release::v1::{ActivateUiRequest, InstallUiRequest};
+use rpc_proto::messages::hephaestus::release::v1::{
+    ActivateUiRequest, InstallUiRequest, InstallUiResponse,
+};
 use sqlx::PgPool;
 
-pub(crate) async fn run(
+pub(super) async fn run(
     pool: &PgPool,
     release: &ReleaseClient,
     fixture: &Fixture,
 ) -> InstallScenarioState {
     let target = project_target(fixture.project_id);
     let install_token = session_token(fixture.user_id, fixture.sid, UI_AUDIENCE);
-    let install_request = InstallUiRequest {
+    let install_request = project_install_request(fixture, &target);
+    assert_denied_requests(release, fixture, &install_request).await;
+    let installed = install_project(pool, release, &install_token, install_request).await;
+    let (organization_installed, repository_installed) =
+        install_scoped(pool, release, fixture, &install_token).await;
+    activate_scoped(
+        pool,
+        release,
+        fixture,
+        &organization_installed,
+        &repository_installed,
+    )
+    .await;
+    InstallScenarioState {
+        target,
+        installed,
+        list_token: session_token(fixture.user_id, fixture.sid, LIST_AUDIENCE),
+        handoff_token: session_token(
+            fixture.user_id,
+            fixture.sid,
+            super::ui_installation_transport::HANDOFF_AUDIENCE,
+        ),
+    }
+}
+
+fn project_install_request(
+    fixture: &Fixture,
+    target: &rpc_proto::messages::hephaestus::release::v1::UiInstallationTarget,
+) -> InstallUiRequest {
+    InstallUiRequest {
         context: request_context("ui-install").into(),
         organization_id: opaque(fixture.organization_id).into(),
         target: Some(target.clone()).into(),
         release_id: opaque(fixture.release_id).into(),
         ui_key: String::from("assistant"),
         ..Default::default()
-    };
+    }
+}
+
+async fn assert_denied_requests(
+    release: &ReleaseClient,
+    fixture: &Fixture,
+    install_request: &InstallUiRequest,
+) {
     let wrong_audience = release
         .install_ui_with_options(
             install_request.clone(),
@@ -72,27 +110,48 @@ pub(crate) async fn run(
         .await
         .expect_err("target organization mismatch must be rejected");
     assert_eq!(wrong_organization.code, ErrorCode::InvalidArgument);
+}
+
+async fn install_project(
+    pool: &PgPool,
+    release: &ReleaseClient,
+    install_token: &str,
+    install_request: InstallUiRequest,
+) -> InstallUiResponse {
     let denied_installations: i64 = sqlx::query_scalar("SELECT count(*) FROM ui_installations")
         .fetch_one(pool)
         .await
         .expect("count installations after denied requests");
     assert_eq!(denied_installations, 0);
     let installed = release
-        .install_ui_with_options(install_request.clone(), authorization(&install_token))
+        .install_ui_with_options(install_request.clone(), authorization(install_token))
         .await
         .expect("authenticated UI install")
         .into_owned();
-    let receipt = installed.receipt.as_option().expect("install receipt");
-    assert_receipt_scope(pool, receipt, "project", "project").await;
+    assert_receipt_scope(
+        pool,
+        installed.receipt.as_option().expect("install receipt"),
+        "project",
+        "project",
+    )
+    .await;
     let replay = release
-        .install_ui_with_options(install_request, authorization(&install_token))
+        .install_ui_with_options(install_request, authorization(install_token))
         .await
         .expect("exact install replay")
         .into_owned();
     assert_eq!(replay.installation_id, installed.installation_id);
     assert_eq!(replay.generation_id, installed.generation_id);
     assert_eq!(replay.receipt, installed.receipt);
+    installed
+}
 
+async fn install_scoped(
+    pool: &PgPool,
+    release: &ReleaseClient,
+    fixture: &Fixture,
+    install_token: &str,
+) -> (InstallUiResponse, InstallUiResponse) {
     let organization = organization_target();
     let organization_installed = release
         .install_ui_with_options(
@@ -104,7 +163,7 @@ pub(crate) async fn run(
                 ui_key: String::from("assistant"),
                 ..Default::default()
             },
-            authorization(&install_token),
+            authorization(install_token),
         )
         .await
         .expect("authenticated organization UI install")
@@ -125,12 +184,12 @@ pub(crate) async fn run(
             InstallUiRequest {
                 context: request_context("ui-install-repository").into(),
                 organization_id: opaque(fixture.organization_id).into(),
-                target: Some(repository.clone()).into(),
+                target: Some(repository).into(),
                 release_id: opaque(fixture.repository_release_id).into(),
                 ui_key: String::from("assistant"),
                 ..Default::default()
             },
-            authorization(&install_token),
+            authorization(install_token),
         )
         .await
         .expect("authenticated repository UI install")
@@ -150,12 +209,12 @@ pub(crate) async fn run(
             InstallUiRequest {
                 context: request_context("ui-install-global-console").into(),
                 organization_id: opaque(fixture.organization_id).into(),
-                target: Some(organization.clone()).into(),
+                target: Some(organization).into(),
                 release_id: opaque(fixture.global_release_id).into(),
                 ui_key: String::from("console"),
                 ..Default::default()
             },
-            authorization(&install_token),
+            authorization(install_token),
         )
         .await
         .expect("second organization UI install for cursor paging")
@@ -170,7 +229,16 @@ pub(crate) async fn run(
         "organization",
     )
     .await;
+    (organization_installed, repository_installed)
+}
 
+async fn activate_scoped(
+    pool: &PgPool,
+    release: &ReleaseClient,
+    fixture: &Fixture,
+    organization_installed: &InstallUiResponse,
+    repository_installed: &InstallUiResponse,
+) {
     let organization_activated = release
         .activate_ui_with_options(
             ActivateUiRequest {
@@ -229,18 +297,4 @@ pub(crate) async fn run(
         "project",
     )
     .await;
-    InstallScenarioState {
-        target,
-        installed,
-        list_token: session_token(
-            fixture.user_id,
-            fixture.sid,
-            super::ui_installation_transport::LIST_AUDIENCE,
-        ),
-        handoff_token: session_token(
-            fixture.user_id,
-            fixture.sid,
-            super::ui_installation_transport::HANDOFF_AUDIENCE,
-        ),
-    }
 }

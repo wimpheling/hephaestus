@@ -30,11 +30,11 @@ impl Write for SharedWriter {
     }
 }
 
-pub struct TraceCapture {
+pub(super) struct TraceCapture {
     bytes: Arc<Mutex<Vec<u8>>>,
 }
 
-pub fn install() -> TraceCapture {
+pub(super) fn install() -> TraceCapture {
     static BUFFER: OnceLock<Arc<Mutex<Vec<u8>>>> = OnceLock::new();
     let bytes = BUFFER
         .get_or_init(|| Arc::new(Mutex::new(Vec::new())))
@@ -56,7 +56,7 @@ pub fn install() -> TraceCapture {
 }
 
 impl TraceCapture {
-    pub fn assert_absent(&self, secret: &str) -> (usize, usize) {
+    pub(super) fn assert_absent(&self, secret: &str) -> (usize, usize) {
         let bytes = self.bytes.lock().expect("read UI RPC trace buffer");
         let logs = String::from_utf8_lossy(&bytes);
         assert!(

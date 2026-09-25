@@ -26,30 +26,30 @@ pub(super) struct Fixture {
     pub(super) second_sid: BrowserSessionSid,
 }
 
-pub(crate) struct SeedData {
-    pub(crate) user_id: Uuid,
-    pub(crate) organization_id: Uuid,
-    pub(crate) foreign_organization_id: Uuid,
-    pub(crate) project_id: Uuid,
-    pub(crate) repository_id: Uuid,
-    pub(crate) second_user_id: Uuid,
-    pub(crate) receive_id: Uuid,
-    pub(crate) build_id: Uuid,
-    pub(crate) source_revision_id: Uuid,
-    pub(crate) release_id: Uuid,
-    pub(crate) global_release_id: Uuid,
-    pub(crate) repository_release_id: Uuid,
-    pub(crate) artifact_id: Uuid,
-    pub(crate) global_artifact_id: Uuid,
-    pub(crate) repository_artifact_id: Uuid,
-    pub(crate) parent_session_id: Uuid,
-    pub(crate) second_parent_session_id: Uuid,
-    pub(crate) sid: BrowserSessionSid,
-    pub(crate) second_sid: BrowserSessionSid,
-    pub(crate) issuer: String,
-    pub(crate) identity: AuthenticatedIdentity,
-    pub(crate) issued_at: OffsetDateTime,
-    pub(crate) commit: String,
+pub(super) struct SeedData {
+    pub(super) user_id: Uuid,
+    pub(super) organization_id: Uuid,
+    pub(super) foreign_organization_id: Uuid,
+    pub(super) project_id: Uuid,
+    pub(super) repository_id: Uuid,
+    pub(super) second_user_id: Uuid,
+    pub(super) receive_id: Uuid,
+    pub(super) build_id: Uuid,
+    pub(super) source_revision_id: Uuid,
+    pub(super) release_id: Uuid,
+    pub(super) global_release_id: Uuid,
+    pub(super) repository_release_id: Uuid,
+    pub(super) artifact_id: Uuid,
+    pub(super) global_artifact_id: Uuid,
+    pub(super) repository_artifact_id: Uuid,
+    pub(super) parent_session_id: Uuid,
+    pub(super) second_parent_session_id: Uuid,
+    pub(super) sid: BrowserSessionSid,
+    pub(super) second_sid: BrowserSessionSid,
+    pub(super) issuer: String,
+    pub(super) identity: AuthenticatedIdentity,
+    pub(super) issued_at: OffsetDateTime,
+    pub(super) commit: String,
 }
 
 impl SeedData {
@@ -111,7 +111,7 @@ impl SeedData {
 }
 
 // Seed phases retain the original insertion order while keeping each concern small.
-pub(crate) async fn seed_fixture(pool: &PgPool) -> Fixture {
+pub(super) async fn seed_fixture(pool: &PgPool) -> Fixture {
     let data = SeedData::new();
     seed_base::seed_base_rows(pool, &data).await;
     seed_releases::seed_release_rows(pool, &data).await;

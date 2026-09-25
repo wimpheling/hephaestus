@@ -2,7 +2,13 @@ use super::ui_installation_seed::SeedData;
 use serde_json::json;
 use sqlx::PgPool;
 
-pub(crate) async fn seed_base_rows(pool: &PgPool, data: &SeedData) {
+pub(super) async fn seed_base_rows(pool: &PgPool, data: &SeedData) {
+    seed_identity_rows(pool, data).await;
+    seed_project_rows(pool, data).await;
+    seed_source_rows(pool, data).await;
+}
+
+async fn seed_identity_rows(pool: &PgPool, data: &SeedData) {
     sqlx::query("INSERT INTO users (id, display_name) VALUES ($1, $2)")
         .bind(data.user_id)
         .bind("UI RPC owner")
@@ -27,33 +33,25 @@ pub(crate) async fn seed_base_rows(pool: &PgPool, data: &SeedData) {
         .execute(pool)
         .await
         .expect("seed foreign UI RPC organization");
-    sqlx::query(
-        "INSERT INTO organization_members (organization_id, user_id, role)
-             VALUES ($1, $2, 'owner')",
-    )
-    .bind(data.organization_id)
-    .bind(data.user_id)
-    .execute(pool)
-    .await
-    .expect("seed UI RPC organization owner");
-    sqlx::query(
-        "INSERT INTO organization_members (organization_id, user_id, role)
-             VALUES ($1, $2, 'admin')",
-    )
-    .bind(data.organization_id)
-    .bind(data.second_user_id)
-    .execute(pool)
-    .await
-    .expect("seed second UI RPC organization admin");
-    sqlx::query(
-        "INSERT INTO organization_members (organization_id, user_id, role)
-             VALUES ($1, $2, 'admin')",
-    )
-    .bind(data.foreign_organization_id)
-    .bind(data.user_id)
-    .execute(pool)
-    .await
-    .expect("seed cross-tenant UI RPC admin");
+    for (organization_id, user_id, role) in [
+        (data.organization_id, data.user_id, "owner"),
+        (data.organization_id, data.second_user_id, "admin"),
+        (data.foreign_organization_id, data.user_id, "admin"),
+    ] {
+        sqlx::query(
+            "INSERT INTO organization_members (organization_id, user_id, role)
+             VALUES ($1, $2, $3)",
+        )
+        .bind(organization_id)
+        .bind(user_id)
+        .bind(role)
+        .execute(pool)
+        .await
+        .expect("seed UI RPC organization member");
+    }
+}
+
+async fn seed_project_rows(pool: &PgPool, data: &SeedData) {
     sqlx::query("INSERT INTO projects (id, organization_id, name) VALUES ($1, $2, $3)")
         .bind(data.project_id)
         .bind(data.organization_id)
@@ -61,18 +59,14 @@ pub(crate) async fn seed_base_rows(pool: &PgPool, data: &SeedData) {
         .execute(pool)
         .await
         .expect("seed UI RPC project");
-    sqlx::query("INSERT INTO project_maintainers (project_id, user_id) VALUES ($1, $2)")
-        .bind(data.project_id)
-        .bind(data.user_id)
-        .execute(pool)
-        .await
-        .expect("seed UI RPC project maintainer");
-    sqlx::query("INSERT INTO project_maintainers (project_id, user_id) VALUES ($1, $2)")
-        .bind(data.project_id)
-        .bind(data.second_user_id)
-        .execute(pool)
-        .await
-        .expect("seed second UI RPC project maintainer");
+    for user_id in [data.user_id, data.second_user_id] {
+        sqlx::query("INSERT INTO project_maintainers (project_id, user_id) VALUES ($1, $2)")
+            .bind(data.project_id)
+            .bind(user_id)
+            .execute(pool)
+            .await
+            .expect("seed UI RPC project maintainer");
+    }
     sqlx::query(
         "INSERT INTO repositories (id, project_id, name, default_branch, is_public)
              VALUES ($1, $2, $3, 'refs/heads/main', false)",
@@ -93,6 +87,9 @@ pub(crate) async fn seed_base_rows(pool: &PgPool, data: &SeedData) {
     .execute(pool)
     .await
     .expect("seed UI RPC receive");
+}
+
+async fn seed_source_rows(pool: &PgPool, data: &SeedData) {
     sqlx::query(
         "INSERT INTO build_requests
              (id, repository_id, source_commit, source_ref, origin_receive_id,

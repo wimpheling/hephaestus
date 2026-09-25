@@ -7,7 +7,7 @@ use serde_json::json;
 use sqlx::PgPool;
 use uuid::Uuid;
 
-pub(crate) async fn seed_session_rows(pool: &PgPool, data: &SeedData) {
+pub(super) async fn seed_session_rows(pool: &PgPool, data: &SeedData) {
     sqlx::query(
         "INSERT INTO human_browser_sessions
              (id, sid_digest, creation_idempotency_id, creation_request_id,

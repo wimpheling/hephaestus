@@ -4,11 +4,11 @@ use rpc_proto::{
     messages::hephaestus::release::v1::{InstallUiResponse, UiInstallationTarget},
 };
 
-pub(crate) type ReleaseClient = ReleaseServiceClient<SharedHttp2Connection>;
+pub(super) type ReleaseClient = ReleaseServiceClient<SharedHttp2Connection>;
 
-pub(crate) struct InstallScenarioState {
-    pub(crate) target: UiInstallationTarget,
-    pub(crate) installed: InstallUiResponse,
-    pub(crate) list_token: String,
-    pub(crate) handoff_token: String,
+pub(super) struct InstallScenarioState {
+    pub(super) target: UiInstallationTarget,
+    pub(super) installed: InstallUiResponse,
+    pub(super) list_token: String,
+    pub(super) handoff_token: String,
 }
