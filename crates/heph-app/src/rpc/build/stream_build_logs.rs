@@ -7,7 +7,7 @@ use rpc_proto::messages::hephaestus::{
     common::v1::Cursor,
 };
 use tokio::sync::mpsc;
-use tokio::time::{Duration, sleep};
+use tokio::time::Duration;
 
 const AUDIENCE: &str = "/hephaestus.build.v1.BuildService/StreamBuildLogs";
 const POLL_INTERVAL: Duration = Duration::from_secs(2);
@@ -35,7 +35,9 @@ pub(super) async fn handle(
     )
     .map_err(into_connect_error)?;
     let application = service.application.clone();
-    let (sender, receiver) = mpsc::channel(8);
+    let (sender, receiver) =
+        mpsc::channel::<Result<StreamBuildLogsResponse, connectrpc::ConnectError>>(8);
+    let budget = request::RequestBudget::from_transport(&ctx);
     tokio::spawn(async move {
         let mut sequence = 0_u64;
         let mut delivered = 0_u32;
@@ -44,19 +46,36 @@ pub(super) async fn handle(
             if delivered >= max_events {
                 return;
             }
-            let build = match application.get_build(&identity, id).await {
-                Ok(build) => build,
+            let build = match super::stream_budget::run_with_stream_budget(
+                &budget,
+                &sender,
+                application.get_build(&identity, id),
+            )
+            .await
+            {
+                Ok(Some(Ok(build))) => build,
+                Ok(Some(Err(error))) => {
+                    super::stream_budget::send_stream_error(
+                        &budget,
+                        &sender,
+                        model::application_error(error),
+                    )
+                    .await;
+                    return;
+                }
+                Ok(None) => return,
                 Err(error) => {
-                    let _ignored = sender
-                        .send(Err(into_connect_error(model::application_error(error))))
-                        .await;
+                    super::stream_budget::send_stream_error(&budget, &sender, error).await;
                     return;
                 }
             };
             if offset > build.logs.len() {
-                let _ignored = sender
-                    .send(Err(into_connect_error(RpcError::FailedPrecondition)))
-                    .await;
+                super::stream_budget::send_stream_error(
+                    &budget,
+                    &sender,
+                    RpcError::FailedPrecondition,
+                )
+                .await;
                 return;
             }
             let mut emitted = false;
@@ -64,9 +83,12 @@ pub(super) async fn handle(
                 let line = build.logs[offset].clone();
                 let estimate = line.len() as u64 + 128;
                 if delivered_bytes.saturating_add(estimate) > max_total_bytes {
-                    let _ignored = sender
-                        .send(Err(into_connect_error(RpcError::ResourceExhausted)))
-                        .await;
+                    super::stream_budget::send_stream_error(
+                        &budget,
+                        &sender,
+                        RpcError::ResourceExhausted,
+                    )
+                    .await;
                     return;
                 }
                 offset += 1;
@@ -87,7 +109,9 @@ pub(super) async fn handle(
                     truncated: !terminal && (delivered >= max_events),
                     ..Default::default()
                 };
-                if sender.send(Ok(response)).await.is_err() {
+                if !super::stream_budget::send_with_stream_budget(&budget, &sender, Ok(response))
+                    .await
+                {
                     return;
                 }
                 if terminal {
@@ -107,7 +131,13 @@ pub(super) async fn handle(
                         end_of_stream: true,
                         ..Default::default()
                     };
-                    if sender.send(Ok(response)).await.is_err() {
+                    if !super::stream_budget::send_with_stream_budget(
+                        &budget,
+                        &sender,
+                        Ok(response),
+                    )
+                    .await
+                    {
                         return;
                     }
                 }
@@ -117,9 +147,12 @@ pub(super) async fn handle(
                 sequence += 1;
                 delivered += 1;
                 if delivered_bytes.saturating_add(128) > max_total_bytes {
-                    let _ignored = sender
-                        .send(Err(into_connect_error(RpcError::ResourceExhausted)))
-                        .await;
+                    super::stream_budget::send_stream_error(
+                        &budget,
+                        &sender,
+                        RpcError::ResourceExhausted,
+                    )
+                    .await;
                     return;
                 }
                 let response = StreamBuildLogsResponse {
@@ -133,11 +166,22 @@ pub(super) async fn handle(
                     ..Default::default()
                 };
                 delivered_bytes += 128;
-                if sender.send(Ok(response)).await.is_err() {
+                if !super::stream_budget::send_with_stream_budget(&budget, &sender, Ok(response))
+                    .await
+                {
                     return;
                 }
             }
-            sleep(POLL_INTERVAL).await;
+            match super::stream_budget::sleep_with_stream_budget(&budget, &sender, POLL_INTERVAL)
+                .await
+            {
+                Ok(Some(())) => {}
+                Ok(None) => return,
+                Err(error) => {
+                    super::stream_budget::send_stream_error(&budget, &sender, error).await;
+                    return;
+                }
+            }
         }
     });
     let responses = futures_stream::unfold(receiver, |mut receiver| async move {

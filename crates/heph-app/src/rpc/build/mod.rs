@@ -7,6 +7,7 @@ mod rebuild_for_verification;
 mod request_build;
 mod retry_build;
 mod stream;
+mod stream_budget;
 mod stream_build_logs;
 mod watch_build;
 mod watch_repository_builds;
