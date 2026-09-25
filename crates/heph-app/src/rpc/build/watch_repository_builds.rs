@@ -29,11 +29,12 @@ pub(super) async fn handle(
 ) -> ServiceResult<ServiceStream<WatchRepositoryBuildsResponse>> {
     let identity = request::query_identity(&ctx, &service.authenticator, AUDIENCE)
         .map_err(into_connect_error)?;
+    let budget = request::RequestBudget::from_transport(&ctx);
     let request = request_message.to_owned_message();
     let repository_id = request::required_id(request.repository_id.as_option())
         .and_then(|value| Uuid::parse_str(&value).map_err(|_| RpcError::InvalidArgument))
         .map_err(into_connect_error)?;
-    let receiver = event::watch::start_filtered(
+    let receiver = event::watch::start_filtered_with_budget(
         service.event_application.clone(),
         identity,
         EventScope {
@@ -48,6 +49,7 @@ pub(super) async fn handle(
         request.max_total_bytes,
         service.cursor_codec.clone(),
         Arc::new(is_build_event),
+        budget,
     )
     .await?;
     let responses = stream::unfold(receiver, |mut receiver| async move {

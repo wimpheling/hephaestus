@@ -28,18 +28,21 @@ pub(super) async fn handle(
 ) -> ServiceResult<ServiceStream<WatchReleaseResponse>> {
     let identity = request::query_identity(&ctx, &service.authenticator, AUDIENCE)
         .map_err(into_connect_error)?;
+    let budget = request::RequestBudget::from_transport(&ctx);
     let request = request_message.to_owned_message();
     let release_id = request::required_id(request.release_id.as_option())
         .and_then(|value| Uuid::parse_str(&value).map_err(|_| RpcError::InvalidArgument))
         .map_err(into_connect_error)?;
-    let detail = service
-        .application
-        .get_release(&identity, release_id)
-        .await
-        .map_err(super::model::application_error)
-        .map_err(into_connect_error)?;
+    let detail = request::run_with_budget(
+        &budget,
+        service.application.get_release(&identity, release_id),
+    )
+    .await
+    .map_err(into_connect_error)?
+    .map_err(super::model::application_error)
+    .map_err(into_connect_error)?;
     let repository_id = detail.repository_id;
-    let receiver = event::watch::start_filtered(
+    let receiver = event::watch::start_filtered_with_budget(
         service.event_application.clone(),
         identity,
         EventScope {
@@ -54,6 +57,7 @@ pub(super) async fn handle(
         request.max_total_bytes,
         service.cursor_codec.clone(),
         Arc::new(move |event| is_release_event(event, release_id)),
+        budget,
     )
     .await?;
     let responses = stream::unfold(receiver, |mut receiver| async move {

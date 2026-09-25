@@ -16,25 +16,41 @@ const MAX_IDEMPOTENCY_KEY_BYTES: usize = 256;
 /// The token is canceled when the handler future drops this owner. Downstream
 /// adapters can clone the token and select it alongside their I/O future while
 /// [`run_with_budget`] enforces the same absolute transport deadline.
-pub(super) struct RequestBudget {
+// The request module is crate-private; this explicit visibility keeps the
+// budget available to sibling RPC handlers without making it a public API.
+#[allow(clippy::redundant_pub_crate)]
+pub(crate) struct RequestBudget {
     deadline: Option<Instant>,
     cancellation: CancellationToken,
 }
 
 impl RequestBudget {
     pub(super) fn from_transport(transport: &TransportContext) -> Self {
+        Self::from_deadline(transport.deadline())
+    }
+
+    pub(super) fn from_deadline(deadline: Option<Instant>) -> Self {
         Self {
-            deadline: transport.deadline(),
+            deadline,
             cancellation: CancellationToken::new(),
         }
+    }
+
+    #[cfg(test)]
+    pub(super) fn unbounded() -> Self {
+        Self::from_deadline(None)
     }
 
     pub(super) fn cancellation_token(&self) -> CancellationToken {
         self.cancellation.clone()
     }
 
+    pub(super) fn cancel(&self) {
+        self.cancellation.cancel();
+    }
+
     #[cfg(test)]
-    const fn deadline(&self) -> Option<Instant> {
+    pub(super) const fn deadline(&self) -> Option<Instant> {
         self.deadline
     }
 }

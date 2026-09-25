@@ -20,11 +20,12 @@ pub(super) async fn handle(
 ) -> ServiceResult<ServiceStream<WatchRepositoryResponse>> {
     let identity = request::query_identity(&ctx, &service.authenticator, AUDIENCE)
         .map_err(into_connect_error)?;
+    let budget = request::RequestBudget::from_transport(&ctx);
     let message = request_message.to_owned_message();
     let id = request::required_id(message.repository_id.as_option())
         .and_then(|value| Uuid::parse_str(&value).map_err(|_| RpcError::InvalidArgument))
         .map_err(into_connect_error)?;
-    let receiver = watch::start(
+    let receiver = watch::start_with_budget(
         service.application.clone(),
         identity,
         EventScope {
@@ -38,6 +39,7 @@ pub(super) async fn handle(
         message.max_events,
         message.max_total_bytes,
         service.cursor_codec.clone(),
+        budget,
     )
     .await?;
     let responses = stream::unfold(receiver, |mut receiver| async move {

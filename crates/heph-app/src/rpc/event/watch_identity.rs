@@ -19,12 +19,13 @@ pub(super) async fn handle(
 ) -> ServiceResult<ServiceStream<WatchIdentityResponse>> {
     let identity = request::query_identity(&ctx, &service.authenticator, AUDIENCE)
         .map_err(into_connect_error)?;
+    let budget = request::RequestBudget::from_transport(&ctx);
     let request = request.to_owned_message();
     let scope = EventScope {
         kind: ScopeKind::Identity,
         id: identity.user_id.as_uuid(),
     };
-    let receiver = watch::start(
+    let receiver = watch::start_with_budget(
         service.application.clone(),
         identity,
         scope,
@@ -35,6 +36,7 @@ pub(super) async fn handle(
         request.max_events,
         request.max_total_bytes,
         service.cursor_codec.clone(),
+        budget,
     )
     .await?;
     let responses = stream::unfold(receiver, |mut receiver| async move {

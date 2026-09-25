@@ -2,13 +2,16 @@ use super::model::{self, Delivery};
 use crate::{
     application::event::{EventApplication, EventError, EventScope, ReadResult},
     event_cursor::EventCursorCodec,
-    rpc::{RpcError, into_connect_error},
+    rpc::{
+        RpcError, into_connect_error,
+        request::{self, RequestBudget},
+    },
 };
 use buffa::Message as _;
 use futures_util::StreamExt as _;
 use identity_domain::AuthenticatedIdentity;
 use rpc_proto::messages::hephaestus::event::v1::ProductEvent;
-use std::sync::Arc;
+use std::{future::Future, sync::Arc};
 use tokio::sync::mpsc;
 
 const DEFAULT_MAX_EVENTS: u32 = 256;
@@ -24,6 +27,7 @@ pub(crate) struct Frame {
     pub delivery: Delivery,
 }
 
+#[cfg(test)]
 pub(crate) async fn start(
     application: EventApplication,
     identity: AuthenticatedIdentity,
@@ -33,7 +37,32 @@ pub(crate) async fn start(
     max_total_bytes: u64,
     codec: EventCursorCodec,
 ) -> Result<mpsc::Receiver<Result<Frame, connectrpc::ConnectError>>, connectrpc::ConnectError> {
-    start_filtered(
+    start_with_budget(
+        application,
+        identity,
+        scope,
+        resume_cursor,
+        max_events,
+        max_total_bytes,
+        codec,
+        RequestBudget::unbounded(),
+    )
+    .await
+}
+
+/// Starts a durable scope watch with an owned request budget.
+#[allow(clippy::too_many_arguments)]
+pub(crate) async fn start_with_budget(
+    application: EventApplication,
+    identity: AuthenticatedIdentity,
+    scope: EventScope,
+    resume_cursor: Option<&str>,
+    max_events: u32,
+    max_total_bytes: u64,
+    codec: EventCursorCodec,
+    budget: RequestBudget,
+) -> Result<mpsc::Receiver<Result<Frame, connectrpc::ConnectError>>, connectrpc::ConnectError> {
+    start_filtered_with_budget(
         application,
         identity,
         scope,
@@ -42,6 +71,7 @@ pub(crate) async fn start(
         max_total_bytes,
         codec,
         Arc::new(accept_all),
+        budget,
     )
     .await
 }
@@ -51,6 +81,8 @@ pub(crate) async fn start(
 /// authorized scope, so reconnects cannot replay unrelated events forever.
 // The arguments mirror the existing public watch contract and keep the filter
 // explicit at this policy boundary.
+#[cfg(test)]
+#[allow(dead_code)]
 #[allow(clippy::too_many_arguments)]
 pub(crate) async fn start_filtered(
     application: EventApplication,
@@ -61,6 +93,32 @@ pub(crate) async fn start_filtered(
     max_total_bytes: u64,
     codec: EventCursorCodec,
     filter: EventFilter,
+) -> Result<mpsc::Receiver<Result<Frame, connectrpc::ConnectError>>, connectrpc::ConnectError> {
+    start_filtered_with_budget(
+        application,
+        identity,
+        scope,
+        resume_cursor,
+        max_events,
+        max_total_bytes,
+        codec,
+        filter,
+        RequestBudget::unbounded(),
+    )
+    .await
+}
+
+#[allow(clippy::too_many_arguments)]
+pub(crate) async fn start_filtered_with_budget(
+    application: EventApplication,
+    identity: AuthenticatedIdentity,
+    scope: EventScope,
+    resume_cursor: Option<&str>,
+    max_events: u32,
+    max_total_bytes: u64,
+    codec: EventCursorCodec,
+    filter: EventFilter,
+    budget: RequestBudget,
 ) -> Result<mpsc::Receiver<Result<Frame, connectrpc::ConnectError>>, connectrpc::ConnectError> {
     let max_events = if max_events == 0 {
         DEFAULT_MAX_EVENTS
@@ -83,10 +141,13 @@ pub(crate) async fn start_filtered(
     // Subscribe first so a commit/publication racing the snapshot is buffered.
     // Notifications are only wakeups; all delivery data still comes from the
     // durable cursor-ordered journal.
-    let notifications = application.subscribe().await.map_err(map_error)?;
-    let snapshot = application
-        .snapshot(&identity, scope)
+    let notifications = request::run_with_budget(&budget, application.subscribe())
         .await
+        .map_err(into_connect_error)?
+        .map_err(map_error)?;
+    let snapshot = request::run_with_budget(&budget, application.snapshot(&identity, scope))
+        .await
+        .map_err(into_connect_error)?
         .map_err(map_error)?;
     let initial = if let Some(resume) = resume {
         if resume.saturating_add(1) < snapshot.retained_from_cursor {
@@ -129,6 +190,7 @@ pub(crate) async fn start_filtered(
             notifications,
             codec,
             filter,
+            budget,
             sender,
         )
         .await;
@@ -138,6 +200,54 @@ pub(crate) async fn start_filtered(
 
 fn snapshot_cursor(initial: Option<&(i64, Delivery)>) -> i64 {
     initial.map_or(0, |(cursor, _)| *cursor)
+}
+
+async fn run_with_stream_budget<T, Operation>(
+    budget: &RequestBudget,
+    sender: &mpsc::Sender<Result<Frame, connectrpc::ConnectError>>,
+    operation: Operation,
+) -> Result<Option<T>, RpcError>
+where
+    Operation: Future<Output = T>,
+{
+    tokio::select! {
+        result = request::run_with_budget(budget, operation) => result.map(Some),
+        () = sender.closed() => {
+            budget.cancel();
+            Ok(None)
+        }
+    }
+}
+
+async fn send_with_stream_budget(
+    budget: &RequestBudget,
+    sender: &mpsc::Sender<Result<Frame, connectrpc::ConnectError>>,
+    item: Result<Frame, connectrpc::ConnectError>,
+) -> bool {
+    let sent = matches!(
+        run_with_stream_budget(budget, sender, sender.send(item)).await,
+        Ok(Some(Ok(())))
+    );
+    if !sent {
+        budget.cancel();
+    }
+    sent
+}
+
+async fn send_stream_error(
+    budget: &RequestBudget,
+    sender: &mpsc::Sender<Result<Frame, connectrpc::ConnectError>>,
+    error: RpcError,
+) {
+    if matches!(error, RpcError::DeadlineExceeded) {
+        // The deadline has already won, so waiting through the normal budget
+        // path cannot deliver the terminal status. The channel is bounded and
+        // try_send keeps this best-effort notification nonblocking.
+        let _ = sender.try_send(Err(into_connect_error(error)));
+        budget.cancel();
+    } else {
+        let _ = send_with_stream_budget(budget, sender, Err(into_connect_error(error))).await;
+    }
 }
 
 // The watch loop keeps its delivery, authorization, and budget state explicit.
@@ -159,6 +269,7 @@ async fn run(
     mut notifications: crate::application::event::EventWakeupStream,
     codec: EventCursorCodec,
     filter: EventFilter,
+    budget: RequestBudget,
     sender: mpsc::Sender<Result<Frame, connectrpc::ConnectError>>,
 ) {
     let mut sequence = 0_u64;
@@ -174,13 +285,16 @@ async fn run(
         };
         let bytes = encoded_frame_size(&frame);
         if bytes > max_total_bytes {
-            let _ignored = sender
-                .send(Err(into_connect_error(RpcError::ResourceExhausted)))
-                .await;
+            let _ = send_with_stream_budget(
+                &budget,
+                &sender,
+                Err(into_connect_error(RpcError::ResourceExhausted)),
+            )
+            .await;
             return;
         }
         delivered_bytes = bytes;
-        if sender.send(Ok(frame)).await.is_err() || terminal {
+        if !send_with_stream_budget(&budget, &sender, Ok(frame)).await || terminal {
             return;
         }
     }
@@ -188,12 +302,15 @@ async fn run(
         if delivered >= max_events || delivered_bytes >= max_total_bytes {
             return;
         }
-        let result = match application
-            .read_after(&identity, scope, cursor, READ_BATCH)
-            .await
+        let result = match run_with_stream_budget(
+            &budget,
+            &sender,
+            application.read_after(&identity, scope, cursor, READ_BATCH),
+        )
+        .await
         {
-            Ok(result) => result,
-            Err(EventError::PermissionDenied) => {
+            Ok(Some(Ok(result))) => result,
+            Ok(Some(Err(EventError::PermissionDenied))) => {
                 sequence += 1;
                 let frame = Frame {
                     sequence,
@@ -207,11 +324,16 @@ async fn run(
                 } else {
                     Ok(frame)
                 };
-                let _ignored = sender.send(result).await;
+                let _ = send_with_stream_budget(&budget, &sender, result).await;
                 return;
             }
+            Ok(Some(Err(error))) => {
+                let _ = send_with_stream_budget(&budget, &sender, Err(map_error(error))).await;
+                return;
+            }
+            Ok(None) => return,
             Err(error) => {
-                let _ignored = sender.send(Err(map_error(error))).await;
+                send_stream_error(&budget, &sender, error).await;
                 return;
             }
         };
@@ -248,7 +370,7 @@ async fn run(
                         Ok(frame)
                     }
                 });
-                let _ignored = sender.send(result).await;
+                let _ = send_with_stream_budget(&budget, &sender, result).await;
                 return;
             }
             ReadResult::Events {
@@ -256,16 +378,30 @@ async fn run(
                 values,
             } if values.is_empty() => {
                 if committed_cursor < cursor {
-                    let _ignored = sender
-                        .send(Err(into_connect_error(RpcError::Internal)))
-                        .await;
+                    let _ = send_with_stream_budget(
+                        &budget,
+                        &sender,
+                        Err(into_connect_error(RpcError::Internal)),
+                    )
+                    .await;
                     return;
                 }
-                if notifications.next().await.is_none() {
-                    let _ignored = sender
-                        .send(Err(into_connect_error(RpcError::Unavailable)))
+                match run_with_stream_budget(&budget, &sender, notifications.next()).await {
+                    Ok(Some(Some(()))) => {}
+                    Ok(Some(None)) => {
+                        let _ = send_with_stream_budget(
+                            &budget,
+                            &sender,
+                            Err(into_connect_error(RpcError::Unavailable)),
+                        )
                         .await;
-                    return;
+                        return;
+                    }
+                    Ok(None) => return,
+                    Err(error) => {
+                        send_stream_error(&budget, &sender, error).await;
+                        return;
+                    }
                 }
             }
             ReadResult::Events {
@@ -274,16 +410,24 @@ async fn run(
             } => {
                 for value in values {
                     if value.cursor != cursor.saturating_add(1) {
-                        let _ignored = sender
-                            .send(Err(into_connect_error(RpcError::Internal)))
-                            .await;
+                        let _ = send_with_stream_budget(
+                            &budget,
+                            &sender,
+                            Err(into_connect_error(RpcError::Internal)),
+                        )
+                        .await;
                         return;
                     }
                     cursor = value.cursor;
                     let delivery = match model::event(&codec, scope, &value) {
                         Ok(value) => Delivery::Event(value),
                         Err(error) => {
-                            let _ignored = sender.send(Err(into_connect_error(error))).await;
+                            let _ = send_with_stream_budget(
+                                &budget,
+                                &sender,
+                                Err(into_connect_error(error)),
+                            )
+                            .await;
                             return;
                         }
                     };
@@ -304,14 +448,19 @@ async fn run(
                     };
                     let event_bytes = encoded_frame_size(&frame);
                     if delivered_bytes.saturating_add(event_bytes) > max_total_bytes {
-                        let _ignored = sender
-                            .send(Err(into_connect_error(RpcError::ResourceExhausted)))
-                            .await;
+                        let _ = send_with_stream_budget(
+                            &budget,
+                            &sender,
+                            Err(into_connect_error(RpcError::ResourceExhausted)),
+                        )
+                        .await;
                         return;
                     }
                     delivered += 1;
                     delivered_bytes += event_bytes;
-                    if sender.send(Ok(frame)).await.is_err() || delivered >= max_events {
+                    if !send_with_stream_budget(&budget, &sender, Ok(frame)).await
+                        || delivered >= max_events
+                    {
                         return;
                     }
                 }
@@ -378,17 +527,113 @@ fn map_error(error: EventError) -> connectrpc::ConnectError {
 
 #[cfg(test)]
 mod tests {
-    use super::{Delivery, Frame, encoded_frame_size, parse_cursor};
+    use super::{Delivery, Frame, encoded_frame_size, parse_cursor, run, run_with_stream_budget};
     use crate::{
-        application::event::{EventScope, ScopeKind},
+        application::event::{
+            EventApplication, EventScope, EventWakeupSource, EventWakeupStream, ScopeKind,
+        },
         event_cursor::EventCursorCodec,
+        rpc::request::RequestBudget,
     };
     use buffa::Message as _;
+    use identity_domain::{AuthenticatedIdentity, RequestId, UserId};
     use rpc_proto::messages::hephaestus::{
         common::v1::Cursor,
         event::v1::{ScopeSnapshotBarrier, WatchIdentityResponse, watch_identity_response},
     };
+    use sqlx::postgres::PgPoolOptions;
+    use tokio::sync::mpsc;
     use uuid::Uuid;
+
+    struct NeverWakeups;
+
+    #[async_trait::async_trait]
+    impl EventWakeupSource for NeverWakeups {
+        async fn subscribe(&self) -> Result<EventWakeupStream, String> {
+            Ok(Box::pin(futures_util::stream::pending()))
+        }
+    }
+
+    #[tokio::test]
+    async fn detached_watch_cancels_when_the_response_receiver_drops() {
+        let budget = RequestBudget::unbounded();
+        let cancellation = budget.cancellation_token();
+        let (sender, receiver) = mpsc::channel(1);
+        drop(receiver);
+
+        let result = run_with_stream_budget(&budget, &sender, std::future::pending::<()>()).await;
+
+        assert_eq!(result, Ok(None));
+        assert!(cancellation.is_cancelled());
+    }
+
+    #[tokio::test]
+    async fn detached_watch_returns_deadline_error_without_resetting_the_deadline() {
+        use std::time::{Duration, Instant};
+
+        let deadline = Instant::now() + Duration::from_millis(1);
+        let budget = RequestBudget::from_deadline(Some(deadline));
+        let (sender, _receiver) = mpsc::channel(1);
+
+        let result = run_with_stream_budget(&budget, &sender, std::future::pending::<()>()).await;
+
+        assert_eq!(result, Err(super::RpcError::DeadlineExceeded));
+        assert_eq!(budget.deadline(), Some(deadline));
+    }
+
+    #[tokio::test]
+    async fn detached_watch_run_queues_deadline_error_before_stopping() {
+        use std::time::{Duration, Instant};
+
+        let application = EventApplication::new(
+            PgPoolOptions::new()
+                .connect_lazy("postgres://test:test@127.0.0.1:1/test")
+                .expect("lazy test pool"),
+            std::sync::Arc::new(NeverWakeups),
+        );
+        let identity = AuthenticatedIdentity::new(
+            UserId::new(),
+            "watch-test",
+            "subject",
+            serde_json::json!({}),
+            RequestId::new(),
+        );
+        let scope = EventScope {
+            kind: ScopeKind::Organization,
+            id: Uuid::new_v4(),
+        };
+        let budget = RequestBudget::from_deadline(Some(
+            Instant::now()
+                .checked_sub(Duration::from_millis(1))
+                .expect("deadline before now"),
+        ));
+        let cancellation = budget.cancellation_token();
+        let (sender, mut receiver) = mpsc::channel(1);
+
+        run(
+            application,
+            identity,
+            scope,
+            0,
+            None,
+            1,
+            1024,
+            Box::pin(futures_util::stream::pending()),
+            EventCursorCodec::new([3; 32]),
+            std::sync::Arc::new(|_| true),
+            budget,
+            sender,
+        )
+        .await;
+
+        let response = receiver.recv().await.expect("deadline terminal response");
+        let error = match response {
+            Err(error) => error,
+            Ok(_) => panic!("deadline must be returned as a stream error"),
+        };
+        assert_eq!(error.code, connectrpc::ErrorCode::DeadlineExceeded);
+        assert!(cancellation.is_cancelled());
+    }
 
     #[test]
     fn resume_cursor_is_canonical_and_non_negative() {
