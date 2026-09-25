@@ -237,17 +237,17 @@ async fn durable_watch_resumes_across_disconnect_gap_duplicate_wake_and_revocati
     assert!(matches!(unique.delivery, super::Delivery::Event(_)));
     drop(duplicate_safe);
 
-    super::connect::assert_connect_transport_resume(
-        &pool,
-        &nats,
-        &publisher,
+    super::connect::assert_connect_transport_resume(super::connect::ConnectWatchContext {
+        pool: &pool,
+        nats: &nats,
+        publisher: &publisher,
         user_id,
         organization_id,
-        &application_pool,
-        &worker_pool,
-        [11; 32],
+        application_pool: &application_pool,
+        worker_pool: &worker_pool,
+        signing_key: [11; 32],
         sid,
-    )
+    })
     .await;
 
     worker_pool.close().await;

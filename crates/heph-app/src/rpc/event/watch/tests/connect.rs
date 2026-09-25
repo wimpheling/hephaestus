@@ -1,14 +1,72 @@
-pub(super) async fn assert_connect_transport_resume(
-    pool: &sqlx::PgPool,
-    nats: &async_nats::Client,
-    publisher: &crate::event_adapter::EventPublisher,
-    user_id: super::Uuid,
-    organization_id: super::Uuid,
-    application_pool: &sqlx::PgPool,
-    worker_pool: &sqlx::PgPool,
-    signing_key: [u8; 32],
-    sid: identity_domain::BrowserSessionSid,
-) {
+use async_nats::Client as NatsClient;
+use connectrpc::{
+    Protocol, Router,
+    client::{CallOptions, ClientConfig, HttpClient},
+};
+use rpc_proto::{
+    connect::hephaestus::event::v1::{ProductEventServiceClient, ProductEventServiceExt},
+    messages::hephaestus::{
+        common::v1::{Cursor, OpaqueId},
+        event::v1::{
+            ProductEvent, WatchOrganizationRequest, WatchOrganizationResponse,
+            watch_organization_response,
+        },
+    },
+};
+use sqlx::PgPool;
+use std::{sync::Arc, time::Duration};
+use tokio::task::JoinHandle;
+
+type ConnectClient = ProductEventServiceClient<HttpClient>;
+
+pub(super) struct ConnectWatchContext<'a> {
+    pub(super) pool: &'a PgPool,
+    pub(super) nats: &'a NatsClient,
+    pub(super) publisher: &'a crate::event_adapter::EventPublisher,
+    pub(super) user_id: super::Uuid,
+    pub(super) organization_id: super::Uuid,
+    pub(super) application_pool: &'a PgPool,
+    pub(super) worker_pool: &'a PgPool,
+    pub(super) signing_key: [u8; 32],
+    pub(super) sid: identity_domain::BrowserSessionSid,
+}
+
+struct ConnectWatchRuntime {
+    client: ConnectClient,
+    server: JoinHandle<()>,
+    token: String,
+}
+
+pub(super) async fn assert_connect_transport_resume(context: ConnectWatchContext<'_>) {
+    let runtime = start_runtime(&context).await;
+    let mut initial = runtime
+        .client
+        .watch_organization_with_options(
+            watch_request(&context, None),
+            call_options(&runtime.token),
+        )
+        .await
+        .expect("Connect watch starts");
+    let barrier_cursor = receive_barrier(&mut initial).await;
+    drop(initial);
+
+    let expected_event_id = publish_event(&context).await;
+    let mut resumed = runtime
+        .client
+        .watch_organization_with_options(
+            watch_request(&context, Some(barrier_cursor)),
+            call_options(&runtime.token),
+        )
+        .await
+        .expect("Connect watch resumes");
+    assert_resumed_event(&mut resumed, expected_event_id).await;
+    assert_duplicate_wakes_do_not_duplicate(&context, &mut resumed).await;
+
+    runtime.server.abort();
+    let _result = runtime.server.await;
+}
+
+async fn start_runtime(context: &ConnectWatchContext<'_>) -> ConnectWatchRuntime {
     use crate::{
         event_adapter::NatsEventWakeups,
         rpc::{
@@ -17,37 +75,20 @@ pub(super) async fn assert_connect_transport_resume(
         },
     };
     use axum::middleware::from_fn_with_state;
-    use buffa::Message as _;
-    use connectrpc::{
-        Protocol, Router,
-        client::{CallOptions, ClientConfig, HttpClient},
-    };
-    use futures_util::StreamExt as _;
     use identity_postgres::PostgresBrowserSessionStore;
-    use rpc_proto::{
-        connect::hephaestus::event::v1::{ProductEventServiceClient, ProductEventServiceExt},
-        messages::hephaestus::{
-            common::v1::{Cursor, OpaqueId},
-            event::v1::{
-                ProductEvent, WatchOrganizationRequest, WatchOrganizationResponse,
-                watch_organization_response,
-            },
-        },
-    };
-    use std::{sync::Arc, time::Duration};
 
     let browser_sessions = Arc::new(PostgresBrowserSessionStore::new(
-        worker_pool.clone(),
-        application_pool.clone(),
+        context.worker_pool.clone(),
+        context.application_pool.clone(),
     ));
     let service = Arc::new(EventRpc::new(
-        pool.clone(),
-        MediatorAuthenticator::new(&signing_key),
-        Arc::new(NatsEventWakeups::new(nats.clone())),
-        signing_key,
+        context.pool.clone(),
+        MediatorAuthenticator::new(&context.signing_key),
+        Arc::new(NatsEventWakeups::new(context.nats.clone())),
+        context.signing_key,
     ));
     let auth_state = MediatorAuthenticationState::new(
-        MediatorAuthenticator::new(&signing_key),
+        MediatorAuthenticator::new(&context.signing_key),
         browser_sessions,
     );
     let router = service
@@ -70,15 +111,27 @@ pub(super) async fn assert_connect_transport_resume(
         HttpClient::plaintext(),
         ClientConfig::new(uri).with_protocol(Protocol::Connect),
     );
-    let token = mediator_assertion(&signing_key, user_id, sid);
-    let options = || {
-        CallOptions::default()
-            .with_header("authorization", format!("Bearer {token}"))
-            .with_timeout(Duration::from_secs(5))
-    };
-    let request = |resume: Option<String>| WatchOrganizationRequest {
+    let token = mediator_assertion(&context.signing_key, context.user_id, context.sid);
+    ConnectWatchRuntime {
+        client,
+        server,
+        token,
+    }
+}
+
+fn call_options(token: &str) -> CallOptions {
+    CallOptions::default()
+        .with_header("authorization", format!("Bearer {token}"))
+        .with_timeout(Duration::from_secs(5))
+}
+
+fn watch_request(
+    context: &ConnectWatchContext<'_>,
+    resume: Option<String>,
+) -> WatchOrganizationRequest {
+    WatchOrganizationRequest {
         organization_id: OpaqueId {
-            value: organization_id.to_string(),
+            value: context.organization_id.to_string(),
             ..Default::default()
         }
         .into(),
@@ -91,13 +144,18 @@ pub(super) async fn assert_connect_transport_resume(
         max_events: 5,
         max_total_bytes: 1024 * 1024,
         ..Default::default()
-    };
+    }
+}
 
-    let mut initial = client
-        .watch_organization_with_options(request(None), options())
-        .await
-        .expect("Connect watch starts");
-    let barrier = initial
+async fn receive_barrier(
+    stream: &mut connectrpc::client::ServerStream<
+        <HttpClient as connectrpc::client::ClientTransport>::ResponseBody,
+        rpc_proto::messages::hephaestus::event::v1::__buffa::view::WatchOrganizationResponseView<
+            'static,
+        >,
+    >,
+) -> String {
+    let barrier = stream
         .message::<WatchOrganizationResponse>()
         .await
         .expect("Connect barrier frame")
@@ -107,31 +165,46 @@ pub(super) async fn assert_connect_transport_resume(
         barrier.item,
         Some(watch_organization_response::Item::SnapshotBarrier(_))
     ));
-    let barrier_cursor = barrier
+    barrier
         .committed_cursor
         .as_option()
         .expect("Connect barrier cursor")
         .value
-        .clone();
-    drop(initial);
+        .clone()
+}
 
-    let mut typed_messages = nats
+async fn publish_event(context: &ConnectWatchContext<'_>) -> super::Uuid {
+    use buffa::Message as _;
+    use futures_util::StreamExt as _;
+
+    let mut typed_messages = context
+        .nats
         .subscribe(crate::event_adapter::PRODUCT_EVENT_SUBJECT)
         .await
         .expect("typed product-event subscription");
-    let request_id =
-        super::fixtures::mutate_organization(pool, user_id, organization_id, "connect").await;
+    let request_id = super::fixtures::mutate_organization(
+        context.pool,
+        context.user_id,
+        context.organization_id,
+        "connect",
+    )
+    .await;
     let expected_event_id: super::Uuid = sqlx::query_scalar(
         "SELECT id FROM application_events
            WHERE scope_kind = 'organization' AND scope_id = $1
              AND request_id = $2 AND aggregate_type = 'organization'",
     )
-    .bind(organization_id)
+    .bind(context.organization_id)
     .bind(request_id)
-    .fetch_one(pool)
+    .fetch_one(context.pool)
     .await
     .expect("Connect event id");
-    super::fixtures::publish_events_until_published(pool, publisher, &[expected_event_id]).await;
+    super::fixtures::publish_events_until_published(
+        context.pool,
+        context.publisher,
+        &[expected_event_id],
+    )
+    .await;
 
     let decoded = tokio::time::timeout(Duration::from_secs(5), async {
         loop {
@@ -151,12 +224,19 @@ pub(super) async fn assert_connect_transport_resume(
     .expect("typed ProductEvent arrives");
     assert_eq!(decoded.schema_version, 1);
     assert!(decoded.payload.is_some());
+    expected_event_id
+}
 
-    let mut resumed = client
-        .watch_organization_with_options(request(Some(barrier_cursor)), options())
-        .await
-        .expect("Connect watch resumes");
-    let event = resumed
+async fn assert_resumed_event(
+    stream: &mut connectrpc::client::ServerStream<
+        <HttpClient as connectrpc::client::ClientTransport>::ResponseBody,
+        rpc_proto::messages::hephaestus::event::v1::__buffa::view::WatchOrganizationResponseView<
+            'static,
+        >,
+    >,
+    expected_event_id: super::Uuid,
+) {
+    let event = stream
         .message::<WatchOrganizationResponse>()
         .await
         .expect("Connect event frame")
@@ -169,27 +249,41 @@ pub(super) async fn assert_connect_transport_resume(
         event.event_id.as_option().map(|id| id.value.as_str()),
         Some(expected_event_id.to_string().as_str())
     );
+}
 
+async fn assert_duplicate_wakes_do_not_duplicate(
+    context: &ConnectWatchContext<'_>,
+    stream: &mut connectrpc::client::ServerStream<
+        <HttpClient as connectrpc::client::ClientTransport>::ResponseBody,
+        rpc_proto::messages::hephaestus::event::v1::__buffa::view::WatchOrganizationResponseView<
+            'static,
+        >,
+    >,
+) {
     for _duplicate in 0..2 {
-        nats.publish(
-            crate::event_adapter::PRODUCT_EVENT_SUBJECT,
-            Vec::new().into(),
-        )
-        .await
-        .expect("duplicate Connect wake");
+        context
+            .nats
+            .publish(
+                crate::event_adapter::PRODUCT_EVENT_SUBJECT,
+                Vec::new().into(),
+            )
+            .await
+            .expect("duplicate Connect wake");
     }
-    nats.flush().await.expect("flush duplicate Connect wakes");
+    context
+        .nats
+        .flush()
+        .await
+        .expect("flush duplicate Connect wakes");
     assert!(
         tokio::time::timeout(
             Duration::from_millis(200),
-            resumed.message::<WatchOrganizationResponse>(),
+            stream.message::<WatchOrganizationResponse>(),
         )
         .await
         .is_err(),
         "duplicate wakes must not duplicate a Connect event"
     );
-    server.abort();
-    let _result = server.await;
 }
 
 fn mediator_assertion(
