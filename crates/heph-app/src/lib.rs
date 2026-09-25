@@ -28,6 +28,17 @@ mod config_validation;
 
 #[path = "app_runtime.rs"]
 mod app_runtime;
+#[path = "registry_adapters.rs"]
+mod registry_adapters;
+use registry_adapters::{
+    InternalRegistryTokens, PostgresRegistryNotificationInbox, PostgresRegistryReconciliation,
+    PostgresRegistryScopeAuthorizer, registry_caller_authentication, registry_reconciliation_loop,
+};
+
+#[path = "oci_workers.rs"]
+mod oci_workers;
+use oci_workers::OciBuilderWorkers;
+
 use app_runtime::{
     GatewayEdgeRuntime, LocalGatewayReleaseMaterializer, ProviderGatewayRuntimeLauncher,
 };
@@ -123,9 +134,7 @@ use oci_builder_worker::{
     RootfsMaterializationWorker,
 };
 use registry_domain::{PolicyVersion, RegistryNamespace, SupplyChainPolicy};
-use registry_http::{
-    RegistryAuthorizationError, RegistryScopeAuthorizer, RegistryTokenHttpService,
-};
+use registry_http::{RegistryAuthorizationError, RegistryTokenHttpService};
 use registry_notification::{NotificationAction, NotificationObservation};
 use registry_notification_http::{
     InboxDisposition, RegistryInboxError, RegistryNotificationHttpService,
@@ -137,13 +146,13 @@ use registry_postgres::{
 };
 use registry_publisher::{ControlledOciPublisher, PublisherConfiguration, SystemCommandRunner};
 use registry_reconciler::{
-    ClaimedNotification, NotificationCompletion, NotificationInbox, ObservedTarget,
-    PublicationIntents, ReconciliationAction, ReconciliationActionExecutor,
-    ReconciliationPortError, RegistryReconciler,
+    ClaimedNotification, NotificationCompletion, NotificationInbox, PublicationIntents,
+    ReconciliationAction, ReconciliationActionExecutor, ReconciliationPortError,
+    RegistryReconciler,
 };
 use registry_token::{
-    AuthorizationDecision as RegistryAuthorizationDecision, IssuedToken, RegistryAction,
-    RepositoryActions, RepositoryName, ScopeRequest, TokenSubject, UnixTimestamp,
+    AuthorizationDecision as RegistryAuthorizationDecision, RegistryAction, RepositoryActions,
+    RepositoryName, ScopeRequest, TokenSubject, UnixTimestamp,
 };
 use registry_zot::{RegistryPullTokenProvider, ZotClientConfig, ZotClientError, ZotHttpRegistry};
 use release_artifact_store::LocalArtifactStore;
@@ -264,439 +273,6 @@ pub struct HephaestusApp {
     startup_timeout: Duration,
     shutdown_timeout: Duration,
     runtime_git_socket_path: Option<PathBuf>,
-}
-
-struct OciBuilderWorkers {
-    preparation: OciImageProductionWorker<
-        PgOciImageProductionJobStore,
-        LocalOciRuntime,
-        VmPublishedOciEngine<
-            PgRepositoryOciImagePublicationStore,
-            InternalRegistryTokens,
-            SystemCommandRunner,
-        >,
-    >,
-    materialization: RootfsMaterializationWorker<PgOciImageProductionJobStore, LocalOciRuntime>,
-    manifest: PathBuf,
-    manifest_dirty: AtomicBool,
-    rootfs_root: PathBuf,
-    image_filesystems: Arc<RwLock<BTreeMap<String, RootFilesystem>>>,
-    poll_interval: Duration,
-}
-
-#[derive(Clone)]
-struct InternalRegistryTokens {
-    issuer: Arc<registry_token::RegistryTokenIssuer>,
-}
-
-impl InternalRegistryTokens {
-    fn issue(
-        &self,
-        namespace: &RegistryNamespace,
-        actions: RepositoryActions,
-        action_text: &str,
-        subject: &str,
-    ) -> Result<IssuedToken, ()> {
-        let repository = namespace
-            .as_str()
-            .parse::<RepositoryName>()
-            .map_err(|_| ())?;
-        let request = ScopeRequest::parse(
-            self.issuer.service().as_str(),
-            &format!("repository:{repository}:{action_text}"),
-        )
-        .map_err(|_| ())?;
-        let mut authorization = RegistryAuthorizationDecision::deny_all();
-        authorization.grant(repository, actions);
-        let now =
-            u64::try_from(time::OffsetDateTime::now_utc().unix_timestamp()).map_err(|_| ())?;
-        self.issuer
-            .issue(
-                subject.parse::<TokenSubject>().map_err(|_| ())?,
-                &request,
-                &authorization,
-                UnixTimestamp::new(now),
-            )
-            .map_err(|_| ())
-    }
-}
-
-#[async_trait]
-impl RegistryPublisherTokenIssuer for InternalRegistryTokens {
-    async fn issue_pull_push(
-        &self,
-        intent: &registry_domain::PublicationIntent,
-    ) -> Result<IssuedToken, OciWorkerError> {
-        self.issue(
-            intent.reference().namespace(),
-            RepositoryActions::pull_push(),
-            "pull,push",
-            "workload:repository-builder",
-        )
-        .map_err(|()| OciWorkerError::RegistryPublication)
-    }
-}
-
-#[async_trait]
-impl RegistryPullTokenProvider for InternalRegistryTokens {
-    async fn issue_pull_token(
-        &self,
-        namespace: &RegistryNamespace,
-    ) -> Result<IssuedToken, ZotClientError> {
-        self.issue(
-            namespace,
-            RepositoryActions::pull(),
-            "pull",
-            "workload:registry-reconciler",
-        )
-        .map_err(|()| ZotClientError::Unavailable)
-    }
-}
-
-#[derive(Clone)]
-struct PostgresRegistryReconciliation {
-    store: PgRegistryStore,
-}
-
-#[async_trait]
-impl NotificationInbox for PostgresRegistryReconciliation {
-    async fn claim(
-        &self,
-        lease: Duration,
-    ) -> Result<Option<ClaimedNotification>, ReconciliationPortError> {
-        self.store
-            .claim_notification(lease)
-            .await
-            .map(|claim| {
-                claim.map(|claim| ClaimedNotification {
-                    id: claim.id,
-                    lease_token: claim.claim_token,
-                    repository_path: claim.repository_path,
-                    namespace: claim.namespace,
-                    target: claim.target.map(|target| ObservedTarget {
-                        digest: target.digest,
-                        media_type: target.media_type,
-                    }),
-                })
-            })
-            .map_err(|_| ReconciliationPortError)
-    }
-
-    async fn complete(
-        &self,
-        claim: &ClaimedNotification,
-        completion: NotificationCompletion,
-    ) -> Result<(), ReconciliationPortError> {
-        let completion = match completion {
-            NotificationCompletion::Processed => PgNotificationCompletion::Processed,
-            NotificationCompletion::Rejected { failure_code } => {
-                PgNotificationCompletion::Rejected { failure_code }
-            }
-        };
-        self.store
-            .complete_notification(claim.id, claim.lease_token, completion)
-            .await
-            .map_err(|_| ReconciliationPortError)
-    }
-}
-
-#[async_trait]
-impl PublicationIntents for PostgresRegistryReconciliation {
-    async fn for_namespace(
-        &self,
-        namespace: &RegistryNamespace,
-    ) -> Result<Vec<registry_domain::PublicationIntent>, ReconciliationPortError> {
-        self.store
-            .list_for_namespace(namespace)
-            .await
-            .map_err(|_| ReconciliationPortError)
-    }
-
-    async fn all(
-        &self,
-    ) -> Result<Vec<registry_domain::PublicationIntent>, ReconciliationPortError> {
-        self.store
-            .list_all()
-            .await
-            .map_err(|_| ReconciliationPortError)
-    }
-}
-
-#[async_trait]
-impl ReconciliationActionExecutor for PostgresRegistryReconciliation {
-    async fn apply(&self, action: &ReconciliationAction) -> Result<(), ReconciliationPortError> {
-        match action {
-            ReconciliationAction::RecordVerified {
-                intent_id,
-                verification,
-            } => {
-                self.store
-                    .record_verified(*intent_id, verification.clone())
-                    .await
-                    .map_err(|_| ReconciliationPortError)?;
-            }
-            ReconciliationAction::MarkMissing { intent_id, reason } => {
-                self.store
-                    .mark_missing(*intent_id)
-                    .await
-                    .map_err(|_| ReconciliationPortError)?;
-                tracing::warn!(publication_id = %intent_id, ?reason, "registry publication failed closed");
-            }
-            ReconciliationAction::RestoreVerified {
-                intent_id,
-                verification,
-            } => {
-                self.store
-                    .restore_verified(*intent_id, verification)
-                    .await
-                    .map_err(|_| ReconciliationPortError)?;
-            }
-            ReconciliationAction::ObservedDifferentTarget { namespace } => {
-                tracing::warn!(namespace = %namespace, "Zot notification target did not match a publication intent");
-            }
-            ReconciliationAction::OrphanNamespace { repository_path } => {
-                tracing::warn!(
-                    repository_path,
-                    "Zot notification addressed an unowned namespace"
-                );
-            }
-            ReconciliationAction::Investigate { intent_id, reason } => {
-                tracing::warn!(publication_id = %intent_id, ?reason, "registry publication requires investigation");
-            }
-        }
-        Ok(())
-    }
-}
-
-struct PostgresRegistryScopeAuthorizer {
-    store: PgRegistryStore,
-}
-
-#[async_trait]
-impl RegistryScopeAuthorizer for PostgresRegistryScopeAuthorizer {
-    async fn authorize(
-        &self,
-        identity: &identity_domain::AuthenticatedIdentity,
-        request: &registry_token::ScopeRequest,
-    ) -> Result<RegistryAuthorizationDecision, RegistryAuthorizationError> {
-        let mut decision = RegistryAuthorizationDecision::deny_all();
-        for scope in request.scopes() {
-            if !scope.actions().contains(RegistryAction::Pull) {
-                continue;
-            }
-            let Ok(namespace) = RegistryNamespace::parse(scope.repository().as_str().to_owned())
-            else {
-                continue;
-            };
-            if self
-                .store
-                .authorize_user_pull(identity, &namespace)
-                .await
-                .map_err(|_| RegistryAuthorizationError)?
-            {
-                // Human token exchange is deliberately pull-only. Trusted
-                // publishers receive push grants through the worker boundary.
-                decision.grant(
-                    scope.repository().clone(),
-                    registry_token::RepositoryActions::pull(),
-                );
-            }
-        }
-        Ok(decision)
-    }
-}
-
-struct PostgresRegistryNotificationInbox {
-    store: PgRegistryStore,
-}
-
-#[async_trait]
-impl RegistryNotificationInbox for PostgresRegistryNotificationInbox {
-    async fn ingest(
-        &self,
-        observation: NotificationObservation,
-    ) -> Result<InboxDisposition, RegistryInboxError> {
-        let target =
-            observation
-                .digest()
-                .zip(observation.media_type())
-                .map(|(digest, media_type)| RegistryNotificationTarget {
-                    digest: digest.clone(),
-                    media_type: media_type.clone(),
-                });
-        let receipt = self
-            .store
-            .ingest_notification(NewRegistryNotification {
-                event_key: observation.idempotency_key().as_str().to_owned(),
-                repository_path: observation.repository().as_str().to_owned(),
-                action: match observation.action() {
-                    NotificationAction::Push => RegistryNotificationAction::Push,
-                    NotificationAction::Delete => RegistryNotificationAction::Delete,
-                },
-                target,
-                occurred_at: observation.occurred_at(),
-                payload_sha256: *observation.payload_sha256().as_bytes(),
-            })
-            .await
-            .map_err(|_| RegistryInboxError)?;
-        Ok(if receipt.duplicate {
-            InboxDisposition::Duplicate
-        } else {
-            InboxDisposition::Accepted
-        })
-    }
-}
-
-async fn registry_caller_authentication(
-    axum::extract::State(authenticator): axum::extract::State<Arc<dyn GitAuthenticator>>,
-    mut request: axum::extract::Request,
-    next: axum::middleware::Next,
-) -> axum::response::Response {
-    let credential = request
-        .headers()
-        .get(http::header::AUTHORIZATION)
-        .and_then(|value| value.to_str().ok())
-        .map(str::to_owned);
-    let principal = authenticator
-        .authenticate(credential.as_deref(), identity_domain::RequestId::new())
-        .await;
-    let Ok(principal) = principal else {
-        let mut response = axum::response::Response::new(axum::body::Body::empty());
-        *response.status_mut() = http::StatusCode::UNAUTHORIZED;
-        return response;
-    };
-    let Some(identity) = principal.human_identity().cloned() else {
-        let mut response = axum::response::Response::new(axum::body::Body::empty());
-        *response.status_mut() = http::StatusCode::UNAUTHORIZED;
-        return response;
-    };
-    request.headers_mut().remove(http::header::AUTHORIZATION);
-    request.extensions_mut().insert(identity);
-    next.run(request).await
-}
-
-impl OciBuilderWorkers {
-    fn initialize(
-        pool: PgPool,
-        config: OciBuilderWorkerConfig,
-        token_issuer: Arc<registry_token::RegistryTokenIssuer>,
-        provider: Arc<dyn VmProvider>,
-        root_images: &BTreeMap<String, RootFilesystem>,
-        image_filesystems: Arc<RwLock<BTreeMap<String, RootFilesystem>>>,
-    ) -> Result<Self, AppError> {
-        if !config.root_manifest.is_absolute() || config.poll_interval.is_zero() {
-            return Err(AppError::Configuration(String::from(
-                "OCI builder manifest path must be absolute and poll interval must be positive",
-            )));
-        }
-        let runtime = LocalOciRuntime::initialize(config.runtime)
-            .map_err(component("OCI local runtime configuration"))?;
-        let builder_root = root_images
-            .get(config.builder_vm_image.as_str())
-            .cloned()
-            .ok_or_else(|| {
-                AppError::Configuration(String::from("OCI builder VM root is unavailable"))
-            })?;
-        let verifier_root = root_images
-            .get(config.verifier_vm_image.as_str())
-            .cloned()
-            .ok_or_else(|| {
-                AppError::Configuration(String::from("OCI verifier VM root is unavailable"))
-            })?;
-        let operation = VmOciOperation::initialize(
-            provider,
-            VmOciOperationConfig {
-                builder_root,
-                verifier_root,
-                candidate_root: runtime.output_root().to_path_buf(),
-                scratch_root: config.scratch_root,
-                mkfs_ext4: config.mkfs_ext4,
-                verification_root: config.verification_root,
-                resources: config.vm_resources,
-                workload_phase_timing: config.workload_phase_timing,
-            },
-        )
-        .map_err(component("OCI VM operation configuration"))?;
-        let publication_store = PgRepositoryOciImagePublicationStore::new(
-            pool.clone(),
-            PgRegistryStore::new(pool.clone()),
-            config.publisher.authority().clone(),
-            config.publication_policy_version,
-            config.publication_policy,
-        );
-        let publisher = ForgeZotOciPublisher::new(
-            runtime.clone(),
-            None,
-            publication_store,
-            InternalRegistryTokens {
-                issuer: token_issuer,
-            },
-            ControlledOciPublisher::new(config.publisher, SystemCommandRunner),
-        );
-        let preparation = OciImageProductionWorker::new(
-            PgOciImageProductionJobStore::new(pool.clone()),
-            runtime.clone(),
-            VmPublishedOciEngine::new(operation, publisher),
-            config.preparation_worker_name,
-            config.materialization_worker_name.clone(),
-            config.lease,
-        )
-        .map_err(component("OCI preparation worker configuration"))?;
-        let materialization = RootfsMaterializationWorker::new(
-            PgOciImageProductionJobStore::new(pool),
-            runtime,
-            config.materialization_worker_name,
-            config.rootfs_root.clone(),
-            config.lease,
-        )
-        .and_then(|worker| worker.with_guest_init(config.guest_init))
-        .map_err(component("OCI materialization worker configuration"))?;
-        Ok(Self {
-            preparation,
-            materialization,
-            manifest: config.root_manifest,
-            manifest_dirty: AtomicBool::new(false),
-            rootfs_root: config.rootfs_root,
-            image_filesystems,
-            poll_interval: config.poll_interval,
-        })
-    }
-
-    async fn refresh_image_filesystems(&self) -> Result<(), OciWorkerError> {
-        let roots = self.materialization.materialized_roots().await?;
-        refresh_image_filesystem_cache(&roots, &self.rootfs_root, &self.image_filesystems)
-    }
-}
-
-fn refresh_image_filesystem_cache(
-    roots: &[MaterializedRoot],
-    rootfs_root: &std::path::Path,
-    image_filesystems: &Arc<RwLock<BTreeMap<String, RootFilesystem>>>,
-) -> Result<(), OciWorkerError> {
-    {
-        let mut image_filesystems = image_filesystems
-            .write()
-            .map_err(|_| OciWorkerError::InvalidConfiguration)?;
-        for root in roots {
-            let canonical =
-                std::fs::canonicalize(&root.root_path).map_err(OciWorkerError::Filesystem)?;
-            let metadata =
-                std::fs::symlink_metadata(&canonical).map_err(OciWorkerError::Filesystem)?;
-            if !canonical.starts_with(rootfs_root)
-                || metadata.file_type().is_symlink()
-                || !metadata.is_dir()
-            {
-                return Err(OciWorkerError::UnsafeMaterializationPath);
-            }
-            image_filesystems.insert(
-                root.image_reference.to_string(),
-                RootFilesystem::Directory {
-                    host_path: canonical,
-                },
-            );
-        }
-    }
-    Ok(())
 }
 
 impl HephaestusApp {
@@ -2785,36 +2361,6 @@ async fn oci_builder_loop(workers: Arc<OciBuilderWorkers>, cancellation: Cancell
     }
 }
 
-async fn registry_reconciliation_loop(
-    reconciler: RegistryReconciler<
-        PostgresRegistryReconciliation,
-        PostgresRegistryReconciliation,
-        ZotHttpRegistry<InternalRegistryTokens>,
-    >,
-    executor: PostgresRegistryReconciliation,
-    lease: Duration,
-    poll_interval: Duration,
-    cancellation: CancellationToken,
-) {
-    let mut interval = tokio::time::interval(poll_interval);
-    interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
-    loop {
-        tokio::select! {
-            () = cancellation.cancelled() => break,
-            _ = interval.tick() => {
-                if let Err(error) = reconciler.process_next_and_apply(lease, &executor).await {
-                    tracing::warn!(%error, "registry notification reconciliation pass failed");
-                }
-                if let Err(error) = reconciler.reconcile_all_and_apply(&executor).await {
-                    // Zot availability is intentionally not forge readiness:
-                    // approved consumers remain fail-closed from durable state.
-                    tracing::warn!(%error, "registry authoritative reconciliation pass failed");
-                }
-            }
-        }
-    }
-}
-
 // The two worker outcomes and their independently durable manifest update are
 // intentionally explicit; Clippy counts the async/logging expansion as well.
 #[allow(clippy::cognitive_complexity)]
@@ -4686,14 +4232,15 @@ pub enum AppError {
 
 #[cfg(test)]
 mod tests {
+    use super::oci_workers::refresh_image_filesystem_cache;
     use super::{
         BuildExecutionError, FlushDiagnostics, FlushPublisher, GatewayServiceArtifact,
         GatewayServiceArtifactKind, GatewayServiceIdentity, GatewayServiceMaterializer,
         LocalGatewayReleaseMaterializer, LocalRunRuntimeConfig, LocalRunRuntimeManager,
         MaterializedRoot, OciImageReference, OciWorkerError, RuntimePolicy, StoredNetworkAccess,
         build_delivery_requires_redelivery, deterministic_update_hook_run_id, flush_publisher,
-        flush_until_quiescent, guest_environment, refresh_image_filesystem_cache,
-        validate_runtime_policy, write_oci_manifest_if_dirty,
+        flush_until_quiescent, guest_environment, validate_runtime_policy,
+        write_oci_manifest_if_dirty,
     };
     use async_trait::async_trait;
     use gateway_edge::GatewayEdgeError;
