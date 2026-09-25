@@ -1,4 +1,3 @@
-#![allow(unused_imports)]
 use super::{
     HUMAN_RECORD_ID, SESSION_ID, concurrent_e2e_enabled, denial_probe_enabled, fork_e2e_enabled,
     restart_e2e_enabled,

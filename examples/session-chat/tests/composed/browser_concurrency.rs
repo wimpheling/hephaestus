@@ -1,4 +1,3 @@
-#![allow(unused_imports)]
 use super::browser_setup::run_session_chat_browser;
 use super::rpc_helpers::git_output_bare;
 use super::*;

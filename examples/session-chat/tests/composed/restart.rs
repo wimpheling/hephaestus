@@ -1,4 +1,3 @@
-#![allow(unused_imports)]
 use super::restart_tail::finish_restart;
 use super::*;
 use super::{BrowserRestartState, MODEL_RESPONSE_TEXT, SessionBrokerFixture};

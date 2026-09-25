@@ -1,4 +1,3 @@
-#![allow(unused_imports)]
 use super::*;
 use super::{SessionBrokerFixture, denial_probe_enabled, fork_e2e_enabled, restart_e2e_enabled};
 use hephaestus_app::RunningHephaestus;

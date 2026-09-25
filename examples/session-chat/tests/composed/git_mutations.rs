@@ -1,4 +1,3 @@
-#![allow(unused_imports)]
 use super::*;
 use hephaestus_app::RunningHephaestus;
 use sqlx::PgPool;

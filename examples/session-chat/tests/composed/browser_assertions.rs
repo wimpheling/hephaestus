@@ -1,4 +1,3 @@
-#![allow(unused_imports)]
 use super::ObservedModelRequest;
 use super::browser_records::{BrowserRecordEvidence, load_browser_records};
 use super::*;

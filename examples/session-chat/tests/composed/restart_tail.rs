@@ -1,4 +1,3 @@
-#![allow(unused_imports)]
 use super::browser_concurrency::exercise_browser_concurrency;
 use super::denial::accepted_receive_count;
 use super::fork;

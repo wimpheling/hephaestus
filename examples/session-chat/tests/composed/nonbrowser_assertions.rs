@@ -1,4 +1,3 @@
-#![allow(unused_imports)]
 use super::denial::{accepted_receive_count, assert_denial_probe_output, canonical_main_ref};
 use super::model::SessionBrokerFixture;
 use super::nonbrowser_setup::NonBrowserState;

@@ -1,4 +1,3 @@
-#![allow(unused_imports)]
 use super::model::ObservedModelRequest;
 use super::*;
 use super::{BrowserSessionObjects, MODEL_RESPONSE_TEXT};

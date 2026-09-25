@@ -1,4 +1,3 @@
-#![allow(unused_imports)]
 use super::MODEL_RESPONSE_TEXT;
 use super::model::SessionBrokerFixture;
 use super::rpc_helpers::git_output_bare;

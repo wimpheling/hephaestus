@@ -1,4 +1,3 @@
-#![allow(unused_imports)]
 use super::*;
 use super::{SessionBrokerFixture, SessionChatBrowserMode};
 use forge_domain::ProjectId;

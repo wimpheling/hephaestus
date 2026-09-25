@@ -1,4 +1,3 @@
-#![allow(unused_imports)]
 use super::denial::{accepted_receive_count, canonical_main_ref};
 use super::git_mutations::{append_human_and_push, initialize_session_checkout};
 use super::rpc_helpers::{git_output, instance_client, mutation_context, opaque, response_id};

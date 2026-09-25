@@ -1,4 +1,3 @@
-#![allow(unused_imports)]
 use super::rpc_helpers::git_output_bare;
 use super::*;
 use sqlx::PgPool;

@@ -1,4 +1,3 @@
-#![allow(unused_imports)]
 use super::browser_assertions::assert_browser_session;
 use super::browser_setup::{
     SessionChatBrowserMode, grant_session_capability, run_session_chat_browser,
