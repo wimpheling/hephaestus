@@ -6,7 +6,7 @@
 use crate::{AcceptedInvocationRow, PostgresGatewayEdgeAuthority};
 use async_trait::async_trait;
 use gateway_domain::Exposure;
-use gateway_edge::{
+use gateway_domain::{
     GATEWAY_NAMESPACE, GatewayEdgeError, GatewayRouteBinding, UiGatewayAdmission,
     UiGatewayAdmissionError, UiGatewayAdmissionProvider, UiGatewayAuthority, UiGatewayRequest,
     UiGatewayRequestKind,

@@ -6,52 +6,55 @@
 
 use async_trait::async_trait;
 use bytes::Bytes;
-pub use gateway_domain::{Exposure, GatewayInboundSecretResolver, InboundGatewaySecretRule};
-use http::{HeaderMap, HeaderName, Method, StatusCode};
-use serde::{Deserialize, Serialize};
-use serde_json::Value;
-use std::{
-    collections::BTreeSet,
-    net::{IpAddr, SocketAddr},
-    sync::Arc,
-    time::Duration,
+pub use gateway_domain::{
+    DEFAULT_SERVICE_CONNECT_TIMEOUT, DEFAULT_SERVICE_MAX_CONNECTIONS, Exposure, GATEWAY_NAMESPACE,
+    GatewayConfigRevision, GatewayDesiredConfiguration, GatewayEdgeError, GatewayExecutionTarget,
+    GatewayExecutionTargetError, GatewayExecutionTargetResolver, GatewayInboundSecretResolver,
+    GatewayInvocationOutcome, GatewayInvocationRecorder, GatewayLimits, GatewayMailboxPublisher,
+    GatewayProvider, GatewayProviderResponse, GatewayReleaseResolver, GatewayRequest,
+    GatewayRequestDispatcher, GatewayResponse, GatewayRouteBinding, GatewayRouteResolver,
+    GatewayScheme, GatewayServiceArtifact, GatewayServiceArtifactKind,
+    GatewayServiceAuthorityBudget, GatewayServiceClaimResolutionStore,
+    GatewayServiceExpiredClaimRecovery, GatewayServiceFailure, GatewayServiceFailureCode,
+    GatewayServiceFailureStore, GatewayServiceFailureStoreError, GatewayServiceIdentity,
+    GatewayServiceInstanceKey, GatewayServiceInstanceLease, GatewayServiceInstancePage,
+    GatewayServiceInstancePageResult, GatewayServiceInstanceState, GatewayServiceLaunch,
+    GatewayServiceLaunchRequest, GatewayServiceLaunchResolver, GatewayServiceMaterializer,
+    GatewayServiceOwnedTarget, GatewayServiceOwner, GatewayServiceOwnership,
+    GatewayServiceOwnershipError, GatewayServiceRevisionTarget, GatewayServiceTarget,
+    GatewayServiceTargetPage, GatewayServiceTargetPageResult, GatewayServiceTargetStore,
+    InboundGatewaySecretRule, MAX_SERVICE_EXIT_VALUE, MAX_SERVICE_INSTANCE_PAGE_SIZE,
+    MAX_SERVICE_OWNER_HOST_BYTES, MAX_SERVICE_OWNERSHIP_BATCH, MAX_SERVICE_OWNERSHIP_LEASE,
+    MAX_SERVICE_TARGET_PAGE_SIZE, TrustedRequestMetadata, UNTRUSTED_FORWARDING_HEADERS,
+    UiGatewayAdmission, UiGatewayAdmissionError, UiGatewayAdmissionProvider, UiGatewayAuthority,
+    UiGatewayRequest, UiGatewayRequestKind, admission_failure_response, prepare_gateway_request,
+    reject_ui_set_cookie, service_transport_spec, strip_ui_guest_headers, validate_ui_response,
 };
+use http::{HeaderMap, HeaderName, StatusCode};
+use serde_json::Value;
+use std::{collections::BTreeSet, net::SocketAddr, sync::Arc};
 use subtle::ConstantTimeEq;
 use tokio::time::timeout;
 use uuid::Uuid;
 
-mod ui_gateway_admission;
-pub use ui_gateway_admission::{
-    UiGatewayAdmission, UiGatewayAdmissionError, UiGatewayAdmissionProvider, UiGatewayAuthority,
-    UiGatewayRequest, UiGatewayRequestKind, admission_failure_response, prepare_gateway_request,
-    reject_ui_set_cookie, strip_ui_guest_headers, validate_ui_response,
-};
 use vm_trait::{PrivateHttpRequest, PrivateHttpResponse, PrivateMailboxPublication, VmInstance};
 
 mod integration;
 mod service_boot_recovery;
 mod service_capacity;
-mod service_claim_resolution;
 mod service_cleanup;
 mod service_cleanup_driver;
 mod service_coordinator;
 pub(crate) mod service_diagnostics;
-mod service_execution;
-mod service_expired_claim_recovery;
-mod service_failure;
 mod service_handler;
 mod service_http;
 mod service_instance;
-mod service_launch;
 mod service_lease;
 mod service_log_writer;
 mod service_logs;
-mod service_ownership;
 mod service_preparation;
 mod service_probe;
-mod service_registry;
 mod service_supervisor;
-mod service_targets;
 
 pub use integration::caddy::LocalCaddyAdministration;
 pub use service_boot_recovery::{
@@ -67,7 +70,6 @@ pub use service_capacity::{
     GatewayServiceCapacityError, GatewayServiceCapacitySnapshot, GatewayServiceCapacityToken,
     GatewayServiceSupervisorPolicy,
 };
-pub use service_claim_resolution::GatewayServiceClaimResolutionStore;
 pub use service_cleanup::{GatewayServiceCleanup, GatewayServiceCleanupError};
 pub use service_cleanup_driver::{
     GatewayServiceCleanupDriver, GatewayServiceCleanupDriverError,
@@ -80,26 +82,11 @@ pub use service_coordinator::{
     GatewayServiceCoordinatorStatus, GatewayServiceLogWriterConfig, GatewayServiceStartupIntent,
 };
 pub use service_diagnostics::{ServiceDiagnosticsSnapshot, ServiceLifecycleEvidence};
-pub use service_execution::{
-    GatewayExecutionTarget, GatewayExecutionTargetError, GatewayExecutionTargetResolver,
-    GatewayServiceAuthorityBudget,
-};
-pub use service_expired_claim_recovery::GatewayServiceExpiredClaimRecovery;
-pub use service_failure::{
-    GatewayServiceFailure, GatewayServiceFailureCode, GatewayServiceFailureStore,
-    GatewayServiceFailureStoreError,
-};
 pub use service_handler::GatewayServiceHandler;
 pub use service_http::{ServiceHttpPolicy, exchange as exchange_private_service_http};
 pub use service_instance::{
     ServiceInstance, ServiceInstanceError, ServiceInstanceHandle, ServiceInstancePolicy,
     ServiceWorkerState, new_service_instance,
-};
-pub use service_launch::{
-    DEFAULT_SERVICE_CONNECT_TIMEOUT, DEFAULT_SERVICE_MAX_CONNECTIONS, GatewayServiceArtifact,
-    GatewayServiceArtifactKind, GatewayServiceIdentity, GatewayServiceLaunch,
-    GatewayServiceLaunchRequest, GatewayServiceLaunchResolver, GatewayServiceMaterializer,
-    service_transport_spec,
 };
 pub use service_lease::{
     GatewayServiceLeaseControl, GatewayServiceLeaseError, GatewayServiceLeaseLossReason,
@@ -127,11 +114,6 @@ pub use service_logs::{
     MAX_SERVICE_LOG_READ_PAGE_RECORDS, ServiceLogBufferHandle, ServiceLogBufferSnapshot,
     ServiceLogLoss, ServiceLogRecord,
 };
-pub use service_ownership::{
-    GatewayServiceInstanceLease, GatewayServiceInstanceState, GatewayServiceOwner,
-    GatewayServiceOwnership, GatewayServiceOwnershipError, MAX_SERVICE_OWNER_HOST_BYTES,
-    MAX_SERVICE_OWNERSHIP_BATCH, MAX_SERVICE_OWNERSHIP_LEASE,
-};
 pub use service_preparation::{
     PreparedGatewayService, ServicePreparation, ServicePreparationFailure,
     ServicePreparationFailureReason, ServicePreparationHandle, new_service_preparation,
@@ -139,9 +121,10 @@ pub use service_preparation::{
 pub use service_probe::{
     ServiceProbeError, ServiceProbePolicy, ServiceProbeSuccess, probe_private_service_http,
 };
+mod service_registry;
 pub use service_registry::{
-    GatewayServiceInstanceKey, GatewayServiceRegistry, GatewayServiceRegistryError,
-    MAX_SERVICE_REGISTRY_CAPACITY, MAX_SERVICE_REQUEST_CAPACITY,
+    GatewayServiceRegistry, GatewayServiceRegistryError, MAX_SERVICE_REGISTRY_CAPACITY,
+    MAX_SERVICE_REQUEST_CAPACITY,
 };
 pub use service_supervisor::{
     GatewayServiceStartupHandle, GatewayServiceStartupRequest, GatewayServiceSupervisor,
@@ -149,219 +132,6 @@ pub use service_supervisor::{
     GatewayServiceSupervisorJobStatus, GatewayServiceSupervisorShutdown,
     GatewayServiceSupervisorUnresolved,
 };
-pub use service_targets::{
-    GatewayServiceInstancePage, GatewayServiceInstancePageResult, GatewayServiceOwnedTarget,
-    GatewayServiceRevisionTarget, GatewayServiceTarget, GatewayServiceTargetPage,
-    GatewayServiceTargetPageResult, GatewayServiceTargetStore, MAX_SERVICE_INSTANCE_PAGE_SIZE,
-    MAX_SERVICE_TARGET_PAGE_SIZE,
-};
-
-/// Reserved public path prefix owned by gateway routing.
-pub const GATEWAY_NAMESPACE: &str = "/gateway/";
-/// Provider-controlled forwarding headers which never reach a gateway.
-pub const UNTRUSTED_FORWARDING_HEADERS: [&str; 4] = [
-    "forwarded",
-    "x-forwarded-for",
-    "x-forwarded-host",
-    "x-forwarded-proto",
-];
-
-/// Stable identity of a derived Caddy configuration.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
-#[serde(transparent)]
-pub struct GatewayConfigRevision(Uuid);
-
-impl GatewayConfigRevision {
-    /// Creates an opaque derived configuration revision.
-    #[must_use]
-    pub fn new() -> Self {
-        Self(Uuid::new_v4())
-    }
-
-    /// Reconstitutes a control-plane-derived configuration revision.
-    #[must_use]
-    pub const fn from_uuid(value: Uuid) -> Self {
-        Self(value)
-    }
-}
-
-impl Default for GatewayConfigRevision {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
-/// An authoritative desired configuration revision and its complete route set.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct GatewayDesiredConfiguration {
-    /// Immutable desired revision supplied by the control plane.
-    pub revision: GatewayConfigRevision,
-    /// Every enabled gateway route.  Absence removes a previously derived route.
-    pub routes: Vec<GatewayRouteBinding>,
-}
-
-/// One enabled route selected by the control plane.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct GatewayRouteBinding {
-    /// Stable authoritative route identity; never derived from public input.
-    pub route_id: Uuid,
-    /// Exact immutable released handler revision to invoke.
-    pub gateway_revision_id: Uuid,
-    /// Declared exposure carried from the authoritative revision. Reserved
-    /// authenticated routes must never enter the public Caddy or dispatcher
-    /// path.
-    pub exposure: Exposure,
-    /// Normalized public path prefix below `/gateway/`.
-    pub path_prefix: String,
-    /// Permitted canonical HTTP methods.
-    pub methods: BTreeSet<Method>,
-    /// Per-route resource and execution limits.
-    pub limits: GatewayLimits,
-}
-
-impl GatewayRouteBinding {
-    /// Validates this binding is safe to place below the shared gateway namespace.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error when the route name, methods, or limits are unsafe.
-    pub fn validate(&self) -> Result<(), GatewayEdgeError> {
-        validate_gateway_prefix(&self.path_prefix)?;
-        if self.methods.is_empty() {
-            return Err(GatewayEdgeError::InvalidRoute("methods cannot be empty"));
-        }
-        self.limits.validate()
-    }
-
-    /// Returns the public path prefix owned by Caddy.
-    #[must_use]
-    pub fn public_path(&self) -> String {
-        format!("{GATEWAY_NAMESPACE}{}", self.path_prefix)
-    }
-}
-
-/// Explicit bounds for a route and its invocation.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct GatewayLimits {
-    /// Maximum request body bytes.
-    pub max_request_body_bytes: usize,
-    /// Maximum response body bytes.
-    pub max_response_body_bytes: usize,
-    /// Maximum distinct request headers.
-    pub max_request_headers: usize,
-    /// Maximum distinct response headers.
-    pub max_response_headers: usize,
-    /// Maximum complete request path and query length.
-    pub max_path_and_query_bytes: usize,
-    /// Maximum startup and handler execution duration.
-    pub execution_timeout: Duration,
-}
-
-impl GatewayLimits {
-    /// Validates all limits fail closed rather than silently becoming unlimited.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error when any route bound is zero.
-    pub const fn validate(self) -> Result<(), GatewayEdgeError> {
-        if self.max_request_body_bytes == 0
-            || self.max_response_body_bytes == 0
-            || self.max_request_headers == 0
-            || self.max_response_headers == 0
-            || self.max_path_and_query_bytes == 0
-            || self.execution_timeout.is_zero()
-        {
-            return Err(GatewayEdgeError::InvalidRoute(
-                "gateway limits must be nonzero",
-            ));
-        }
-        Ok(())
-    }
-}
-
-/// Trusted metadata produced only by a concrete edge adapter.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct TrustedRequestMetadata {
-    /// Scheme terminated by the public edge.
-    pub scheme: GatewayScheme,
-    /// Public listener authority selected by the adapter, never `Host` input.
-    pub authority: String,
-    /// Immediate client address observed by the trusted edge.
-    pub client_address: IpAddr,
-    /// Edge-generated opaque request correlation identifier.
-    pub request_id: Uuid,
-}
-
-/// The public scheme observed by the trusted adapter.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum GatewayScheme {
-    /// HTTP.
-    Http,
-    /// HTTPS terminated at Caddy.
-    Https,
-}
-
-/// Canonical normalized inbound HTTP request sent to a gateway handler.
-#[derive(Debug, Clone)]
-pub struct GatewayRequest {
-    /// HTTP method.
-    pub method: Method,
-    /// Normalized path and optional query, always beginning with `/`.
-    pub path_and_query: String,
-    /// Allowlisted non-forwarding headers.
-    pub headers: HeaderMap,
-    /// Complete bounded body; streaming is unsupported.
-    pub body: Bytes,
-    /// Metadata trusted from the edge adapter.
-    pub trusted: TrustedRequestMetadata,
-}
-
-/// Canonical bounded response returned by a handler.
-#[derive(Debug, Clone)]
-pub struct GatewayResponse {
-    /// HTTP status selected by released application code.
-    pub status: StatusCode,
-    /// Allowlisted response headers.
-    pub headers: HeaderMap,
-    /// Complete bounded response body; streaming is unsupported.
-    pub body: Bytes,
-    /// At most one host-authorized mailbox publication candidate from the
-    /// released handler. This is never exposed to the public HTTP client.
-    pub mailbox_publication: Option<PrivateMailboxPublication>,
-}
-
-/// Safe outcome returned to the provider adapter.
-#[derive(Debug, Clone)]
-pub struct GatewayProviderResponse {
-    /// Response safe for the public client.
-    pub response: GatewayResponse,
-    /// Opaque invocation correlation identity for logs only.
-    pub invocation_id: Uuid,
-}
-
-/// Desired configuration reconciler for any edge provider.
-#[async_trait]
-pub trait GatewayProvider: Send + Sync {
-    /// Applies the complete desired route set atomically, or leaves the prior
-    /// observed revision unchanged.  Implementations must make duplicate
-    /// revision application idempotent.
-    async fn reconcile(
-        &self,
-        desired: &GatewayDesiredConfiguration,
-    ) -> Result<GatewayConfigRevision, GatewayEdgeError>;
-    /// Reapplies the complete authoritative configuration after an edge
-    /// restart. Implementations that can prove their observation is still
-    /// present may use the ordinary idempotent reconciliation path.
-    async fn recover(
-        &self,
-        desired: &GatewayDesiredConfiguration,
-    ) -> Result<GatewayConfigRevision, GatewayEdgeError> {
-        self.reconcile(desired).await
-    }
-    /// Translates one provider request into canonical HTTP and dispatches it.
-    /// Only the adapter may populate trusted metadata.
-    async fn forward(&self, request: GatewayRequest) -> GatewayProviderResponse;
-}
 
 /// Private Caddy administration port.  Implementations must not be exposed to
 /// gateway VMs or public request paths.
@@ -490,34 +260,6 @@ where
     }
 }
 
-/// Dispatcher port used by a concrete provider after it has established trusted metadata.
-#[async_trait]
-pub trait GatewayRequestDispatcher: Send + Sync {
-    /// Dispatches one normalized, bounded private request.
-    async fn dispatch(&self, request: GatewayRequest) -> GatewayProviderResponse;
-}
-
-#[async_trait]
-impl<T> GatewayRequestDispatcher for Arc<T>
-where
-    T: GatewayRequestDispatcher + ?Sized,
-{
-    async fn dispatch(&self, request: GatewayRequest) -> GatewayProviderResponse {
-        (**self).dispatch(request).await
-    }
-}
-
-/// Resolves an exact authoritative enabled route.  The adapter must not use a
-/// caller-controlled route identifier or forwarding header to choose a route.
-#[async_trait]
-pub trait GatewayRouteResolver: Send + Sync {
-    /// Resolves a public normalized route path to its enabled binding.
-    async fn resolve(
-        &self,
-        path_and_query: &str,
-    ) -> Result<Option<GatewayRouteBinding>, GatewayEdgeError>;
-}
-
 /// Runs the exact released handler revision in a short-lived isolated VM.
 #[async_trait]
 pub trait GatewayVmHandler: Send + Sync {
@@ -583,30 +325,6 @@ pub trait GatewayVmLauncher: Send + Sync {
 
 /// Resolves one authoritative route to its exact immutable release launch
 /// specification, including the gateway runtime-session bootstrap selected by
-/// the control plane. Public request data is never an input to this port.
-#[async_trait]
-pub trait GatewayReleaseResolver: Send + Sync {
-    /// Resolves the released root filesystem, command, and session bootstrap.
-    async fn resolve_launch(
-        &self,
-        route: &GatewayRouteBinding,
-        invocation_id: Uuid,
-    ) -> Result<vm_trait::VmSpec, GatewayEdgeError>;
-
-    /// Persists the exact guest acknowledgement for a launched invocation.
-    async fn acknowledge_runtime_authority(
-        &self,
-        invocation_id: Uuid,
-        session_id: Uuid,
-        generation: u64,
-    ) -> Result<(), GatewayEdgeError>;
-
-    /// Releases any host-owned release tree prepared for this invocation.
-    async fn cleanup_launch(&self, _: Uuid) -> Result<(), GatewayEdgeError> {
-        Ok(())
-    }
-}
-
 /// Provisions the already-resolved private VM launch specification.
 #[async_trait]
 pub trait GatewayRuntimeLauncher: Send + Sync {
@@ -760,67 +478,14 @@ where
 }
 
 /// Durable audit/session boundary for one invocation.  The control plane owns
-/// its authority snapshot and never accepts these values from the public edge.
-#[async_trait]
-pub trait GatewayInvocationRecorder: Send + Sync {
-    /// Records a pre-launch invocation/session and returns its opaque id.
-    async fn accepted(
-        &self,
-        route: &GatewayRouteBinding,
-        request_id: Uuid,
-    ) -> Result<Uuid, GatewayEdgeError>;
-    /// Records a UI-origin invocation only after the adapter has rechecked
-    /// the child authority and exact derived route in the same transaction as
-    /// the accepted invocation row. Existing recorders deny this path until
-    /// they implement that durable check.
-    ///
-    /// # Errors
-    ///
-    /// Returns a contract error when the recorder has not implemented the
-    /// durable UI authority check.
-    async fn accepted_ui(
-        &self,
-        route: &GatewayRouteBinding,
-        authority: &UiGatewayAuthority,
-        request_id: Uuid,
-    ) -> Result<Uuid, GatewayEdgeError> {
-        let _ = (route, authority, request_id);
-        Err(GatewayEdgeError::Contract(
-            "UI invocation acceptance is unsupported",
-        ))
+const fn ui_admission_dispatch_disposition(
+    error: UiGatewayAdmissionError,
+) -> UiDispatchDisposition {
+    match error {
+        UiGatewayAdmissionError::Denied => UiDispatchDisposition::ProviderDenied,
+        UiGatewayAdmissionError::NotFound => UiDispatchDisposition::ProviderNotFound,
+        UiGatewayAdmissionError::Unavailable => UiDispatchDisposition::ProviderUnavailable,
     }
-    /// Records the terminal safe outcome.
-    async fn completed(
-        &self,
-        invocation_id: Uuid,
-        outcome: GatewayInvocationOutcome,
-    ) -> Result<(), GatewayEdgeError>;
-}
-
-/// Host-only acceptance port for a candidate mailbox event returned by an
-/// `http.v1` handler. The implementation resolves the target and producer
-/// from the invocation's immutable authority; guests never select either.
-#[async_trait]
-pub trait GatewayMailboxPublisher: Send + Sync {
-    /// Accepts one bounded candidate or returns a redacted failure.
-    async fn publish(
-        &self,
-        invocation_id: Uuid,
-        publication: PrivateMailboxPublication,
-    ) -> Result<(), GatewayEdgeError>;
-}
-
-/// Persistable terminal outcome with no request/response payload.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum GatewayInvocationOutcome {
-    /// Handler returned a bounded response.
-    Completed,
-    /// Handler/startup failed.
-    Failed,
-    /// Deadline elapsed.
-    TimedOut,
-    /// Request was rejected before launch.
-    Rejected,
 }
 
 /// Detailed disposition of one UI-origin dispatch.  This is an audit-facing
@@ -981,7 +646,7 @@ impl<R, H, I> GatewayDispatcher<R, H, I> {
                         response: admission_failure_response(error),
                         invocation_id: Uuid::nil(),
                     },
-                    disposition: error.dispatch_disposition(),
+                    disposition: ui_admission_dispatch_disposition(error),
                 };
             }
         };
@@ -1155,53 +820,6 @@ impl<R: Sync, H: Sync, I: Sync> GatewayDispatcher<R, H, I> {
         }
         Ok(request)
     }
-}
-
-/// Gateway reconciliation or dispatch failure.  Public adapters must map this
-/// to a generic safe response rather than exposing internals.
-#[derive(Debug, thiserror::Error)]
-#[non_exhaustive]
-pub enum GatewayEdgeError {
-    /// Route data violates the canonical contract.
-    #[error("invalid gateway route: {0}")]
-    InvalidRoute(&'static str),
-    /// Request or response violates a declared bound.
-    #[error("gateway HTTP contract violation: {0}")]
-    Contract(&'static str),
-    /// Caddy administration or a durable adapter failed.
-    #[error("gateway edge unavailable")]
-    Unavailable,
-    /// The Caddy administration endpoint is not a loopback HTTP address.
-    #[error("Caddy administration endpoint must be a loopback HTTP URL")]
-    InvalidAdministrationEndpoint,
-    /// The operator-owned shared Caddy baseline lacks the exact gateway slot.
-    #[error("invalid shared Caddy configuration template")]
-    InvalidCaddyConfiguration,
-    /// VM startup or private handler invocation failed.
-    #[error("gateway handler unavailable")]
-    HandlerUnavailable,
-    /// An inbound real-secret matcher did not pass its exact host-side lease.
-    #[error("gateway inbound secret was rejected")]
-    SecretRejected,
-}
-
-fn validate_gateway_prefix(prefix: &str) -> Result<(), GatewayEdgeError> {
-    if prefix.is_empty()
-        || prefix.starts_with('/')
-        || prefix.ends_with('/')
-        || prefix.contains("//")
-        || prefix
-            .split('/')
-            .any(|segment| segment.is_empty() || segment == "." || segment == "..")
-        || !prefix
-            .bytes()
-            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_' | b'.' | b'/'))
-    {
-        return Err(GatewayEdgeError::InvalidRoute(
-            "path prefix must be normalized relative path",
-        ));
-    }
-    Ok(())
 }
 
 fn ensure_unique_routes(routes: &[GatewayRouteBinding]) -> Result<(), GatewayEdgeError> {
@@ -1609,6 +1227,8 @@ fn gateway_response(response: PrivateHttpResponse) -> GatewayResponse {
 mod tests {
     use super::*;
     use http::HeaderValue;
+    use http::Method;
+    use std::time::Duration;
     use std::{
         collections::BTreeMap,
         sync::{

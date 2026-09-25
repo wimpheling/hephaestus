@@ -1,7 +1,7 @@
 //! `PostgreSQL` adapter for redacted service failure recording and backoff.
 
 use async_trait::async_trait;
-use gateway_edge::{
+use gateway_domain::{
     GatewayServiceFailure, GatewayServiceFailureStore, GatewayServiceFailureStoreError,
     GatewayServiceInstanceLease, GatewayServiceOwner,
 };

@@ -2,15 +2,17 @@
 
 use super::{active_pointer, seed_fixture, seed_service_revision, test_pool};
 use async_trait::async_trait;
+use gateway_domain::{
+    GatewayLimits, GatewayRequest, GatewayScheme, GatewayServiceFailureCode,
+    GatewayServiceIdentity, GatewayServiceInstanceKey, GatewayServiceLaunch,
+    GatewayServiceLaunchRequest, GatewayServiceLaunchResolver, GatewayServiceOwner,
+    GatewayServiceOwnership, TrustedRequestMetadata,
+};
 use gateway_domain::{GatewayServiceConfig, ServiceProbePath};
 use gateway_edge::{
-    GatewayLimits, GatewayRequest, GatewayScheme, GatewayServiceCoordinator,
-    GatewayServiceCoordinatorStatus, GatewayServiceFailureCode, GatewayServiceIdentity,
-    GatewayServiceInstanceKey, GatewayServiceLaunch, GatewayServiceLaunchRequest,
-    GatewayServiceLaunchResolver, GatewayServiceLeasePolicy, GatewayServiceOwner,
-    GatewayServiceOwnership, GatewayServiceRegistry, GatewayServiceStartupIntent,
-    GatewayServiceSupervisorPolicy, ServiceHttpPolicy, ServiceInstancePolicy,
-    TrustedRequestMetadata,
+    GatewayServiceCoordinator, GatewayServiceCoordinatorStatus, GatewayServiceLeasePolicy,
+    GatewayServiceRegistry, GatewayServiceStartupIntent, GatewayServiceSupervisorPolicy,
+    ServiceHttpPolicy, ServiceInstancePolicy,
 };
 use gateway_postgres::{
     PostgresGatewayServiceFailureStore, PostgresGatewayServiceOwnership,
@@ -462,9 +464,9 @@ impl GatewayServiceLaunchResolver for FakeResolver {
     async fn resolve_service_launch(
         &self,
         request: GatewayServiceLaunchRequest,
-    ) -> Result<GatewayServiceLaunch, gateway_edge::GatewayEdgeError> {
+    ) -> Result<GatewayServiceLaunch, gateway_domain::GatewayEdgeError> {
         if request.identity != self.launch.identity {
-            return Err(gateway_edge::GatewayEdgeError::Contract(
+            return Err(gateway_domain::GatewayEdgeError::Contract(
                 "fake launch identity mismatch",
             ));
         }
@@ -474,9 +476,9 @@ impl GatewayServiceLaunchResolver for FakeResolver {
     async fn cleanup_service_launch(
         &self,
         identity: GatewayServiceIdentity,
-    ) -> Result<(), gateway_edge::GatewayEdgeError> {
+    ) -> Result<(), gateway_domain::GatewayEdgeError> {
         if identity != self.launch.identity {
-            return Err(gateway_edge::GatewayEdgeError::Contract(
+            return Err(gateway_domain::GatewayEdgeError::Contract(
                 "fake cleanup identity mismatch",
             ));
         }

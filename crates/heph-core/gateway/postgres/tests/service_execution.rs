@@ -1,6 +1,6 @@
 //! Real `PostgreSQL` coverage for immutable gateway execution-target lookup.
 
-use gateway_edge::{
+use gateway_domain::{
     GatewayExecutionTarget, GatewayExecutionTargetError, GatewayExecutionTargetResolver,
     GatewayServiceOwner,
 };

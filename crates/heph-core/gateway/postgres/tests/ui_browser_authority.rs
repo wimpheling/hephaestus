@@ -4,7 +4,7 @@
 //! as the browser authentication schema tests, then exercise the gateway
 //! worker adapter through its public edge ports.
 
-use gateway_edge::{
+use gateway_domain::{
     GatewayInvocationRecorder, GatewayLimits, GatewayScheme, TrustedRequestMetadata,
     UiGatewayAdmissionProvider, UiGatewayAuthority, UiGatewayRequest, UiGatewayRequestKind,
 };

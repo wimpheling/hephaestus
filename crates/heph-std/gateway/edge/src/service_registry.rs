@@ -5,6 +5,7 @@ use std::{
     sync::{Arc, RwLock},
 };
 
+use crate::GatewayServiceInstanceKey;
 use tokio::{
     sync::{OwnedSemaphorePermit, Semaphore, watch},
     time::{self, Instant},
@@ -13,36 +14,14 @@ use tokio_util::sync::CancellationToken;
 use vm_trait::{VmId, VmInstance};
 
 use crate::{
-    GatewayEdgeError, GatewayRequest, GatewayResponse, GatewayServiceIdentity, ServiceHttpPolicy,
-    ServiceWorkerState, exchange_private_service_http,
+    GatewayEdgeError, GatewayRequest, GatewayResponse, ServiceHttpPolicy, ServiceWorkerState,
+    exchange_private_service_http,
 };
 
 /// Maximum number of live service instances held by one registry.
 pub const MAX_SERVICE_REGISTRY_CAPACITY: usize = 128;
 /// Maximum concurrent HTTP exchanges admitted to one service instance.
 pub const MAX_SERVICE_REQUEST_CAPACITY: usize = 31;
-
-/// Exact in-memory service key, including the durable fencing token.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub struct GatewayServiceInstanceKey {
-    /// Immutable service launch identity.
-    pub identity: GatewayServiceIdentity,
-    /// Positive durable ownership fence.
-    pub fencing_token: i64,
-}
-
-impl GatewayServiceInstanceKey {
-    const fn validate(self) -> Result<(), GatewayServiceRegistryError> {
-        if self.identity.instance_id.is_nil()
-            || self.identity.gateway_id.is_nil()
-            || self.identity.revision_id.is_nil()
-            || self.fencing_token <= 0
-        {
-            return Err(GatewayServiceRegistryError::InvalidKey);
-        }
-        Ok(())
-    }
-}
 
 /// Redacted registry admission and lifecycle errors.
 #[derive(Debug, thiserror::Error, PartialEq, Eq)]
@@ -127,7 +106,9 @@ impl GatewayServiceRegistry {
         vm: Arc<dyn VmInstance>,
         state: watch::Receiver<ServiceWorkerState>,
     ) -> Result<(), GatewayServiceRegistryError> {
-        key.validate()?;
+        if !key.is_valid() {
+            return Err(GatewayServiceRegistryError::InvalidKey);
+        }
         let expected = format!("gateway-service-{}", key.identity.instance_id);
         if vm.id() != &VmId(expected) {
             return Err(GatewayServiceRegistryError::VmIdentityMismatch);
@@ -181,7 +162,9 @@ impl GatewayServiceRegistry {
         &self,
         key: GatewayServiceInstanceKey,
     ) -> Result<(), GatewayServiceRegistryError> {
-        key.validate()?;
+        if !key.is_valid() {
+            return Err(GatewayServiceRegistryError::InvalidKey);
+        }
         let entry = {
             let mut entries = self.write_entries();
             entries
@@ -211,8 +194,9 @@ impl GatewayServiceRegistry {
         request: GatewayRequest,
         policy: ServiceHttpPolicy,
     ) -> Result<GatewayResponse, GatewayEdgeError> {
-        key.validate()
-            .map_err(|_| GatewayEdgeError::Contract("invalid service instance key"))?;
+        if !key.is_valid() {
+            return Err(GatewayEdgeError::Contract("invalid service instance key"));
+        }
         policy.validate()?;
         let entry = {
             let entries = self.read_entries();
@@ -309,6 +293,7 @@ mod tests {
     use super::*;
     use async_trait::async_trait;
     use bytes::Bytes;
+    use gateway_domain::GatewayServiceIdentity;
     use http::{HeaderMap, Method, StatusCode};
     use std::{
         collections::VecDeque,

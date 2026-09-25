@@ -1,7 +1,7 @@
 //! Real `PostgreSQL` claim-resolution barrier coverage.
 
 use super::{seed_fixture, test_pool, wait_for_lock_named, worker_ownership};
-use gateway_edge::{
+use gateway_domain::{
     GatewayServiceClaimResolutionStore, GatewayServiceInstanceState, GatewayServiceOwner,
     GatewayServiceOwnership,
 };
@@ -162,13 +162,13 @@ async fn claim_resolution_rejects_nil_identity_without_database_access() {
         ownership
             .resolve_revision_claim(Uuid::nil(), Uuid::new_v4())
             .await,
-        Err(gateway_edge::GatewayServiceOwnershipError::InvalidArgument)
+        Err(gateway_domain::GatewayServiceOwnershipError::InvalidArgument)
     ));
     assert!(matches!(
         ownership
             .resolve_revision_claim(Uuid::new_v4(), Uuid::nil())
             .await,
-        Err(gateway_edge::GatewayServiceOwnershipError::InvalidArgument)
+        Err(gateway_domain::GatewayServiceOwnershipError::InvalidArgument)
     ));
     assert!(
         ownership

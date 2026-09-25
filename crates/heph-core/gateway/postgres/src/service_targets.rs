@@ -2,13 +2,13 @@
 
 use crate::service_ownership::ServiceInstanceRow;
 use async_trait::async_trait;
-use gateway_domain::{GatewayServiceConfig, ServiceLogCaptureMode, ServiceProbePath};
-use gateway_edge::{
+use gateway_domain::{
     GatewayEdgeError, GatewayServiceIdentity, GatewayServiceInstanceKey,
     GatewayServiceInstanceLease, GatewayServiceInstancePage, GatewayServiceInstancePageResult,
     GatewayServiceOwnedTarget, GatewayServiceRevisionTarget, GatewayServiceTarget,
     GatewayServiceTargetPage, GatewayServiceTargetPageResult, GatewayServiceTargetStore,
 };
+use gateway_domain::{GatewayServiceConfig, ServiceLogCaptureMode, ServiceProbePath};
 use sqlx::{FromRow, PgPool};
 use std::convert::TryFrom;
 use uuid::Uuid;

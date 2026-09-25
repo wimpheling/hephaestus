@@ -1,6 +1,6 @@
 //! Real `PostgreSQL` coverage for read-only persistent-service target queries.
 
-use gateway_edge::{
+use gateway_domain::{
     GatewayServiceIdentity, GatewayServiceInstanceKey, GatewayServiceInstanceLease,
     GatewayServiceInstancePage, GatewayServiceInstanceState, GatewayServiceLogAppendBatch,
     GatewayServiceLogMaintenance, GatewayServiceLogMaintenancePolicy,

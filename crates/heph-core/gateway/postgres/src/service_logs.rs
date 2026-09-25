@@ -1,7 +1,7 @@
 //! Worker-only durable append adapter for opt-in application service logs.
 
 use async_trait::async_trait;
-use gateway_edge::{
+use gateway_domain::{
     GatewayServiceInstanceLease, GatewayServiceLogAppendBatch, GatewayServiceLogAppendOutcome,
     GatewayServiceLogMaintenance, GatewayServiceLogMaintenanceError,
     GatewayServiceLogMaintenancePolicy, GatewayServiceLogMaintenanceProjectPage,

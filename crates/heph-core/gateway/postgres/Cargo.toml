@@ -19,7 +19,6 @@ authz-postgres = { path = "../../authorization/authz-postgres" }
 async-trait.workspace = true
 capability-domain = { path = "../../authorization/capability-domain" }
 forge-domain = { path = "../../forge/domain" }
-gateway-edge = { path = "../../../heph-std/gateway/edge" }
 gateway-domain = { path = "../domain" }
 http.workspace = true
 identity-domain = { path = "../../identity/domain" }

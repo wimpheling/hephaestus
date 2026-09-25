@@ -1,7 +1,7 @@
 //! Exact-instance expired takeover coverage for boot recovery.
 
 use super::{seed_fixture, test_pool, wait_for_lock_named, worker_ownership};
-use gateway_edge::{
+use gateway_domain::{
     GatewayServiceExpiredClaimRecovery, GatewayServiceIdentity, GatewayServiceInstanceLease,
     GatewayServiceInstanceState, GatewayServiceOwner, GatewayServiceOwnership,
     GatewayServiceOwnershipError,

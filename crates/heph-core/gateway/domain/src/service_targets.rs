@@ -1,7 +1,7 @@
 //! Read-only ports for durable persistent-gateway service targets.
 
+use crate::GatewayServiceConfig;
 use async_trait::async_trait;
-use gateway_domain::GatewayServiceConfig;
 use uuid::Uuid;
 
 use crate::GatewayEdgeError;

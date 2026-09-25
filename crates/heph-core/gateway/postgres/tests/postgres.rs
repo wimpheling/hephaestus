@@ -3,7 +3,7 @@
 use authz_postgres::PostgresMelangeAuthorizer;
 use forge_domain::{ProjectId, RepositoryId};
 use futures_util::StreamExt;
-use gateway_edge::{
+use gateway_domain::{
     GatewayEdgeError, GatewayServiceArtifact, GatewayServiceIdentity, GatewayServiceLaunchRequest,
     GatewayServiceLaunchResolver, GatewayServiceMaterializer,
 };

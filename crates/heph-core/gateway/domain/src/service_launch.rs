@@ -1,7 +1,7 @@
 //! Immutable launch contracts for long-lived gateway services.
 
+use crate::GatewayServiceConfig;
 use async_trait::async_trait;
-use gateway_domain::GatewayServiceConfig;
 use serde_json::Value;
 use std::time::Duration;
 use uuid::Uuid;

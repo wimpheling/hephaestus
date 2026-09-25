@@ -15,7 +15,7 @@ use gateway_domain::{
     Exposure, GatewayDeclaration, GatewayId, GatewayRevisionId, GatewayServiceConfig, HttpMethod,
     ServiceLogCaptureMode, ServiceProbePath,
 };
-use gateway_edge::{
+use gateway_domain::{
     GatewayConfigRevision, GatewayDesiredConfiguration, GatewayEdgeError, GatewayInvocationOutcome,
     GatewayInvocationRecorder, GatewayLimits, GatewayMailboxPublisher, GatewayReleaseResolver,
     GatewayRouteBinding, GatewayRouteResolver, GatewayServiceArtifact, GatewayServiceArtifactKind,
@@ -1149,7 +1149,7 @@ impl GatewayInvocationRecorder for PostgresGatewayEdgeAuthority {
     async fn accepted_ui(
         &self,
         route: &GatewayRouteBinding,
-        authority: &gateway_edge::UiGatewayAuthority,
+        authority: &gateway_domain::UiGatewayAuthority,
         request_id: Uuid,
     ) -> Result<Uuid, GatewayEdgeError> {
         ui_browser::accept_ui_invocation(self, route, authority, request_id).await

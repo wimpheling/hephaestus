@@ -5,7 +5,7 @@ use authz_postgres::{
     PostgresMelangeAuthorizer, audit_decision, begin_actor_transaction,
     begin_repeatable_read_actor_transaction,
 };
-use gateway_edge::{
+use gateway_domain::{
     GatewayServiceLogProjectMetadata, GatewayServiceLogReadCursor, GatewayServiceLogReadMetadata,
     GatewayServiceLogReadPage, GatewayServiceLogReadRecord, GatewayServiceLogReadRequest,
     GatewayServiceLogReadScope, MAX_SERVICE_LOG_CHUNK_BYTES, MAX_SERVICE_LOG_READ_PAGE_BYTES,

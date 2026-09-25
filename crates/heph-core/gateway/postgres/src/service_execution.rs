@@ -1,7 +1,7 @@
 //! `PostgreSQL` execution-target authority for accepted gateway invocations.
 
 use async_trait::async_trait;
-use gateway_edge::{
+use gateway_domain::{
     GatewayExecutionTarget, GatewayExecutionTargetError, GatewayExecutionTargetResolver,
     GatewayServiceAuthorityBudget, GatewayServiceInstanceKey, GatewayServiceOwner,
 };
@@ -77,7 +77,7 @@ impl GatewayExecutionTargetResolver for PostgresGatewayExecutionTargetResolver {
         Ok(GatewayExecutionTarget::Service(
             GatewayServiceAuthorityBudget {
                 instance: GatewayServiceInstanceKey {
-                    identity: gateway_edge::GatewayServiceIdentity {
+                    identity: gateway_domain::GatewayServiceIdentity {
                         instance_id,
                         gateway_id: row.gateway_id,
                         revision_id: row.gateway_revision_id,

@@ -1,6 +1,6 @@
 //! Real `PostgreSQL` coverage for bounded service-invocation recovery.
 
-use gateway_edge::{GatewayLimits, GatewayServiceOwner, GatewayServiceOwnership};
+use gateway_domain::{GatewayLimits, GatewayServiceOwner, GatewayServiceOwnership};
 use gateway_postgres::{PostgresGatewayEdgeAuthority, PostgresGatewayServiceOwnership};
 use serial_test::serial;
 use sqlx::postgres::PgPoolOptions;

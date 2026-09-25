@@ -1,7 +1,7 @@
 //! `PostgreSQL` durable ownership for long-lived gateway service instances.
 
 use async_trait::async_trait;
-use gateway_edge::{
+use gateway_domain::{
     GatewayServiceClaimResolutionStore, GatewayServiceExpiredClaimRecovery, GatewayServiceIdentity,
     GatewayServiceInstanceLease, GatewayServiceInstanceState, GatewayServiceOwner,
     GatewayServiceOwnership, GatewayServiceOwnershipError, MAX_SERVICE_OWNERSHIP_BATCH,

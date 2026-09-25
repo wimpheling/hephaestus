@@ -1,6 +1,6 @@
 //! Real `PostgreSQL` coverage for authorized service-log epoch metadata reads.
 
-use gateway_edge::{
+use gateway_domain::{
     GatewayServiceLogReadCursor, GatewayServiceLogReadMetadata, GatewayServiceLogReadRequest,
     GatewayServiceLogReadScope, GatewayServiceOwnership,
 };
@@ -1060,7 +1060,7 @@ async fn project_metadata_is_scoped_audited_and_preserved_by_worker_gc() {
     assert_eq!(revoked_member_audit_count, 1);
 
     let worker = worker_pool().await;
-    let gc_owner = gateway_edge::GatewayServiceOwner::new(&fixture.owner_host_id, Uuid::new_v4())
+    let gc_owner = gateway_domain::GatewayServiceOwner::new(&fixture.owner_host_id, Uuid::new_v4())
         .expect("valid GC owner");
     let ownership = gateway_postgres::PostgresGatewayServiceOwnership::new(worker.clone());
     let recovered = ownership
@@ -1087,10 +1087,10 @@ async fn project_metadata_is_scoped_audited_and_preserved_by_worker_gc() {
     .expect("seed aged cleaned epoch");
 
     let worker_store = gateway_postgres::PostgresGatewayServiceLogStore::new(worker.clone());
-    let report = gateway_edge::GatewayServiceLogMaintenance::maintain_project(
+    let report = gateway_domain::GatewayServiceLogMaintenance::maintain_project(
         &worker_store,
         fixture.project,
-        gateway_edge::GatewayServiceLogMaintenancePolicy::default(),
+        gateway_domain::GatewayServiceLogMaintenancePolicy::default(),
     )
     .await
     .expect("worker maintenance removes aged cleaned epoch");

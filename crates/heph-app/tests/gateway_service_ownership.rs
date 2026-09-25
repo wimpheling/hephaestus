@@ -1,6 +1,6 @@
 //! Real `PostgreSQL` coverage for durable gateway service ownership.
 
-use gateway_edge::{
+use gateway_domain::{
     GatewayServiceFailure, GatewayServiceFailureCode, GatewayServiceFailureStore,
     GatewayServiceFailureStoreError, GatewayServiceInstanceState, GatewayServiceOwner,
     GatewayServiceOwnership, GatewayServiceOwnershipError, MAX_SERVICE_OWNERSHIP_BATCH,
@@ -11,11 +11,11 @@ use sqlx::postgres::PgPoolOptions;
 use std::{env, sync::Arc, time::Duration};
 use uuid::Uuid;
 
-#[path = "service_ownership/claim_resolution.rs"]
+#[path = "gateway_service_ownership/claim_resolution.rs"]
 mod claim_resolution;
-#[path = "service_ownership/coordinator.rs"]
+#[path = "gateway_service_ownership/coordinator.rs"]
 mod coordinator;
-#[path = "service_ownership/expired_takeover.rs"]
+#[path = "gateway_service_ownership/expired_takeover.rs"]
 mod expired_takeover;
 
 #[tokio::test(flavor = "multi_thread")]
@@ -1197,7 +1197,7 @@ async fn test_pool() -> Option<sqlx::PgPool> {
         .connect(&database_url)
         .await
         .expect("connect real PostgreSQL");
-    sqlx::migrate!("../../../../migrations")
+    sqlx::migrate!("../../migrations")
         .run(&pool)
         .await
         .expect("apply gateway migrations");

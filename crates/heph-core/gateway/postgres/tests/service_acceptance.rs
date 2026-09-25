@@ -4,7 +4,7 @@ use async_trait::async_trait;
 use capability_domain::{
     AuthorityHash, RuntimeCredentialGeneration, RuntimeSessionId, RuntimeSessionStatus,
 };
-use gateway_edge::{
+use gateway_domain::{
     GatewayInvocationRecorder, GatewayLimits, GatewayRouteBinding, GatewayRouteResolver,
 };
 use gateway_postgres::PostgresGatewayEdgeAuthority;
