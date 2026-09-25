@@ -33,7 +33,6 @@ git-capability-domain = { path = "../git-capability-domain" }
 capability-domain = { path = "../capability-domain" }
 runtime-git-authority = { path = "../runtime-git-authority" }
 runtime-git-authority-postgres = { path = "../runtime-git-authority-postgres" }
-runtime-handoff-local = { path = "../runtime-handoff-local" }
 pat-domain = { path = "../pat-domain" }
 pat-postgres = { path = "../pat-postgres" }
 async-nats.workspace = true

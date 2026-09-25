@@ -1347,7 +1347,6 @@ dependencies = [
  "run-postgres",
  "runtime-git-authority",
  "runtime-git-authority-postgres",
- "runtime-handoff-local",
  "runtime-types",
  "serde_json",
  "serial_test",
