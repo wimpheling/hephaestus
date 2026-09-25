@@ -1,6 +1,9 @@
 //! Migration-gated structural checks for the Rust RPC boundary.
 
 use super::Diagnostic;
+
+#[path = "rpc_architecture/module_graph.rs"]
+mod module_graph;
 use std::{collections::BTreeMap, ffi::OsStr, fs, path::Path};
 
 const RULES: [&str; 7] = [
@@ -88,12 +91,24 @@ fn visit_rust_sources(
                 continue;
             };
             let relative = path.strip_prefix(root).unwrap_or(&path);
-            validate_source(relative, &source, active, diagnostics);
+            let test_only = module_graph::is_test_only_source(root, &path);
+            validate_source_with_context(relative, &source, active, diagnostics, test_only);
         }
     }
 }
 
+#[cfg(test)]
 fn validate_source(path: &Path, source: &str, active: &[&str], diagnostics: &mut Vec<Diagnostic>) {
+    validate_source_with_context(path, source, active, diagnostics, false);
+}
+
+fn validate_source_with_context(
+    path: &Path,
+    source: &str,
+    active: &[&str],
+    diagnostics: &mut Vec<Diagnostic>,
+    test_only: bool,
+) {
     let rendered = path.to_string_lossy();
     if rendered.starts_with("crates/heph-core/platform/rpc-proto/")
         || rendered.starts_with("crates/heph-dev/")
@@ -108,7 +123,15 @@ fn validate_source(path: &Path, source: &str, active: &[&str], diagnostics: &mut
     ) || rendered == "crates/heph-app/src/rpc/mod.rs";
 
     validate_transport_boundaries(path, source, active, in_rpc, diagnostics);
-    validate_handler_structure(path, source, active, in_rpc, rpc_support, diagnostics);
+    validate_handler_structure(
+        path,
+        source,
+        active,
+        in_rpc,
+        rpc_support,
+        test_only,
+        diagnostics,
+    );
 }
 
 fn validate_transport_boundaries(
@@ -163,6 +186,7 @@ fn validate_handler_structure(
     active: &[&str],
     in_rpc: bool,
     rpc_support: bool,
+    test_only: bool,
     diagnostics: &mut Vec<Diagnostic>,
 ) {
     if active.contains(&"RPC-NO-DIRECT-CONNECT-ERROR")
@@ -178,7 +202,7 @@ fn validate_handler_structure(
             ),
         ));
     }
-    if active.contains(&"RPC-HANDLER-IS-THIN") && in_rpc && !rpc_support {
+    if active.contains(&"RPC-HANDLER-IS-THIN") && in_rpc && !rpc_support && !test_only {
         let runtime_source = source.split("#[cfg(test)]").next().unwrap_or(source);
         for forbidden in [
             "sqlx::query",
@@ -281,197 +305,5 @@ fn allowed_non_rpc_route(path: &Path, route: &str) -> bool {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::{RULES, validate_source};
-    use crate::checks::architecture::Diagnostic;
-    use std::path::Path;
-
-    const INVALID: &str =
-        include_str!("../../../tests/fixtures/rpc-architecture/invalid/src/rpc/service.rs");
-    const INWARD: &str =
-        include_str!("../../../tests/fixtures/rpc-architecture/invalid/src/domain/service.rs");
-    const VALID: &str =
-        include_str!("../../../tests/fixtures/rpc-architecture/valid/src/rpc/error.rs");
-
-    fn active() -> Vec<&'static str> {
-        RULES
-            .into_iter()
-            .chain(["RPC-GENERATED-TYPES-DO-NOT-LEAK-INWARD"])
-            .collect()
-    }
-
-    #[test]
-    fn invalid_rpc_fixture_covers_layout_routes_errors_and_handler_io() {
-        let mut diagnostics = Vec::new();
-        validate_source(
-            Path::new("crates/example/src/rpc/service.rs"),
-            INVALID,
-            &active(),
-            &mut diagnostics,
-        );
-        for rule in [
-            "RPC-METHOD-IN-SEPARATE-FILE",
-            "RPC-NON_RPC-HTTP-ALLOWLIST",
-            "RPC-NO-DIRECT-CONNECT-ERROR",
-            "RPC-HANDLER-IS-THIN",
-        ] {
-            assert!(
-                diagnostics
-                    .iter()
-                    .any(|diagnostic| diagnostic.rule_id == rule),
-                "fixture did not trigger {rule}"
-            );
-        }
-    }
-
-    #[test]
-    fn nested_service_mod_is_checked_as_a_handler() {
-        let mut diagnostics = Vec::new();
-        validate_source(
-            Path::new("crates/example/src/rpc/identity/mod.rs"),
-            "async fn resolve() { let _ = sqlx::query(\"SELECT 1\"); }",
-            &active(),
-            &mut diagnostics,
-        );
-        assert!(
-            diagnostics
-                .iter()
-                .any(|diagnostic| diagnostic.rule_id == "RPC-HANDLER-IS-THIN")
-        );
-    }
-
-    #[test]
-    fn inward_fixture_rejects_connect_generated_types_and_transport_errors() {
-        let mut diagnostics = Vec::new();
-        validate_source(
-            Path::new("crates/example/src/domain/service.rs"),
-            INWARD,
-            &active(),
-            &mut diagnostics,
-        );
-        for rule in [
-            "RPC-CONNECT-ONLY-IN-TRANSPORT",
-            "RPC-ERRORS-MAPPED-AT-BOUNDARY",
-            "RPC-GENERATED-TYPES-DO-NOT-LEAK-INWARD",
-        ] {
-            assert!(
-                diagnostics
-                    .iter()
-                    .any(|diagnostic| diagnostic.rule_id == rule),
-                "fixture did not trigger {rule}"
-            );
-        }
-    }
-
-    #[test]
-    fn central_error_adapter_and_health_route_are_allowed() {
-        let mut diagnostics = Vec::<Diagnostic>::new();
-        validate_source(
-            Path::new("crates/example/src/rpc/error.rs"),
-            VALID,
-            &active(),
-            &mut diagnostics,
-        );
-        assert!(diagnostics.is_empty());
-    }
-
-    #[test]
-    fn runtime_and_ui_git_transport_routes_are_allowlisted_exactly() {
-        let mut diagnostics = Vec::new();
-        validate_source(
-            Path::new("crates/heph-app/src/runtime_git_listener.rs"),
-            r#"
-                let _router = axum::Router::new()
-                    .route("/", axum::routing::get(handler))
-                    .route("/_heph/git/{repository}/info/refs", axum::routing::get(handler))
-                    .route("/_heph/git/{repository}/git-upload-pack", axum::routing::post(handler))
-                    .route("/_heph/git/{repository}/git-receive-pack", axum::routing::post(handler));
-            "#,
-            &active(),
-            &mut diagnostics,
-        );
-        assert!(diagnostics.is_empty());
-
-        let mut diagnostics = Vec::new();
-        validate_source(
-            Path::new("crates/heph-app/src/git_transport.rs"),
-            r#"let _router = axum::Router::new().route("/", axum::routing::get(handler));"#,
-            &active(),
-            &mut diagnostics,
-        );
-        assert!(
-            diagnostics
-                .iter()
-                .any(|diagnostic| diagnostic.rule_id == "RPC-NON_RPC-HTTP-ALLOWLIST")
-        );
-
-        let mut diagnostics = Vec::new();
-        validate_source(
-            Path::new("crates/heph-app/src/git_transport.rs"),
-            r#"let _router = axum::Router::new().route("/_heph/git/{repository}/other", axum::routing::get(handler));"#,
-            &active(),
-            &mut diagnostics,
-        );
-        assert!(
-            diagnostics
-                .iter()
-                .any(|diagnostic| diagnostic.rule_id == "RPC-NON_RPC-HTTP-ALLOWLIST")
-        );
-    }
-
-    #[test]
-    fn rpc_module_helpers_cannot_hide_database_io() {
-        let mut diagnostics = Vec::new();
-        validate_source(
-            Path::new("crates/example/src/rpc/mod.rs"),
-            "fn helper() { let _query = sqlx::query(\"SELECT 1\"); }",
-            &active(),
-            &mut diagnostics,
-        );
-        assert!(
-            diagnostics
-                .iter()
-                .any(|diagnostic| diagnostic.rule_id == "RPC-HANDLER-IS-THIN")
-        );
-    }
-
-    #[test]
-    fn nested_rpc_services_cannot_hide_database_io() {
-        let mut diagnostics = Vec::new();
-        validate_source(
-            Path::new("crates/example/src/rpc/mod.rs"),
-            "mod nested { fn load() { let _query = sqlx::query_as::<_, (i64,)>(\"SELECT 1\"); } }",
-            &active(),
-            &mut diagnostics,
-        );
-        assert!(
-            diagnostics
-                .iter()
-                .any(|diagnostic| diagnostic.rule_id == "RPC-HANDLER-IS-THIN")
-        );
-    }
-
-    #[test]
-    fn rpc_constructor_type_plumbing_may_carry_a_pool() {
-        let mut diagnostics = Vec::new();
-        validate_source(
-            Path::new("crates/example/src/rpc/service.rs"),
-            "use sqlx::PgPool; struct Service(PgPool); impl Service { fn new(pool: PgPool) -> Self { Self(pool) } }",
-            &active(),
-            &mut diagnostics,
-        );
-        assert!(diagnostics.is_empty());
-    }
-
-    #[test]
-    fn event_transport_may_encode_the_generated_product_envelope() {
-        let mut diagnostics = Vec::<Diagnostic>::new();
-        validate_source(
-            Path::new("crates/example/src/event_adapter.rs"),
-            "use rpc_proto::messages::hephaestus::event::v1::ProductEvent;",
-            &active(),
-            &mut diagnostics,
-        );
-        assert!(diagnostics.is_empty());
-    }
-}
+#[path = "rpc_architecture/tests.rs"]
+mod tests;
