@@ -273,6 +273,7 @@ enum SensitiveValue {
         origin: &'static str,
         source_line: usize,
     },
+    RequestRoot,
     Opaque,
 }
 
@@ -453,10 +454,13 @@ impl SensitiveFlowVisitor<'_> {
     fn sensitive_expr(&self, expression: &Expr) -> Option<SensitiveValue> {
         match expression {
             Expr::Field(field) => self.sensitive_field(field),
-            Expr::Path(path) => path
-                .path
-                .get_ident()
-                .and_then(|name| self.bindings.get(&name.to_string()).copied()),
+            Expr::Path(path) => path.path.get_ident().and_then(|name| {
+                if name == "request" {
+                    Some(SensitiveValue::RequestRoot)
+                } else {
+                    self.bindings.get(&name.to_string()).copied()
+                }
+            }),
             Expr::Reference(reference) => self.sensitive_expr(&reference.expr),
             Expr::Paren(parenthesized) => self.sensitive_expr(&parenthesized.expr),
             Expr::Group(group) => self.sensitive_expr(&group.expr),
@@ -499,13 +503,33 @@ impl SensitiveFlowVisitor<'_> {
             syn::Member::Named(name) => name.to_string(),
             syn::Member::Unnamed(_) => return self.sensitive_expr(&field.base),
         };
-        if is_sensitive_request_field(&field_name) && is_request_expr(&field.base) {
+        if is_sensitive_request_field(&field_name) && self.is_request_rooted(&field.base) {
             return Some(SensitiveValue::Plain {
                 origin: "sensitive request field",
                 source_line: span_line(field),
             });
         }
+        if self.is_request_rooted(&field.base) {
+            return Some(SensitiveValue::RequestRoot);
+        }
         self.sensitive_expr(&field.base)
+    }
+
+    fn is_request_rooted(&self, expression: &Expr) -> bool {
+        match expression {
+            Expr::Path(path) => path.path.get_ident().is_some_and(|name| {
+                name == "request"
+                    || self
+                        .bindings
+                        .get(&name.to_string())
+                        .is_some_and(|value| matches!(value, SensitiveValue::RequestRoot))
+            }),
+            Expr::Field(field) => self.is_request_rooted(&field.base),
+            Expr::Reference(reference) => self.is_request_rooted(&reference.expr),
+            Expr::Paren(parenthesized) => self.is_request_rooted(&parenthesized.expr),
+            Expr::Group(group) => self.is_request_rooted(&group.expr),
+            _ => false,
+        }
     }
 
     fn macro_contains_sensitive(&self, tokens: &str) -> bool {
@@ -541,7 +565,7 @@ impl SensitiveFlowVisitor<'_> {
             .values()
             .find_map(|value| match value {
                 SensitiveValue::Plain { origin, .. } => Some(*origin),
-                SensitiveValue::Opaque => None,
+                SensitiveValue::RequestRoot | SensitiveValue::Opaque => None,
             })
             .unwrap_or("sensitive request field");
         report(
@@ -570,7 +594,7 @@ const fn is_plain_sensitive(value: SensitiveValue) -> bool {
 const fn plain_source_line(value: SensitiveValue) -> Option<usize> {
     match value {
         SensitiveValue::Plain { source_line, .. } => Some(source_line),
-        SensitiveValue::Opaque => None,
+        SensitiveValue::RequestRoot | SensitiveValue::Opaque => None,
     }
 }
 
@@ -593,18 +617,6 @@ const fn sensitive_request_field_names() -> [&'static str; 8] {
         "plaintext",
         "ciphertext",
     ]
-}
-
-fn is_request_expr(expression: &Expr) -> bool {
-    match expression {
-        Expr::Path(path) => path
-            .path
-            .get_ident()
-            .is_some_and(|ident| ident == "request"),
-        Expr::Reference(reference) => is_request_expr(&reference.expr),
-        Expr::Paren(parenthesized) => is_request_expr(&parenthesized.expr),
-        _ => false,
-    }
 }
 
 fn is_opaque_conversion(function: &Expr) -> bool {
@@ -907,6 +919,59 @@ mod tests {
             diagnostics.is_empty(),
             "unexpected diagnostics: {diagnostics:?}"
         );
+    }
+
+    #[test]
+    fn nested_sensitive_flow_fixture_allows_opaque_conversions_and_safe_fields() {
+        let active = all_rules();
+        let mut diagnostics = Vec::new();
+        validate_source(
+            Path::new("crates/example/src/rpc/nested_sensitive.rs"),
+            include_str!(
+                "../../../tests/fixtures/rust-architecture/valid/src/nested_sensitive_flow.rs"
+            ),
+            &active,
+            &mut diagnostics,
+        );
+        assert!(
+            diagnostics.is_empty(),
+            "unexpected nested-flow diagnostics: {diagnostics:?}"
+        );
+    }
+
+    #[test]
+    fn nested_sensitive_flow_fixture_reports_all_plaintext_sinks() {
+        let active = all_rules();
+        let mut diagnostics = Vec::new();
+        validate_source(
+            Path::new("crates/example/src/rpc/nested_sensitive.rs"),
+            include_str!(
+                "../../../tests/fixtures/rust-architecture/invalid/src/nested_sensitive_flow.rs"
+            ),
+            &active,
+            &mut diagnostics,
+        );
+        let flow_diagnostics = diagnostics
+            .iter()
+            .filter(|diagnostic| diagnostic.message.contains("sensitive request field"))
+            .collect::<Vec<_>>();
+        for sink in ["warn", "json", "append_application_event", "body"] {
+            assert!(
+                flow_diagnostics
+                    .iter()
+                    .any(|diagnostic| diagnostic.message.contains(sink)),
+                "missing {sink} diagnostic: {diagnostics:?}"
+            );
+        }
+        assert!(flow_diagnostics.iter().all(|diagnostic| {
+            diagnostic.message.contains("source at line ")
+                && diagnostic.message.contains("sink")
+                && diagnostic.message.contains("line ")
+        }));
+        assert!(diagnostics.iter().all(|diagnostic| {
+            !diagnostic.message.contains("safe nested field")
+                && !diagnostic.message.contains("non-sensitive")
+        }));
     }
 
     #[test]
