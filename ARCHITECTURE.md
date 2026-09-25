@@ -592,9 +592,16 @@ the configured UI namespace to this listener.
 
 | Rule | Class / state | Rationale and scope | Command | Exceptions and remediation |
 | --- | --- | --- | --- | --- |
-| `EVT-STATE-AND-EVENT-COMMIT-ATOMICALLY` | Structural + PostgreSQL integration / harness | Prevents state/event divergence; covers every state-changing unit of work. | `cargo dev check full` | None; append the durable event through the same transaction port and test rollback. |
-| `EVT-OUTBOX-PUBLISHER-ONLY` | Visibility + dependency lint + integration / harness | Prevents publication of uncommitted state; covers every product-event publisher. | `cargo dev check full` | Worker composition may construct the publisher only; route publication through committed outbox records. |
+| `EVT-STATE-AND-EVENT-COMMIT-ATOMICALLY` | SQL syntax lint + PostgreSQL integration / hard-enabled | Rejects direct production writes to durable event tables and requires explicit `append_application_event` calls to use a recognized transaction executor in the same Rust item; migration capture triggers cover authoritative state tables. | `cargo dev check architecture`; `cargo dev quality` | No direct event-table writes; append through the state transaction or install the committed capture trigger, then test rollback. |
+| `EVT-OUTBOX-PUBLISHER-ONLY` | Source lint + NATS integration / hard-enabled | Restricts product-event publication to the designated `EventPublisher::publish_pending` adapter item after reading committed outbox rows. Legacy command outboxes keep their separate paths. | `cargo dev check architecture`; `cargo dev quality` | Worker composition may construct the publisher; publish product events only from committed outbox records. |
 | `EVT-CONSUMER-USES-INBOX` | Structural + integration / harness | Makes duplicate delivery harmless; covers every state-changing consumer. | `cargo dev check full` | Proven naturally idempotent operation only; use durable inbox/deduplication and duplicate tests. |
 | `EVT-SIDE-EFFECT-AFTER-DURABLE-CLAIM` | Structural + failure-injection integration / harness | Prevents repeated external effects after crashes; covers event handlers that perform external effects. | `cargo dev check full` | None; claim ownership/idempotency durably before the effect. |
 | `EVT-REDUCER-COVERAGE` | Descriptor/test parity lint / harness | Keeps every client-facing variant projectable; covers product event `oneof` variants and reducers. | `cargo dev check full` | None; add reducer/projection tests with the schema variant. |
 | `EVT-STREAM-REAUTHORIZATION` | Stream integration / harness | Prevents post-revocation disclosure; covers subscription and each streamed delivery. | `cargo dev check full` | None; reauthorize, terminate on revocation, and test no later event arrives. |
+
+The event source lint recognizes literal SQLx calls, transaction executor syntax,
+and the designated publisher item. It cannot prove dynamic SQL, deployed trigger
+state, aliased transaction ownership, broker durability, or crash timing.
+`event_durability` tests use a real PostgreSQL pool to prove rollback and
+pre-commit invisibility; the event adapter retry test uses JetStream to prove
+failed publication stays pending and acknowledgement precedes the published mark.
