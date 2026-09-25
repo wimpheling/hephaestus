@@ -1,5 +1,9 @@
 use super::*;
 
+#[path = "lifecycle/disable_remove.rs"]
+mod disable_remove;
+#[path = "lifecycle/ledger_race.rs"]
+mod ledger_race;
 #[path = "lifecycle/replay_matrix.rs"]
 mod replay_matrix;
 #[path = "lifecycle/scope_matrix.rs"]
