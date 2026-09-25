@@ -17,16 +17,21 @@ pub(super) async fn handle(
 
     let identity = shared_request::query_identity(&ctx, &service.authenticator, AUDIENCE)
         .map_err(into_connect_error)?;
+    let budget = shared_request::RequestBudget::from_transport(&ctx);
     let request = request.to_owned_message();
     let artifact_id = shared_request::required_id(request.artifact_id.as_option())
         .and_then(|value| Uuid::parse_str(&value).map_err(|_| RpcError::InvalidArgument))
         .map_err(into_connect_error)?;
-    let result = service
-        .application
-        .get_artifact_preview(&identity, artifact_id, request.max_bytes)
-        .await
-        .map_err(super::model::application_error)
-        .map_err(into_connect_error)?;
+    let result = shared_request::run_with_budget(
+        &budget,
+        service
+            .application
+            .get_artifact_preview(&identity, artifact_id, request.max_bytes),
+    )
+    .await
+    .map_err(into_connect_error)?
+    .map_err(super::model::application_error)
+    .map_err(into_connect_error)?;
     connectrpc::Response::ok(GetArtifactPreviewResponse {
         artifact: super::model::artifact(&result.artifact).into(),
         utf8_contents: result.utf8_contents,
