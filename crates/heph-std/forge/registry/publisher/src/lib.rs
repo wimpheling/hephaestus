@@ -1,7 +1,7 @@
 //! Controlled publication of administrator-owned OCI layouts to Zot.
 //!
 //! This adapter never accepts a caller-selected registry, repository, command,
-//! or credential.  The durable [`PublicationIntent`] defines the sole remote
+//! or credential.  The durable [`registry_domain::PublicationIntent`] defines the sole remote
 //! subject; the configured registry authority and local roots form the other
 //! half of that trust boundary.
 
