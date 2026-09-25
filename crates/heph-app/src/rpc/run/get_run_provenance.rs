@@ -1,6 +1,7 @@
 //! Exact, redacted run authorization and HTTPS inspection.
 
 use super::{RunRpc, map_error, opaque, parse_id, parse_page, query, timestamp};
+use crate::rpc::{into_connect_error, request};
 use connectrpc::{RequestContext, Response, ServiceRequest, ServiceResult};
 use rpc_proto::messages::hephaestus::{
     common::v1::PageResponse,
@@ -12,14 +13,21 @@ pub(super) async fn handle(
     ctx: RequestContext,
     message: ServiceRequest<'_, GetRunProvenanceRequest>,
 ) -> ServiceResult<GetRunProvenanceResponse> {
+    let budget = request::RequestBudget::from_transport(&ctx);
     let identity = query(&ctx, &rpc.authenticator, "GetRunProvenance")?;
     let request = message.to_owned_message();
     let run_id = parse_id(request.run_id.as_option())?;
-    let value = rpc
-        .application
-        .get_run_provenance(&identity, run_id, parse_page(request.page.as_option())?)
-        .await
-        .map_err(map_error)?;
+    let value = request::run_with_budget(
+        &budget,
+        rpc.application.get_run_provenance(
+            &identity,
+            run_id,
+            parse_page(request.page.as_option())?,
+        ),
+    )
+    .await
+    .map_err(into_connect_error)?
+    .map_err(map_error)?;
     Response::ok(GetRunProvenanceResponse {
         run_id: opaque(run_id).into(),
         authorization_snapshot_id: value.snapshot.as_ref().map(|s| opaque(s.id)).into(),

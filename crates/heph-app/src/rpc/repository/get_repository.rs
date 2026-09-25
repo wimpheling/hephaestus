@@ -14,6 +14,7 @@ pub(super) async fn handle(
     ctx: RequestContext,
     message: ServiceRequest<'_, GetRepositoryRequest>,
 ) -> ServiceResult<GetRepositoryResponse> {
+    let budget = request::RequestBudget::from_transport(&ctx);
     let identity = request::query_identity(
         &ctx,
         &service.authenticator,
@@ -22,12 +23,12 @@ pub(super) async fn handle(
     .map_err(into_connect_error)?;
     let repository_id = parse_id(message.to_owned_message().repository_id.as_option())
         .map_err(into_connect_error)?;
-    let result = service
-        .application
-        .get(&identity, repository_id)
-        .await
-        .map_err(map_error)
-        .map_err(into_connect_error)?;
+    let result =
+        request::run_with_budget(&budget, service.application.get(&identity, repository_id))
+            .await
+            .map_err(into_connect_error)?
+            .map_err(map_error)
+            .map_err(into_connect_error)?;
     let runs = result
         .runs
         .into_iter()

@@ -10,6 +10,7 @@ pub(super) async fn handle(
     ctx: RequestContext,
     request_message: ServiceRequest<'_, GetProjectRequest>,
 ) -> ServiceResult<GetProjectResponse> {
+    let budget = request::RequestBudget::from_transport(&ctx);
     let identity = request::query_identity(
         &ctx,
         &service.authenticator,
@@ -18,10 +19,9 @@ pub(super) async fn handle(
     .map_err(into_connect_error)?;
     let project_id = parse_id(request_message.to_owned_message().project_id.as_option())
         .map_err(into_connect_error)?;
-    let row = service
-        .application
-        .get(&identity, project_id)
+    let row = request::run_with_budget(&budget, service.application.get(&identity, project_id))
         .await
+        .map_err(into_connect_error)?
         .map_err(map_error)
         .map_err(into_connect_error)?;
     Response::ok(GetProjectResponse {

@@ -86,17 +86,20 @@ impl RunService for RunRpc {
         ctx: RequestContext,
         message: ServiceRequest<'_, ListProjectRunsRequest>,
     ) -> ServiceResult<ListProjectRunsResponse> {
+        let budget = request::RequestBudget::from_transport(&ctx);
         let identity = query(&ctx, &self.authenticator, "ListProjectRuns")?;
         let request = message.to_owned_message();
-        let result = self
-            .application
-            .list_project_runs(
+        let result = request::run_with_budget(
+            &budget,
+            self.application.list_project_runs(
                 &identity,
                 parse_id(request.project_id.as_option())?,
                 parse_page(request.page.as_option())?,
-            )
-            .await
-            .map_err(map_error)?;
+            ),
+        )
+        .await
+        .map_err(into_connect_error)?
+        .map_err(map_error)?;
         Response::ok(ListProjectRunsResponse {
             page: PageResponse {
                 next_page_token: result.next.unwrap_or_default(),
@@ -134,13 +137,17 @@ impl RunService for RunRpc {
         ctx: RequestContext,
         message: ServiceRequest<'_, GetRunRequest>,
     ) -> ServiceResult<GetRunResponse> {
+        let budget = request::RequestBudget::from_transport(&ctx);
         let identity = query(&ctx, &self.authenticator, "GetRun")?;
         let request = message.to_owned_message();
-        let run = self
-            .application
-            .get_run(&identity, parse_id(request.run_id.as_option())?)
-            .await
-            .map_err(map_error)?;
+        let run = request::run_with_budget(
+            &budget,
+            self.application
+                .get_run(&identity, parse_id(request.run_id.as_option())?),
+        )
+        .await
+        .map_err(into_connect_error)?
+        .map_err(map_error)?;
         Response::ok(GetRunResponse {
             run: proto_run(run)?.into(),
             ..Default::default()
@@ -152,6 +159,7 @@ impl RunService for RunRpc {
         ctx: RequestContext,
         message: ServiceRequest<'_, RequestControlRequest>,
     ) -> ServiceResult<RequestControlResponse> {
+        let budget = request::RequestBudget::from_transport(&ctx);
         let request = message.to_owned_message();
         let identity = request::mutation_identity(
             &ctx,
@@ -191,9 +199,9 @@ impl RunService for RunRpc {
         } else {
             "review"
         };
-        let result = self
-            .application
-            .request_control(
+        let result = request::run_with_budget(
+            &budget,
+            self.application.request_control(
                 &identity,
                 AppControl {
                     kind,
@@ -201,23 +209,29 @@ impl RunService for RunRpc {
                     target,
                     reason: request.reason,
                 },
-            )
-            .await
-            .map_err(map_error)?;
+            ),
+        )
+        .await
+        .map_err(into_connect_error)?
+        .map_err(map_error)?;
         let state = match result.state.as_str() {
             "pending" | "processing" => ControlState::Queued,
             "completed" => ControlState::Applied,
             "failed" => ControlState::Rejected,
             _ => return Err(into_connect_error(RpcError::Internal)),
         };
-        let receipt = mutation_receipt(
-            &self.receipts,
-            identity.idempotency_id,
-            identity.user_id,
-            receipt_aggregate,
-            "run",
+        let receipt = request::run_with_budget(
+            &budget,
+            mutation_receipt(
+                &self.receipts,
+                identity.idempotency_id,
+                identity.user_id,
+                receipt_aggregate,
+                "run",
+            ),
         )
-        .await?;
+        .await
+        .map_err(into_connect_error)??;
         Response::ok(RequestControlResponse {
             control_request_id: opaque(result.id).into(),
             state: state.into(),

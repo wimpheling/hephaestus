@@ -15,6 +15,7 @@ pub(super) async fn handle(
     ctx: RequestContext,
     message: ServiceRequest<'_, ListRepositoryInstancesRequest>,
 ) -> ServiceResult<ListRepositoryInstancesResponse> {
+    let budget = request::RequestBudget::from_transport(&ctx);
     let identity = request::query_identity(
         &ctx,
         &service.authenticator,
@@ -24,12 +25,16 @@ pub(super) async fn handle(
     let request = message.to_owned_message();
     let repository_id = parse_id(request.repository_id.as_option()).map_err(into_connect_error)?;
     let page = parse_page(request.page.as_option()).map_err(into_connect_error)?;
-    let result = service
-        .application
-        .attachments(&identity, repository_id, page)
-        .await
-        .map_err(map_error)
-        .map_err(into_connect_error)?;
+    let result = request::run_with_budget(
+        &budget,
+        service
+            .application
+            .attachments(&identity, repository_id, page),
+    )
+    .await
+    .map_err(into_connect_error)?
+    .map_err(map_error)
+    .map_err(into_connect_error)?;
     let attachments = result
         .values
         .into_iter()

@@ -12,6 +12,7 @@ pub(super) async fn handle(
     ctx: RequestContext,
     message: ServiceRequest<'_, CreateRepositoryRequest>,
 ) -> ServiceResult<CreateRepositoryResponse> {
+    let budget = request::RequestBudget::from_transport(&ctx);
     let request = message.to_owned_message();
     let identity = request::mutation_identity(
         &ctx,
@@ -34,9 +35,9 @@ pub(super) async fn handle(
     };
     let default_branch =
         GitRef::parse(default_branch).map_err(|_| into_connect_error(RpcError::InvalidArgument))?;
-    let repository = service
-        .forge
-        .create_repository(
+    let repository = request::run_with_budget(
+        &budget,
+        service.forge.create_repository(
             &identity,
             &CreateRepository {
                 project_id,
@@ -45,18 +46,24 @@ pub(super) async fn handle(
                 is_public: request.is_public,
                 agent_runs_enabled: request.agent_runs_enabled,
             },
-        )
-        .await
-        .map_err(|error| map_forge_error(&error))
-        .map_err(into_connect_error)?;
-    let receipt = crate::rpc::mutation_receipt(
-        &service.receipts,
-        identity.idempotency_id,
-        identity.user_id,
-        "repository",
-        "repository",
+        ),
     )
-    .await?;
+    .await
+    .map_err(into_connect_error)?
+    .map_err(|error| map_forge_error(&error))
+    .map_err(into_connect_error)?;
+    let receipt = request::run_with_budget(
+        &budget,
+        crate::rpc::mutation_receipt(
+            &service.receipts,
+            identity.idempotency_id,
+            identity.user_id,
+            "repository",
+            "repository",
+        ),
+    )
+    .await
+    .map_err(into_connect_error)??;
     Response::ok(CreateRepositoryResponse {
         repository_id: opaque(repository.id.as_uuid()).into(),
         receipt: receipt.into(),

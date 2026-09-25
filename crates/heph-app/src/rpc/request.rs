@@ -6,9 +6,80 @@ use identity_domain::{
     AuthenticatedIdentity, RequestId, actor_idempotency_id, mutation_idempotency_seed,
 };
 use rpc_proto::messages::hephaestus::common::v1::{OpaqueId, RequestContext};
-use std::str::FromStr;
+use std::{future::Future, str::FromStr, time::Instant};
+use tokio_util::sync::CancellationToken;
 
 const MAX_IDEMPOTENCY_KEY_BYTES: usize = 256;
+
+/// The bounded lifetime shared by one RPC handler and its downstream calls.
+///
+/// The token is canceled when the handler future drops this owner. Downstream
+/// adapters can clone the token and select it alongside their I/O future while
+/// [`run_with_budget`] enforces the same absolute transport deadline.
+pub(super) struct RequestBudget {
+    deadline: Option<Instant>,
+    cancellation: CancellationToken,
+}
+
+impl RequestBudget {
+    pub(super) fn from_transport(transport: &TransportContext) -> Self {
+        Self {
+            deadline: transport.deadline(),
+            cancellation: CancellationToken::new(),
+        }
+    }
+
+    pub(super) fn cancellation_token(&self) -> CancellationToken {
+        self.cancellation.clone()
+    }
+
+    #[cfg(test)]
+    fn deadline(&self) -> Option<Instant> {
+        self.deadline
+    }
+}
+
+impl Drop for RequestBudget {
+    fn drop(&mut self) {
+        self.cancellation.cancel();
+    }
+}
+
+/// Runs one downstream operation until the shared deadline or request
+/// cancellation. The operation is dropped when either boundary wins.
+pub(super) async fn run_with_budget<T, Operation>(
+    budget: &RequestBudget,
+    operation: Operation,
+) -> Result<T, RpcError>
+where
+    Operation: Future<Output = T>,
+{
+    let cancellation = budget.cancellation_token();
+    match budget.deadline {
+        Some(deadline) => {
+            tokio::select! {
+                result = tokio::time::timeout_at(deadline.into(), operation) => {
+                    result.map_err(|_| RpcError::DeadlineExceeded)
+                }
+                () = cancellation.cancelled() => Err(RpcError::Canceled),
+            }
+        }
+        None => {
+            tokio::select! {
+                result = operation => Ok(result),
+                () = cancellation.cancelled() => Err(RpcError::Canceled),
+            }
+        }
+    }
+}
+
+#[cfg(test)]
+fn test_budget(deadline: Option<Instant>) -> RequestBudget {
+    RequestBudget {
+        deadline,
+        cancellation: CancellationToken::new(),
+    }
+}
 
 pub(super) fn mutation_identity(
     transport: &TransportContext,
@@ -85,10 +156,35 @@ pub(super) fn required_id(value: Option<&OpaqueId>) -> Result<String, RpcError> 
 mod tests {
     use super::{
         MAX_IDEMPOTENCY_KEY_BYTES, MediatorAuthenticator, derive_idempotency_id,
-        mutation_request_id,
+        mutation_request_id, run_with_budget, test_budget,
     };
     use rpc_proto::messages::hephaestus::common::v1::{OpaqueId, RequestContext};
+    use std::{
+        future::Future,
+        pin::Pin,
+        sync::{
+            Arc,
+            atomic::{AtomicBool, Ordering},
+        },
+        task::{Context, Poll},
+    };
     use uuid::Uuid;
+
+    struct DropProbe(Arc<AtomicBool>);
+
+    impl Future for DropProbe {
+        type Output = ();
+
+        fn poll(self: Pin<&mut Self>, _cx: &mut Context<'_>) -> Poll<Self::Output> {
+            Poll::Pending
+        }
+    }
+
+    impl Drop for DropProbe {
+        fn drop(&mut self) {
+            self.0.store(true, Ordering::SeqCst);
+        }
+    }
 
     #[test]
     fn mutation_context_requires_bounded_idempotency_and_uuid_request_id() {
@@ -242,5 +338,39 @@ mod tests {
             derive_idempotency_id(actor.as_bytes(), "/service.v1/First", "other-key")
         );
         assert_eq!(first.as_uuid().get_version_num(), 8);
+    }
+
+    #[tokio::test]
+    async fn request_budget_enforces_the_transport_deadline() {
+        use connectrpc::RequestContext as TransportContext;
+        use http::HeaderMap;
+        use std::time::{Duration, Instant};
+
+        let deadline = Instant::now() + Duration::from_millis(1);
+        let transport = TransportContext::new(HeaderMap::new()).with_deadline(Some(deadline));
+        let budget = super::RequestBudget::from_transport(&transport);
+        assert_eq!(budget.deadline(), Some(deadline));
+
+        let dropped = Arc::new(AtomicBool::new(false));
+        let result = run_with_budget(&budget, DropProbe(Arc::clone(&dropped))).await;
+        assert_eq!(result, Err(super::RpcError::DeadlineExceeded));
+        assert!(dropped.load(Ordering::SeqCst));
+    }
+
+    #[tokio::test]
+    async fn request_budget_cancels_when_the_request_future_drops() {
+        let cancellation = {
+            let budget = test_budget(None);
+            let cancellation = budget.cancellation_token();
+            let task = tokio::spawn(async move {
+                let _ = run_with_budget(&budget, std::future::pending::<()>()).await;
+            });
+            tokio::task::yield_now().await;
+            task.abort();
+            assert!(task.await.is_err());
+            cancellation
+        };
+
+        assert!(cancellation.is_cancelled());
     }
 }

@@ -15,6 +15,7 @@ pub(super) async fn handle(
     ctx: RequestContext,
     message: ServiceRequest<'_, GetProjectRepositoryImageRequest>,
 ) -> ServiceResult<GetProjectRepositoryImageResponse> {
+    let budget = request::RequestBudget::from_transport(&ctx);
     let identity = request::query_identity(
         &ctx,
         &service.authenticator,
@@ -30,12 +31,16 @@ pub(super) async fn handle(
         .parse::<Uuid>()
         .map_err(|_| into_connect_error(crate::rpc::RpcError::InvalidArgument))?;
     let page = parse_page(request.page.as_option()).map_err(into_connect_error)?;
-    let (image, history) = service
-        .application
-        .repository_image(&identity, image_id, page)
-        .await
-        .map_err(map_error)
-        .map_err(into_connect_error)?;
+    let (image, history) = request::run_with_budget(
+        &budget,
+        service
+            .application
+            .repository_image(&identity, image_id, page),
+    )
+    .await
+    .map_err(into_connect_error)?
+    .map_err(map_error)
+    .map_err(into_connect_error)?;
     Response::ok(GetProjectRepositoryImageResponse {
         image: ProjectRepositoryImage {
             id: opaque(image.id).into(),

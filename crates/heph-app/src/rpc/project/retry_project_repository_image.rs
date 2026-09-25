@@ -11,6 +11,7 @@ pub(super) async fn handle(
     ctx: RequestContext,
     message: ServiceRequest<'_, RetryProjectRepositoryImageRequest>,
 ) -> ServiceResult<RetryProjectRepositoryImageResponse> {
+    let budget = request::RequestBudget::from_transport(&ctx);
     let request = message.to_owned_message();
     let identity = request::mutation_identity(
         &ctx,
@@ -26,20 +27,28 @@ pub(super) async fn handle(
         .value
         .parse::<Uuid>()
         .map_err(|_| into_connect_error(crate::rpc::RpcError::InvalidArgument))?;
-    let image = service
-        .application
-        .retry_repository_image(&identity, image_id)
-        .await
-        .map_err(map_error)
-        .map_err(into_connect_error)?;
-    let receipt = mutation_receipt(
-        &service.receipts,
-        identity.idempotency_id,
-        identity.user_id,
-        "project",
-        "project",
+    let image = request::run_with_budget(
+        &budget,
+        service
+            .application
+            .retry_repository_image(&identity, image_id),
     )
-    .await?;
+    .await
+    .map_err(into_connect_error)?
+    .map_err(map_error)
+    .map_err(into_connect_error)?;
+    let receipt = request::run_with_budget(
+        &budget,
+        mutation_receipt(
+            &service.receipts,
+            identity.idempotency_id,
+            identity.user_id,
+            "project",
+            "project",
+        ),
+    )
+    .await
+    .map_err(into_connect_error)??;
     Response::ok(RetryProjectRepositoryImageResponse {
         image: ProjectRepositoryImage {
             id: opaque(image.id).into(),

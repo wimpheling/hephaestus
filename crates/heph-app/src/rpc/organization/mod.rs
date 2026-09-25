@@ -50,16 +50,19 @@ impl OrganizationService for OrganizationRpc {
         ctx: RequestContext,
         request: ServiceRequest<'_, ListOrganizationsRequest>,
     ) -> ServiceResult<ListOrganizationsResponse> {
+        let budget = request::RequestBudget::from_transport(&ctx);
         let identity = request::query_identity(&ctx, &self.authenticator, LIST_AUDIENCE)
             .map_err(into_connect_error)?;
         let request = request.to_owned_message();
         let page = parse_page(request.page.as_option()).map_err(into_connect_error)?;
-        let result = self
-            .application
-            .list_organizations(&identity, page)
-            .await
-            .map_err(map_application_error)
-            .map_err(into_connect_error)?;
+        let result = request::run_with_budget(
+            &budget,
+            self.application.list_organizations(&identity, page),
+        )
+        .await
+        .map_err(into_connect_error)?
+        .map_err(map_application_error)
+        .map_err(into_connect_error)?;
         Response::ok(ListOrganizationsResponse {
             organizations: result
                 .organizations
@@ -91,6 +94,7 @@ impl OrganizationService for OrganizationRpc {
         ctx: RequestContext,
         request: ServiceRequest<'_, GetOrganizationRequest>,
     ) -> ServiceResult<GetOrganizationResponse> {
+        let budget = request::RequestBudget::from_transport(&ctx);
         let identity = request::query_identity(
             &ctx,
             &self.authenticator,
@@ -99,12 +103,15 @@ impl OrganizationService for OrganizationRpc {
         .map_err(into_connect_error)?;
         let request = request.to_owned_message();
         let organization_id = parse_id(request.organization_id.as_option())?;
-        let organization = self
-            .application
-            .get_organization(&identity, organization_id)
-            .await
-            .map_err(map_application_error)
-            .map_err(into_connect_error)?;
+        let organization = request::run_with_budget(
+            &budget,
+            self.application
+                .get_organization(&identity, organization_id),
+        )
+        .await
+        .map_err(into_connect_error)?
+        .map_err(map_application_error)
+        .map_err(into_connect_error)?;
         Response::ok(GetOrganizationResponse {
             organization: rpc_proto::messages::hephaestus::organization::v1::Organization {
                 id: opaque(organization.id).into(),
@@ -121,6 +128,7 @@ impl OrganizationService for OrganizationRpc {
         ctx: RequestContext,
         request: ServiceRequest<'_, ListOrganizationRepositoriesRequest>,
     ) -> ServiceResult<ListOrganizationRepositoriesResponse> {
+        let budget = request::RequestBudget::from_transport(&ctx);
         let identity = request::query_identity(
             &ctx,
             &self.authenticator,
@@ -130,12 +138,15 @@ impl OrganizationService for OrganizationRpc {
         let request = request.to_owned_message();
         let organization_id = parse_id(request.organization_id.as_option())?;
         let page = parse_page(request.page.as_option()).map_err(into_connect_error)?;
-        let result = self
-            .application
-            .list_repositories(&identity, organization_id, page)
-            .await
-            .map_err(map_application_error)
-            .map_err(into_connect_error)?;
+        let result = request::run_with_budget(
+            &budget,
+            self.application
+                .list_repositories(&identity, organization_id, page),
+        )
+        .await
+        .map_err(into_connect_error)?
+        .map_err(map_application_error)
+        .map_err(into_connect_error)?;
         Response::ok(ListOrganizationRepositoriesResponse {
             repositories: result
                 .repositories
@@ -163,6 +174,7 @@ impl OrganizationService for OrganizationRpc {
         ctx: RequestContext,
         request: ServiceRequest<'_, ListOrganizationProjectsRequest>,
     ) -> ServiceResult<ListOrganizationProjectsResponse> {
+        let budget = request::RequestBudget::from_transport(&ctx);
         let identity = request::query_identity(
             &ctx,
             &self.authenticator,
@@ -172,12 +184,15 @@ impl OrganizationService for OrganizationRpc {
         let request = request.to_owned_message();
         let organization_id = parse_id(request.organization_id.as_option())?;
         let page = parse_page(request.page.as_option()).map_err(into_connect_error)?;
-        let result = self
-            .application
-            .list_projects(&identity, organization_id, page)
-            .await
-            .map_err(map_application_error)
-            .map_err(into_connect_error)?;
+        let result = request::run_with_budget(
+            &budget,
+            self.application
+                .list_projects(&identity, organization_id, page),
+        )
+        .await
+        .map_err(into_connect_error)?
+        .map_err(map_application_error)
+        .map_err(into_connect_error)?;
         Response::ok(ListOrganizationProjectsResponse {
             projects: result
                 .projects
