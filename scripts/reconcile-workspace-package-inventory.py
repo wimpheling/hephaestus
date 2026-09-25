@@ -29,6 +29,38 @@ EXPECTED_FACADES = {
     "heph-build",
 }
 EXPECTED_BASELINE_PACKAGE_COUNT = 85
+ALLOWED_INTEGRATION_TEST_RELOCATIONS = (
+    {
+        "from_package": "volume-postgres",
+        "from_target": "postgres",
+        "to_package": "hephaestus-app",
+        "to_target": "volume_postgres_local",
+    },
+    {
+        "from_package": "workspace-postgres",
+        "from_target": "postgres_git",
+        "to_package": "hephaestus-app",
+        "to_target": "workspace_postgres_git",
+    },
+    {
+        "from_package": "run-postgres",
+        "from_target": "phase1b_libkrun",
+        "to_package": "hephaestus-app",
+        "to_target": "run_postgres_phase1b_libkrun",
+    },
+    {
+        "from_package": "forge-postgres",
+        "from_target": "smart_http",
+        "to_package": "hephaestus-app",
+        "to_target": "forge_postgres_smart_http",
+    },
+    {
+        "from_package": "forge-postgres",
+        "from_target": "postgres",
+        "to_package": "hephaestus-app",
+        "to_target": "forge_postgres_receive",
+    },
+)
 
 
 def relative_path(path: str) -> str:
@@ -136,9 +168,26 @@ def package_identity(package: dict[str, Any]) -> dict[str, Any]:
         "name": package["name"],
         "version": package["version"],
         "features": package["features"],
-        "targets": [target_identity(target) for target in package["targets"]],
+        # Integration tests can move to the composition root to remove core
+        # development dependencies. They are reconciled separately below.
+        "targets": [
+            target_identity(target)
+            for target in package["targets"]
+            if "test" not in target["kind"]
+        ],
         "metadata_hephaestus": package["metadata_hephaestus"],
     }
+
+
+def test_targets(inventory: dict[str, Any]) -> dict[tuple[str, str], dict[str, Any]]:
+    """Index full test target identities by package and target name."""
+
+    indexed: dict[tuple[str, str], dict[str, Any]] = {}
+    for package in inventory.get("packages", []):
+        for target in package["targets"]:
+            if "test" in target["kind"]:
+                indexed[(package["name"], target["name"])] = target_identity(target)
+    return indexed
 
 
 def reconcile(
@@ -146,8 +195,8 @@ def reconcile(
     current: dict[str, Any],
     *,
     baseline_only: bool,
-) -> tuple[list[str], list[str], list[str]]:
-    """Return missing package names, unexpected names, and changed facts."""
+) -> tuple[list[str], list[str], list[str], list[str]]:
+    """Return package errors, stable fact errors, and allowed relocations."""
 
     baseline_packages = {
         package["name"]: package for package in baseline.get("packages", [])
@@ -167,6 +216,48 @@ def reconcile(
         ):
             changed.append(name)
 
+    baseline_tests = test_targets(baseline)
+    current_tests = test_targets(current)
+    relocations: list[str] = []
+    removed_tests = set(baseline_tests) - set(current_tests)
+    added_tests = set(current_tests) - set(baseline_tests)
+    for package, target in sorted(set(baseline_tests) & set(current_tests)):
+        if baseline_tests[(package, target)] != current_tests[(package, target)]:
+            changed.append(f"changed integration-test target {package}::{target}")
+    for relocation in ALLOWED_INTEGRATION_TEST_RELOCATIONS:
+        source = (relocation["from_package"], relocation["from_target"])
+        destination = (relocation["to_package"], relocation["to_target"])
+        if source in removed_tests and destination in added_tests:
+            source_identity = baseline_tests[source]
+            destination_identity = current_tests[destination]
+            if not (
+                source_identity.get("crate_types") == ["bin"]
+                and source_identity.get("kind") == ["test"]
+            ):
+                changed.append(f"{source[0]}::{source[1]} integration-test identity")
+            if not (
+                destination_identity.get("crate_types") == ["bin"]
+                and destination_identity.get("kind") == ["test"]
+            ):
+                changed.append(
+                    f"{destination[0]}::{destination[1]} integration-test identity"
+                )
+            relocations.append(
+                f"{source[0]}::{source[1]} -> {destination[0]}::{destination[1]}"
+            )
+            removed_tests.remove(source)
+            added_tests.remove(destination)
+    if removed_tests:
+        changed.extend(
+            f"removed integration-test target {package}::{target}"
+            for package, target in sorted(removed_tests)
+        )
+    if added_tests:
+        changed.extend(
+            f"added integration-test target {package}::{target}"
+            for package, target in sorted(added_tests)
+        )
+
     expected_count = len(baseline_packages) + (0 if baseline_only else len(EXPECTED_FACADES))
     if current.get("package_count") != expected_count:
         changed.append(
@@ -177,7 +268,7 @@ def reconcile(
             "<workspace-member-count> "
             f"expected {expected_count}, got {current.get('workspace_member_count')}"
         )
-    return missing, unexpected, changed
+    return missing, unexpected, changed, relocations
 
 
 def report(
@@ -203,7 +294,7 @@ def report(
         )
         return 1
 
-    missing, unexpected, changed = reconcile(
+    missing, unexpected, changed, relocations = reconcile(
         baseline, current, baseline_only=baseline_only
     )
     baseline_names = set(baseline_names)
@@ -226,6 +317,10 @@ def report(
     print(f"Baseline packages compared: {len(baseline_names)}")
     print(f"Manifest path changes: {path_changes}")
     print(f"Additional packages: {', '.join(facades) if facades else 'none'}")
+    if relocations:
+        print("Integration-test target relocations:")
+        for relocation in relocations:
+            print(f"  {relocation}")
 
     if baseline_only:
         expected_facades = set()
