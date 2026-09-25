@@ -1,57 +1,33 @@
 //! Agent-instance RPC adapters.
 
+mod attachment;
+mod budget;
 mod create_mailbox;
 mod get_instance;
+mod helpers;
+mod lifecycle;
+mod mailbox;
+mod secrets;
 
-use super::{
-    MediatorAuthenticator, MutationReceipts, RpcError, into_connect_error, mutation_receipt,
-    request,
-};
-use crate::application::commands::{
-    CapabilitySelectionInput, InternalCommand, InternalCommandState,
-    RecoveryAction as ApplicationRecoveryAction, dispatch,
-};
+use super::{MediatorAuthenticator, MutationReceipts, RpcError};
+use crate::application::commands::{InternalCommand, InternalCommandState, dispatch};
 use crate::application::instance::InstanceApplication;
-use capability_domain::{
-    CapabilityOperation, CapabilityResource, CapabilityResourceKind, CapabilitySlotKey,
-};
-use connectrpc::{RequestContext, Response, ServiceRequest, ServiceResult};
+use connectrpc::{RequestContext, ServiceRequest, ServiceResult};
 use control_plane_postgres::ControlPlanePool as PgPool;
-use mailbox_domain::{MailboxEventId, MailboxId};
-use mailbox_postgres::{MailboxOperatorAction, PostgresMailboxRepository};
-use release_domain::{
-    InstanceName, NetworkAccess, ParameterName, ParameterValue, RefSelector, RuntimePolicy,
-    TriggerPolicy,
-};
-use release_postgres::BrokeredRuleCopy;
 use rpc_proto::{
     connect::hephaestus::instance::v1::AgentInstanceService,
-    messages::hephaestus::{
-        common::v1::{
-            Diagnostic, DiagnosticCode, DiagnosticSeverity, NetworkPolicy, OpaqueId, Operation,
-            OperationState, ParameterValue as ProtoParameterValue,
-            RuntimePolicy as ProtoRuntimePolicy, parameter_value,
-        },
-        instance::v1::{
-            BindSecretRequest, BindSecretResponse, ControlMailboxRequest, ControlMailboxResponse,
-            CreateAttachmentRequest, CreateAttachmentResponse, CreateMailboxRequest,
-            CreateMailboxResponse, CreateUpdateRequest, CreateUpdateResponse,
-            DeclareBrokeredHttpsRuleRequest, DeclareBrokeredHttpsRuleResponse, GetInstanceRequest,
-            GetInstanceResponse, ImportAgentRequest, ImportAgentResponse,
-            MailboxControlAction as ProtoMailboxControlAction, RecoverUpdateRequest,
-            RecoverUpdateResponse, RecoveryAction, RecoveryDecision, RemovalState,
-            RemoveAttachmentRequest, RemoveAttachmentResponse, ReviseCapabilitiesRequest,
-            ReviseCapabilitiesResponse, ReviseInstanceRequest, ReviseInstanceResponse,
-            SetAttachmentEnabledRequest, SetAttachmentEnabledResponse,
-            TriggerPolicy as ProtoTriggerPolicy, ref_selector,
-        },
-        secret::v1::{DeliveryMode as ProtoDeliveryMode, DeliveryPhase},
+    messages::hephaestus::instance::v1::{
+        BindSecretRequest, BindSecretResponse, ControlMailboxRequest, ControlMailboxResponse,
+        CreateAttachmentRequest, CreateAttachmentResponse, CreateMailboxRequest,
+        CreateMailboxResponse, CreateUpdateRequest, CreateUpdateResponse,
+        DeclareBrokeredHttpsRuleRequest, DeclareBrokeredHttpsRuleResponse, GetInstanceRequest,
+        GetInstanceResponse, ImportAgentRequest, ImportAgentResponse, RecoverUpdateRequest,
+        RecoverUpdateResponse, RemoveAttachmentRequest, RemoveAttachmentResponse,
+        ReviseCapabilitiesRequest, ReviseCapabilitiesResponse, ReviseInstanceRequest,
+        ReviseInstanceResponse, SetAttachmentEnabledRequest, SetAttachmentEnabledResponse,
     },
 };
-use secret_domain::{AgentSecretBindingId, DeliveryMode, ExecutionPhase, SecretSlotKey};
 use serde_json::Value;
-use std::{collections::BTreeMap, str::FromStr};
-use uuid::Uuid;
 
 /// Generated instance service backed by the existing release application.
 pub struct InstanceRpc {
@@ -100,6 +76,7 @@ impl InstanceRpc {
 
 // Generated traits hide an Encodable response; concrete message bodies keep
 // each adapter readable while refining only this implementation's opaque type.
+
 #[allow(refining_impl_trait)]
 impl AgentInstanceService for InstanceRpc {
     async fn get_instance(
@@ -123,51 +100,7 @@ impl AgentInstanceService for InstanceRpc {
         ctx: RequestContext,
         request: ServiceRequest<'_, ControlMailboxRequest>,
     ) -> ServiceResult<ControlMailboxResponse> {
-        let request = request.to_owned_message();
-        let identity = mutation(
-            &ctx,
-            &self.authenticator,
-            "ControlMailbox",
-            &request.context,
-        )?;
-        let action = match request.action.as_known() {
-            Some(ProtoMailboxControlAction::Pause) => MailboxOperatorAction::Pause,
-            Some(ProtoMailboxControlAction::Resume) => MailboxOperatorAction::Resume,
-            Some(ProtoMailboxControlAction::Retry) => MailboxOperatorAction::Retry,
-            Some(ProtoMailboxControlAction::Cancel) => MailboxOperatorAction::Cancel,
-            Some(ProtoMailboxControlAction::DeadLetter) => MailboxOperatorAction::DeadLetter,
-            Some(ProtoMailboxControlAction::Unspecified) | None => {
-                return Err(into_connect_error(RpcError::InvalidArgument));
-            }
-        };
-        let result = PostgresMailboxRepository::new(self.pool.clone())
-            .operate(
-                &identity,
-                action,
-                parse_id::<MailboxId>(request.mailbox_id.as_option())?,
-                request
-                    .event_id
-                    .as_option()
-                    .map(|value| parse_id::<MailboxEventId>(Some(value)))
-                    .transpose()?,
-            )
-            .await
-            // The repository deliberately does not disclose whether an
-            // inaccessible mailbox or event exists.
-            .map_err(|_| into_connect_error(RpcError::NotFound))?;
-        let receipt = mutation_receipt(
-            &self.receipts,
-            identity.idempotency_id,
-            identity.user_id,
-            "agent_instance",
-            "agent_instance",
-        )
-        .await?;
-        Response::ok(ControlMailboxResponse {
-            changed: result.changed,
-            receipt: receipt.into(),
-            ..Default::default()
-        })
+        mailbox::control_mailbox(self, ctx, request).await
     }
 
     async fn import_agent(
@@ -175,35 +108,7 @@ impl AgentInstanceService for InstanceRpc {
         ctx: RequestContext,
         request: ServiceRequest<'_, ImportAgentRequest>,
     ) -> ServiceResult<ImportAgentResponse> {
-        let request = request.to_owned_message();
-        let identity = mutation(&ctx, &self.authenticator, "ImportAgent", &request.context)?;
-        let value = self
-            .execute(
-                &identity,
-                InternalCommand::ImportAgent {
-                    project_id: parse_id(request.project_id.as_option())?,
-                    release_agent_id: parse_id(request.release_agent_id.as_option())?,
-                    name: InstanceName::parse(request.name).map_err(invalid)?,
-                    parameters: parameters(request.parameters)?,
-                    selected_policy: policy(request.selected_policy.as_option())?,
-                },
-            )
-            .await
-            .map_err(into_connect_error)?;
-        let receipt = mutation_receipt(
-            &self.receipts,
-            identity.idempotency_id,
-            identity.user_id,
-            "agent_instance",
-            "agent_instance",
-        )
-        .await?;
-        Response::ok(ImportAgentResponse {
-            instance_id: opaque(json_id(&value, "instance_id")?).into(),
-            revision_id: opaque(json_id(&value, "revision_id")?).into(),
-            receipt: receipt.into(),
-            ..Default::default()
-        })
+        lifecycle::import_agent(self, ctx, request).await
     }
 
     async fn create_attachment(
@@ -211,54 +116,7 @@ impl AgentInstanceService for InstanceRpc {
         ctx: RequestContext,
         request: ServiceRequest<'_, CreateAttachmentRequest>,
     ) -> ServiceResult<CreateAttachmentResponse> {
-        let request = request.to_owned_message();
-        let identity = mutation(
-            &ctx,
-            &self.authenticator,
-            "CreateAttachment",
-            &request.context,
-        )?;
-        let selector = request
-            .ref_selector
-            .as_option()
-            .and_then(|value| value.selector.as_ref())
-            .ok_or_else(|| into_connect_error(RpcError::InvalidArgument))?;
-        let selector = match selector {
-            ref_selector::Selector::Exact(value) => RefSelector::parse(value.clone()),
-            ref_selector::Selector::Prefix(value) => RefSelector::parse(format!("{value}/*")),
-        }
-        .map_err(invalid)?;
-        let trigger_policy = match request.trigger_policy.as_known() {
-            Some(ProtoTriggerPolicy::Manual) => TriggerPolicy::Manual,
-            Some(ProtoTriggerPolicy::Push) => TriggerPolicy::Push,
-            Some(ProtoTriggerPolicy::PushAndManual) => TriggerPolicy::PushAndManual,
-            _ => return Err(into_connect_error(RpcError::InvalidArgument)),
-        };
-        let value = self
-            .execute(
-                &identity,
-                InternalCommand::CreateAttachment {
-                    instance_id: parse_id(request.instance_id.as_option())?,
-                    repository_id: parse_id(request.repository_id.as_option())?,
-                    ref_selector: selector,
-                    trigger_policy,
-                },
-            )
-            .await
-            .map_err(into_connect_error)?;
-        let receipt = mutation_receipt(
-            &self.receipts,
-            identity.idempotency_id,
-            identity.user_id,
-            "agent_instance",
-            "agent_instance",
-        )
-        .await?;
-        Response::ok(CreateAttachmentResponse {
-            attachment_id: opaque(json_id(&value, "attachment_id")?).into(),
-            receipt: receipt.into(),
-            ..Default::default()
-        })
+        attachment::create_attachment(self, ctx, request).await
     }
 
     async fn set_attachment_enabled(
@@ -266,37 +124,7 @@ impl AgentInstanceService for InstanceRpc {
         ctx: RequestContext,
         request: ServiceRequest<'_, SetAttachmentEnabledRequest>,
     ) -> ServiceResult<SetAttachmentEnabledResponse> {
-        let request = request.to_owned_message();
-        let identity = mutation(
-            &ctx,
-            &self.authenticator,
-            "SetAttachmentEnabled",
-            &request.context,
-        )?;
-        let attachment_id = parse_id(request.attachment_id.as_option())?;
-        self.execute(
-            &identity,
-            InternalCommand::SetAttachmentEnabled {
-                attachment_id,
-                enabled: request.enabled,
-            },
-        )
-        .await
-        .map_err(into_connect_error)?;
-        let receipt = mutation_receipt(
-            &self.receipts,
-            identity.idempotency_id,
-            identity.user_id,
-            "agent_instance",
-            "agent_instance",
-        )
-        .await?;
-        Response::ok(SetAttachmentEnabledResponse {
-            attachment_id: opaque(attachment_id.to_string()).into(),
-            enabled: request.enabled,
-            receipt: receipt.into(),
-            ..Default::default()
-        })
+        attachment::set_attachment_enabled(self, ctx, request).await
     }
 
     async fn remove_attachment(
@@ -304,34 +132,7 @@ impl AgentInstanceService for InstanceRpc {
         ctx: RequestContext,
         request: ServiceRequest<'_, RemoveAttachmentRequest>,
     ) -> ServiceResult<RemoveAttachmentResponse> {
-        let request = request.to_owned_message();
-        let identity = mutation(
-            &ctx,
-            &self.authenticator,
-            "RemoveAttachment",
-            &request.context,
-        )?;
-        let attachment_id = parse_id(request.attachment_id.as_option())?;
-        self.execute(
-            &identity,
-            InternalCommand::RemoveAttachment { attachment_id },
-        )
-        .await
-        .map_err(into_connect_error)?;
-        let receipt = mutation_receipt(
-            &self.receipts,
-            identity.idempotency_id,
-            identity.user_id,
-            "agent_instance",
-            "agent_instance",
-        )
-        .await?;
-        Response::ok(RemoveAttachmentResponse {
-            attachment_id: opaque(attachment_id.to_string()).into(),
-            state: RemovalState::Removed.into(),
-            receipt: receipt.into(),
-            ..Default::default()
-        })
+        attachment::remove_attachment(self, ctx, request).await
     }
 
     async fn revise_instance(
@@ -339,40 +140,7 @@ impl AgentInstanceService for InstanceRpc {
         ctx: RequestContext,
         request: ServiceRequest<'_, ReviseInstanceRequest>,
     ) -> ServiceResult<ReviseInstanceResponse> {
-        let request = request.to_owned_message();
-        let identity = mutation(
-            &ctx,
-            &self.authenticator,
-            "ReviseInstance",
-            &request.context,
-        )?;
-        let instance_id = parse_id(request.instance_id.as_option())?;
-        let value = self
-            .execute(
-                &identity,
-                InternalCommand::ReviseInstance {
-                    instance_id,
-                    expected_revision_id: parse_id(request.expected_revision_id.as_option())?,
-                    parameters: parameters(request.parameters)?,
-                    selected_policy: policy(request.selected_policy.as_option())?,
-                },
-            )
-            .await
-            .map_err(into_connect_error)?;
-        let receipt = mutation_receipt(
-            &self.receipts,
-            identity.idempotency_id,
-            identity.user_id,
-            "agent_instance",
-            "agent_instance",
-        )
-        .await?;
-        Response::ok(ReviseInstanceResponse {
-            instance_id: opaque(instance_id.to_string()).into(),
-            revision_id: opaque(json_id(&value, "revision_id")?).into(),
-            receipt: receipt.into(),
-            ..Default::default()
-        })
+        lifecycle::revise_instance(self, ctx, request).await
     }
 
     async fn create_update(
@@ -380,53 +148,7 @@ impl AgentInstanceService for InstanceRpc {
         ctx: RequestContext,
         request: ServiceRequest<'_, CreateUpdateRequest>,
     ) -> ServiceResult<CreateUpdateResponse> {
-        let request = request.to_owned_message();
-        let identity = mutation(&ctx, &self.authenticator, "CreateUpdate", &request.context)?;
-        let value = self
-            .execute(
-                &identity,
-                InternalCommand::CreateUpdate {
-                    instance_id: parse_id(request.instance_id.as_option())?,
-                    expected_revision_id: parse_id(request.expected_revision_id.as_option())?,
-                    candidate_release_agent_id: parse_id(
-                        request.candidate_release_agent_id.as_option(),
-                    )?,
-                    parameters: parameters(request.parameters)?,
-                    brokered_rule_copies: brokered_rule_copies(request.brokered_rule_copies)?,
-                    selected_policy: policy(request.selected_policy.as_option())?,
-                },
-            )
-            .await
-            .map_err(into_connect_error)?;
-        let hook_run_id = value
-            .get("hook_run_id")
-            .and_then(Value::as_str)
-            .map(str::to_owned);
-        let receipt = mutation_receipt(
-            &self.receipts,
-            identity.idempotency_id,
-            identity.user_id,
-            "agent_instance",
-            "agent_instance",
-        )
-        .await?;
-        Response::ok(CreateUpdateResponse {
-            update_id: opaque(json_id(&value, "update_id")?).into(),
-            candidate_revision_id: opaque(json_id(&value, "candidate_revision_id")?).into(),
-            hook_run_id: hook_run_id.as_ref().map(|id| opaque(id.clone())).into(),
-            operation: hook_run_id
-                .map(|id| {
-                    Operation {
-                        id: opaque(id).into(),
-                        state: OperationState::Queued.into(),
-                        ..Default::default()
-                    }
-                    .into()
-                })
-                .unwrap_or_default(),
-            receipt: receipt.into(),
-            ..Default::default()
-        })
+        lifecycle::create_update(self, ctx, request).await
     }
 
     async fn recover_update(
@@ -434,43 +156,7 @@ impl AgentInstanceService for InstanceRpc {
         ctx: RequestContext,
         request: ServiceRequest<'_, RecoverUpdateRequest>,
     ) -> ServiceResult<RecoverUpdateResponse> {
-        let request = request.to_owned_message();
-        let identity = mutation(&ctx, &self.authenticator, "RecoverUpdate", &request.context)?;
-        let update_id = parse_id(request.update_id.as_option())?;
-        let (action, decision) = match request.action.as_known() {
-            Some(RecoveryAction::Retry) => (
-                ApplicationRecoveryAction::Retry,
-                RecoveryDecision::RetryQueued,
-            ),
-            Some(RecoveryAction::Reject) => (
-                ApplicationRecoveryAction::Reject,
-                RecoveryDecision::Rejected,
-            ),
-            Some(RecoveryAction::Resume) => {
-                (ApplicationRecoveryAction::Resume, RecoveryDecision::Resumed)
-            }
-            _ => return Err(into_connect_error(RpcError::InvalidArgument)),
-        };
-        self.execute(
-            &identity,
-            InternalCommand::RecoverUpdate { update_id, action },
-        )
-        .await
-        .map_err(into_connect_error)?;
-        let receipt = mutation_receipt(
-            &self.receipts,
-            identity.idempotency_id,
-            identity.user_id,
-            "agent_instance",
-            "agent_instance",
-        )
-        .await?;
-        Response::ok(RecoverUpdateResponse {
-            update_id: opaque(update_id.to_string()).into(),
-            decision: decision.into(),
-            receipt: receipt.into(),
-            ..Default::default()
-        })
+        lifecycle::recover_update(self, ctx, request).await
     }
 
     async fn bind_secret(
@@ -478,60 +164,7 @@ impl AgentInstanceService for InstanceRpc {
         ctx: RequestContext,
         request: ServiceRequest<'_, BindSecretRequest>,
     ) -> ServiceResult<BindSecretResponse> {
-        let request = request.to_owned_message();
-        let identity = mutation(&ctx, &self.authenticator, "BindSecret", &request.context)?;
-        let mode = match request.mode.as_known() {
-            Some(ProtoDeliveryMode::Raw) => DeliveryMode::Raw,
-            Some(ProtoDeliveryMode::Brokered) => DeliveryMode::Brokered,
-            _ => return Err(into_connect_error(RpcError::InvalidArgument)),
-        };
-        let phases = request
-            .phases
-            .into_iter()
-            .map(|phase| match phase.as_known() {
-                Some(DeliveryPhase::Normal) => Ok(ExecutionPhase::Normal),
-                Some(DeliveryPhase::Update) => Ok(ExecutionPhase::Update),
-                _ => Err(into_connect_error(RpcError::InvalidArgument)),
-            })
-            .collect::<Result<Vec<_>, _>>()?;
-        let attachment_ids = request
-            .attachment_ids
-            .iter()
-            .map(|id| {
-                Uuid::parse_str(&id.value)
-                    .map_err(|_| into_connect_error(RpcError::InvalidArgument))
-            })
-            .collect::<Result<Vec<_>, _>>()?;
-        let value = self
-            .execute(
-                &identity,
-                InternalCommand::BindSecret {
-                    instance_id: parse_id(request.instance_id.as_option())?,
-                    expected_revision_id: parse_id(request.expected_revision_id.as_option())?,
-                    import_id: parse_id(request.import_id.as_option())?,
-                    slot: SecretSlotKey::parse(request.slot).map_err(invalid)?,
-                    mode,
-                    phases,
-                    attachment_ids,
-                    destinations: request.destinations,
-                },
-            )
-            .await
-            .map_err(into_connect_error)?;
-        let receipt = mutation_receipt(
-            &self.receipts,
-            identity.idempotency_id,
-            identity.user_id,
-            "agent_secret_binding",
-            "agent_instance",
-        )
-        .await?;
-        Response::ok(BindSecretResponse {
-            binding_id: opaque(json_id(&value, "binding_id")?).into(),
-            instance_revision_id: opaque(json_id(&value, "instance_revision_id")?).into(),
-            receipt: receipt.into(),
-            ..Default::default()
-        })
+        secrets::bind_secret(self, ctx, request).await
     }
 
     async fn declare_brokered_https_rule(
@@ -539,42 +172,7 @@ impl AgentInstanceService for InstanceRpc {
         ctx: RequestContext,
         request: ServiceRequest<'_, DeclareBrokeredHttpsRuleRequest>,
     ) -> ServiceResult<DeclareBrokeredHttpsRuleResponse> {
-        let request = request.to_owned_message();
-        let identity = mutation(
-            &ctx,
-            &self.authenticator,
-            "DeclareBrokeredHttpsRule",
-            &request.context,
-        )?;
-        let requested_rule_id = requested_rule_id(&request)?;
-        let value = self
-            .execute(
-                &identity,
-                InternalCommand::DeclareBrokeredHttpsRule {
-                    binding_id: AgentSecretBindingId::from_uuid(parse_id(
-                        request.binding_id.as_option(),
-                    )?),
-                    destination: request.destination,
-                    header: request.header,
-                    header_prefix: request.header_prefix,
-                    requested_rule_id,
-                },
-            )
-            .await
-            .map_err(into_connect_error)?;
-        let receipt = mutation_receipt(
-            &self.receipts,
-            identity.idempotency_id,
-            identity.user_id,
-            "agent_secret_binding",
-            "agent_instance",
-        )
-        .await?;
-        Response::ok(DeclareBrokeredHttpsRuleResponse {
-            rule_id: opaque(json_id(&value, "rule_id")?).into(),
-            receipt: receipt.into(),
-            ..Default::default()
-        })
+        secrets::declare_brokered_https_rule(self, ctx, request).await
     }
 
     async fn revise_capabilities(
@@ -582,260 +180,6 @@ impl AgentInstanceService for InstanceRpc {
         ctx: RequestContext,
         request: ServiceRequest<'_, ReviseCapabilitiesRequest>,
     ) -> ServiceResult<ReviseCapabilitiesResponse> {
-        let request = request.to_owned_message();
-        let identity = mutation(
-            &ctx,
-            &self.authenticator,
-            "ReviseCapabilities",
-            &request.context,
-        )?;
-        let instance_id = parse_id(request.instance_id.as_option())?;
-        let bindings = request
-            .bindings
-            .into_iter()
-            .map(|binding| {
-                let kind = capability_resource_kind(&binding.resource_kind)?;
-                Ok(CapabilitySelectionInput {
-                    slot: CapabilitySlotKey::parse(binding.slot_key).map_err(invalid)?,
-                    resource: CapabilityResource::new(
-                        kind,
-                        parse_id(binding.resource_id.as_option())?,
-                    ),
-                    granted_operations: binding
-                        .granted_operations
-                        .iter()
-                        .map(|operation| capability_operation(operation))
-                        .collect::<Result<Vec<_>, _>>()?,
-                })
-            })
-            .collect::<Result<Vec<_>, connectrpc::ConnectError>>()?;
-        let value = self
-            .execute(
-                &identity,
-                InternalCommand::ReviseCapabilities {
-                    instance_id,
-                    expected_revision_id: parse_id(request.expected_revision_id.as_option())?,
-                    bindings,
-                },
-            )
-            .await
-            .map_err(into_connect_error)?;
-        let receipt = mutation_receipt(
-            &self.receipts,
-            identity.idempotency_id,
-            identity.user_id,
-            "agent_instance",
-            "agent_instance",
-        )
-        .await?;
-        let diagnostics = value
-            .get("diagnostics")
-            .and_then(Value::as_array)
-            .ok_or_else(|| into_connect_error(RpcError::Internal))?
-            .iter()
-            .map(|diagnostic| Diagnostic {
-                code: DiagnosticCode::ResourceUnavailable.into(),
-                severity: DiagnosticSeverity::Error.into(),
-                field: format!(
-                    "capability_slots.{}",
-                    diagnostic
-                        .get("slot")
-                        .and_then(Value::as_str)
-                        .unwrap_or("unknown")
-                ),
-                message: String::from("Required capability binding is missing."),
-                ..Default::default()
-            })
-            .collect();
-        Response::ok(ReviseCapabilitiesResponse {
-            instance_revision_id: opaque(json_id(&value, "revision_id")?).into(),
-            runnable: value
-                .get("runnable")
-                .and_then(Value::as_bool)
-                .unwrap_or(false),
-            diagnostics,
-            receipt: receipt.into(),
-            ..Default::default()
-        })
-    }
-}
-
-fn capability_resource_kind(
-    value: &str,
-) -> Result<CapabilityResourceKind, connectrpc::ConnectError> {
-    match value {
-        "repository" => Ok(CapabilityResourceKind::Repository),
-        "project" => Ok(CapabilityResourceKind::Project),
-        "agent_instance" => Ok(CapabilityResourceKind::AgentInstance),
-        "gateway" => Ok(CapabilityResourceKind::Gateway),
-        "run" => Ok(CapabilityResourceKind::Run),
-        "state_volume" => Ok(CapabilityResourceKind::StateVolume),
-        _ => Err(into_connect_error(RpcError::InvalidArgument)),
-    }
-}
-
-fn capability_operation(value: &str) -> Result<CapabilityOperation, connectrpc::ConnectError> {
-    let operation = match value {
-        "inspect" => CapabilityOperation::Inspect,
-        "configure" => CapabilityOperation::Configure,
-        "execute" => CapabilityOperation::Execute,
-        "update" => CapabilityOperation::Update,
-        "pause" => CapabilityOperation::Pause,
-        "recover" => CapabilityOperation::Recover,
-        "cancel" => CapabilityOperation::Cancel,
-        "attach" => CapabilityOperation::Attach,
-        "restore" => CapabilityOperation::Restore,
-        "git_read" => CapabilityOperation::GitRead,
-        "create_ref" => CapabilityOperation::CreateRef,
-        "update_ref" => CapabilityOperation::UpdateRef,
-        "force_update_ref" => CapabilityOperation::ForceUpdateRef,
-        "delete_ref" => CapabilityOperation::DeleteRef,
-        "create_tag" => CapabilityOperation::CreateTag,
-        "delete_tag" => CapabilityOperation::DeleteTag,
-        "trigger_run" => CapabilityOperation::TriggerRun,
-        "manage_attachments" => CapabilityOperation::ManageAttachments,
-        _ => return Err(into_connect_error(RpcError::InvalidArgument)),
-    };
-    Ok(operation)
-}
-
-fn mutation(
-    ctx: &RequestContext,
-    authenticator: &MediatorAuthenticator,
-    method: &str,
-    context: &buffa::MessageField<rpc_proto::messages::hephaestus::common::v1::RequestContext>,
-) -> Result<identity_domain::AuthenticatedIdentity, connectrpc::ConnectError> {
-    request::mutation_identity(
-        ctx,
-        authenticator,
-        &format!("/hephaestus.instance.v1.AgentInstanceService/{method}"),
-        context.as_option(),
-    )
-    .map_err(into_connect_error)
-}
-
-fn parse_id<T: FromStr>(value: Option<&OpaqueId>) -> Result<T, connectrpc::ConnectError> {
-    request::required_id(value)
-        .map_err(into_connect_error)?
-        .parse()
-        .map_err(|_| into_connect_error(RpcError::InvalidArgument))
-}
-
-fn requested_rule_id(
-    request: &DeclareBrokeredHttpsRuleRequest,
-) -> Result<Option<Uuid>, connectrpc::ConnectError> {
-    request
-        .requested_rule_id
-        .as_option()
-        .map(|value| parse_id(Some(value)))
-        .transpose()
-}
-
-fn policy(value: Option<&ProtoRuntimePolicy>) -> Result<RuntimePolicy, connectrpc::ConnectError> {
-    let value = value.ok_or_else(|| into_connect_error(RpcError::InvalidArgument))?;
-    let vcpus =
-        u8::try_from(value.vcpus).map_err(|_| into_connect_error(RpcError::InvalidArgument))?;
-    if vcpus == 0 || value.memory_mib == 0 {
-        return Err(into_connect_error(RpcError::InvalidArgument));
-    }
-    let network = match value.network.as_known() {
-        Some(NetworkPolicy::Disabled) => NetworkAccess::Disabled,
-        Some(NetworkPolicy::BrokerOnly) => NetworkAccess::BrokerOnly,
-        _ => return Err(into_connect_error(RpcError::InvalidArgument)),
-    };
-    Ok(RuntimePolicy {
-        vcpus,
-        memory_mib: value.memory_mib,
-        network,
-    })
-}
-
-fn parameters(
-    values: Vec<ProtoParameterValue>,
-) -> Result<BTreeMap<ParameterName, ParameterValue>, connectrpc::ConnectError> {
-    values
-        .into_iter()
-        .map(|value| {
-            let name = ParameterName::parse(value.name).map_err(invalid)?;
-            let value = match value.value {
-                Some(parameter_value::Value::StringValue(value)) => ParameterValue::String(value),
-                Some(parameter_value::Value::IntegerValue(value)) => ParameterValue::Integer(value),
-                Some(parameter_value::Value::BooleanValue(value)) => ParameterValue::Boolean(value),
-                None => return Err(into_connect_error(RpcError::InvalidArgument)),
-            };
-            Ok((name, value))
-        })
-        .collect()
-}
-
-fn brokered_rule_copies(
-    values: Vec<rpc_proto::messages::hephaestus::instance::v1::BrokeredRuleCopy>,
-) -> Result<Vec<BrokeredRuleCopy>, connectrpc::ConnectError> {
-    values
-        .into_iter()
-        .map(|value| {
-            Ok(BrokeredRuleCopy {
-                source_rule_id: parse_id(value.source_rule_id.as_option())?,
-                candidate_rule_id: parse_id(value.candidate_rule_id.as_option())?,
-            })
-        })
-        .collect()
-}
-
-fn json_id(value: &Value, field: &str) -> Result<String, connectrpc::ConnectError> {
-    value
-        .get(field)
-        .and_then(Value::as_str)
-        .map(str::to_owned)
-        .ok_or_else(|| into_connect_error(RpcError::Internal))
-}
-
-fn opaque(value: String) -> OpaqueId {
-    OpaqueId {
-        value,
-        ..Default::default()
-    }
-}
-
-fn invalid<T>(_error: T) -> connectrpc::ConnectError {
-    into_connect_error(RpcError::InvalidArgument)
-}
-
-#[cfg(test)]
-mod tests {
-    use super::requested_rule_id;
-    use rpc_proto::messages::hephaestus::{
-        common::v1::OpaqueId, instance::v1::DeclareBrokeredHttpsRuleRequest,
-    };
-    use uuid::Uuid;
-
-    #[test]
-    fn requested_rule_id_is_optional_but_must_be_a_uuid_when_present() {
-        let absent = DeclareBrokeredHttpsRuleRequest::default();
-        assert_eq!(requested_rule_id(&absent).expect("absent is valid"), None);
-
-        let expected = Uuid::new_v4();
-        let valid = DeclareBrokeredHttpsRuleRequest {
-            requested_rule_id: OpaqueId {
-                value: expected.to_string(),
-                ..Default::default()
-            }
-            .into(),
-            ..Default::default()
-        };
-        assert_eq!(
-            requested_rule_id(&valid).expect("valid UUID is accepted"),
-            Some(expected)
-        );
-
-        let malformed = DeclareBrokeredHttpsRuleRequest {
-            requested_rule_id: OpaqueId {
-                value: "rule-from-client".to_owned(),
-                ..Default::default()
-            }
-            .into(),
-            ..Default::default()
-        };
-        assert!(requested_rule_id(&malformed).is_err());
+        secrets::revise_capabilities(self, ctx, request).await
     }
 }

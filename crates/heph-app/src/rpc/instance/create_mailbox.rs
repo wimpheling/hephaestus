@@ -1,5 +1,5 @@
 use super::InstanceRpc;
-use crate::rpc::{RpcError, into_connect_error, mutation_receipt, request};
+use crate::rpc::{RpcError, into_connect_error, request};
 use connectrpc::{RequestContext, Response, ServiceRequest, ServiceResult};
 use mailbox_postgres::MailboxPersistenceError;
 use rpc_proto::messages::hephaestus::instance::v1::{CreateMailboxRequest, CreateMailboxResponse};
@@ -19,20 +19,24 @@ pub(super) async fn handle(
         request.context.as_option(),
     )
     .map_err(into_connect_error)?;
-    let instance_id = super::parse_id(request.instance_id.as_option())?;
-    let mailbox_id = mailbox_postgres::PostgresMailboxRepository::new(service.pool.clone())
-        .allocate(&identity, instance_id)
-        .await
-        .map_err(|error| match error {
-            MailboxPersistenceError::IdempotencyConflict => {
-                into_connect_error(RpcError::AlreadyExists)
-            }
-            MailboxPersistenceError::Unavailable => into_connect_error(RpcError::NotFound),
-            MailboxPersistenceError::PayloadIntegrity
-            | MailboxPersistenceError::UnsupportedContentEncoding
-            | MailboxPersistenceError::Provider(_) => into_connect_error(RpcError::Unavailable),
-        })?;
-    let receipt = mutation_receipt(
+    let instance_id = super::helpers::parse_id(request.instance_id.as_option())?;
+    let budget = request::RequestBudget::from_transport(&ctx);
+    let mailbox_id = request::run_with_budget(
+        &budget,
+        mailbox_postgres::PostgresMailboxRepository::new(service.pool.clone())
+            .allocate(&identity, instance_id),
+    )
+    .await
+    .map_err(into_connect_error)?
+    .map_err(|error| match error {
+        MailboxPersistenceError::IdempotencyConflict => into_connect_error(RpcError::AlreadyExists),
+        MailboxPersistenceError::Unavailable => into_connect_error(RpcError::NotFound),
+        MailboxPersistenceError::PayloadIntegrity
+        | MailboxPersistenceError::UnsupportedContentEncoding
+        | MailboxPersistenceError::Provider(_) => into_connect_error(RpcError::Unavailable),
+    })?;
+    let receipt = super::budget::receipt(
+        &budget,
         &service.receipts,
         identity.idempotency_id,
         identity.user_id,
@@ -41,7 +45,7 @@ pub(super) async fn handle(
     )
     .await?;
     Response::ok(CreateMailboxResponse {
-        mailbox_id: super::opaque(mailbox_id.to_string()).into(),
+        mailbox_id: super::helpers::opaque(mailbox_id.to_string()).into(),
         receipt: receipt.into(),
         ..Default::default()
     })
