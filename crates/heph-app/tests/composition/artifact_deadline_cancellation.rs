@@ -340,5 +340,6 @@ mod artifact_deadline_transport {
             .await
             .expect("shutdown artifact RPC application");
         cleanup_nats(&nats_url).await;
+        println!("REAL_APP_ARTIFACT_RPC_COMPLETED=1");
     }
 }

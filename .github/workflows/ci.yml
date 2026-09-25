@@ -60,6 +60,9 @@ jobs:
       - name: UI installation RPC integration
         timeout-minutes: 5
         run: scripts/test-ui-installation-rpc.sh
+      - name: Artifact RPC deadline integration
+        timeout-minutes: 5
+        run: scripts/test-artifact-deadline-rpc.sh
       - name: Deferred update admission and reconciler race
         timeout-minutes: 15
         env:

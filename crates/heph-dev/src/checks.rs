@@ -79,6 +79,7 @@ fn rust(context: &DevContext) -> Result<()> {
     let root = &context.repository_root;
     let browser_session_rpc = env::var("REAL_APP_BROWSER_SESSION_RPC").as_deref() == Ok("1");
     let ui_installation_rpc_enabled = env::var("REAL_UI_INSTALLATION_RPC").as_deref() == Ok("1");
+    let artifact_deadline_rpc_enabled = env::var("REAL_APP_ARTIFACT_RPC").as_deref() == Ok("1");
     phase("Rust formatting");
     cargo(root, &["fmt", "--all", "--", "--check"])?;
     phase("Rust Clippy");
@@ -87,9 +88,15 @@ fn rust(context: &DevContext) -> Result<()> {
         &["clippy", "--workspace", "--all-targets", "--all-features"],
     )?;
     phase("Rust tests");
-    workspace_tests(root, browser_session_rpc, ui_installation_rpc_enabled)?;
+    workspace_tests(
+        root,
+        browser_session_rpc,
+        ui_installation_rpc_enabled,
+        artifact_deadline_rpc_enabled,
+    )?;
     browser_session_lifecycle(context, browser_session_rpc)?;
     ui_installation_rpc(context, ui_installation_rpc_enabled)?;
+    artifact_deadline_rpc(context, artifact_deadline_rpc_enabled)?;
     phase("Rust documentation");
     cargo(root, &["doc", "--workspace", "--all-features", "--no-deps"])?;
     cooking_service(context)
@@ -99,6 +106,7 @@ fn workspace_tests(
     root: &Path,
     browser_session_rpc: bool,
     ui_installation_rpc: bool,
+    artifact_deadline_rpc: bool,
 ) -> Result<()> {
     let mut command = Command::new("cargo");
     command
@@ -113,6 +121,11 @@ fn workspace_tests(
         // Run the opt-in proof after this shared pass against its disposable
         // database instead of the caller's potentially contaminated database.
         command.env_remove("REAL_UI_INSTALLATION_RPC");
+    }
+    if artifact_deadline_rpc {
+        // Run the opt-in proof after this shared pass against its disposable
+        // database instead of the caller's potentially contaminated database.
+        command.env_remove("REAL_APP_ARTIFACT_RPC");
     }
     run_process(&mut command)
 }
@@ -160,6 +173,32 @@ fn ui_installation_rpc(context: &DevContext, enabled: bool) -> Result<()> {
     let mut command = Command::new(script);
     command.current_dir(&context.repository_root);
     if env::var("HEPHAESTUS_UI_RPC_POSTGRES_MODE").as_deref() == Ok("container") {
+        command.env(
+            "HEPHAESTUS_POSTGRES_CONTAINER",
+            env::var("HEPHAESTUS_POSTGRES_CONTAINER")
+                .unwrap_or_else(|_| context.postgres_container()),
+        );
+    }
+    run_process(&mut command)
+}
+
+fn artifact_deadline_rpc(context: &DevContext, enabled: bool) -> Result<()> {
+    if !enabled {
+        return Ok(());
+    }
+    let script = context
+        .repository_root
+        .join("scripts/test-artifact-deadline-rpc.sh");
+    if !script.is_file() {
+        return Err(DevError::Invalid(format!(
+            "artifact RPC deadline runner is missing at {}",
+            script.display()
+        )));
+    }
+    phase("Artifact RPC deadline integration (isolated database)");
+    let mut command = Command::new(script);
+    command.current_dir(&context.repository_root);
+    if env::var("HEPHAESTUS_ARTIFACT_RPC_POSTGRES_MODE").as_deref() == Ok("container") {
         command.env(
             "HEPHAESTUS_POSTGRES_CONTAINER",
             env::var("HEPHAESTUS_POSTGRES_CONTAINER")
