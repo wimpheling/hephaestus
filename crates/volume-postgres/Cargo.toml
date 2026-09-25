@@ -17,7 +17,6 @@ volume-trait = { path = "../volume-trait" }
 serial_test = "3"
 tempfile = "3"
 tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }
-volume-local = { path = "../volume-local" }
 
 [lints]
 workspace = true

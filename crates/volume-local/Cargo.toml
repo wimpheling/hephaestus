@@ -19,8 +19,10 @@ uuid.workspace = true
 volume-trait = { path = "../volume-trait" }
 
 [dev-dependencies]
+sqlx.workspace = true
 tempfile = "3"
 tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }
+volume-postgres = { path = "../volume-postgres" }
 
 [lints]
 workspace = true

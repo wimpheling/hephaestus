@@ -5780,11 +5780,13 @@ version = "0.1.0"
 dependencies = [
  "async-trait",
  "runtime-types",
+ "sqlx",
  "tempfile",
  "time",
  "tokio",
  "tracing",
  "uuid",
+ "volume-postgres",
  "volume-trait",
 ]
 
@@ -5800,7 +5802,6 @@ dependencies = [
  "time",
  "tokio",
  "uuid",
- "volume-local",
  "volume-trait",
 ]
 
