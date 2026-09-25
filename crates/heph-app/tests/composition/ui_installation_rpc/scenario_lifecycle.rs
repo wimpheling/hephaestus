@@ -21,7 +21,14 @@ pub(super) async fn run(
     state: &InstallScenarioState,
 ) {
     let rolled_back = activate_and_rollback(release, fixture, &state.installed).await;
-    let disabled = disable_with_stale_check(pool, release, fixture, &rolled_back).await;
+    let disabled = disable_with_stale_check(
+        pool,
+        release,
+        fixture,
+        &rolled_back,
+        &state.installed.generation_id,
+    )
+    .await;
     remove_installation(release, fixture, &disabled).await;
     assert_revoked_parent(pool, release, fixture, state).await;
 }
@@ -80,6 +87,9 @@ async fn disable_with_stale_check(
     release: &ReleaseClient,
     fixture: &Fixture,
     rolled_back: &RollbackUiResponse,
+    installed_generation_id: &buffa::MessageField<
+        rpc_proto::messages::hephaestus::common::v1::OpaqueId,
+    >,
 ) -> DisableUiResponse {
     let disabled = release
         .disable_ui_with_options(
@@ -119,7 +129,7 @@ async fn disable_with_stale_check(
             RemoveUiRequest {
                 context: request_context("ui-stale-remove").into(),
                 installation_id: disabled.installation_id.clone(),
-                expected_generation_id: rolled_back.generation_id.clone(),
+                expected_generation_id: installed_generation_id.clone(),
                 ..Default::default()
             },
             authorization(&session_token(
