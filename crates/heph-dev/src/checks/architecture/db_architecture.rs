@@ -3,13 +3,12 @@
 use super::{ArchitectureException, CargoMetadata, CargoPackage, Diagnostic};
 use std::{
     collections::{BTreeMap, BTreeSet},
-    ffi::OsStr,
     fs,
-    path::{Path, PathBuf},
+    path::Path,
 };
 use syn::{
-    Expr, ExprCall, ExprMacro, File, ItemUse, Lit, UseTree, punctuated::Punctuated,
-    spanned::Spanned, token::Comma, visit::Visit,
+    Expr, ExprCall, ExprMacro, File, Lit, punctuated::Punctuated, spanned::Spanned, token::Comma,
+    visit::Visit,
 };
 
 const SQLX_RULE: &str = "DB-SQLX-ONLY-IN-POSTGRES-ADAPTERS";
@@ -17,6 +16,13 @@ const MIGRATION_RULE: &str = "DB-MIGRATIONS-ONLY-IN-MIGRATIONS";
 const STATIC_RULE: &str = "DB-STATIC-SQL";
 const PAGINATION_RULE: &str = "DB-PAGINATION-STABLE-ORDER";
 const RULES: [&str; 4] = [SQLX_RULE, MIGRATION_RULE, STATIC_RULE, PAGINATION_RULE];
+
+#[derive(Clone, Copy)]
+pub(super) enum QueryKind {
+    Inline,
+    File,
+    Builder,
+}
 
 #[path = "db_architecture_pagination.rs"]
 mod pagination;
@@ -27,6 +33,14 @@ use sql::{
     contains_schema_sql, cursor_predicate_matches, is_paginated_sql, normalize_sql, parse_order_by,
     parse_order_key, uuid_row_lookup_matches,
 };
+#[path = "db_architecture_metadata.rs"]
+mod metadata;
+use metadata::validate_metadata;
+#[path = "db_architecture_source.rs"]
+mod source;
+#[cfg(test)]
+use source::validate_rust_source;
+use source::{RustItemIdentities, SqlImports, visit_sources};
 
 /// Validates a `DB-STATIC-SQL` item selector against Rust's parsed item tree.
 ///
@@ -105,431 +119,6 @@ pub(super) fn audit(
         *counts.entry(diagnostic.rule_id).or_insert(0) += 1;
     }
     counts
-}
-
-fn validate_metadata(
-    metadata: &CargoMetadata,
-    active: &BTreeSet<&str>,
-    diagnostics: &mut Vec<Diagnostic>,
-) {
-    if !active.contains(SQLX_RULE) {
-        return;
-    }
-    let workspace = metadata
-        .packages
-        .iter()
-        .filter(|package| metadata.workspace_members.contains(&package.id))
-        .collect::<Vec<_>>();
-    let packages_by_root = workspace
-        .iter()
-        .map(|package| (manifest_root(package), *package))
-        .collect::<BTreeMap<_, _>>();
-
-    for package in &workspace {
-        let declaration = adapter_declaration(package, diagnostics);
-        if declaration {
-            continue;
-        }
-        if has_dev_sqlx(package) && !has_test_only_sqlx(package) {
-            diagnostics.push(Diagnostic::new(
-                SQLX_RULE,
-                format!(
-                    "workspace package {} declares a dev-only SQLx test harness without `hephaestus.sqlx_test_dependency = true`",
-                    package.name
-                ),
-            ));
-        }
-        let mut visited = BTreeSet::new();
-        if let Some(path) = sqlx_path(package, &packages_by_root, &mut visited) {
-            diagnostics.push(Diagnostic::new(
-                SQLX_RULE,
-                format!(
-                    "workspace package {} reaches SQLx outside a declared PostgreSQL adapter: {}",
-                    package.name,
-                    path.join(" -> ")
-                ),
-            ));
-        }
-    }
-}
-
-fn adapter_declaration(package: &CargoPackage, diagnostics: &mut Vec<Diagnostic>) -> bool {
-    let Some(hephaestus) = package.metadata.get("hephaestus") else {
-        return false;
-    };
-    let Some(adapter) = hephaestus.get("postgres_adapter") else {
-        return false;
-    };
-    if adapter != true {
-        diagnostics.push(Diagnostic::new(
-            SQLX_RULE,
-            format!(
-                "workspace package {} has non-boolean or false `hephaestus.postgres_adapter`; omit it or set it to true",
-                package.name
-            ),
-        ));
-        return false;
-    }
-    if !package.name.ends_with("-postgres") {
-        diagnostics.push(Diagnostic::new(
-            SQLX_RULE,
-            format!(
-                "PostgreSQL adapter {} must use a package name ending in `-postgres` when `hephaestus.postgres_adapter = true`",
-                package.name
-            ),
-        ));
-    }
-    let valid_context = has_valid_database_context(package);
-    if !valid_context {
-        diagnostics.push(Diagnostic::new(
-            SQLX_RULE,
-            format!(
-                "PostgreSQL adapter {} requires a non-empty lowercase `hephaestus.database_context`",
-                package.name
-            ),
-        ));
-    }
-    package.name.ends_with("-postgres") && valid_context
-}
-
-fn manifest_root(package: &CargoPackage) -> PathBuf {
-    package
-        .manifest_path
-        .parent()
-        .unwrap_or(&package.manifest_path)
-        .to_path_buf()
-}
-
-fn sqlx_path(
-    package: &CargoPackage,
-    packages_by_root: &BTreeMap<PathBuf, &CargoPackage>,
-    visited: &mut BTreeSet<String>,
-) -> Option<Vec<String>> {
-    if !visited.insert(package.id.clone()) {
-        return None;
-    }
-    for dependency in &package.dependencies {
-        if dependency.name == "sqlx" && dependency.kind.as_deref() != Some("dev") {
-            return Some(vec![package.name.clone(), String::from("sqlx")]);
-        }
-        if dependency.kind.as_deref() == Some("dev") {
-            continue;
-        }
-        let Some(path) = dependency.path.as_ref() else {
-            continue;
-        };
-        let Some(target) = packages_by_root.get(path) else {
-            continue;
-        };
-        if is_declared_adapter(target) {
-            continue;
-        }
-        if let Some(mut path) = sqlx_path(target, packages_by_root, visited) {
-            path.insert(0, package.name.clone());
-            return Some(path);
-        }
-    }
-    None
-}
-
-/// Allows `SQLx` only for an explicitly declared test harness dependency.
-fn has_test_only_sqlx(package: &CargoPackage) -> bool {
-    let declared = package
-        .metadata
-        .get("hephaestus")
-        .and_then(|metadata| metadata.get("sqlx_test_dependency"))
-        .and_then(serde_json::Value::as_bool)
-        .unwrap_or(false);
-    declared
-        && package.dependencies.iter().any(|dependency| {
-            dependency.name == "sqlx" && dependency.kind.as_deref() == Some("dev")
-        })
-}
-
-fn has_dev_sqlx(package: &CargoPackage) -> bool {
-    package
-        .dependencies
-        .iter()
-        .any(|dependency| dependency.name == "sqlx" && dependency.kind.as_deref() == Some("dev"))
-}
-
-fn is_declared_adapter(package: &CargoPackage) -> bool {
-    package.name.ends_with("-postgres")
-        && package
-            .metadata
-            .get("hephaestus")
-            .and_then(|metadata| metadata.get("postgres_adapter"))
-            .and_then(serde_json::Value::as_bool)
-            .unwrap_or(false)
-        && has_valid_database_context(package)
-}
-
-fn has_valid_database_context(package: &CargoPackage) -> bool {
-    package
-        .metadata
-        .get("hephaestus")
-        .and_then(|metadata| metadata.get("database_context"))
-        .and_then(serde_json::Value::as_str)
-        .is_some_and(|context| {
-            !context.is_empty()
-                && context
-                    .bytes()
-                    .all(|byte| byte.is_ascii_lowercase() || byte.is_ascii_digit() || byte == b'-')
-        })
-}
-
-fn visit_sources(
-    root: &Path,
-    directory: &Path,
-    active: &BTreeSet<&str>,
-    exceptions: &[&ArchitectureException],
-    diagnostics: &mut Vec<Diagnostic>,
-    pagination: &mut PaginationRegistry,
-) {
-    let Ok(entries) = fs::read_dir(directory) else {
-        return;
-    };
-    for entry in entries.flatten() {
-        let path = entry.path();
-        let relative = path.strip_prefix(root).unwrap_or(&path);
-        if path.is_dir() {
-            if should_skip_directory(relative) {
-                continue;
-            }
-            visit_sources(root, &path, active, exceptions, diagnostics, pagination);
-        } else if path.extension() == Some(OsStr::new("rs")) {
-            validate_rust_source_with_registry(
-                root,
-                relative,
-                &path,
-                active,
-                exceptions,
-                diagnostics,
-                pagination,
-            );
-        } else if path.extension() == Some(OsStr::new("sql"))
-            && active.contains(MIGRATION_RULE)
-            && !relative.starts_with("migrations")
-            && fs::read_to_string(&path).is_ok_and(|source| contains_schema_sql(&source))
-        {
-            diagnostics.push(Diagnostic::new(
-                MIGRATION_RULE,
-                format!(
-                    "schema-changing SQL file is outside the root migrations boundary: {}",
-                    relative.display()
-                ),
-            ));
-        }
-    }
-}
-
-fn should_skip_directory(relative: &Path) -> bool {
-    relative == Path::new("target")
-        || relative.starts_with(".git")
-        || relative.starts_with(".local")
-        || relative.starts_with("web/deps")
-        || relative.starts_with("web/_build")
-        || relative.starts_with("crates/heph-dev/tests/fixtures")
-}
-
-#[cfg(test)]
-fn validate_rust_source(
-    root: &Path,
-    relative: &Path,
-    path: &Path,
-    active: &BTreeSet<&str>,
-    exceptions: &[&ArchitectureException],
-    diagnostics: &mut Vec<Diagnostic>,
-) {
-    let mut pagination = PaginationRegistry::default();
-    validate_rust_source_with_registry(
-        root,
-        relative,
-        path,
-        active,
-        exceptions,
-        diagnostics,
-        &mut pagination,
-    );
-    if active.contains(PAGINATION_RULE) {
-        pagination.validate_stale(diagnostics);
-    }
-}
-
-fn validate_rust_source_with_registry(
-    root: &Path,
-    relative: &Path,
-    path: &Path,
-    active: &BTreeSet<&str>,
-    exceptions: &[&ArchitectureException],
-    diagnostics: &mut Vec<Diagnostic>,
-    pagination_registry: &mut PaginationRegistry,
-) {
-    let Ok(source) = fs::read_to_string(path) else {
-        return;
-    };
-    let Ok(file) = syn::parse_file(&source) else {
-        return;
-    };
-    let package_root = path
-        .ancestors()
-        .find(|ancestor| ancestor.join("Cargo.toml").is_file())
-        .or_else(|| path.parent())
-        .unwrap_or(path);
-    let pagination = pagination_registry.contracts_for(package_root, diagnostics);
-    let imports = SqlImports::collect(&file);
-    let mut visitor = SqlVisitor {
-        repository_root: root,
-        package_root,
-        source_path: path,
-        path: relative,
-        active,
-        exceptions,
-        diagnostics,
-        imports,
-        current_item: None,
-        module_path: Vec::new(),
-        function_path: Vec::new(),
-        impl_type: None,
-        pagination,
-        query_counts: BTreeMap::new(),
-        seen_queries: BTreeSet::new(),
-        has_pagination_parameter: false,
-    };
-    visitor.visit_file(&file);
-    pagination_registry.record_queries(package_root, visitor.seen_queries);
-}
-
-#[derive(Default)]
-struct SqlImports {
-    query_functions: BTreeMap<String, QueryKind>,
-    query_builders: BTreeSet<String>,
-}
-
-impl SqlImports {
-    fn collect(file: &File) -> Self {
-        let mut collector = ImportCollector::default();
-        collector.visit_file(file);
-        collector.imports
-    }
-}
-
-#[derive(Default)]
-struct ImportCollector {
-    imports: SqlImports,
-}
-
-impl Visit<'_> for ImportCollector {
-    fn visit_item_use(&mut self, item: &ItemUse) {
-        collect_use_tree(&item.tree, false, &mut self.imports);
-    }
-}
-
-fn collect_use_tree(tree: &UseTree, inside_sqlx: bool, imports: &mut SqlImports) {
-    match tree {
-        UseTree::Path(path) => {
-            collect_use_tree(&path.tree, inside_sqlx || path.ident == "sqlx", imports);
-        }
-        UseTree::Name(name) if inside_sqlx => {
-            register_import(&name.ident.to_string(), None, imports);
-        }
-        UseTree::Rename(rename) if inside_sqlx => register_import(
-            &rename.ident.to_string(),
-            Some(rename.rename.to_string()),
-            imports,
-        ),
-        UseTree::Group(group) => {
-            for item in &group.items {
-                collect_use_tree(item, inside_sqlx, imports);
-            }
-        }
-        UseTree::Glob(_) | UseTree::Name(_) | UseTree::Rename(_) => {}
-    }
-}
-
-fn register_import(original: &str, rename: Option<String>, imports: &mut SqlImports) {
-    let local = rename.unwrap_or_else(|| original.to_owned());
-    if let Some(kind) = query_kind(original) {
-        imports.query_functions.insert(local, kind);
-    } else if original == "QueryBuilder" {
-        imports.query_builders.insert(local);
-    }
-}
-
-#[derive(Clone, Copy)]
-enum QueryKind {
-    Inline,
-    File,
-    Builder,
-}
-
-#[derive(Default)]
-struct RustItemIdentities {
-    module_path: Vec<String>,
-    function_path: Vec<String>,
-    impl_type: Option<String>,
-    items: BTreeMap<String, usize>,
-}
-
-impl RustItemIdentities {
-    fn collect(file: &File) -> Self {
-        let mut identities = Self::default();
-        identities.visit_file(file);
-        identities
-    }
-
-    fn insert(&mut self, name: String) {
-        *self.items.entry(name).or_default() += 1;
-    }
-}
-
-impl<'ast> Visit<'ast> for RustItemIdentities {
-    fn visit_item_mod(&mut self, item: &'ast syn::ItemMod) {
-        let Some((_, items)) = &item.content else {
-            return;
-        };
-        self.module_path.push(item.ident.to_string());
-        for item in items {
-            self.visit_item(item);
-        }
-        self.module_path.pop();
-    }
-
-    fn visit_item_fn(&mut self, item: &'ast syn::ItemFn) {
-        let mut path = self.module_path.clone();
-        path.extend(self.function_path.iter().cloned());
-        path.push(item.sig.ident.to_string());
-        self.insert(path.join("::"));
-
-        let previous = self.function_path.clone();
-        self.function_path.push(item.sig.ident.to_string());
-        syn::visit::visit_item_fn(self, item);
-        self.function_path = previous;
-    }
-
-    fn visit_item_impl(&mut self, item: &'ast syn::ItemImpl) {
-        let previous = self.impl_type.take();
-        self.impl_type = impl_type_name(&item.self_ty);
-        syn::visit::visit_item_impl(self, item);
-        self.impl_type = previous;
-    }
-
-    fn visit_impl_item_fn(&mut self, item: &'ast syn::ImplItemFn) {
-        let Some(impl_type) = self.impl_type.clone() else {
-            return;
-        };
-        let mut path = self.module_path.clone();
-        path.extend(self.function_path.iter().cloned());
-        path.push(impl_type.clone());
-        path.push(item.sig.ident.to_string());
-        self.insert(path.join("::"));
-
-        let previous = self.function_path.clone();
-        self.function_path.push(impl_type);
-        self.function_path.push(item.sig.ident.to_string());
-        syn::visit::visit_impl_item_fn(self, item);
-        self.function_path = previous;
-    }
 }
 
 struct SqlVisitor<'a> {
@@ -914,7 +503,7 @@ impl<'ast> Visit<'ast> for SqlVisitor<'_> {
     }
 }
 
-fn impl_type_name(self_ty: &syn::Type) -> Option<String> {
+pub(super) fn impl_type_name(self_ty: &syn::Type) -> Option<String> {
     let syn::Type::Path(type_path) = self_ty else {
         return None;
     };
@@ -986,7 +575,7 @@ fn sqlx_query_macro(expression: &ExprMacro, imports: &SqlImports) -> Option<Quer
     (first == "sqlx").then(|| query_kind(&last)).flatten()
 }
 
-fn query_kind(name: &str) -> Option<QueryKind> {
+pub(super) fn query_kind(name: &str) -> Option<QueryKind> {
     match name {
         "query" | "query_as" | "query_scalar" => Some(QueryKind::Inline),
         "query_file" | "query_file_as" => Some(QueryKind::File),
