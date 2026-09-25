@@ -1,6 +1,7 @@
 //! Connect adapter for project-wide service-log loss metadata.
 
-use super::{GatewayRpc, id, query};
+use super::GatewayRpc;
+use super::auth::{id, query};
 use crate::rpc::{RpcError, into_connect_error, request};
 use connectrpc::{RequestContext, Response, ServiceRequest, ServiceResult};
 use gateway_edge::GatewayServiceLogProjectMetadata as ReaderMetadata;

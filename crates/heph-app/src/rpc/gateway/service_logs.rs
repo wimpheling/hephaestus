@@ -1,6 +1,8 @@
 //! Connect adapter for the authorized persistent service-log reader.
 
-use super::{GatewayRpc, id, query, timestamp};
+use super::GatewayRpc;
+use super::auth::{id, query};
+use super::conversions::timestamp;
 use crate::rpc::{RpcError, into_connect_error, request};
 use connectrpc::{RequestContext, Response, ServiceRequest, ServiceResult};
 use gateway_edge::{

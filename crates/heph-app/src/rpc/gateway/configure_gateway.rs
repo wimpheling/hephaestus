@@ -1,4 +1,6 @@
 use super::GatewayRpc;
+use super::auth::id;
+use super::conversions::opaque;
 use crate::rpc::{RpcError, into_connect_error, mutation_receipt, request};
 use connectrpc::{RequestContext, Response, ServiceRequest, ServiceResult};
 use gateway_postgres::{ConfigureGatewayRequest, GatewayConfigureError, GatewaySecretSelection};
@@ -26,8 +28,8 @@ pub(super) async fn handle(
     )
     .map_err(into_connect_error)?;
     let command = ConfigureGatewayRequest {
-        gateway_id: super::id(request.gateway_id.as_option())?,
-        expected_revision_id: super::id(request.expected_revision_id.as_option())?,
+        gateway_id: id(request.gateway_id.as_option())?,
+        expected_revision_id: id(request.expected_revision_id.as_option())?,
         parameters: parameters(request.parameters).map_err(into_connect_error)?,
         secret_selections: request
             .secret_selections
@@ -35,8 +37,8 @@ pub(super) async fn handle(
             .map(|selection| {
                 Ok(GatewaySecretSelection {
                     slot_key: selection.slot_key,
-                    import_id: super::id(selection.import_id.as_option())?,
-                    secret_version_id: super::id(selection.secret_version_id.as_option())?,
+                    import_id: id(selection.import_id.as_option())?,
+                    secret_version_id: id(selection.secret_version_id.as_option())?,
                     route_path: selection.route_path,
                     header_name: selection.header_name,
                 })
@@ -62,7 +64,7 @@ pub(super) async fn handle(
     .await
     .map_err(into_connect_error)??;
     Response::ok(ConfigureGatewayResponse {
-        revision_id: super::opaque(result.revision_id).into(),
+        revision_id: opaque(result.revision_id).into(),
         receipt: receipt.into(),
         ..Default::default()
     })
