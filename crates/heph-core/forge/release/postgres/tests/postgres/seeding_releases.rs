@@ -160,7 +160,7 @@ profile = "egress"
 push = false
 [[parameters]]
 name = "severity"
-pub type = "enum"
+type = "enum"
 values = ["warning", "error"]
 required = true
 [[secret_slots]]
@@ -247,4 +247,39 @@ pub(crate) async fn seed_matching_update_release(
     .await
     .expect("seed matching candidate agent");
     release_agent_id
+}
+
+#[test]
+fn reusable_config_and_runtime_git_transform_parse() {
+    let config = reusable_config();
+    let parsed = parse(config.as_bytes()).config.expect("reusable config");
+    assert!(parsed.secret_slots.iter().any(|slot| slot.key == "model"));
+
+    let runtime_git = config
+        .replace("mount = true", "mount = false")
+        .replace(
+            "[state_volume]",
+            "[publication]\nmode = \"runtime_git\"\nrepository_slot = \"content\"\n\n\
+             [[capability_slots]]\nkey = \"content\"\npurpose = \"Publish content\"\n\
+             resource_kind = \"repository\"\nrequired_operations = [\"git_read\"]\n\
+             optional_operations = [\"update_ref\"]\nrequired = true\n\n\
+             [capability_slots.git]\nref_globs = [\"refs/heads/content\"]\n\
+             changed_path_globs = [\"content/**\"]\nexact_parent_required = false\n\
+             transfer = { request_bytes = 1048576, pack_bytes = 8388608, object_count = 10000, ref_updates = 8 }\n\n\
+             [state_volume]",
+        );
+    let parsed = parse(runtime_git.as_bytes())
+        .config
+        .expect("runtime Git config");
+    let content_slot = parsed
+        .capability_slots
+        .into_iter()
+        .find(|slot| slot.key == "content")
+        .expect("content capability slot");
+    assert!(
+        content_slot
+            .git_ceiling()
+            .expect("Git ceiling result")
+            .is_some()
+    );
 }
