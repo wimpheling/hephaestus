@@ -18,8 +18,6 @@ use super::{
     ReviewControlService, RunOrchestrator, SecretService, UpdateRunCompletion,
 };
 
-// Keep dependency assembly in one auditable sequence; the source file remains bounded.
-#[allow(clippy::too_many_lines)]
 /// Constructed application whose external tasks have not started.
 pub struct HephaestusApp {
     pub(super) pool: PgPool,

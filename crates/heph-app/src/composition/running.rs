@@ -1,7 +1,9 @@
+#[cfg(feature = "test-fixtures")]
+use super::ControlPlanePool;
 use super::{
-    AppError, Arc, CancelRun, CommandId, ControlPlanePool, Duration, FlushDiagnostics,
-    FlushPublisher, ForgeNatsOutboxPublisher, MailboxOutboxPublisher, PgForgeRepository, PgPool,
-    PgRunRepository, PostgresMailboxRepository, PostgresReviewRepository, ReleaseOutboxPublisher,
+    AppError, Arc, CancelRun, CommandId, Duration, FlushDiagnostics, FlushPublisher,
+    ForgeNatsOutboxPublisher, MailboxOutboxPublisher, PgForgeRepository, PgPool, PgRunRepository,
+    PostgresMailboxRepository, PostgresReviewRepository, ReleaseOutboxPublisher,
     ReviewOutboxPublisher, RunEventKind, RunId, RunOrchestrator, RunRepository, StdMutex,
     component, event_adapter, flush_publisher, flush_until_quiescent,
 };
