@@ -72,7 +72,7 @@ fixed host policy.
 
 ## Golden test
 
-`crates/hephaestus-app/tests/golden.rs` seeds only the initial identity and
+`crates/heph-app/tests/golden.rs` seeds only the initial identity and
 repository metadata before startup. After the readiness barrier, it interacts
 through real Git smart HTTP with a signed bearer token, runs an agent that
 changes the writable workspace, and waits for the persisted
@@ -81,7 +81,7 @@ parent, and imported tree. No receive, outbox, NATS, or orchestrator shortcut
 is exposed by the test harness.
 
 The browser and local-smoke seed command
-(`crates/bootstrap-postgres/src/bin/hephaestus-e2e-seed.rs`) is a deliberately
+(`crates/heph-app/bootstrap/src/bin/hephaestus-e2e-seed.rs`) is a deliberately
 trusted bootstrap boundary, not a second application API. It creates the
 project and repository through the forge's `*_trusted` operations, then seeds
 only deterministic fixture relations and release rows that have no public

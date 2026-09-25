@@ -29,6 +29,11 @@ EXPECTED_FACADES = {
     "heph-build",
 }
 EXPECTED_BASELINE_PACKAGE_COUNT = 85
+ALLOWED_ARCHITECTURE_METADATA_DELTA = {
+    "package": "git-http",
+    "field": "allow_cross_context_dependencies",
+    "baseline_value": ["identity-oidc"],
+}
 ALLOWED_INTEGRATION_TEST_RELOCATIONS = (
     {
         "from_package": "volume-postgres",
@@ -164,6 +169,10 @@ def target_identity(target: dict[str, Any]) -> dict[str, Any]:
 def package_identity(package: dict[str, Any]) -> dict[str, Any]:
     """Return the package facts that must remain unchanged."""
 
+    metadata = package["metadata_hephaestus"]
+    if package["name"] == ALLOWED_ARCHITECTURE_METADATA_DELTA["package"]:
+        metadata = dict(metadata)
+        metadata.pop(ALLOWED_ARCHITECTURE_METADATA_DELTA["field"], None)
     return {
         "name": package["name"],
         "version": package["version"],
@@ -175,8 +184,25 @@ def package_identity(package: dict[str, Any]) -> dict[str, Any]:
             for target in package["targets"]
             if "test" not in target["kind"]
         ],
-        "metadata_hephaestus": package["metadata_hephaestus"],
+        "metadata_hephaestus": metadata,
     }
+
+
+def architecture_metadata_delta_is_allowed(
+    package_name: str,
+    baseline: dict[str, Any],
+    current: dict[str, Any],
+) -> bool:
+    """Permit only git-http's documented stale allowlist removal."""
+
+    delta = ALLOWED_ARCHITECTURE_METADATA_DELTA
+    if package_name != delta["package"]:
+        return baseline == current
+    if baseline.get(delta["field"]) != delta["baseline_value"]:
+        return baseline == current
+    expected_current = dict(baseline)
+    expected_current.pop(delta["field"])
+    return current == expected_current
 
 
 def test_targets(inventory: dict[str, Any]) -> dict[tuple[str, str], dict[str, Any]]:
@@ -213,6 +239,10 @@ def reconcile(
     for name in sorted(set(baseline_packages) & set(current_packages)):
         if package_identity(baseline_packages[name]) != package_identity(
             current_packages[name]
+        ) or not architecture_metadata_delta_is_allowed(
+            name,
+            baseline_packages[name]["metadata_hephaestus"],
+            current_packages[name]["metadata_hephaestus"],
         ):
             changed.append(name)
 
