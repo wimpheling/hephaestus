@@ -97,14 +97,14 @@ ui_component = 500
 
 [[exceptions]]
 rule_id = "DB-STATIC-SQL"
-scope = "crates/heph-app/src/gateway_recovery_tests.rs#isolated_startup_database"
+scope = "crates/heph-app/src/gateway_recovery_tests/database.rs#isolated_startup_database"
 rationale = "Test-only CREATE DATABASE cannot bind a PostgreSQL identifier; the name is generated from a UUID and restricted to lowercase hexadecimal characters with a fixed prefix."
 owner = "persistent-services-runtime"
 tracking_task = "tasks/done/persistent-gateway-service-runtime-and-development-workflow.md"
 
 [[exceptions]]
 rule_id = "DB-STATIC-SQL"
-scope = "crates/heph-app/src/gateway_recovery_tests.rs#drop_isolated_startup_database"
+scope = "crates/heph-app/src/gateway_recovery_tests/database.rs#drop_isolated_startup_database"
 rationale = "Test-only DROP DATABASE cannot bind a PostgreSQL identifier; the stored name is produced by the isolated fixture's UUID-only naming path."
 owner = "persistent-services-runtime"
 tracking_task = "tasks/done/persistent-gateway-service-runtime-and-development-workflow.md"
