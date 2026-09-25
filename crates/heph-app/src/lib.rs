@@ -86,6 +86,7 @@ use heph_run::{
     RunAuthorityManager, RunCompletionError, RunCompletionObserver, RunKind, RunOrchestrator,
     RunRepository, RunRuntimeArtifact, RunRuntimeArtifactKind, RunSecretManager, VmSpecFactory,
 };
+use heph_secret::EphemeralSecretConfig;
 use identity_application::{BrowserSessionStore, IdempotentIdentityResolver};
 use identity_domain::{AuthenticatedIdentity, RequestId, UserId};
 use identity_oidc::OidcVerifier;
@@ -161,12 +162,16 @@ use secret_application::BrokerAdapter;
 use secret_broker::{BrokerExecutor, BrokerServer, ServiceBrokerExecutor};
 use secret_postgres::initialize_manager;
 use secret_postgres::{GatewayIngressSecretResolver, SecretRuntimeService, SecretService};
-use secret_runtime::{EphemeralSecretConfig, FilesystemSecretMountProvider};
+use secret_runtime::FilesystemSecretMountProvider;
 use secret_store::{EncryptedStore, LocalKeyProvider};
 use serde::Deserialize;
 use service_log_maintenance::GatewayServiceLogMaintenanceScheduler;
 use sha2::{Digest, Sha256};
 type PgPool = ControlPlanePool;
+use heph_runtime::{
+    GuestCommand, NetworkMode, RootFilesystem, StopMode, VmError, VmEvent, VmExit, VmId,
+    VmInstance, VmMetric, VmMount, VmProvider, VmResources, VmSpec,
+};
 use std::{
     collections::{BTreeMap, HashMap},
     future::Future,
@@ -189,10 +194,6 @@ use tokio_util::sync::CancellationToken;
 use uuid::Uuid;
 use vm_fake::FakeProvider;
 use vm_libkrun::{LibkrunConfig, LibkrunProvider};
-use vm_trait::{
-    GuestCommand, NetworkMode, RootFilesystem, StopMode, VmError, VmEvent, VmExit, VmId,
-    VmInstance, VmMetric, VmMount, VmProvider, VmResources, VmSpec,
-};
 use volume_local::{LocalVolumeConfig, LocalVolumeStore};
 use volume_postgres::PostgresVolumeMetadataRepository;
 use workspace_local::{LocalWorkspaceConfig, LocalWorkspaceManager};
@@ -1308,9 +1309,8 @@ impl HephaestusApp {
         let result_artifact_root = config.workspaces.artifact_root.clone();
         let workspace_repository = Arc::new(PgWorkspaceMetadataRepository::new(pool.clone()));
         let mut workspaces = LocalWorkspaceManager::new(
-            Arc::clone(&workspace_repository)
-                as Arc<dyn workspace_domain::WorkspaceMetadataRepository>,
-            Arc::clone(&workspace_repository) as Arc<dyn workspace_domain::ResultRepository>,
+            Arc::clone(&workspace_repository) as Arc<dyn heph_runtime::WorkspaceMetadataRepository>,
+            Arc::clone(&workspace_repository) as Arc<dyn heph_runtime::ResultRepository>,
             config.workspaces,
         )
         .map_err(component("workspace configuration"))?;
@@ -1652,10 +1652,10 @@ impl HephaestusApp {
                 config.agent_state_capacity_bytes,
             )
             .with_workspace_manager(
-                Arc::clone(&workspaces) as Arc<dyn workspace_domain::RunWorkspaceManager>
+                Arc::clone(&workspaces) as Arc<dyn heph_runtime::RunWorkspaceManager>
             )
             .with_runtime_git_workspace_manager(
-                workspaces as Arc<dyn workspace_domain::RuntimeGitWorkspaceManager>,
+                workspaces as Arc<dyn heph_runtime::RuntimeGitWorkspaceManager>,
             )
             .with_runtime_manager(run_runtime)
             .with_launch_authorizer(launch_authorizer)
@@ -4632,7 +4632,7 @@ impl RunAuthorityManager for PgRunAuthorityManager {
             Err(RuntimeGitAuthorityError::NotFound) => None,
             Err(error) => return Err(runtime_git_authority_error(error)),
         };
-        let mut bootstrap = vm_trait::RuntimeAuthorityBootstrap::new(
+        let mut bootstrap = heph_runtime::RuntimeAuthorityBootstrap::new(
             issued.session.id.as_uuid(),
             issued.session.generation.get(),
             *issued.credential.expose(),
@@ -4890,7 +4890,7 @@ impl VmSpecFactory for PgAgentVmSpecFactory {
         }
         let env = guest_environment(run.kind, stored.agent_update_id)?;
         Ok(VmSpec {
-            id: vm_trait::VmId(run.id.to_string()),
+            id: heph_runtime::VmId(run.id.to_string()),
             root,
             disks: Vec::new(),
             mounts: Vec::<VmMount>::new(),
@@ -5101,7 +5101,7 @@ impl VmInstance for ResultFixtureInstance {
                 .map_err(fixture_vm_error)?;
         }
         drop(self.events.send(VmEvent::Log {
-            stream: vm_trait::LogStream::Stdout,
+            stream: heph_runtime::LogStream::Stdout,
             bytes: b"fixture agent completed workspace edits\n".to_vec(),
         }));
         drop(self.events.send(VmEvent::Metric(VmMetric {
@@ -5227,6 +5227,7 @@ mod tests {
     use async_trait::async_trait;
     use gateway_edge::GatewayEdgeError;
     use heph_run::{Run, RunKind, RunRuntimeCatalog, RunRuntimeCatalogError, RunRuntimeInput};
+    use heph_runtime::{VmError, VmResources};
     use runtime_types::RunId;
     use sha2::{Digest, Sha256};
     use std::sync::Arc;
@@ -5236,7 +5237,6 @@ mod tests {
         time::{Duration, Instant},
     };
     use uuid::Uuid;
-    use vm_trait::{VmError, VmResources};
 
     struct EmptyRunRuntimeCatalog;
 
@@ -5535,7 +5535,7 @@ mod tests {
         .expect("durable root refresh");
 
         let cache = image_filesystems.read().expect("image cache read");
-        let Some(vm_trait::RootFilesystem::Directory { host_path }) =
+        let Some(heph_runtime::RootFilesystem::Directory { host_path }) =
             cache.get(&reference.to_string())
         else {
             panic!("durable root was not hydrated into image cache");
