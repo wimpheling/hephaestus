@@ -18,7 +18,6 @@ uuid.workspace = true
 event-application = { path = "../event-application" }
 event-postgres = { path = "../event-postgres" }
 git-http = { path = "../git-http" }
-identity-oidc = { path = "../identity-oidc" }
 jsonwebtoken.workspace = true
 serial_test = "3"
 tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }
