@@ -9,3 +9,8 @@ mod static_ui;
 
 #[path = "installation/guards.rs"]
 mod guards;
+
+#[path = "installation/global.rs"]
+mod global;
+#[path = "installation/lifecycle.rs"]
+mod lifecycle;
