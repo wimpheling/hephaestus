@@ -1,4 +1,5 @@
 use clap::{Args, Parser, Subcommand, ValueEnum};
+use std::path::PathBuf;
 
 #[derive(Debug, Parser)]
 #[command(
@@ -55,6 +56,15 @@ pub enum Command {
     },
     /// Run the complete repository quality gate (generated code, Rust, Phoenix, and UI).
     Quality,
+    /// Run workspace Rust tests and generate HTML, LCOV, and per-crate coverage reports.
+    Coverage(CoverageArgs),
+}
+
+#[derive(Debug, Args)]
+pub struct CoverageArgs {
+    /// Directory receiving Rust coverage reports, relative to the repository root.
+    #[arg(long, default_value = "target/coverage")]
+    pub output_dir: PathBuf,
 }
 
 #[derive(Clone, Copy, Debug, Subcommand)]
@@ -402,6 +412,7 @@ pub struct LogArgs {
 mod tests {
     use super::{CheckCommand, Cli, Command, StateCommand, StateResource};
     use clap::Parser;
+    use std::path::PathBuf;
 
     #[test]
     fn no_state_selector_means_every_resource() {
@@ -463,5 +474,32 @@ mod tests {
         let cli =
             Cli::try_parse_from(["cargo-dev", "quality"]).expect("valid complete quality command");
         assert!(matches!(cli.command, Some(Command::Quality)));
+    }
+
+    #[test]
+    fn coverage_defaults_to_target_directory() {
+        let cli = Cli::try_parse_from(["cargo-dev", "coverage"]).expect("valid coverage command");
+        let Some(Command::Coverage(arguments)) = cli.command else {
+            panic!("expected coverage command");
+        };
+        assert_eq!(arguments.output_dir, PathBuf::from("target/coverage"));
+    }
+
+    #[test]
+    fn coverage_accepts_an_explicit_output_directory() {
+        let cli = Cli::try_parse_from([
+            "cargo-dev",
+            "coverage",
+            "--output-dir",
+            "/tmp/hephaestus-coverage",
+        ])
+        .expect("valid coverage output directory");
+        let Some(Command::Coverage(arguments)) = cli.command else {
+            panic!("expected coverage command");
+        };
+        assert_eq!(
+            arguments.output_dir,
+            PathBuf::from("/tmp/hephaestus-coverage")
+        );
     }
 }

@@ -5,6 +5,7 @@ mod cache;
 mod checks;
 mod cli;
 mod context;
+mod coverage;
 mod diagnostics;
 mod platform_images;
 mod process;
@@ -70,5 +71,6 @@ fn execute() -> process::Result<()> {
         },
         Some(Command::Check { command }) => checks::run(&context, command),
         Some(Command::Quality) => checks::quality(&context),
+        Some(Command::Coverage(arguments)) => coverage::run(&context, &arguments),
     }
 }
