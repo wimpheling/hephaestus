@@ -38,6 +38,10 @@ pub trait ExternalIdentityVerifier: Send + Sync {
     ///
     /// `expected_nonce` is supplied by interactive authorization flows and is
     /// omitted for bearer-token authentication.
+    ///
+    /// # Errors
+    ///
+    /// Returns a generic failure when the provider rejects the token.
     fn verify(
         &self,
         token: &str,
