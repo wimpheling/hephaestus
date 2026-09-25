@@ -1854,6 +1854,7 @@ mod tests {
         wait_exit: Notify,
         should_exit: AtomicBool,
         opens: AtomicUsize,
+        health_activity: Option<Arc<Notify>>,
     }
 
     #[async_trait]
@@ -1891,6 +1892,9 @@ mod tests {
             &self,
         ) -> Result<vm_trait::BoxedPrivateServiceConnection, VmError> {
             self.opens.fetch_add(1, Ordering::Relaxed);
+            if let Some(activity) = &self.health_activity {
+                activity.notify_one();
+            }
             self.connections
                 .lock()
                 .expect("connection mutex")
@@ -1918,6 +1922,7 @@ mod tests {
     struct MockOwnership {
         events: Mutex<Vec<&'static str>>,
         renewals: AtomicUsize,
+        renewal_activity: Option<Arc<Notify>>,
         renew_fails: AtomicBool,
         stopping_fails: AtomicBool,
         drain_conflict: AtomicBool,
@@ -1981,6 +1986,9 @@ mod tests {
             _: Duration,
         ) -> Result<GatewayServiceInstanceLease, GatewayServiceOwnershipError> {
             self.renewals.fetch_add(1, Ordering::Relaxed);
+            if let Some(activity) = &self.renewal_activity {
+                activity.notify_one();
+            }
             if self.renew_fails.load(Ordering::Relaxed) {
                 Err(GatewayServiceOwnershipError::StaleLease)
             } else {
@@ -2415,6 +2423,8 @@ mod tests {
         let identity = identity();
         let owner =
             GatewayServiceOwner::new("coordinator-drain-host", Uuid::new_v4()).expect("owner");
+        let health_activity = Arc::new(Notify::new());
+        let renewal_activity = Arc::new(Notify::new());
         let (events, _) = broadcast::channel(2);
         let vm = Arc::new(MockVm {
             id: VmId(format!("gateway-service-{}", identity.instance_id)),
@@ -2429,6 +2439,7 @@ mod tests {
             wait_exit: Notify::new(),
             should_exit: AtomicBool::new(false),
             opens: AtomicUsize::new(0),
+            health_activity: Some(Arc::clone(&health_activity)),
         });
         let (client, peer) = tokio::io::duplex(4096);
         vm.connections
@@ -2458,6 +2469,7 @@ mod tests {
         let ownership = Arc::new(MockOwnership {
             events: Mutex::new(Vec::new()),
             renewals: AtomicUsize::new(0),
+            renewal_activity: Some(Arc::clone(&renewal_activity)),
             renew_fails: AtomicBool::new(false),
             stopping_fails: AtomicBool::new(false),
             drain_conflict: AtomicBool::new(drain_conflict),
@@ -2661,12 +2673,35 @@ mod tests {
             .expect("blocked append");
         let opens_at_blocked_append = fixture.vm.opens.load(Ordering::Relaxed);
         let renewals_at_blocked_append = fixture.ownership.renewals.load(Ordering::Relaxed);
-        timeout(Duration::from_secs(1), async {
-            while fixture.vm.opens.load(Ordering::Relaxed) <= opens_at_blocked_append
-                || fixture.ownership.renewals.load(Ordering::Relaxed) <= renewals_at_blocked_append
-            {
-                tokio::task::yield_now().await;
-            }
+        let vm = Arc::clone(&fixture.vm);
+        let ownership = Arc::clone(&fixture.ownership);
+        let health_activity = Arc::clone(
+            fixture
+                .vm
+                .health_activity
+                .as_ref()
+                .expect("health activity signal"),
+        );
+        let renewal_activity = Arc::clone(
+            fixture
+                .ownership
+                .renewal_activity
+                .as_ref()
+                .expect("renewal activity signal"),
+        );
+        timeout(Duration::from_secs(5), async move {
+            tokio::join!(
+                async {
+                    while vm.opens.load(Ordering::Relaxed) <= opens_at_blocked_append {
+                        health_activity.notified().await;
+                    }
+                },
+                async {
+                    while ownership.renewals.load(Ordering::Relaxed) <= renewals_at_blocked_append {
+                        renewal_activity.notified().await;
+                    }
+                },
+            );
         })
         .await
         .expect("health and lease activity while append is blocked");
@@ -3097,10 +3132,12 @@ mod tests {
             wait_exit: Notify::new(),
             should_exit: AtomicBool::new(false),
             opens: AtomicUsize::new(0),
+            health_activity: None,
         });
         let ownership = Arc::new(MockOwnership {
             events: Mutex::new(Vec::new()),
             renewals: AtomicUsize::new(0),
+            renewal_activity: None,
             renew_fails: AtomicBool::new(false),
             stopping_fails: AtomicBool::new(false),
             drain_conflict: AtomicBool::new(false),
@@ -3190,6 +3227,7 @@ mod tests {
             wait_exit: Notify::new(),
             should_exit: AtomicBool::new(false),
             opens: AtomicUsize::new(0),
+            health_activity: None,
         });
         let (client, peer) = tokio::io::duplex(4096);
         vm.connections
@@ -3213,6 +3251,7 @@ mod tests {
         let ownership = Arc::new(MockOwnership {
             events: Mutex::new(Vec::new()),
             renewals: AtomicUsize::new(0),
+            renewal_activity: None,
             renew_fails: AtomicBool::new(false),
             stopping_fails: AtomicBool::new(false),
             drain_conflict: AtomicBool::new(false),
@@ -3296,6 +3335,7 @@ mod tests {
             wait_exit: Notify::new(),
             should_exit: AtomicBool::new(false),
             opens: AtomicUsize::new(0),
+            health_activity: None,
         });
         let (client, peer) = tokio::io::duplex(4096);
         vm.connections
@@ -3319,6 +3359,7 @@ mod tests {
         let ownership = Arc::new(MockOwnership {
             events: Mutex::new(Vec::new()),
             renewals: AtomicUsize::new(0),
+            renewal_activity: None,
             renew_fails: AtomicBool::new(false),
             stopping_fails: AtomicBool::new(false),
             drain_conflict: AtomicBool::new(false),
@@ -3408,6 +3449,7 @@ mod tests {
             wait_exit: Notify::new(),
             should_exit: AtomicBool::new(false),
             opens: AtomicUsize::new(0),
+            health_activity: None,
         });
         let (client, peer) = tokio::io::duplex(4096);
         vm.connections
@@ -3431,6 +3473,7 @@ mod tests {
         let ownership = Arc::new(MockOwnership {
             events: Mutex::new(Vec::new()),
             renewals: AtomicUsize::new(0),
+            renewal_activity: None,
             renew_fails: AtomicBool::new(false),
             stopping_fails: AtomicBool::new(false),
             drain_conflict: AtomicBool::new(false),
@@ -3513,6 +3556,7 @@ mod tests {
             wait_exit: Notify::new(),
             should_exit: AtomicBool::new(false),
             opens: AtomicUsize::new(0),
+            health_activity: None,
         });
         let (client, peer) = tokio::io::duplex(4096);
         vm.connections
@@ -3536,6 +3580,7 @@ mod tests {
         let ownership = Arc::new(MockOwnership {
             events: Mutex::new(Vec::new()),
             renewals: AtomicUsize::new(0),
+            renewal_activity: None,
             renew_fails: AtomicBool::new(false),
             stopping_fails: AtomicBool::new(false),
             drain_conflict: AtomicBool::new(false),
@@ -3631,6 +3676,7 @@ mod tests {
             wait_exit: Notify::new(),
             should_exit: AtomicBool::new(false),
             opens: AtomicUsize::new(0),
+            health_activity: None,
         });
         let original_vm: Arc<dyn VmInstance> = vm.clone();
         let (client, peer) = tokio::io::duplex(4096);
@@ -3655,6 +3701,7 @@ mod tests {
         let ownership = Arc::new(MockOwnership {
             events: Mutex::new(Vec::new()),
             renewals: AtomicUsize::new(0),
+            renewal_activity: None,
             renew_fails: AtomicBool::new(false),
             stopping_fails: AtomicBool::new(false),
             drain_conflict: AtomicBool::new(false),
@@ -3749,6 +3796,7 @@ mod tests {
             wait_exit: Notify::new(),
             should_exit: AtomicBool::new(false),
             opens: AtomicUsize::new(0),
+            health_activity: None,
         });
         let resolver = Arc::new(MockResolver {
             launch: launch(identity),
@@ -3766,6 +3814,7 @@ mod tests {
         let ownership = Arc::new(MockOwnership {
             events: Mutex::new(Vec::new()),
             renewals: AtomicUsize::new(0),
+            renewal_activity: None,
             renew_fails: AtomicBool::new(false),
             stopping_fails: AtomicBool::new(false),
             drain_conflict: AtomicBool::new(false),
@@ -3849,6 +3898,7 @@ mod tests {
             wait_exit: Notify::new(),
             should_exit: AtomicBool::new(false),
             opens: AtomicUsize::new(0),
+            health_activity: None,
         });
         let (client, peer) = tokio::io::duplex(4096);
         vm.connections
@@ -3872,6 +3922,7 @@ mod tests {
         let ownership = Arc::new(MockOwnership {
             events: Mutex::new(Vec::new()),
             renewals: AtomicUsize::new(0),
+            renewal_activity: None,
             renew_fails: AtomicBool::new(false),
             stopping_fails: AtomicBool::new(false),
             drain_conflict: AtomicBool::new(false),
@@ -3949,6 +4000,7 @@ mod tests {
             wait_exit: Notify::new(),
             should_exit: AtomicBool::new(false),
             opens: AtomicUsize::new(0),
+            health_activity: None,
         });
         let (client, peer) = tokio::io::duplex(4096);
         vm.connections
@@ -3972,6 +4024,7 @@ mod tests {
         let ownership = Arc::new(MockOwnership {
             events: Mutex::new(Vec::new()),
             renewals: AtomicUsize::new(0),
+            renewal_activity: None,
             renew_fails: AtomicBool::new(false),
             stopping_fails: AtomicBool::new(false),
             drain_conflict: AtomicBool::new(false),
@@ -4049,6 +4102,7 @@ mod tests {
             wait_exit: Notify::new(),
             should_exit: AtomicBool::new(false),
             opens: AtomicUsize::new(0),
+            health_activity: None,
         });
         let (client, peer) = tokio::io::duplex(4096);
         vm.connections
@@ -4072,6 +4126,7 @@ mod tests {
         let ownership = Arc::new(MockOwnership {
             events: Mutex::new(Vec::new()),
             renewals: AtomicUsize::new(0),
+            renewal_activity: None,
             renew_fails: AtomicBool::new(false),
             stopping_fails: AtomicBool::new(false),
             drain_conflict: AtomicBool::new(false),
@@ -4160,6 +4215,7 @@ mod tests {
             wait_exit: Notify::new(),
             should_exit: AtomicBool::new(false),
             opens: AtomicUsize::new(0),
+            health_activity: None,
         });
         let (client, peer) = tokio::io::duplex(4096);
         let (failed_health_client, failed_health_peer) = tokio::io::duplex(4096);
@@ -4231,6 +4287,7 @@ mod tests {
         let ownership = Arc::new(MockOwnership {
             events: Mutex::new(Vec::new()),
             renewals: AtomicUsize::new(0),
+            renewal_activity: None,
             renew_fails: AtomicBool::new(false),
             stopping_fails: AtomicBool::new(false),
             drain_conflict: AtomicBool::new(false),
@@ -4376,6 +4433,7 @@ mod tests {
             wait_exit: Notify::new(),
             should_exit: AtomicBool::new(false),
             opens: AtomicUsize::new(0),
+            health_activity: None,
         });
         let (ready_client, ready_peer) = tokio::io::duplex(4096);
         let (health_client, _health_peer) = tokio::io::duplex(4096);
@@ -4404,6 +4462,7 @@ mod tests {
         let ownership = Arc::new(MockOwnership {
             events: Mutex::new(Vec::new()),
             renewals: AtomicUsize::new(0),
+            renewal_activity: None,
             renew_fails: AtomicBool::new(false),
             stopping_fails: AtomicBool::new(false),
             drain_conflict: AtomicBool::new(false),
@@ -4500,6 +4559,7 @@ mod tests {
             wait_exit: Notify::new(),
             should_exit: AtomicBool::new(false),
             opens: AtomicUsize::new(0),
+            health_activity: None,
         });
         let (ready_client, ready_peer) = tokio::io::duplex(4096);
         let (health_client, _health_peer) = tokio::io::duplex(4096);
@@ -4528,6 +4588,7 @@ mod tests {
         let ownership = Arc::new(MockOwnership {
             events: Mutex::new(Vec::new()),
             renewals: AtomicUsize::new(0),
+            renewal_activity: None,
             renew_fails: AtomicBool::new(false),
             stopping_fails: AtomicBool::new(false),
             drain_conflict: AtomicBool::new(false),
