@@ -83,7 +83,11 @@ async fn expired_deadline_wins_before_ready_operation() {
     let result = run_with_boundary(
         &cancellation,
         &sender,
-        Some(Instant::now() - Duration::from_millis(1)),
+        Some(
+            Instant::now()
+                .checked_sub(Duration::from_millis(1))
+                .expect("instant supports subtraction"),
+        ),
         std::future::ready(()),
     )
     .await;
