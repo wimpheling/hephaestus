@@ -17,17 +17,17 @@ use gateway_domain::{
 };
 use gateway_domain::{
     GatewayConfigRevision, GatewayDesiredConfiguration, GatewayEdgeError, GatewayInvocationOutcome,
-    GatewayInvocationRecorder, GatewayLimits, GatewayMailboxPublisher, GatewayReleaseResolver,
-    GatewayRouteBinding, GatewayRouteResolver, GatewayServiceArtifact, GatewayServiceArtifactKind,
+    GatewayInvocationRecorder, GatewayLimits, GatewayReleaseResolver, GatewayRouteBinding,
+    GatewayRouteResolver, GatewayServiceArtifact, GatewayServiceArtifactKind,
     GatewayServiceIdentity, GatewayServiceLaunch, GatewayServiceLaunchRequest,
     GatewayServiceLaunchResolver, GatewayServiceMaterializer, service_transport_spec,
 };
 use http::Method;
 use identity_domain::AuthenticatedIdentity;
+#[cfg(test)]
 use mailbox_domain::{
     BodyReference, BodyReferenceId, ContentMetadata, DeduplicationKey, EnvelopeMethod,
-    EnvelopeRoute, MailboxEnvelope, MailboxEventId, SelectedHeaderName, SelectedHeaderValue,
-    TraceContext,
+    EnvelopeRoute, MailboxEnvelope,
 };
 use release_domain::{
     ParameterDeclaration, ParameterDocument, ParameterName, ParameterValue, ReleaseCommandKey,
@@ -48,10 +48,12 @@ use std::{
 use time::OffsetDateTime;
 use uuid::Uuid;
 use vm_trait::{
-    GuestCommand, NetworkMode, PrivateMailboxPublication, RootFilesystem,
-    RuntimeAuthorityBootstrap, VmId, VmMount, VmResources, VmSpec,
+    GuestCommand, NetworkMode, RootFilesystem, RuntimeAuthorityBootstrap, VmId, VmMount,
+    VmResources, VmSpec,
 };
 
+mod gateway_mailbox_payload;
+mod gateway_mailbox_publisher;
 mod service_execution;
 mod service_failure;
 mod service_log_reader;
@@ -60,6 +62,12 @@ pub(crate) mod service_ownership;
 mod service_targets;
 pub(crate) mod ui_browser;
 
+#[cfg(test)]
+use gateway_mailbox_payload::validate_gateway_mailbox_payload;
+pub use gateway_mailbox_publisher::{
+    GatewayMailboxPublicationRequest, GatewayMailboxPublicationResult,
+    PostgresGatewayMailboxPublisher,
+};
 pub use service_execution::PostgresGatewayExecutionTargetResolver;
 pub use service_failure::PostgresGatewayServiceFailureStore;
 pub use service_log_reader::{GatewayServiceLogReaderError, PostgresGatewayServiceLogReader};
@@ -68,420 +76,6 @@ pub use service_ownership::PostgresGatewayServiceOwnership;
 pub use service_targets::PostgresGatewayServiceTargets;
 
 const SERVICE_RECOVERY_BATCH_SIZE: i64 = 128;
-
-/// Host-only request to publish one generic event through an exact gateway
-/// mailbox slot.  The caller never chooses the mailbox or producer identity.
-#[derive(Debug, Clone)]
-pub struct GatewayMailboxPublicationRequest {
-    /// Session authenticated by the gateway runtime handoff.
-    pub runtime_session_id: Uuid,
-    /// Invocation currently executing that session.
-    pub invocation_id: Uuid,
-    /// Declared immutable slot selected by the guest protocol.
-    pub slot_key: String,
-    /// Application-selected stable key within the bound producer scope.
-    pub deduplication_key: DeduplicationKey,
-    /// Bounded, value-bearing envelope. It is never written to gateway audit.
-    pub envelope: MailboxEnvelope,
-    /// Opaque bytes corresponding exactly to the envelope body reference.
-    pub encoded_body: Vec<u8>,
-    /// Decoded length; this MVP accepts only identity encoding.
-    pub decoded_length: u32,
-}
-
-/// Redacted durable result of a gateway mailbox publication.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum GatewayMailboxPublicationResult {
-    /// One new mailbox event and its transactional wake command were accepted.
-    Accepted {
-        /// Immutable accepted mailbox event.
-        event_id: MailboxEventId,
-    },
-    /// The same invocation/slot/key was already accepted.
-    Duplicate {
-        /// Original immutable mailbox event.
-        event_id: MailboxEventId,
-    },
-    /// Live authority was unavailable; details deliberately remain redacted.
-    Denied,
-}
-
-/// Worker-side authority for the gateway-to-mailbox bridge.
-#[derive(Clone)]
-pub struct PostgresGatewayMailboxPublisher {
-    pool: PgPool,
-}
-
-impl PostgresGatewayMailboxPublisher {
-    /// Creates the publisher over the control-plane authority pool.
-    #[must_use]
-    pub const fn new(pool: PgPool) -> Self {
-        Self { pool }
-    }
-
-    /// Rechecks the live invocation/session/revision/binding/grant/mailbox
-    /// chain, then accepts through the normal mailbox event and outbox path.
-    ///
-    /// # Errors
-    ///
-    /// Returns an unavailable error for invalid payload evidence or database
-    /// failures. Authority denial is persisted and returned without detail.
-    #[allow(clippy::too_many_lines)]
-    pub async fn publish(
-        &self,
-        request: GatewayMailboxPublicationRequest,
-    ) -> Result<GatewayMailboxPublicationResult, GatewayEdgeError> {
-        validate_gateway_mailbox_payload(&request)?;
-        let headers = serde_json::to_value(&request.envelope.headers)
-            .map_err(|_| GatewayEdgeError::Unavailable)?;
-        let mut tx = self
-            .pool
-            .begin()
-            .await
-            .map_err(|_| GatewayEdgeError::Unavailable)?;
-        sqlx::query("SET LOCAL ROLE hephaestus_worker")
-            .execute(&mut *tx)
-            .await
-            .map_err(|_| GatewayEdgeError::Unavailable)?;
-        // Serializing on the invocation makes a repeated guest frame observe
-        // its earlier publication before it can allocate another body row.
-        // Updates close execution, not durable ingress. The dispatcher binds
-        // queued work only after the gate reopens; recovery states fail closed.
-        let invocation: Option<GatewayMailboxAuthorityRow> = sqlx::query_as(
-            "SELECT invocation.gateway_revision_id AS revision, binding.id AS binding,
-                    binding_grant.id AS grant_id, binding.mailbox_id AS mailbox, binding.producer_id AS producer
-             FROM gateway_invocations AS invocation
-             JOIN gateway_runtime_authority_sessions AS session
-               ON session.id = $1 AND session.invocation_id = invocation.id
-             JOIN gateway_authorization_snapshot_bindings AS snapshot_binding
-               ON snapshot_binding.snapshot_id = session.snapshot_id
-             JOIN gateway_mailbox_bindings AS binding
-               ON binding.gateway_revision_id = invocation.gateway_revision_id
-              AND binding.slot_key = $3
-              AND snapshot_binding.binding_id = binding.id
-             JOIN gateway_mailbox_binding_grants AS binding_grant
-               ON binding_grant.binding_id = binding.id
-              AND binding_grant.status = 'active'
-              AND snapshot_binding.grant_id = binding_grant.id
-             JOIN mailboxes AS mailbox ON mailbox.id = binding.mailbox_id
-             JOIN agent_instances AS instance ON instance.id = mailbox.instance_id
-             JOIN gateways AS gateway ON gateway.id = invocation.gateway_id
-             WHERE invocation.id = $2
-               AND invocation.outcome = 'accepted'
-               AND session.status = 'active' AND session.expires_at > now()
-               AND gateway.lifecycle = 'enabled'
-               AND gateway.active_revision_id = invocation.gateway_revision_id
-               AND mailbox.state = 'active'
-               AND instance.state IN ('active', 'update_rejected', 'update_draining', 'updating')
-             FOR UPDATE OF invocation, session",
-        )
-        .bind(request.runtime_session_id)
-        .bind(request.invocation_id)
-        .bind(&request.slot_key)
-        .fetch_optional(&mut *tx)
-        .await
-        .map_err(|error| {
-            tracing::warn!(%error, invocation_id = %request.invocation_id, "gateway mailbox authority query failed");
-            GatewayEdgeError::Unavailable
-        })?;
-        if let Some(existing) = sqlx::query_as::<_, GatewayMailboxPublicationRow>(
-            "SELECT outcome, event_id FROM gateway_mailbox_publications
-             WHERE invocation_id = $1 AND slot_key = $2 AND deduplication_key = $3",
-        )
-        .bind(request.invocation_id)
-        .bind(&request.slot_key)
-        .bind(request.deduplication_key.as_str())
-        .fetch_optional(&mut *tx)
-        .await
-        .map_err(|_| GatewayEdgeError::Unavailable)?
-        {
-            tx.commit()
-                .await
-                .map_err(|_| GatewayEdgeError::Unavailable)?;
-            return repeated_publication_result(&existing);
-        }
-        let Some(authority) = invocation else {
-            // A valid runtime session is still retained as the denial's
-            // correlation. A forged/missing session cannot create evidence.
-            sqlx::query(
-                "INSERT INTO gateway_mailbox_publications
-                   (id, invocation_id, runtime_session_id, gateway_revision_id, slot_key,
-                    deduplication_key, outcome, denial_code)
-                 SELECT gen_random_uuid(), invocation.id, $1, invocation.gateway_revision_id,
-                        $3, $4, 'denied', 'authority_unavailable'
-                 FROM gateway_invocations AS invocation
-                 JOIN gateway_runtime_authority_sessions AS session
-                   ON session.id = $1 AND session.invocation_id = invocation.id
-                 WHERE invocation.id = $2
-                 ON CONFLICT (invocation_id, slot_key, deduplication_key) DO NOTHING",
-            )
-            .bind(request.runtime_session_id)
-            .bind(request.invocation_id)
-            .bind(&request.slot_key)
-            .bind(request.deduplication_key.as_str())
-            .execute(&mut *tx)
-            .await
-            .map_err(|_| GatewayEdgeError::Unavailable)?;
-            tx.commit()
-                .await
-                .map_err(|_| GatewayEdgeError::Unavailable)?;
-            return Ok(GatewayMailboxPublicationResult::Denied);
-        };
-        let body = &request.envelope.content.body;
-        let event_id = Uuid::new_v4();
-        let inserted = sqlx::query_scalar::<_, Uuid>(
-            "INSERT INTO mailbox_payloads
-               (id, mailbox_id, project_id, encoded_body, encoded_length, decoded_length,
-                integrity_hash, content_type, content_encoding)
-             SELECT $1, binding.mailbox_id, binding.project_id, $2, $3, $4, $5, $6, $7
-             FROM gateway_mailbox_bindings AS binding WHERE binding.id = $8
-             RETURNING id",
-        )
-        .bind(body.id.as_uuid())
-        .bind(&request.encoded_body)
-        .bind(i32::try_from(request.encoded_body.len()).map_err(|_| GatewayEdgeError::Unavailable)?)
-        .bind(i32::try_from(request.decoded_length).map_err(|_| GatewayEdgeError::Unavailable)?)
-        .bind(body.integrity_hash.as_slice())
-        .bind(&request.envelope.content.content_type)
-        .bind(&request.envelope.content.content_encoding)
-        .bind(authority.binding)
-        .fetch_one(&mut *tx)
-        .await
-        .map_err(|_| GatewayEdgeError::Unavailable)?;
-        let event = sqlx::query_scalar::<_, Uuid>(
-            "INSERT INTO mailbox_events
-               (id, mailbox_id, project_id, instance_id, body_id, producer_kind, producer_id,
-                deduplication_scope, deduplication_key, method, route, selected_headers,
-                content_type, received_at, trace_context)
-             SELECT $1, binding.mailbox_id, binding.project_id, mailbox.instance_id, $2,
-                    'gateway', binding.producer_id, binding.producer_id, $3, $4, $5, $6,
-                    $7, $8, $9
-             FROM gateway_mailbox_bindings AS binding JOIN mailboxes AS mailbox ON mailbox.id = binding.mailbox_id
-             WHERE binding.id = $10
-             ON CONFLICT (mailbox_id, deduplication_scope, deduplication_key) DO NOTHING
-             RETURNING id",
-        ).bind(event_id).bind(inserted).bind(request.deduplication_key.as_str())
-         .bind(request.envelope.method.as_str()).bind(request.envelope.route.as_str()).bind(headers)
-         .bind(&request.envelope.content.content_type).bind(request.envelope.received_at)
-         .bind(request.envelope.trace_context.as_ref().map(mailbox_domain::TraceContext::as_str))
-         .bind(authority.binding).fetch_optional(&mut *tx)
-         .await.map_err(|_| GatewayEdgeError::Unavailable)?;
-        let (event_id, outcome) = if let Some(id) = event {
-            (id, "accepted")
-        } else {
-            // The candidate payload must not survive a deduplication collision.
-            tx.rollback()
-                .await
-                .map_err(|_| GatewayEdgeError::Unavailable)?;
-            return self.record_gateway_mailbox_duplicate(request).await;
-        };
-        sqlx::query(
-            "INSERT INTO gateway_mailbox_publications
-               (id, invocation_id, runtime_session_id, gateway_revision_id, binding_id, grant_id,
-                mailbox_id, producer_id, slot_key, deduplication_key, event_id, outcome)
-             VALUES (gen_random_uuid(), $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)",
-        )
-        .bind(request.invocation_id)
-        .bind(request.runtime_session_id)
-        .bind(authority.revision)
-        .bind(authority.binding)
-        .bind(authority.grant_id)
-        .bind(authority.mailbox)
-        .bind(authority.producer)
-        .bind(&request.slot_key)
-        .bind(request.deduplication_key.as_str())
-        .bind(event_id)
-        .bind(outcome)
-        .execute(&mut *tx)
-        .await
-        .map_err(|_| GatewayEdgeError::Unavailable)?;
-        tx.commit()
-            .await
-            .map_err(|_| GatewayEdgeError::Unavailable)?;
-        Ok(GatewayMailboxPublicationResult::Accepted {
-            event_id: MailboxEventId::from_uuid(event_id),
-        })
-    }
-
-    async fn record_gateway_mailbox_duplicate(
-        &self,
-        request: GatewayMailboxPublicationRequest,
-    ) -> Result<GatewayMailboxPublicationResult, GatewayEdgeError> {
-        let mut tx = self
-            .pool
-            .begin()
-            .await
-            .map_err(|_| GatewayEdgeError::Unavailable)?;
-        sqlx::query("SET LOCAL ROLE hephaestus_worker")
-            .execute(&mut *tx)
-            .await
-            .map_err(|_| GatewayEdgeError::Unavailable)?;
-        let row: Option<GatewayMailboxAuthorityRow> = sqlx::query_as(
-            "SELECT invocation.gateway_revision_id AS revision, binding.id AS binding,
-                    binding_grant.id AS grant_id, binding.mailbox_id AS mailbox, binding.producer_id AS producer
-             FROM gateway_invocations invocation JOIN gateway_runtime_authority_sessions session
-               ON session.id = $1 AND session.invocation_id = invocation.id
-             JOIN gateway_authorization_snapshot_bindings snapshot_binding
-               ON snapshot_binding.snapshot_id = session.snapshot_id
-             JOIN gateway_mailbox_bindings binding
-               ON binding.gateway_revision_id = invocation.gateway_revision_id
-              AND binding.slot_key = $3
-              AND snapshot_binding.binding_id = binding.id
-             JOIN gateway_mailbox_binding_grants binding_grant
-               ON binding_grant.binding_id = binding.id
-              AND binding_grant.status = 'active'
-              AND snapshot_binding.grant_id = binding_grant.id
-             JOIN mailboxes mailbox ON mailbox.id = binding.mailbox_id
-             JOIN agent_instances instance ON instance.id = mailbox.instance_id
-             JOIN gateways gateway ON gateway.id = invocation.gateway_id
-             WHERE invocation.id = $2 AND invocation.outcome = 'accepted'
-               AND session.status = 'active' AND session.expires_at > now()
-               AND mailbox.state = 'active'
-               AND instance.state IN ('active', 'update_rejected', 'update_draining', 'updating')
-               AND gateway.lifecycle = 'enabled'
-               AND gateway.active_revision_id = invocation.gateway_revision_id
-             FOR UPDATE OF invocation, session",
-        ).bind(request.runtime_session_id).bind(request.invocation_id).bind(&request.slot_key)
-         .fetch_optional(&mut *tx).await.map_err(|_| GatewayEdgeError::Unavailable)?;
-        let Some(authority) = row else {
-            return Ok(GatewayMailboxPublicationResult::Denied);
-        };
-        let event_id: Uuid = sqlx::query_scalar(
-            "SELECT id FROM mailbox_events WHERE mailbox_id = $1 AND deduplication_scope = $2 AND deduplication_key = $3",
-        ).bind(authority.mailbox).bind(&authority.producer).bind(request.deduplication_key.as_str())
-         .fetch_one(&mut *tx).await.map_err(|_| GatewayEdgeError::Unavailable)?;
-        sqlx::query(
-            "INSERT INTO gateway_mailbox_publications
-               (id, invocation_id, runtime_session_id, gateway_revision_id, binding_id, grant_id, mailbox_id,
-                producer_id, slot_key, deduplication_key, event_id, outcome)
-             VALUES (gen_random_uuid(), $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, 'duplicate')
-             ON CONFLICT (invocation_id, slot_key, deduplication_key) DO NOTHING",
-        ).bind(request.invocation_id).bind(request.runtime_session_id).bind(authority.revision)
-         .bind(authority.binding).bind(authority.grant_id).bind(authority.mailbox)
-         .bind(authority.producer).bind(&request.slot_key).bind(request.deduplication_key.as_str())
-         .bind(event_id).execute(&mut *tx).await.map_err(|_| GatewayEdgeError::Unavailable)?;
-        tx.commit()
-            .await
-            .map_err(|_| GatewayEdgeError::Unavailable)?;
-        Ok(GatewayMailboxPublicationResult::Duplicate {
-            event_id: MailboxEventId::from_uuid(event_id),
-        })
-    }
-}
-
-#[async_trait]
-impl GatewayMailboxPublisher for PostgresGatewayMailboxPublisher {
-    async fn publish(
-        &self,
-        invocation_id: Uuid,
-        publication: PrivateMailboxPublication,
-    ) -> Result<(), GatewayEdgeError> {
-        let encoded_body = publication.body.to_vec();
-        let byte_length =
-            u32::try_from(encoded_body.len()).map_err(|_| GatewayEdgeError::Unavailable)?;
-        let integrity_hash: [u8; 32] = Sha256::digest(&encoded_body).into();
-        let body = BodyReference::new(BodyReferenceId::new(), byte_length, integrity_hash)
-            .map_err(|_| GatewayEdgeError::Unavailable)?;
-        let content = ContentMetadata::new(
-            body,
-            publication.content_type,
-            Some(String::from("identity")),
-        )
-        .map_err(|_| GatewayEdgeError::Unavailable)?;
-        let headers = publication
-            .headers
-            .into_iter()
-            .map(|(name, value)| {
-                Ok((
-                    SelectedHeaderName::parse(name).map_err(|_| GatewayEdgeError::Unavailable)?,
-                    SelectedHeaderValue::parse(value).map_err(|_| GatewayEdgeError::Unavailable)?,
-                ))
-            })
-            .collect::<Result<_, GatewayEdgeError>>()?;
-        let envelope = MailboxEnvelope::new(
-            EnvelopeMethod::parse(publication.method).map_err(|_| GatewayEdgeError::Unavailable)?,
-            EnvelopeRoute::parse(publication.route).map_err(|_| GatewayEdgeError::Unavailable)?,
-            headers,
-            content,
-            OffsetDateTime::now_utc(),
-            publication
-                .trace_context
-                .map(TraceContext::parse)
-                .transpose()
-                .map_err(|_| GatewayEdgeError::Unavailable)?,
-        )
-        .map_err(|_| GatewayEdgeError::Unavailable)?;
-        // Gateway runtime session identity is deterministically the accepted
-        // invocation identity. The publisher rechecks that exact session only
-        // after entering its worker-role transaction; guests never provide it.
-        let runtime_session_id = invocation_id;
-        let result = self
-            .publish(GatewayMailboxPublicationRequest {
-                runtime_session_id,
-                invocation_id,
-                slot_key: publication.slot,
-                deduplication_key: DeduplicationKey::parse(publication.deduplication_key)
-                    .map_err(|_| GatewayEdgeError::Unavailable)?,
-                envelope,
-                encoded_body,
-                decoded_length: byte_length,
-            })
-            .await?;
-        match result {
-            GatewayMailboxPublicationResult::Accepted { .. }
-            | GatewayMailboxPublicationResult::Duplicate { .. } => Ok(()),
-            GatewayMailboxPublicationResult::Denied => Err(GatewayEdgeError::HandlerUnavailable),
-        }
-    }
-}
-
-#[derive(sqlx::FromRow)]
-struct GatewayMailboxAuthorityRow {
-    revision: Uuid,
-    binding: Uuid,
-    grant_id: Uuid,
-    mailbox: Uuid,
-    producer: String,
-}
-#[derive(sqlx::FromRow)]
-struct GatewayMailboxPublicationRow {
-    outcome: String,
-    event_id: Option<Uuid>,
-}
-
-/// The stored outcome records the original decision; a later observation of
-/// that row is always an idempotent duplicate of the guest publication.
-fn repeated_publication_result(
-    row: &GatewayMailboxPublicationRow,
-) -> Result<GatewayMailboxPublicationResult, GatewayEdgeError> {
-    match (row.outcome.as_str(), row.event_id) {
-        ("accepted" | "duplicate", Some(id)) => Ok(GatewayMailboxPublicationResult::Duplicate {
-            event_id: MailboxEventId::from_uuid(id),
-        }),
-        ("denied", None) => Ok(GatewayMailboxPublicationResult::Denied),
-        _ => Err(GatewayEdgeError::Unavailable),
-    }
-}
-
-fn validate_gateway_mailbox_payload(
-    request: &GatewayMailboxPublicationRequest,
-) -> Result<(), GatewayEdgeError> {
-    let body = &request.envelope.content.body;
-    if request.encoded_body.len()
-        != usize::try_from(body.byte_length).map_err(|_| GatewayEdgeError::Unavailable)?
-        || request.decoded_length != body.byte_length
-        || Sha256::digest(&request.encoded_body).as_slice() != body.integrity_hash
-        || request
-            .envelope
-            .content
-            .content_encoding
-            .as_deref()
-            .is_some_and(|value| value != "identity")
-    {
-        return Err(GatewayEdgeError::Unavailable);
-    }
-    Ok(())
-}
 
 /// Private worker adapter from authoritative gateway rows to the edge ports.
 ///
