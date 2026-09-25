@@ -1,6 +1,9 @@
 //! Exact, redacted run authorization and HTTPS inspection.
 
-use super::{RunRpc, map_error, opaque, parse_id, parse_page, query, timestamp};
+use super::RunRpc;
+use super::auth::{parse_id, parse_page, query};
+use super::conversions::{opaque, timestamp};
+use super::errors::map_error;
 use crate::rpc::{into_connect_error, request};
 use connectrpc::{RequestContext, Response, ServiceRequest, ServiceResult};
 use rpc_proto::messages::hephaestus::{
