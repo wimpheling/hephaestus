@@ -1,4 +1,7 @@
-use super::*;
+#[cfg(feature = "test-fixtures")]
+use crate::{GatewayServiceLogRpcFixture, golden_issuer, seed_golden_browser_session};
+#[cfg(feature = "test-fixtures")]
+use identity_domain::UserId;
 
 #[cfg(feature = "test-fixtures")]
 // Keep the complete SQL authority fixture together so its persisted scopes and

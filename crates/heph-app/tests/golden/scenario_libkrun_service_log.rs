@@ -1,4 +1,14 @@
-use super::*;
+#[cfg(feature = "test-fixtures")]
+use crate::{
+    GatewayServiceGoldenFixture, assert_guest_gateway_service_log_retained, cleanup_streams,
+    gateway_service_log_rpc,
+};
+#[cfg(feature = "test-fixtures")]
+use forge_domain::ProjectId;
+#[cfg(feature = "test-fixtures")]
+use identity_domain::{BrowserSessionSid, UserId};
+#[cfg(feature = "test-fixtures")]
+use std::{env, path::PathBuf};
 
 #[cfg(feature = "test-fixtures")]
 #[allow(clippy::too_many_arguments)]

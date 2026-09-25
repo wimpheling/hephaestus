@@ -1,13 +1,16 @@
 use super::*;
 
 /// Runs persistent service readiness, restart, and crash lifecycle checks.
+// Several arguments are used only by optional test-fixture paths, so their
+// bindings remain intentionally present when those features are disabled.
 #[allow(
     clippy::cognitive_complexity,
     clippy::fn_params_excessive_bools,
     clippy::needless_borrow,
     clippy::ref_option,
     clippy::too_many_arguments,
-    clippy::too_many_lines
+    clippy::too_many_lines,
+    unused_variables
 )]
 pub async fn run_gateway_service_lifecycle(
     pool: &sqlx::PgPool,
