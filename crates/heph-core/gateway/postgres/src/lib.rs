@@ -17,10 +17,7 @@ use gateway_domain::{
 };
 use gateway_domain::{
     GatewayConfigRevision, GatewayDesiredConfiguration, GatewayEdgeError, GatewayInvocationOutcome,
-    GatewayInvocationRecorder, GatewayLimits, GatewayReleaseResolver, GatewayRouteBinding,
-    GatewayRouteResolver, GatewayServiceArtifact, GatewayServiceArtifactKind,
-    GatewayServiceIdentity, GatewayServiceLaunch, GatewayServiceLaunchRequest,
-    GatewayServiceLaunchResolver, GatewayServiceMaterializer, service_transport_spec,
+    GatewayInvocationRecorder, GatewayLimits, GatewayRouteBinding, GatewayRouteResolver,
 };
 use http::Method;
 use identity_domain::AuthenticatedIdentity;
@@ -33,29 +30,25 @@ use release_domain::{
     ParameterDeclaration, ParameterDocument, ParameterName, ParameterValue, ReleaseCommandKey,
     ReleaseId,
 };
-use runtime_authority::{
-    GatewayRuntimeAuthorityIssuer, GatewayRuntimeSessionRequest, RuntimeHandoffStore,
-};
+use runtime_authority::{GatewayRuntimeAuthorityIssuer, GatewayRuntimeSessionRequest};
 use serde::Deserialize;
 use sha2::{Digest, Sha256};
 use sqlx::{PgPool, Postgres, Transaction, pool::PoolConnection};
 use std::{
     collections::{BTreeMap, BTreeSet},
-    path::PathBuf,
     sync::Arc,
     time::Duration,
 };
 use time::OffsetDateTime;
 use uuid::Uuid;
-use vm_trait::{
-    GuestCommand, NetworkMode, RootFilesystem, RuntimeAuthorityBootstrap, VmId, VmMount,
-    VmResources, VmSpec,
-};
+use vm_trait::VmMount;
 
 mod gateway_mailbox_payload;
 mod gateway_mailbox_publisher;
+mod release_resolver;
 mod service_execution;
 mod service_failure;
+mod service_launch;
 mod service_log_reader;
 mod service_logs;
 pub(crate) mod service_ownership;
@@ -68,8 +61,10 @@ pub use gateway_mailbox_publisher::{
     GatewayMailboxPublicationRequest, GatewayMailboxPublicationResult,
     PostgresGatewayMailboxPublisher,
 };
+pub use release_resolver::PostgresGatewayReleaseResolver;
 pub use service_execution::PostgresGatewayExecutionTargetResolver;
 pub use service_failure::PostgresGatewayServiceFailureStore;
+pub use service_launch::PostgresGatewayServiceLaunchResolver;
 pub use service_log_reader::{GatewayServiceLogReaderError, PostgresGatewayServiceLogReader};
 pub use service_logs::PostgresGatewayServiceLogStore;
 pub use service_ownership::PostgresGatewayServiceOwnership;
@@ -768,180 +763,6 @@ impl GatewayInvocationRecorder for PostgresGatewayEdgeAuthority {
     }
 }
 
-/// Production resolver for the exact released agent selected by a gateway revision.
-///
-/// It accepts only an already-recorded invocation ID; public request data cannot
-/// influence image, command, resource, or bootstrap selection.
-pub struct PostgresGatewayReleaseResolver {
-    pool: PgPool,
-    root_images: BTreeMap<String, RootFilesystem>,
-    handoff: Arc<dyn RuntimeHandoffStore>,
-    release_materializer: Option<Arc<dyn GatewayReleaseMaterializer>>,
-}
-
-/// Production resolver for one immutable published long-lived gateway service.
-///
-/// Unlike the stateless resolver, this port takes only the host-owned launch
-/// identity. It does not require or create an invocation, runtime session, or
-/// request bearer.
-pub struct PostgresGatewayServiceLaunchResolver {
-    pool: PgPool,
-    root_images: BTreeMap<String, RootFilesystem>,
-    service_materializer: Option<Arc<dyn GatewayServiceMaterializer>>,
-}
-
-impl PostgresGatewayServiceLaunchResolver {
-    /// Creates a service resolver over the immutable gateway database and root
-    /// image catalog.
-    #[must_use]
-    pub fn new(pool: PgPool, root_images: BTreeMap<String, RootFilesystem>) -> Self {
-        Self {
-            pool,
-            root_images,
-            service_materializer: None,
-        }
-    }
-
-    /// Attaches the host-owned persistent-service materializer.
-    #[must_use]
-    pub fn with_service_materializer(
-        mut self,
-        service_materializer: Arc<dyn GatewayServiceMaterializer>,
-    ) -> Self {
-        self.service_materializer = Some(service_materializer);
-        self
-    }
-}
-
-#[async_trait]
-impl GatewayServiceLaunchResolver for PostgresGatewayServiceLaunchResolver {
-    // Keep the exact query, validation, materialization, and postcondition
-    // cleanup together as one auditable immutable launch boundary.
-    #[allow(clippy::too_many_lines)]
-    async fn resolve_service_launch(
-        &self,
-        request: GatewayServiceLaunchRequest,
-    ) -> Result<GatewayServiceLaunch, GatewayEdgeError> {
-        let identity = request.identity;
-        if identity.instance_id.is_nil()
-            || identity.gateway_id.is_nil()
-            || identity.revision_id.is_nil()
-        {
-            return Err(GatewayEdgeError::HandlerUnavailable);
-        }
-        let row = sqlx::query_as::<_, GatewayServiceLaunchRow>(
-            "SELECT revision.gateway_id, revision.id AS revision_id,
-                    revision.release_id, revision.handler_contract,
-                    revision.service_loopback_port,
-                    revision.service_readiness_path, revision.service_health_path,
-                    revision.service_log_capture_mode,
-                    revision.parameters, agent.runtime_contract
-               FROM gateway_revisions AS revision
-               JOIN release_agents AS agent
-                 ON agent.id = revision.release_agent_id
-                AND agent.release_id = revision.release_id
-                AND agent.agent_key = revision.release_agent_key
-               JOIN releases AS release
-                 ON release.id = revision.release_id
-                AND release.repository_id = revision.repository_id
-              WHERE revision.gateway_id = $1
-                AND revision.id = $2
-                AND revision.handler_contract = 'http.service.v1'
-                AND release.state = 'published'",
-        )
-        .bind(identity.gateway_id)
-        .bind(identity.revision_id)
-        .fetch_optional(&self.pool)
-        .await
-        .map_err(|_| GatewayEdgeError::Unavailable)?
-        .ok_or(GatewayEdgeError::HandlerUnavailable)?;
-
-        let release_id = row.release_id.ok_or(GatewayEdgeError::HandlerUnavailable)?;
-        if row.gateway_id != identity.gateway_id || row.revision_id != identity.revision_id {
-            return Err(GatewayEdgeError::HandlerUnavailable);
-        }
-        if row.handler_contract != "http.service.v1" {
-            return Err(GatewayEdgeError::HandlerUnavailable);
-        }
-        let loopback_port = row
-            .service_loopback_port
-            .and_then(|value| u16::try_from(value).ok())
-            .ok_or(GatewayEdgeError::HandlerUnavailable)?;
-        let readiness_path = ServiceProbePath::parse(
-            row.service_readiness_path
-                .ok_or(GatewayEdgeError::HandlerUnavailable)?,
-        )
-        .map_err(|_| GatewayEdgeError::HandlerUnavailable)?;
-        let health_path = ServiceProbePath::parse(
-            row.service_health_path
-                .ok_or(GatewayEdgeError::HandlerUnavailable)?,
-        )
-        .map_err(|_| GatewayEdgeError::HandlerUnavailable)?;
-        let log_capture_mode = ServiceLogCaptureMode::from_name(&row.service_log_capture_mode)
-            .ok_or(GatewayEdgeError::HandlerUnavailable)?;
-        let service = GatewayServiceConfig::new(loopback_port, readiness_path, health_path)
-            .map_err(|_| GatewayEdgeError::HandlerUnavailable)?
-            .with_log_capture_mode(log_capture_mode);
-        let contract: GatewayRuntimeContract = serde_json::from_value(row.runtime_contract)
-            .map_err(|_| GatewayEdgeError::HandlerUnavailable)?;
-        if contract.requires_state
-            || !matches!(contract.policy_ceiling.network, GatewayNetwork::Disabled)
-        {
-            return Err(GatewayEdgeError::HandlerUnavailable);
-        }
-        let root = self
-            .root_images
-            .get(&contract.image_reference)
-            .cloned()
-            .ok_or(GatewayEdgeError::HandlerUnavailable)?;
-        let materializer = self
-            .service_materializer
-            .as_ref()
-            .ok_or(GatewayEdgeError::HandlerUnavailable)?;
-        let artifacts = gateway_release_artifacts(&self.pool, release_id)
-            .await?
-            .into_iter()
-            .map(|artifact| GatewayServiceArtifact {
-                path: artifact.path,
-                kind: match artifact.kind {
-                    GatewayReleaseArtifactKind::Executable => {
-                        GatewayServiceArtifactKind::Executable
-                    }
-                    GatewayReleaseArtifactKind::File => GatewayServiceArtifactKind::File,
-                    GatewayReleaseArtifactKind::Manifest => GatewayServiceArtifactKind::Manifest,
-                },
-                mode: artifact.mode,
-                content_hash: artifact.content_hash,
-                size_bytes: artifact.size_bytes,
-                storage_key: artifact.storage_key,
-            })
-            .collect::<Vec<_>>();
-        let mounts = materializer.prepare_service(identity, &artifacts, &row.parameters)?;
-        let spec = match service_vm_spec(identity, &service, contract, root, mounts) {
-            Ok(spec) => spec,
-            Err(error) => {
-                let _ = materializer.destroy_service(identity);
-                return Err(error);
-            }
-        };
-        Ok(GatewayServiceLaunch {
-            identity,
-            service,
-            spec,
-        })
-    }
-
-    async fn cleanup_service_launch(
-        &self,
-        identity: GatewayServiceIdentity,
-    ) -> Result<(), GatewayEdgeError> {
-        self.service_materializer
-            .as_ref()
-            .ok_or(GatewayEdgeError::HandlerUnavailable)?
-            .destroy_service(identity)
-    }
-}
-
 /// Verified artifact metadata selected for one immutable gateway release.
 #[derive(Debug, Clone)]
 pub struct GatewayReleaseArtifact {
@@ -993,300 +814,6 @@ pub trait GatewayReleaseMaterializer: Send + Sync {
     ///
     /// Returns a safe edge error when the release tree cannot be removed.
     fn destroy(&self, invocation_id: Uuid) -> Result<(), GatewayEdgeError>;
-}
-
-impl PostgresGatewayReleaseResolver {
-    /// Creates a resolver over operator-materialized immutable root filesystems
-    /// and the same host-only handoff store used to issue gateway sessions.
-    #[must_use]
-    pub fn new(
-        pool: PgPool,
-        root_images: BTreeMap<String, RootFilesystem>,
-        handoff: Arc<dyn RuntimeHandoffStore>,
-    ) -> Self {
-        Self {
-            pool,
-            root_images,
-            handoff,
-            release_materializer: None,
-        }
-    }
-
-    /// Attaches the host-owned release-tree lifecycle required for a real VM
-    /// launch. A resolver without this explicit boundary fails closed rather
-    /// than executing a path supplied by the base image.
-    #[must_use]
-    pub fn with_release_materializer(
-        mut self,
-        release_materializer: Arc<dyn GatewayReleaseMaterializer>,
-    ) -> Self {
-        self.release_materializer = Some(release_materializer);
-        self
-    }
-
-    /// Cleans up the invocation's materialized release tree after the VM has
-    /// been destroyed.
-    ///
-    /// # Errors
-    ///
-    /// Returns an unavailable edge error when no configured materializer can
-    /// safely remove the invocation's release tree.
-    pub fn destroy_materialized_release(
-        &self,
-        invocation_id: Uuid,
-    ) -> Result<(), GatewayEdgeError> {
-        self.release_materializer
-            .as_ref()
-            .ok_or(GatewayEdgeError::HandlerUnavailable)?
-            .destroy(invocation_id)
-    }
-}
-
-#[async_trait]
-impl GatewayReleaseResolver for PostgresGatewayReleaseResolver {
-    // The complete authority query, artifact validation, and fail-closed VM
-    // specification are deliberately adjacent for one auditable launch path.
-    #[allow(clippy::too_many_lines)]
-    async fn resolve_launch(
-        &self,
-        route: &GatewayRouteBinding,
-        invocation_id: Uuid,
-    ) -> Result<VmSpec, GatewayEdgeError> {
-        let row = sqlx::query_as::<_, GatewayLaunchRow>(
-            "SELECT agent.runtime_contract, session.issuance_generation, revision.release_id, revision.parameters
-             FROM gateway_invocations AS invocation
-             JOIN gateway_revisions AS revision
-               ON revision.id = invocation.gateway_revision_id
-              AND revision.gateway_id = invocation.gateway_id
-             JOIN release_agents AS agent
-               ON agent.id = revision.release_agent_id
-              AND agent.release_id = revision.release_id
-              AND agent.agent_key = revision.release_agent_key
-             JOIN releases AS release
-               ON release.id = revision.release_id
-              AND release.repository_id = revision.repository_id
-             JOIN gateway_runtime_authority_sessions AS session
-               ON session.invocation_id = invocation.id
-              AND session.gateway_id = invocation.gateway_id
-              AND session.gateway_revision_id = invocation.gateway_revision_id
-             WHERE invocation.id = $1
-               AND invocation.gateway_route_id = $2
-               AND invocation.gateway_revision_id = $3
-               AND invocation.outcome = 'accepted'
-               AND revision.handler_contract = 'http.v1'
-               AND release.state = 'published'
-               AND session.admission_mode = 'guest_handoff'
-               AND session.status = 'pending_handoff'
-               AND session.expires_at > now()",
-        )
-        .bind(invocation_id)
-        .bind(route.route_id)
-        .bind(route.gateway_revision_id)
-        .fetch_optional(&self.pool)
-        .await
-        .map_err(|_| GatewayEdgeError::Unavailable)?
-        .ok_or(GatewayEdgeError::HandlerUnavailable)?;
-        let contract: GatewayRuntimeContract = serde_json::from_value(row.runtime_contract)
-            .map_err(|_| GatewayEdgeError::Unavailable)?;
-        // MVP-03 gateway VMs are stateless one-request handlers. They cannot
-        // silently acquire a volume or general network listener merely because
-        // the source agent also supports those modes elsewhere.
-        if contract.requires_state
-            || !matches!(contract.policy_ceiling.network, GatewayNetwork::Disabled)
-        {
-            return Err(GatewayEdgeError::HandlerUnavailable);
-        }
-        let root = self
-            .root_images
-            .get(&contract.image_reference)
-            .cloned()
-            .ok_or(GatewayEdgeError::HandlerUnavailable)?;
-        let materializer = self
-            .release_materializer
-            .as_ref()
-            .ok_or(GatewayEdgeError::HandlerUnavailable)?;
-        let artifacts = gateway_release_artifacts(&self.pool, row.release_id).await?;
-        let mounts = materializer.prepare(invocation_id, &artifacts, &row.parameters)?;
-        let generation = u64::try_from(row.issuance_generation)
-            .ok()
-            .and_then(|value| capability_domain::RuntimeCredentialGeneration::new(value).ok())
-            .ok_or(GatewayEdgeError::Unavailable)?;
-        let session_id = capability_domain::RuntimeSessionId::from_uuid(invocation_id);
-        let credential = self
-            .handoff
-            .open(session_id, generation, OffsetDateTime::now_utc())
-            .map_err(|_| GatewayEdgeError::HandlerUnavailable)?;
-        Ok(VmSpec {
-            id: VmId(format!("gateway-{invocation_id}")),
-            root,
-            disks: Vec::new(),
-            mounts,
-            resources: VmResources {
-                vcpus: contract.policy_ceiling.vcpus,
-                memory_mib: contract.policy_ceiling.memory_mib,
-            },
-            network: NetworkMode::Disabled,
-            command: GuestCommand {
-                program: format!("/release/{}", contract.command),
-                args: contract.arguments,
-                env: BTreeMap::new(),
-                working_dir: Some(PathBuf::from(format!(
-                    "/release/{}",
-                    contract.working_directory
-                ))),
-            },
-            runtime_authority: Some(RuntimeAuthorityBootstrap::new(
-                invocation_id,
-                generation.get(),
-                *credential.expose(),
-            )),
-            private_http_service: None,
-            runtime_git_bridge: None,
-            labels: BTreeMap::from([
-                (String::from("hephaestus.kind"), String::from("gateway")),
-                (
-                    String::from("hephaestus.gateway.handler-contract"),
-                    String::from("http.v1"),
-                ),
-                (
-                    String::from("hephaestus.gateway-invocation"),
-                    invocation_id.to_string(),
-                ),
-                (
-                    String::from("hephaestus.gateway-route"),
-                    route.route_id.to_string(),
-                ),
-                (
-                    String::from("hephaestus.gateway-revision"),
-                    route.gateway_revision_id.to_string(),
-                ),
-            ]),
-        })
-    }
-
-    async fn acknowledge_runtime_authority(
-        &self,
-        invocation_id: Uuid,
-        session_id: Uuid,
-        generation: u64,
-    ) -> Result<(), GatewayEdgeError> {
-        let generation = i64::try_from(generation).map_err(|_| GatewayEdgeError::Unavailable)?;
-        let acknowledged = sqlx::query_scalar::<_, bool>(
-            "UPDATE gateway_runtime_authority_sessions
-                SET status = 'active', acknowledged_at = now(), updated_at = now()
-              WHERE id = $1
-                AND invocation_id = $2
-                AND issuance_generation = $3
-                AND status = 'pending_handoff'
-                AND issued_at <= now()
-                AND expires_at > now()
-              RETURNING TRUE",
-        )
-        .bind(session_id)
-        .bind(invocation_id)
-        .bind(generation)
-        .fetch_optional(&self.pool)
-        .await
-        .map_err(|_| GatewayEdgeError::Unavailable)?;
-        if acknowledged == Some(true) {
-            Ok(())
-        } else {
-            Err(GatewayEdgeError::HandlerUnavailable)
-        }
-    }
-
-    async fn cleanup_launch(&self, invocation_id: Uuid) -> Result<(), GatewayEdgeError> {
-        self.destroy_materialized_release(invocation_id)
-    }
-}
-
-#[derive(sqlx::FromRow)]
-struct GatewayLaunchRow {
-    runtime_contract: serde_json::Value,
-    issuance_generation: i64,
-    release_id: Uuid,
-    parameters: serde_json::Value,
-}
-
-#[derive(sqlx::FromRow)]
-struct GatewayServiceLaunchRow {
-    gateway_id: Uuid,
-    revision_id: Uuid,
-    release_id: Option<Uuid>,
-    handler_contract: String,
-    service_loopback_port: Option<i32>,
-    service_readiness_path: Option<String>,
-    service_health_path: Option<String>,
-    service_log_capture_mode: String,
-    parameters: serde_json::Value,
-    runtime_contract: serde_json::Value,
-}
-
-fn service_vm_spec(
-    identity: GatewayServiceIdentity,
-    service: &GatewayServiceConfig,
-    contract: GatewayRuntimeContract,
-    root: RootFilesystem,
-    mounts: Vec<VmMount>,
-) -> Result<VmSpec, GatewayEdgeError> {
-    let has_release_mount = mounts
-        .iter()
-        .filter(|mount| mount.guest_path == PathBuf::from("/release"))
-        .count()
-        == 1;
-    let has_control_mount = mounts
-        .iter()
-        .filter(|mount| mount.guest_path == PathBuf::from("/run/hephaestus"))
-        .count()
-        == 1;
-    if mounts.len() != 2
-        || mounts.iter().any(|mount| !mount.read_only)
-        || !has_release_mount
-        || !has_control_mount
-    {
-        return Err(GatewayEdgeError::HandlerUnavailable);
-    }
-    Ok(VmSpec {
-        id: VmId(format!("gateway-service-{}", identity.instance_id)),
-        root,
-        disks: Vec::new(),
-        mounts,
-        resources: VmResources {
-            vcpus: contract.policy_ceiling.vcpus,
-            memory_mib: contract.policy_ceiling.memory_mib,
-        },
-        network: NetworkMode::Disabled,
-        private_http_service: Some(service_transport_spec(service)),
-        command: GuestCommand {
-            program: format!("/release/{}", contract.command),
-            args: contract.arguments,
-            env: BTreeMap::new(),
-            working_dir: Some(PathBuf::from(format!(
-                "/release/{}",
-                contract.working_directory
-            ))),
-        },
-        runtime_authority: None,
-        runtime_git_bridge: None,
-        labels: BTreeMap::from([
-            (
-                String::from("hephaestus.kind"),
-                String::from("gateway-service"),
-            ),
-            (
-                String::from("hephaestus.gateway"),
-                identity.gateway_id.to_string(),
-            ),
-            (
-                String::from("hephaestus.gateway-revision"),
-                identity.revision_id.to_string(),
-            ),
-            (
-                String::from("hephaestus.gateway-instance"),
-                identity.instance_id.to_string(),
-            ),
-        ]),
-    })
 }
 
 #[derive(sqlx::FromRow)]
