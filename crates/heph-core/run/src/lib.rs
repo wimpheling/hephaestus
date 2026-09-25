@@ -1,6 +1,6 @@
 //! Stable provider-neutral contracts and operations for durable runs.
 //!
-//! PostgreSQL repositories and broker-specific command handlers remain in
+//! `PostgreSQL` repositories and broker-specific command handlers remain in
 //! their leaf crates. This facade intentionally exposes only the contracts
 //! needed by composition and application code.
 //!

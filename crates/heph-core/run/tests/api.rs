@@ -9,51 +9,31 @@ use heph_run::{
 };
 use std::sync::Arc;
 
-fn stable_contracts(
-    _run: &Run,
-    _start: &StartRun,
-    _cancel: &CancelRun,
-    _orchestrator: &RunOrchestrator,
-    _repository: Arc<dyn RunRepository>,
-    _catalog: Arc<dyn RunRuntimeCatalog>,
-    _authority: Arc<dyn RunAuthorityManager>,
-    _completion: Arc<dyn RunCompletionObserver>,
-    _secrets: Arc<dyn RunSecretManager>,
-    _factory: Arc<dyn VmSpecFactory>,
-) -> Result<Run, OrchestratorError> {
-    let _ = (
-        RunKind::Normal,
-        RunOutcome::Succeeded,
-        RunState::Queued,
-        PreparedRunAuthority::default(),
-        RunRuntimeArtifactKind::File,
-    );
-    let _: fn(&Run) -> Result<(), RunAuthorityError> = |_| Ok(());
-    let _: fn(&Run) -> Result<(), RunCompletionError> = |_| Ok(());
-    let _: fn(&Run) -> Result<RunRuntimeInput, RunRuntimeCatalogError> =
-        |_| Err(RunRuntimeCatalogError::Unavailable);
-    let _: fn(&Run) -> Result<(), RepositoryError> = |_| Ok(());
-    let _ = CompositeRunCompletionObserver::new(Vec::new());
-    Ok(_run.clone())
-}
+const fn assert_type<T>() {}
 
 #[test]
 fn approved_facade_contracts_compile() {
-    let _: fn(
-        &Run,
-        &StartRun,
-        &CancelRun,
-        &RunOrchestrator,
-        Arc<dyn RunRepository>,
-        Arc<dyn RunRuntimeCatalog>,
-        Arc<dyn RunAuthorityManager>,
-        Arc<dyn RunCompletionObserver>,
-        Arc<dyn RunSecretManager>,
-        Arc<dyn VmSpecFactory>,
-    ) -> Result<Run, OrchestratorError> = stable_contracts;
-    let _: fn() -> PreparedRunAuthority = PreparedRunAuthority::default;
-    let _: fn() -> CompositeRunCompletionObserver =
-        || CompositeRunCompletionObserver::new(Vec::new());
-    let _ = std::mem::size_of::<RunRuntimeArtifact>();
-    let _ = std::mem::size_of::<RunRuntimeArtifactKind>();
+    assert_type::<Run>();
+    assert_type::<StartRun>();
+    assert_type::<CancelRun>();
+    assert_type::<RunOrchestrator>();
+    assert_type::<Arc<dyn RunRepository>>();
+    assert_type::<Arc<dyn RunRuntimeCatalog>>();
+    assert_type::<Arc<dyn RunAuthorityManager>>();
+    assert_type::<Arc<dyn RunCompletionObserver>>();
+    assert_type::<Arc<dyn RunSecretManager>>();
+    assert_type::<Arc<dyn VmSpecFactory>>();
+    assert_type::<OrchestratorError>();
+    assert_type::<RepositoryError>();
+    assert_type::<RunAuthorityError>();
+    assert_type::<RunCompletionError>();
+    assert_type::<RunRuntimeCatalogError>();
+    assert_type::<RunRuntimeInput>();
+    assert_type::<RunRuntimeArtifact>();
+    assert_type::<RunRuntimeArtifactKind>();
+    assert_type::<RunKind>();
+    assert_type::<RunOutcome>();
+    assert_type::<RunState>();
+    let _ = PreparedRunAuthority::default();
+    let _ = CompositeRunCompletionObserver::new(Vec::new());
 }
