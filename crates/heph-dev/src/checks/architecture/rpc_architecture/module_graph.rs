@@ -1,7 +1,32 @@
 use std::{ffi::OsStr, fs, path::Path};
 
 pub(super) fn is_test_only_source(root: &Path, path: &Path) -> bool {
+    if is_package_integration_test(root, path) {
+        return true;
+    }
     is_test_only_source_inner(root, path, &mut Vec::new())
+}
+
+fn is_package_integration_test(root: &Path, path: &Path) -> bool {
+    let mut directory = path.parent();
+    while let Some(candidate) = directory {
+        if !candidate.starts_with(root) {
+            return false;
+        }
+        let manifest = candidate.join("Cargo.toml");
+        if manifest.is_file() {
+            let Ok(contents) = fs::read_to_string(manifest) else {
+                return false;
+            };
+            return contents.lines().any(|line| line.trim() == "[package]")
+                && path.starts_with(candidate.join("tests"));
+        }
+        if candidate == root {
+            break;
+        }
+        directory = candidate.parent();
+    }
+    false
 }
 
 fn is_test_only_source_inner(root: &Path, path: &Path, seen: &mut Vec<std::path::PathBuf>) -> bool {

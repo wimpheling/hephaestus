@@ -255,3 +255,69 @@ fn cfg_test_parent_marks_path_attribute_descendants_as_test_only() {
             .any(|diagnostic| diagnostic.rule_id == "RPC-HANDLER-IS-THIN")
     );
 }
+
+#[test]
+fn package_integration_helpers_are_test_only_but_src_tests_are_production() {
+    let directory = tempdir().expect("fixture root");
+    let package = directory.path().join("crates/example");
+    fs::create_dir_all(package.join("tests/composition/ui_installation_rpc"))
+        .expect("integration fixture");
+    fs::create_dir_all(package.join("src/rpc/tests")).expect("production fixture");
+    fs::write(
+        package.join("Cargo.toml"),
+        "[package]\nname = \"example\"\nversion = \"0.1.0\"\n",
+    )
+    .expect("package manifest");
+    fs::write(
+        package.join("tests/composition/ui_installation_rpc.rs"),
+        "#[path = \"ui_installation_rpc/seed_base.rs\"]\nmod seed_base;\n",
+    )
+    .expect("integration wrapper");
+    let integration_helper = package.join("tests/composition/ui_installation_rpc/seed_base.rs");
+    let production_helper = package.join("src/rpc/tests/seed.rs");
+    fs::write(
+        &integration_helper,
+        "fn seed() { let _ = sqlx::query(\"SELECT 1\"); }",
+    )
+    .expect("integration source");
+    fs::write(
+        &production_helper,
+        "fn seed() { let _ = sqlx::query(\"SELECT 1\"); }",
+    )
+    .expect("production source");
+
+    let integration_test_only =
+        super::module_graph::is_test_only_source(directory.path(), &integration_helper);
+    assert!(integration_test_only);
+    let production_test_only =
+        super::module_graph::is_test_only_source(directory.path(), &production_helper);
+    assert!(!production_test_only);
+
+    let mut diagnostics = Vec::new();
+    validate_source_with_context(
+        Path::new("crates/example/tests/composition/ui_installation_rpc/seed_base.rs"),
+        "fn seed() { let _ = sqlx::query(\"SELECT 1\"); }",
+        &active(),
+        &mut diagnostics,
+        integration_test_only,
+    );
+    assert!(
+        !diagnostics
+            .iter()
+            .any(|diagnostic| diagnostic.rule_id == "RPC-HANDLER-IS-THIN")
+    );
+
+    let mut diagnostics = Vec::new();
+    validate_source_with_context(
+        Path::new("crates/example/src/rpc/tests/seed.rs"),
+        "fn seed() { let _ = sqlx::query(\"SELECT 1\"); }",
+        &active(),
+        &mut diagnostics,
+        production_test_only,
+    );
+    assert!(
+        diagnostics
+            .iter()
+            .any(|diagnostic| diagnostic.rule_id == "RPC-HANDLER-IS-THIN")
+    );
+}
