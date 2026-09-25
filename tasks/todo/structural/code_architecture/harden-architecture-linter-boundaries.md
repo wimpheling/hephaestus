@@ -14,7 +14,7 @@ The SQLx boundary is already enabled as
 `DB-SQLX-ONLY-IN-POSTGRES-ADAPTERS`. Preserve and regression-check its existing
 metadata-based rule; do not add a duplicate SQLx rule. Workspace placement and
 the core-to-standard dependency direction belong to the sibling
-[workspace topology task](clarify-workspace-crate-topology-and-extension-boundaries.md),
+[workspace topology task](../../../in-progress/structural/code_architecture/clarify-workspace-crate-topology-and-extension-boundaries.md),
 which owns `ARCH-CORE-NO-STD-DEPENDENCIES`.
 
 ## Locked decisions
@@ -90,7 +90,7 @@ which owns `ARCH-CORE-NO-STD-DEPENDENCIES`.
 
 ## Dependencies and ownership
 
-- The [workspace topology task](clarify-workspace-crate-topology-and-extension-boundaries.md)
+- The [workspace topology task](../../../in-progress/structural/code_architecture/clarify-workspace-crate-topology-and-extension-boundaries.md)
   owns canonical manifest-directory prefixes, provider placement, facades, and
   `ARCH-CORE-NO-STD-DEPENDENCIES`, including its normal, build, and development
   dependency edges. Do not duplicate that implementation or its fixtures here.

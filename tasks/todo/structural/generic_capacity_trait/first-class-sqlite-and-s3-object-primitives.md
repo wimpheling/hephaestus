@@ -49,7 +49,7 @@ release requirements → exact private-volume, SQLite-database, or
 - [`mvp-02-durable-agent-mailboxes-and-stateful-dispatch.md`](../../../done/mvp-02-durable-agent-mailboxes-and-stateful-dispatch.md)
 - [`mvp-03-event-ingress-and-caddy-routing.md`](../../../done/mvp-03-event-ingress-and-caddy-routing.md)
 - [`define-own-the-loop-agent-platform.md`](../../distribution/define-own-the-loop-agent-platform.md)
-- Coordinate package placement and architecture metadata with the sibling [workspace topology task](../code_architecture/clarify-workspace-crate-topology-and-extension-boundaries.md). Keep its 85-existing-package plus five-facade baseline intact; account for any packages added by this task as separate additions during the later inventory reconciliation.
+- Coordinate package placement and architecture metadata with the sibling [workspace topology task](../../../in-progress/structural/code_architecture/clarify-workspace-crate-topology-and-extension-boundaries.md). Keep its 85-existing-package plus five-facade baseline intact; account for any packages added by this task as separate additions during the later inventory reconciliation.
 
 ## Non-goals
 

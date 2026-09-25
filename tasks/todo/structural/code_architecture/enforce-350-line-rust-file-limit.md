@@ -12,7 +12,7 @@ Do not introduce another rule ID or a Dylint dependency.
 
 ## Dependency and current state
 
-- Start implementation after the [workspace topology migration](clarify-workspace-crate-topology-and-extension-boundaries.md)
+- Start implementation after the [workspace topology migration](../../../in-progress/structural/code_architecture/clarify-workspace-crate-topology-and-extension-boundaries.md)
   completes. That task explicitly defers activating this rule until paths are
   stable. Recount the post-migration tree before splitting files or enabling the
   check; the pre-migration measurement below is a planning baseline, not an
