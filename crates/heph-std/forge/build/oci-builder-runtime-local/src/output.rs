@@ -24,7 +24,7 @@ use std::{
 /// The local runtime cannot publish repository-image output by itself.
 ///
 /// This compatibility implementation deliberately fails closed until the
-/// daemon composes [`ForgeZotOciPublisher`] with durable registry and token
+/// daemon composes [`crate::ForgeZotOciPublisher`] with durable registry and token
 /// ports. It replaces the former fabricated registry-like output path.
 #[async_trait]
 impl OciOutputPublisher for LocalOciRuntime {
