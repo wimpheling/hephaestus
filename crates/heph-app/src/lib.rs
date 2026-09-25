@@ -1,5 +1,4 @@
 //! Production composition root and supervised daemon lifecycle.
-
 mod application;
 mod event_adapter;
 mod event_cursor;
@@ -13,21 +12,20 @@ mod ui_context;
 mod ui_origin_config;
 mod ui_origin_wiring;
 mod ui_repository_git;
-
 pub use ui_origin_config::{UiOriginConfig, UiOriginConfigError};
-
 #[path = "config_types.rs"]
 mod config_types;
 pub use config_types::{
     AppConfig, GatewayEdgeConfig, OciBuilderWorkerConfig, OidcConfig, RegistryConfig,
     RuntimePolicy, VmBackendConfig,
 };
-
-#[path = "config_validation.rs"]
-mod config_validation;
-
+#[path = "composition/construction.rs"]
+mod app_build;
+pub use app_build::HephaestusApp;
 #[path = "app_runtime.rs"]
 mod app_runtime;
+#[path = "config_validation.rs"]
+mod config_validation;
 #[path = "registry_adapters.rs"]
 mod registry_adapters;
 #[path = "composition/startup.rs"]
@@ -36,19 +34,15 @@ use registry_adapters::{
     InternalRegistryTokens, PostgresRegistryNotificationInbox, PostgresRegistryReconciliation,
     PostgresRegistryScopeAuthorizer, registry_caller_authentication, registry_reconciliation_loop,
 };
-
 #[path = "oci_workers.rs"]
 mod oci_workers;
-use oci_workers::OciBuilderWorkers;
-
 use app_runtime::{
     GatewayEdgeRuntime, LocalGatewayReleaseMaterializer, ProviderGatewayRuntimeLauncher,
 };
-
+use oci_workers::OciBuilderWorkers;
 #[path = "gateway_dispatch.rs"]
 mod gateway_dispatch;
 use gateway_dispatch::{PrivateGatewayDispatcherState, gateway_limits, private_gateway_dispatch};
-
 #[path = "gateway_service_state.rs"]
 mod gateway_service_state;
 use gateway_service_state::clone_service_supervisor_context;
@@ -236,8 +230,8 @@ use runtime_handoff_local::EncryptedFileHandoffStore;
 use runtime_types::{CommandId, RunId};
 use secret_application::BrokerAdapter;
 use secret_broker::{BrokerExecutor, BrokerServer};
-use secret_postgres::{GatewayIngressSecretResolver, SecretService};
-use secret_store::{EncryptedStore, LocalKeyProvider};
+use secret_postgres::SecretService;
+use secret_store::LocalKeyProvider;
 use serde::Deserialize;
 use service_log_maintenance::GatewayServiceLogMaintenanceScheduler;
 type PgPool = ControlPlanePool;
@@ -268,48 +262,8 @@ use vm_libkrun::LibkrunConfig;
 use volume_local::{LocalVolumeConfig, LocalVolumeStore};
 use workspace_local::{LocalWorkspaceConfig, LocalWorkspaceManager};
 
-/// Constructed application whose external tasks have not started.
-pub struct HephaestusApp {
-    pool: PgPool,
-    application_pool: PgPool,
-    service_log_pool: PgPool,
-    nats_client: async_nats::Client,
-    jetstream: async_nats::jetstream::Context,
-    forge: Arc<PgForgeRepository>,
-    storage: Arc<GitStorage>,
-    identity_store: Arc<PostgresIdentityStore>,
-    git_authenticator: Arc<dyn GitAuthenticator>,
-    git_authorizer: Arc<PostgresGitAuthorizer>,
-    git_backend: PathBuf,
-    git_pre_receive_hook: PathBuf,
-    git_limits: GitHttpLimits,
-    registry: RegistryConfig,
-    http_listen: SocketAddr,
-    run_repository: Arc<PgRunRepository>,
-    mailbox_repository: Arc<PostgresMailboxRepository>,
-    review_repository: Arc<PostgresReviewRepository>,
-    review_control: ReviewControlService,
-    orchestrator: Arc<RunOrchestrator>,
-    build_executor: Arc<BuildExecutor>,
-    oci_builder_workers: Option<Arc<OciBuilderWorkers>>,
-    artifact_store: LocalArtifactStore,
-    result_artifact_root: PathBuf,
-    release_service: Arc<ReleaseService>,
-    update_completion: Arc<UpdateRunCompletion>,
-    secret_service: Arc<SecretService<LocalKeyProvider>>,
-    rpc_mediator_signing_key: [u8; 32],
-    internal_platform_policy: release_domain::RuntimePolicy,
-    internal_platform_policy_version: String,
-    secret_broker_socket: PathBuf,
-    secret_broker_executor: Arc<dyn BrokerExecutor>,
-    service_log_maintenance: Arc<GatewayServiceLogMaintenanceScheduler>,
-    gateway_edge: Option<GatewayEdgeRuntime>,
-    worker_concurrency: usize,
-    outbox_poll_interval: Duration,
-    outbox_batch_size: i64,
-    startup_timeout: Duration,
-    shutdown_timeout: Duration,
-    runtime_git_socket_path: Option<PathBuf>,
+fn canonicalize_release_artifact_root(path: PathBuf) -> Result<PathBuf, AppError> {
+    std::fs::canonicalize(path).map_err(component("release artifact store"))
 }
 
 impl HephaestusApp {
@@ -321,386 +275,8 @@ impl HephaestusApp {
     ///
     /// Returns an error for invalid configuration, incompatible migrations, or
     /// an unavailable required dependency.
-    #[allow(clippy::too_many_lines)]
     pub async fn build(config: AppConfig) -> Result<Self, AppError> {
-        let BuildPreparation {
-            config,
-            runtime_git_socket_path,
-            gateway_service_host_id,
-            pool,
-            application_pool,
-            storage,
-            forge,
-            run_repository,
-            mailbox_repository,
-            review_repository,
-            review_control,
-            volumes,
-            build_git_binary,
-            result_artifact_root,
-            workspaces,
-            release_artifact_root,
-            run_runtime,
-            gateway_release_runtime,
-            gateway_edge_config,
-            gateway_secret_keys,
-            gateway_handoff_root,
-            gateway_handoff_key,
-            gateway_root_images,
-            service_log_pool,
-            service_log_store,
-            service_log_maintenance,
-            secret_mounts,
-            secret_service,
-            runtime_git_credentials,
-            runtime_authority,
-            secret_broker_executor,
-            provider,
-            image_filesystems,
-            oci_builder_workers,
-        } = Box::pin(prepare_build(config)).await?;
-        let gateway_edge = if let Some(gateway) = gateway_edge_config {
-            // Gateway runtime snapshots and sessions are worker-owned
-            // immutable authority records. Keep issuance on a dedicated
-            // worker-role pool rather than leaking those writes through the
-            // user-scoped control-plane pool.
-            let gateway_authority_pool = connect_oci_worker(&config.database_url, 4)
-                .await
-                .map_err(component("gateway runtime authority PostgreSQL connection"))?;
-            let service_owner = GatewayServiceOwner::new(gateway_service_host_id, Uuid::new_v4())
-                .map_err(component("gateway service owner"))?;
-            let service_registry = GatewayServiceRegistry::new(
-                GATEWAY_SERVICE_SERVING_CAPACITY + GATEWAY_SERVICE_REPLACEMENT_CAPACITY,
-                GATEWAY_SERVICE_REQUEST_CAPACITY,
-            )
-            .map_err(component("gateway service registry"))?;
-            let issuer_handoff =
-                EncryptedFileHandoffStore::new(gateway_handoff_root.clone(), gateway_handoff_key)
-                    .map_err(component("gateway runtime authority handoff"))?;
-            let issuer: Arc<dyn GatewayRuntimeAuthorityIssuer> =
-                Arc::new(PgGatewayRuntimeAuthorityIssuer::new(
-                    gateway_authority_pool.clone(),
-                    issuer_handoff,
-                    authz_postgres::AUTHORIZATION_MODEL_VERSION,
-                ));
-            let authority = PostgresGatewayEdgeAuthority::new(pool.clone(), gateway_limits())
-                .with_runtime_authority(Arc::clone(&issuer), Duration::from_secs(30))
-                .map_err(component("gateway runtime authority"))?;
-            let recovery_authority =
-                PostgresGatewayEdgeAuthority::new(gateway_authority_pool.clone(), gateway_limits());
-            let ui_authority =
-                PostgresGatewayEdgeAuthority::new(gateway_authority_pool.clone(), gateway_limits())
-                    .with_runtime_authority(Arc::clone(&issuer), Duration::from_secs(30))
-                    .map_err(component("UI gateway runtime authority"))?;
-            let gateway_release_materializer = Arc::new(gateway_release_runtime);
-            let gateway_release_materializer_port: Arc<dyn GatewayReleaseMaterializer> =
-                gateway_release_materializer.clone();
-            let gateway_service_materializer: Arc<dyn GatewayServiceMaterializer> =
-                gateway_release_materializer.clone();
-            let service_ownership = Arc::new(PostgresGatewayServiceOwnership::new(
-                gateway_authority_pool.clone(),
-            ));
-            let service_claim_resolution: Arc<dyn GatewayServiceClaimResolutionStore> =
-                service_ownership.clone();
-            let service_expired_claim_recovery: Arc<dyn GatewayServiceExpiredClaimRecovery> =
-                service_ownership.clone();
-            let service_failure_store = Arc::new(PostgresGatewayServiceFailureStore::new(
-                gateway_authority_pool.clone(),
-            ));
-            let service_log_writer = GatewayServiceLogWriterConfig::new(
-                service_log_store.clone() as Arc<dyn GatewayServiceLogStore>,
-                ServiceLogWriterPolicy::default(),
-            );
-            let service_launch_resolver = Arc::new(
-                PostgresGatewayServiceLaunchResolver::new(
-                    gateway_authority_pool.clone(),
-                    gateway_root_images.clone(),
-                )
-                .with_service_materializer(Arc::clone(&gateway_service_materializer)),
-            );
-            let service_targets = Arc::new(PostgresGatewayServiceTargets::new(
-                gateway_authority_pool.clone(),
-            ));
-            let resolver_handoff: Arc<dyn RuntimeHandoffStore> = Arc::new(
-                EncryptedFileHandoffStore::new(gateway_handoff_root, gateway_handoff_key)
-                    .map_err(component("gateway runtime resolver handoff"))?,
-            );
-            let releases = PostgresGatewayReleaseResolver::new(
-                pool.clone(),
-                gateway_root_images.clone(),
-                resolver_handoff,
-            )
-            .with_release_materializer(gateway_release_materializer_port);
-            let runtime = GatewayRuntimeService::new(
-                releases,
-                ProviderGatewayRuntimeLauncher {
-                    provider: Arc::clone(&provider),
-                },
-            );
-            let stateless_handler = PrivateHttpVmGatewayHandler::new(runtime);
-            let service_supervisor_context = Arc::new(GatewayServiceSupervisorContext {
-                owner: service_owner.clone(),
-                policy: GatewayServiceSupervisorPolicy::default(),
-                ownership: service_ownership.clone(),
-                failure_store: service_failure_store.clone(),
-                resolver: service_launch_resolver.clone(),
-                provider: Arc::clone(&provider),
-                targets: service_targets.clone(),
-                registry: service_registry.clone(),
-                service_authority: gateway.public_authority.clone(),
-            });
-            let service_policy = service_supervisor_context.policy;
-            let service_boot_context = GatewayServiceBootRecoveryContext {
-                owner: service_supervisor_context.owner.clone(),
-                cleanup_policy: GatewayServiceCleanupDriverPolicy {
-                    lease: service_policy.lease,
-                    database_timeout: service_policy.instance.probe_timeout,
-                },
-                shutdown_timeout: service_policy.instance.shutdown_timeout,
-                ownership: service_ownership.clone(),
-                exact_recovery: service_ownership.clone(),
-                targets: service_targets.clone(),
-                failure_store: service_failure_store.clone(),
-                resolver: service_launch_resolver.clone(),
-                provider: Arc::clone(&service_supervisor_context.provider),
-            };
-            GatewayServiceSupervisor::new(clone_service_supervisor_context(
-                &service_supervisor_context,
-            ))
-            .map_err(component("gateway service supervisor"))?;
-            let handler = Arc::new(
-                GatewayServiceHandler::new(
-                    PostgresGatewayExecutionTargetResolver::new(gateway_authority_pool.clone()),
-                    stateless_handler,
-                    service_registry,
-                    service_owner,
-                )
-                .map_err(component("gateway service handler"))?,
-            );
-            let ingress_pool = connect_control_plane(&config.database_url, 4)
-                .await
-                .map_err(component("gateway secret resolver PostgreSQL connection"))?;
-            let inbound: Arc<dyn GatewayInboundSecretResolver> =
-                Arc::new(GatewayIngressSecretResolver::new(
-                    ingress_pool,
-                    EncryptedStore::new(gateway_secret_keys),
-                ));
-            let mailbox: Arc<dyn gateway_edge::GatewayMailboxPublisher> =
-                Arc::new(PostgresGatewayMailboxPublisher::new(pool.clone()));
-            let dispatcher: Arc<dyn GatewayRequestDispatcher> = Arc::new(
-                GatewayDispatcher::new(authority.clone(), Arc::clone(&handler), authority.clone())
-                    .with_inbound_secret_resolver(Arc::clone(&inbound))
-                    .with_mailbox_publisher(Arc::clone(&mailbox)),
-            );
-            let ui_dispatcher = gateway.ui_origin.as_ref().map(|ui| {
-                let ui_core = Arc::new(
-                    GatewayDispatcher::new(
-                        ui_authority.clone(),
-                        Arc::clone(&handler),
-                        ui_authority.clone(),
-                    )
-                    .with_inbound_secret_resolver(Arc::clone(&inbound))
-                    .with_mailbox_publisher(Arc::clone(&mailbox)),
-                );
-                Arc::new(ui_origin_wiring::RealUiGatewayDispatcher::new(
-                    ui_core,
-                    Arc::new(ui_authority.clone()),
-                    ui.namespace().clone(),
-                    ui.public_port(),
-                )) as Arc<dyn ui_browser_content::UiGatewayDispatcher>
-            });
-            let administration = LocalCaddyAdministration::new(&gateway.caddy_admin_url)
-                .map_err(component("gateway Caddy administration"))?;
-            let template = LocalCaddyConfigurationTemplate::new(
-                &gateway.caddy_configuration_template,
-                gateway.caddy_server_name,
-            )
-            .map_err(component("gateway Caddy configuration template"))?;
-            let template = match &gateway.ui_origin {
-                Some(ui) => template
-                    .with_ui_namespace(
-                        ui.namespace().as_str(),
-                        ui.listener().ok_or_else(|| {
-                            AppError::Configuration(String::from("missing UI origin listener"))
-                        })?,
-                    )
-                    .map_err(component("gateway UI Caddy configuration"))?,
-                None => template,
-            };
-            let provider: Arc<dyn gateway_edge::GatewayProvider> = Arc::new(
-                LocalCaddyGatewayProvider::new(administration, Arc::clone(&dispatcher))
-                    .with_dispatcher_upstream(gateway.dispatcher_listen.to_string())
-                    .with_configuration_template(template),
-            );
-            Some(GatewayEdgeRuntime {
-                authority,
-                recovery_authority,
-                service_supervisor_context,
-                service_claim_resolution,
-                service_expired_claim_recovery,
-                service_boot_context,
-                service_log_writer,
-                provider,
-                dispatcher,
-                dispatcher_listen: gateway.dispatcher_listen,
-                public_authority: gateway.public_authority,
-                ui_dispatcher,
-                ui_origin: gateway.ui_origin,
-            })
-        } else {
-            None
-        };
-        let release_authorizer = Arc::new(authz_postgres::PostgresMelangeAuthorizer);
-        let release_service = Arc::new(ReleaseService::new(
-            pool.clone(),
-            release_authorizer.clone(),
-        ));
-        let artifact_store = LocalArtifactStore::new(
-            std::fs::canonicalize(release_artifact_root)
-                .map_err(component("release artifact store"))?,
-        )
-        .map_err(component("release artifact store"))?;
-        let build_executor = Arc::new(
-            BuildExecutor::initialize(
-                Arc::new(PgBuildRepository::new(pool.clone())),
-                Arc::clone(&provider),
-                artifact_store.clone(),
-                Arc::clone(&release_service),
-                BuildExecutorConfig {
-                    workspace_root: config.build_workspace_root,
-                    repository_root: config.repository_root.clone(),
-                    git_binary: build_git_binary,
-                    image_filesystems: Arc::clone(&image_filesystems),
-                    timeout: config.build_timeout,
-                },
-            )
-            .map_err(component("isolated build executor"))?,
-        );
-        let internal_platform_policy = release_domain::RuntimePolicy {
-            vcpus: config.runtime_policy.max_vcpus,
-            memory_mib: config.runtime_policy.max_memory_mib,
-            network: if config.runtime_policy.allow_egress {
-                release_domain::NetworkAccess::Egress
-            } else if config.runtime_policy.allow_broker_only {
-                release_domain::NetworkAccess::BrokerOnly
-            } else {
-                release_domain::NetworkAccess::Disabled
-            },
-        };
-        let internal_platform_policy_version = config.runtime_policy.version.clone();
-        let spec_factory = Arc::new(PgAgentVmSpecFactory {
-            pool: pool.clone(),
-            root_images: config.root_images,
-            runtime_policy: config.runtime_policy,
-        });
-        let launch_authorizer =
-            Arc::new(PgRunLaunchAuthorizer::new(pool.clone(), release_authorizer));
-        let update_completion = Arc::new(UpdateRunCompletion {
-            pool: pool.clone(),
-            releases: Arc::clone(&release_service),
-            admission_cursor: Mutex::new(None),
-        });
-        let mailbox_store: Arc<dyn MailboxDispatchStore> = mailbox_repository.clone();
-        let completion = Arc::new(CompositeRunCompletionObserver::new(vec![
-            Arc::clone(&update_completion) as Arc<dyn RunCompletionObserver>,
-            Arc::new(MailboxRunCompletion::new(Arc::clone(&mailbox_store))),
-        ]));
-        let orchestrator = Arc::new(
-            RunOrchestrator::new(
-                run_repository.clone(),
-                volumes,
-                Arc::clone(&provider),
-                spec_factory,
-                config.agent_state_capacity_bytes,
-            )
-            .with_workspace_manager(
-                Arc::clone(&workspaces) as Arc<dyn heph_runtime::RunWorkspaceManager>
-            )
-            .with_runtime_git_workspace_manager(
-                workspaces as Arc<dyn heph_runtime::RuntimeGitWorkspaceManager>,
-            )
-            .with_runtime_manager(run_runtime)
-            .with_launch_authorizer(launch_authorizer)
-            .with_resource_observer(Arc::new(MailboxRunResources::new(Arc::clone(
-                &mailbox_store,
-            ))))
-            .with_authority_manager(runtime_authority)
-            .with_secret_manager(secret_mounts)
-            .with_completion_observer(completion),
-        );
-
-        let verifier = Arc::new(OidcVerifier::new(
-            config.oidc.issuer,
-            &config.oidc.audience,
-            config.oidc.algorithm,
-            config.oidc.decoding_key,
-        ));
-        let identity_store = Arc::new(PostgresIdentityStore::new(pool.clone()));
-        let oidc_git_authenticator = Arc::new(OidcGitAuthenticator::new(
-            verifier,
-            Arc::clone(&identity_store) as Arc<dyn identity_application::VerifiedIdentityMapper>,
-        ));
-        let git_authenticator: Arc<dyn GitAuthenticator> = Arc::new(
-            CompositeGitAuthenticator::new(
-                oidc_git_authenticator,
-                Arc::new(pat_postgres::PostgresPersonalAccessTokenService::new(
-                    pool.clone(),
-                )),
-            )
-            .with_runtime_git(Arc::new(RuntimeGitHttpAuthenticator::new(Arc::new(
-                runtime_git_credentials,
-            )))),
-        );
-        let git_authorizer = Arc::new(PostgresGitAuthorizer::new(Arc::new(
-            authz_postgres::PostgresGitAuthorizer::new(pool.clone()),
-        )));
-        let nats_client = async_nats::connect(&config.nats_url)
-            .await
-            .map_err(component("NATS connection"))?;
-        let jetstream = async_nats::jetstream::new(nats_client.clone());
-
-        Ok(Self {
-            pool,
-            application_pool,
-            nats_client,
-            jetstream,
-            forge,
-            storage,
-            identity_store,
-            git_authenticator,
-            git_authorizer,
-            git_backend: config.git_http_backend,
-            git_pre_receive_hook: config.git_pre_receive_hook,
-            git_limits: config.git_http_limits,
-            registry: config.registry,
-            http_listen: config.http_listen,
-            service_log_pool,
-            run_repository,
-            mailbox_repository,
-            review_repository,
-            review_control,
-            orchestrator,
-            build_executor,
-            oci_builder_workers,
-            artifact_store,
-            result_artifact_root,
-            release_service,
-            update_completion,
-            secret_service,
-            rpc_mediator_signing_key: config.rpc_mediator_signing_key,
-            internal_platform_policy,
-            internal_platform_policy_version,
-            secret_broker_socket: config.secret_broker_socket,
-            secret_broker_executor,
-            service_log_maintenance,
-            gateway_edge,
-            worker_concurrency: config.worker_concurrency,
-            outbox_poll_interval: config.outbox_poll_interval,
-            outbox_batch_size: config.outbox_batch_size,
-            startup_timeout: config.startup_timeout,
-            shutdown_timeout: config.shutdown_timeout,
-            runtime_git_socket_path,
-        })
+        app_build::build(config).await
     }
 
     /// Binds HTTP, establishes durable NATS topology, and starts supervised
