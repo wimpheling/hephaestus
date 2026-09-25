@@ -6,3 +6,6 @@ use super::*;
 mod pins;
 #[path = "installation/static_ui.rs"]
 mod static_ui;
+
+#[path = "installation/guards.rs"]
+mod guards;
