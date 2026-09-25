@@ -3,8 +3,7 @@ use super::application;
 use super::command_transport::completion_error;
 use super::{
     Arc, CancellationToken, Duration, Mutex, OffsetDateTime, PgPool, ReleaseService,
-    ReleaseServiceError, Run, RunCompletionError, RunCompletionObserver, RunId, RunKind, Sha256,
-    Uuid,
+    ReleaseServiceError, Run, RunCompletionError, RunCompletionObserver, RunId, RunKind, Uuid,
 };
 use async_trait::async_trait;
 use control_plane_postgres::{
@@ -13,7 +12,7 @@ use control_plane_postgres::{
 use identity_domain::{AuthenticatedIdentity, RequestId, UserId};
 use release_domain::ReleaseCommandKey;
 use release_service::BeginUpdateHook;
-use sha2::Digest;
+use sha2::{Digest, Sha256};
 use tokio::sync::oneshot;
 pub struct UpdateRunCompletion {
     pub pool: PgPool,
