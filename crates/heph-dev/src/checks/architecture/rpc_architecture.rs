@@ -2,11 +2,13 @@
 
 use super::Diagnostic;
 
+#[path = "rpc_architecture/deadline.rs"]
+mod deadline;
 #[path = "rpc_architecture/module_graph.rs"]
 mod module_graph;
 use std::{collections::BTreeMap, ffi::OsStr, fs, path::Path};
 
-const RULES: [&str; 7] = [
+const RULES: [&str; 8] = [
     "RPC-CONNECT-ONLY-IN-TRANSPORT",
     "RPC-METHOD-IN-SEPARATE-FILE",
     "RPC-NON_RPC-HTTP-ALLOWLIST",
@@ -14,6 +16,7 @@ const RULES: [&str; 7] = [
     "RPC-ERRORS-MAPPED-AT-BOUNDARY",
     "RPC-NO-DIRECT-CONNECT-ERROR",
     "RPC-HANDLER-IS-THIN",
+    "RPC-DEADLINE-CANCELLATION-PROPAGATION",
 ];
 
 const GENERATED_LEAK_RULE: &str = "RPC-GENERATED-TYPES-DO-NOT-LEAK-INWARD";
@@ -29,6 +32,7 @@ pub(super) fn validate(root: &Path, enabled_rules: &[String], diagnostics: &mut 
     }
     validate_generated_layout(root, &active, diagnostics);
     visit_rust_sources(root, &root.join("crates"), &active, diagnostics);
+    deadline::validate(root, &active, diagnostics);
 }
 
 pub(super) fn audit(root: &Path) -> BTreeMap<&'static str, usize> {
@@ -39,6 +43,7 @@ pub(super) fn audit(root: &Path) -> BTreeMap<&'static str, usize> {
     let mut diagnostics = Vec::new();
     validate_generated_layout(root, &active, &mut diagnostics);
     visit_rust_sources(root, &root.join("crates"), &active, &mut diagnostics);
+    deadline::validate(root, &active, &mut diagnostics);
     let mut counts = BTreeMap::new();
     for diagnostic in diagnostics {
         *counts.entry(diagnostic.rule_id).or_insert(0) += 1;
