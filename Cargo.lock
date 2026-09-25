@@ -1358,9 +1358,7 @@ dependencies = [
  "tokio",
  "tracing",
  "uuid",
- "vm-fake",
  "vm-trait",
- "volume-local",
  "volume-postgres",
 ]
 

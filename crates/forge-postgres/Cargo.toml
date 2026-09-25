@@ -42,9 +42,7 @@ run-postgres = { path = "../run-postgres" }
 serial_test = "3"
 tempfile = "3"
 tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }
-vm-fake = { path = "../vm-fake" }
 vm-trait.workspace = true
-volume-local = { path = "../volume-local" }
 volume-postgres = { path = "../volume-postgres" }
 
 [lints]
