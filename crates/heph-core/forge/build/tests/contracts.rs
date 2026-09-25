@@ -8,30 +8,24 @@ use heph_build::{
 };
 use std::sync::Arc;
 
-fn shared_contracts(
-    _job: ClaimedProductionJob,
-    _materialization: ClaimedMaterializationJob,
-    _output: OciImageProductionOutput,
-    _root: MaterializedRoot,
-    _provenance: RepositoryOciImageProvenance,
-    _path: RepositoryOciImageSourcePath,
-    _store: Arc<dyn OciImageProductionJobStore>,
-    _publication: Arc<dyn RepositoryOciImagePublicationStore>,
-) -> Result<RepositoryOciImagePublicationLease, OciWorkerError> {
+const fn assert_type<T>() {}
+
+fn error_conversion_is_available() {
     let _: fn(OciWorkerStoreError) -> OciWorkerError = OciWorkerError::Store;
-    Err(OciWorkerStoreError::Conflict.into())
 }
 
 #[test]
 fn shared_ports_and_dtos_are_available_from_the_facade() {
-    let _: fn(
-        ClaimedProductionJob,
-        ClaimedMaterializationJob,
-        OciImageProductionOutput,
-        MaterializedRoot,
-        RepositoryOciImageProvenance,
-        RepositoryOciImageSourcePath,
-        Arc<dyn OciImageProductionJobStore>,
-        Arc<dyn RepositoryOciImagePublicationStore>,
-    ) -> Result<RepositoryOciImagePublicationLease, OciWorkerError> = shared_contracts;
+    assert_type::<ClaimedProductionJob>();
+    assert_type::<ClaimedMaterializationJob>();
+    assert_type::<OciImageProductionOutput>();
+    assert_type::<MaterializedRoot>();
+    assert_type::<RepositoryOciImageProvenance>();
+    assert_type::<RepositoryOciImageSourcePath>();
+    assert_type::<Arc<dyn OciImageProductionJobStore>>();
+    assert_type::<Arc<dyn RepositoryOciImagePublicationStore>>();
+    assert_type::<RepositoryOciImagePublicationLease>();
+    assert_type::<OciWorkerError>();
+    assert_type::<OciWorkerStoreError>();
+    error_conversion_is_available();
 }
