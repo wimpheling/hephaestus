@@ -137,15 +137,16 @@ fn adapter_declaration(package: &CargoPackage, diagnostics: &mut Vec<Diagnostic>
         ));
         return false;
     }
-    let valid_context = hephaestus
-        .get("database_context")
-        .and_then(|value| value.as_str())
-        .is_some_and(|context| {
-            !context.is_empty()
-                && context
-                    .bytes()
-                    .all(|byte| byte.is_ascii_lowercase() || byte.is_ascii_digit() || byte == b'-')
-        });
+    if !package.name.ends_with("-postgres") {
+        diagnostics.push(Diagnostic::new(
+            SQLX_RULE,
+            format!(
+                "PostgreSQL adapter {} must use a package name ending in `-postgres` when `hephaestus.postgres_adapter = true`",
+                package.name
+            ),
+        ));
+    }
+    let valid_context = has_valid_database_context(package);
     if !valid_context {
         diagnostics.push(Diagnostic::new(
             SQLX_RULE,
@@ -155,7 +156,7 @@ fn adapter_declaration(package: &CargoPackage, diagnostics: &mut Vec<Diagnostic>
             ),
         ));
     }
-    valid_context
+    package.name.ends_with("-postgres") && valid_context
 }
 
 fn manifest_root(package: &CargoPackage) -> PathBuf {
@@ -220,12 +221,28 @@ fn has_dev_sqlx(package: &CargoPackage) -> bool {
 }
 
 fn is_declared_adapter(package: &CargoPackage) -> bool {
+    package.name.ends_with("-postgres")
+        && package
+            .metadata
+            .get("hephaestus")
+            .and_then(|metadata| metadata.get("postgres_adapter"))
+            .and_then(serde_json::Value::as_bool)
+            .unwrap_or(false)
+        && has_valid_database_context(package)
+}
+
+fn has_valid_database_context(package: &CargoPackage) -> bool {
     package
         .metadata
         .get("hephaestus")
-        .and_then(|metadata| metadata.get("postgres_adapter"))
-        .and_then(serde_json::Value::as_bool)
-        .unwrap_or(false)
+        .and_then(|metadata| metadata.get("database_context"))
+        .and_then(serde_json::Value::as_str)
+        .is_some_and(|context| {
+            !context.is_empty()
+                && context
+                    .bytes()
+                    .all(|byte| byte.is_ascii_lowercase() || byte.is_ascii_digit() || byte == b'-')
+        })
 }
 
 fn visit_sources(
@@ -677,7 +694,7 @@ fn contains_schema_sql(sql: &str) -> bool {
 mod tests {
     use super::{
         RULES, STATIC_RULE, audit, contains_schema_sql, validate_exception_scope,
-        validate_rust_source,
+        validate_metadata, validate_rust_source,
     };
     use crate::checks::architecture::{
         ArchitectureException, CargoDependency, CargoMetadata, CargoPackage, Diagnostic,
@@ -733,6 +750,13 @@ mod tests {
             path: None,
             kind: Some(String::from("dev")),
         }
+    }
+
+    fn sqlx_metadata_diagnostics(metadata: &CargoMetadata) -> Vec<Diagnostic> {
+        let active = BTreeSet::from([super::SQLX_RULE]);
+        let mut diagnostics = Vec::new();
+        validate_metadata(metadata, &active, &mut diagnostics);
+        diagnostics
     }
 
     fn static_exception(scope: &str, rule_id: &str) -> ArchitectureException {
@@ -797,7 +821,7 @@ mod tests {
         let root = fixture("valid");
         let adapter = package(
             &root,
-            "adapter",
+            "adapter-postgres",
             json!({"hephaestus": {"postgres_adapter": true, "database_context": "fixture"}}),
             vec![sqlx_dependency()],
         );
@@ -805,7 +829,10 @@ mod tests {
             &root,
             "application",
             serde_json::Value::Null,
-            vec![path_dependency("adapter", root.join("adapter"))],
+            vec![path_dependency(
+                "adapter-postgres",
+                root.join("adapter-postgres"),
+            )],
         );
         let metadata = CargoMetadata {
             workspace_members: vec![adapter.id.clone(), application.id.clone()],
@@ -813,6 +840,66 @@ mod tests {
             workspace_root: root.clone(),
         };
         assert!(audit(&root, &metadata, &[]).is_empty());
+    }
+
+    #[test]
+    fn production_postgres_adapter_requires_the_postgres_package_suffix() {
+        let root = fixture("invalid");
+        let adapter = package(
+            &root,
+            "adapter",
+            json!({"hephaestus": {"postgres_adapter": true, "database_context": "fixture"}}),
+            vec![sqlx_dependency()],
+        );
+        let metadata = CargoMetadata {
+            workspace_members: vec![adapter.id.clone()],
+            packages: vec![adapter],
+            workspace_root: root,
+        };
+
+        let diagnostics = sqlx_metadata_diagnostics(&metadata);
+        assert!(diagnostics.iter().any(|diagnostic| {
+            diagnostic
+                .message
+                .contains("must use a package name ending in `-postgres`")
+        }));
+    }
+
+    #[test]
+    fn postgres_suffix_without_adapter_metadata_does_not_authorize_sqlx() {
+        let root = fixture("invalid");
+        let suffix_package = package(
+            &root,
+            "suffix-without-metadata-postgres",
+            serde_json::Value::Null,
+            vec![sqlx_dependency()],
+        );
+        let consumer = package(
+            &root,
+            "suffix-consumer",
+            serde_json::Value::Null,
+            vec![path_dependency(
+                "suffix-without-metadata-postgres",
+                root.join("suffix-without-metadata-postgres"),
+            )],
+        );
+        let metadata = CargoMetadata {
+            workspace_members: vec![suffix_package.id.clone(), consumer.id.clone()],
+            packages: vec![suffix_package, consumer],
+            workspace_root: root,
+        };
+
+        let diagnostics = sqlx_metadata_diagnostics(&metadata);
+        assert!(diagnostics.iter().any(|diagnostic| {
+            diagnostic.message.contains(
+                "workspace package suffix-without-metadata-postgres reaches SQLx outside a declared PostgreSQL adapter",
+            )
+        }));
+        assert!(diagnostics.iter().any(|diagnostic| {
+            diagnostic.message.contains(
+                "workspace package suffix-consumer reaches SQLx outside a declared PostgreSQL adapter",
+            )
+        }));
     }
 
     #[test]
@@ -833,7 +920,7 @@ mod tests {
         let invalid_adapter = package(
             &root,
             "invalid-adapter",
-            json!({"hephaestus": {"postgres_adapter": true}}),
+            json!({"hephaestus": {"postgres_adapter": true, "database_context": "fixture"}}),
             vec![sqlx_dependency()],
         );
         let metadata = CargoMetadata {

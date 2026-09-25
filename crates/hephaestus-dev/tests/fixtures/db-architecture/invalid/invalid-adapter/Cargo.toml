@@ -8,3 +8,4 @@ sqlx = "0.8"
 
 [package.metadata.hephaestus]
 postgres_adapter = true
+database_context = "fixture"
