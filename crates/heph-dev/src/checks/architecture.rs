@@ -14,6 +14,7 @@ use std::{
 mod db_architecture;
 mod db_rls;
 mod event_architecture;
+mod file_length_architecture;
 mod layer_architecture;
 mod rpc_architecture;
 mod rust_architecture;
@@ -259,9 +260,26 @@ pub fn run(context: &DevContext) -> Result<()> {
                     .join(", ")
             );
         }
+        print_file_length_audit(root, &configuration.maximum_file_lines);
         Ok(())
     } else {
         Err(DevError::Invalid(render_diagnostics(&diagnostics)))
+    }
+}
+
+fn print_file_length_audit(root: &Path, maximum_file_lines: &BTreeMap<String, usize>) {
+    let audit = file_length_architecture::audit(root, maximum_file_lines);
+    if audit.is_empty() {
+        println!("migration-gated Rust file-length dry-run: clean");
+    } else {
+        println!(
+            "migration-gated Rust file-length dry-run: {}",
+            audit
+                .iter()
+                .map(|(rule, count)| format!("{rule}={count}"))
+                .collect::<Vec<_>>()
+                .join(", ")
+        );
     }
 }
 
@@ -335,6 +353,12 @@ fn validate_repository(
     validate_exceptions(root, configuration, &mut diagnostics);
     let usable_exceptions = usable_exceptions(root, configuration);
     validate_metadata(root, metadata, &mut diagnostics);
+    file_length_architecture::validate(
+        root,
+        &configuration.enabled_rules,
+        &configuration.maximum_file_lines,
+        &mut diagnostics,
+    );
     layer_architecture::validate(&configuration.enabled_rules, metadata, &mut diagnostics);
     topology_architecture::validate(
         root,

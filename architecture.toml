@@ -74,12 +74,12 @@ enabled_rules = [
 # complete. Keeping them here makes the eventual policy reviewable and avoids
 # layer-specific constants in checker code.
 [maximum_file_lines]
-domain = 500
-application = 500
-adapter = 700
-transport = 500
-composition = 500
-development = 700
+domain = 350
+application = 350
+adapter = 350
+transport = 350
+composition = 350
+development = 350
 phoenix_state = 500
 phoenix_page = 350
 ui_component = 500
