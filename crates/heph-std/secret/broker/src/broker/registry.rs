@@ -1,8 +1,8 @@
 use super::{
     adapter::{destination_from_origin, destination_from_rule},
     common::{
-        BrokerAdapter, BrokerAdapterError, BrokerRequest, BrokerResponse, BrokeredSecretRule,
-        HashMap, IpAddr, SecretValue, VerifiedBrokeredHttpsRule, async_trait,
+        BrokerAdapter, BrokerAdapterError, BrokerRequest, BrokerResponse, HashMap, SecretValue,
+        VerifiedBrokeredHttpsRule, async_trait,
     },
     transport::ReqwestPinnedHttpsTransport,
     types::{
@@ -11,6 +11,9 @@ use super::{
     },
     validation::map_rule_error,
 };
+
+#[cfg(feature = "test-fixtures")]
+use super::common::{BrokeredSecretRule, IpAddr};
 
 impl BrokeredHttpsAdapterRegistry {
     /// Builds a fail-closed registry from control-plane-pinned upstreams.

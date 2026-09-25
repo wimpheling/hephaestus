@@ -5,12 +5,15 @@
 /// invalid-certificate escape hatch is exposed.
 use super::{
     common::{
-        BrokerAdapterError, BrokerResponse, BrokerStatus, IpAddr, MAX_UPSTREAM_RESPONSE_BYTES,
-        SocketAddr, UPSTREAM_TIMEOUT, async_trait,
+        BrokerAdapterError, BrokerResponse, BrokerStatus, MAX_UPSTREAM_RESPONSE_BYTES, SocketAddr,
+        UPSTREAM_TIMEOUT, async_trait,
     },
     types::{BrokeredHttpsMethod, PinnedHttpsTransport, UpstreamHttpsRequest},
     validation::{public_address, valid_dns_destination},
 };
+
+#[cfg(any(test, feature = "test-fixtures"))]
+use super::common::IpAddr;
 
 /// Default redirect-free, proxy-free TLS transport.
 ///
