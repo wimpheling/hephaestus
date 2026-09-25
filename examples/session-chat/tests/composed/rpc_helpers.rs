@@ -1,4 +1,3 @@
-use super::*;
 use hephaestus_app::RunningHephaestus;
 use rpc_proto::{
     connect::hephaestus::instance::v1::AgentInstanceServiceClient,

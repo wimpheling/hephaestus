@@ -1,17 +1,14 @@
-use super::*;
-use super::{SessionBrokerFixture, SessionChatBrowserMode};
+use super::BrowserSessionObjects;
+use super::SessionBrokerFixture;
+use super::rpc_helpers::{git_output_bare, git_output_bare_bytes};
 use forge_domain::ProjectId;
-use hephaestus_app::RunningHephaestus;
 use identity_domain::{AuthenticatedIdentity, OrganizationId};
-use rpc_proto::messages::hephaestus::common::v1::RequestContext;
 use serde_json::Value as JsonValue;
 use sqlx::PgPool;
 use std::{
-    collections::{BTreeMap, HashMap, HashSet},
-    path::{Path, PathBuf},
-    time::Duration,
+    collections::{HashMap, HashSet},
+    path::Path,
 };
-use time::OffsetDateTime;
 use uuid::Uuid;
 /// Persisted identifiers and immutable first-phase evidence used by recovery.
 pub(crate) struct BrowserRestartState<'a> {

@@ -1,16 +1,14 @@
 use super::restart_tail::finish_restart;
 use super::*;
-use super::{BrowserRestartState, MODEL_RESPONSE_TEXT, SessionBrokerFixture};
+use super::{BrowserRestartState, MODEL_RESPONSE_TEXT};
 use super::{
     assert_runtime_git_turn_at_commit, canonical_record_commit, git_output_bare,
     git_output_bare_bytes, run_session_chat_browser,
 };
-use forge_domain::ProjectId;
 use hephaestus_app::RunningHephaestus;
-use identity_domain::{AuthenticatedIdentity, OrganizationId};
 use serde_json::Value as JsonValue;
 use sqlx::PgPool;
-use std::{collections::HashMap, path::Path, process::Stdio, time::Duration};
+use std::{collections::HashMap, path::Path, time::Duration};
 use time::OffsetDateTime;
 use tokio::process::Command;
 use uuid::Uuid;

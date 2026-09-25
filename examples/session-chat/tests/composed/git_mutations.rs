@@ -1,6 +1,6 @@
-use super::*;
+use super::SESSION_ID;
+use super::rpc_helpers::{authenticated_git, git};
 use hephaestus_app::RunningHephaestus;
-use sqlx::PgPool;
 use std::path::Path;
 use std::process::Stdio;
 use tokio::process::Command;

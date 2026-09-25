@@ -6,23 +6,13 @@ use super::browser_state::{BrowserRestartState, load_browser_restart_state};
 use super::denial::prepare_denial_probe_source;
 use super::git_mutations::initialize_session_checkout;
 use super::model::SessionBrokerFixture;
-use super::rpc_helpers::{git_output, instance_client, mutation_context, opaque};
 use super::secrets::seed_model_import;
-use super::*;
-use super::{
-    DENIAL_HUMAN_RECORD_ID, HUMAN_RECORD_ID, MODEL_RULE, concurrent_e2e_enabled,
-    denial_probe_enabled, fork_e2e_enabled, restart_e2e_enabled,
-};
-use crate::golden_modules::cooking_builds::{CookingBuildContext, CookingIdentity};
+use super::{concurrent_e2e_enabled, denial_probe_enabled, fork_e2e_enabled, restart_e2e_enabled};
 use forge_domain::{GitRef, OrganizationId, ProjectId};
 use forge_postgres::PgForgeRepository;
 use forge_service::CreateRepository;
 use hephaestus_app::RunningHephaestus;
 use identity_domain::AuthenticatedIdentity;
-use rpc_proto::messages::hephaestus::{
-    common::v1::{ParameterValue, RuntimePolicy, parameter_value::Value},
-    instance::v1::ImportAgentRequest,
-};
 use sqlx::PgPool;
 use std::{collections::HashSet, path::Path, time::Duration};
 use uuid::Uuid;

@@ -3,7 +3,6 @@ use super::denial::accepted_receive_count;
 use super::fork;
 use super::fork_phase::exercise_browser_fork;
 use super::rpc_helpers::{git_output_bare, git_output_bare_bytes};
-use super::*;
 use super::{SessionBrokerFixture, concurrent_e2e_enabled, fork_e2e_enabled};
 use forge_domain::{OrganizationId, ProjectId};
 use hephaestus_app::RunningHephaestus;
@@ -12,7 +11,6 @@ use sqlx::PgPool;
 use std::{
     collections::{BTreeMap, BTreeSet},
     path::Path,
-    sync::Arc,
 };
 use uuid::Uuid;
 #[allow(clippy::too_many_arguments, clippy::too_many_lines)]

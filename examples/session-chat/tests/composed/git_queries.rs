@@ -1,5 +1,4 @@
 use super::rpc_helpers::git_output_bare;
-use super::*;
 use sqlx::PgPool;
 use std::path::Path;
 use uuid::Uuid;

@@ -1,7 +1,6 @@
-use super::*;
+use super::{MODEL_RULE, MODEL_SECRET_VALUE};
 use forge_domain::{OrganizationId, ProjectId};
 use identity_domain::AuthenticatedIdentity;
-use rpc_proto::messages::hephaestus::common::v1::RequestContext;
 use secret_application::{
     BindSecret, CreateSecret, DeclareBrokeredHttpsRule, GrantAndAcceptSecretImport,
 };

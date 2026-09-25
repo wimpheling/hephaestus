@@ -2,11 +2,10 @@ use super::denial::{accepted_receive_count, assert_denial_probe_output, canonica
 use super::model::SessionBrokerFixture;
 use super::nonbrowser_setup::NonBrowserState;
 use super::runtime_assertions::assert_runtime_git_turn;
-use super::*;
+use super::{DENIAL_HUMAN_RECORD_ID, HUMAN_RECORD_ID, SESSION_ID};
 use sqlx::PgPool;
 use std::path::Path;
 use std::time::Duration;
-use tokio::time::sleep;
 use uuid::Uuid;
 
 #[allow(clippy::cognitive_complexity, clippy::too_many_lines)]

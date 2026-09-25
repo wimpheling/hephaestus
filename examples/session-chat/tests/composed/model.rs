@@ -2,9 +2,7 @@ use super::{
     HUMAN_RECORD_ID, SESSION_ID, concurrent_e2e_enabled, denial_probe_enabled, fork_e2e_enabled,
     restart_e2e_enabled,
 };
-use secret_application::BrokerAdapter;
 use secret_broker::BrokeredHttpsAdapterRegistry;
-use secret_domain::SecretValue;
 /// Deterministic CA-pinned HTTPS model fixture for session-chat.
 use serde_json::Value as JsonValue;
 use std::{
