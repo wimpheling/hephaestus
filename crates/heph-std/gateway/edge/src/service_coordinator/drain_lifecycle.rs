@@ -1,11 +1,13 @@
 use super::{
-    Arc, DRAIN_POLL_INTERVAL, DrainCount, DrainOutcome, DrainTransition, FailureReason, Future,
+    Arc, DrainCount, DrainOutcome, DrainTransition, Duration, FailureReason, Future,
     GatewayEdgeError, GatewayServiceCoordinator, GatewayServiceCoordinatorStatus,
     GatewayServiceInstanceKey, GatewayServiceInstanceLease, GatewayServiceLeaseStatus,
     GatewayServiceOwnershipError, Instant, MonitorFuture, ServiceInstanceError,
     ServiceInstanceHandle, ServiceWorkerState, VmInstance, WorkerFuture, current_deadline,
     current_lease, lease_active, monitor_signal, time, watch,
 };
+
+const DRAIN_POLL_INTERVAL: Duration = Duration::from_millis(50);
 
 impl GatewayServiceCoordinator {
     // This state machine deliberately carries every live owner through the
