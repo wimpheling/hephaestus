@@ -29,6 +29,12 @@ EXPECTED_FACADES = {
     "heph-build",
 }
 EXPECTED_BASELINE_PACKAGE_COUNT = 85
+EXPECTED_FACADE_TEST_TARGETS = {
+    ("heph-build", "contracts"),
+    ("heph-forge", "api"),
+    ("heph-run", "api"),
+    ("heph-runtime", "api"),
+}
 ALLOWED_ARCHITECTURE_METADATA_DELTA = {
     "package": "git-http",
     "field": "allow_cross_context_dependencies",
@@ -64,6 +70,12 @@ ALLOWED_INTEGRATION_TEST_RELOCATIONS = (
         "from_target": "postgres",
         "to_package": "hephaestus-app",
         "to_target": "forge_postgres_receive",
+    },
+    {
+        "from_package": "gateway-postgres",
+        "from_target": "service_ownership",
+        "to_package": "hephaestus-app",
+        "to_target": "gateway_service_ownership",
     },
 )
 
@@ -282,6 +294,10 @@ def reconcile(
             f"removed integration-test target {package}::{target}"
             for package, target in sorted(removed_tests)
         )
+    for target in EXPECTED_FACADE_TEST_TARGETS & added_tests:
+        identity = current_tests[target]
+        if identity.get("crate_types") == ["bin"] and identity.get("kind") == ["test"]:
+            added_tests.remove(target)
     if added_tests:
         changed.extend(
             f"added integration-test target {package}::{target}"

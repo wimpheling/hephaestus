@@ -1,0 +1,17 @@
+[package]
+name = "heph-forge"
+description = "Provider-neutral forge contracts and receive operations for Hephaestus"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+
+[package.metadata.hephaestus]
+layer = "application"
+context = "forge"
+
+[dependencies]
+forge-domain = { path = "domain" }
+forge-service = { path = "service" }
+
+[lints]
+workspace = true

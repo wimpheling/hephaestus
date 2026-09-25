@@ -161,7 +161,7 @@ use secret_application::BrokerAdapter;
 use secret_broker::{BrokerExecutor, BrokerServer, ServiceBrokerExecutor};
 use secret_postgres::initialize_manager;
 use secret_postgres::{GatewayIngressSecretResolver, SecretRuntimeService, SecretService};
-use secret_runtime::EphemeralSecretConfig;
+use secret_runtime::{EphemeralSecretConfig, FilesystemSecretMountProvider};
 use secret_store::{EncryptedStore, LocalKeyProvider};
 use serde::Deserialize;
 use service_log_maintenance::GatewayServiceLogMaintenanceScheduler;
@@ -3562,12 +3562,15 @@ async fn build_secret_mount_manager(
         EncryptedStore::new(keys.clone()),
         authorizer.clone(),
     ));
-    let runtime = Arc::new(SecretRuntimeService::new(
-        pool.clone(),
-        resolver_pool,
-        EncryptedStore::new(keys),
-        authorizer,
-    ));
+    let runtime = Arc::new(
+        SecretRuntimeService::new(
+            pool.clone(),
+            resolver_pool,
+            EncryptedStore::new(keys),
+            authorizer,
+        )
+        .with_mount_provider(Arc::new(FilesystemSecretMountProvider::new())),
+    );
     let manager = initialize_manager(
         pool,
         dispatch.as_ref().clone(),

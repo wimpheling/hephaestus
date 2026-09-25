@@ -1498,13 +1498,16 @@ name = "gateway-domain"
 version = "0.1.0"
 dependencies = [
  "async-trait",
+ "bytes",
  "capability-domain",
  "http",
  "serde",
  "serde_json",
  "sha2",
  "thiserror 2.0.19",
+ "time",
  "uuid",
+ "vm-trait",
 ]
 
 [[package]]
@@ -1545,7 +1548,6 @@ dependencies = [
  "forge-domain",
  "futures-util",
  "gateway-domain",
- "gateway-edge",
  "http",
  "identity-domain",
  "mailbox-dispatch",
@@ -2379,11 +2381,47 @@ dependencies = [
 ]
 
 [[package]]
+name = "heph-forge"
+version = "0.1.0"
+dependencies = [
+ "forge-domain",
+ "forge-service",
+]
+
+[[package]]
 name = "heph-run"
 version = "0.1.0"
 dependencies = [
  "run-domain",
  "run-orchestrator",
+]
+
+[[package]]
+name = "heph-runtime"
+version = "0.1.0"
+dependencies = [
+ "vm-trait",
+ "volume-trait",
+ "workspace-domain",
+]
+
+[[package]]
+name = "heph-secret"
+version = "0.1.0"
+dependencies = [
+ "async-trait",
+ "forge-domain",
+ "identity-domain",
+ "run-domain",
+ "run-orchestrator",
+ "runtime-types",
+ "secret-application",
+ "secret-domain",
+ "serde_json",
+ "thiserror 2.0.19",
+ "time",
+ "uuid",
+ "vm-trait",
 ]
 
 [[package]]
@@ -4579,6 +4617,7 @@ dependencies = [
  "capability-domain",
  "forge-domain",
  "gateway-domain",
+ "heph-secret",
  "http",
  "identity-domain",
  "release-domain",
@@ -4587,7 +4626,6 @@ dependencies = [
  "runtime-types",
  "secret-application",
  "secret-domain",
- "secret-runtime",
  "secret-store",
  "serde_json",
  "serial_test",
@@ -4604,19 +4642,10 @@ dependencies = [
 name = "secret-runtime"
 version = "0.1.0"
 dependencies = [
- "async-trait",
- "forge-domain",
- "identity-domain",
- "run-domain",
- "run-orchestrator",
+ "heph-secret",
  "runtime-types",
- "secret-application",
  "secret-domain",
- "secret-store",
- "serde_json",
  "tempfile",
- "thiserror 2.0.19",
- "time",
  "uuid",
  "vm-trait",
 ]

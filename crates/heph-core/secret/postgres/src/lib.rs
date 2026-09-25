@@ -538,11 +538,11 @@ pub struct ProjectAuthority {
 }
 
 use async_trait::async_trait;
+use heph_secret::{
+    EphemeralSecretConfig, SecretDispatchInput, SecretMountManager, SecretMountMetadata,
+};
 use run_domain::Run;
 use runtime_types::RunId;
-use secret_runtime::{
-    EphemeralSecretMount, SecretDispatchInput, SecretMountManager, SecretMountMetadata,
-};
 use std::collections::BTreeSet;
 /// PostgreSQL-backed ephemeral mount metadata.
 #[derive(Clone)]
@@ -609,21 +609,15 @@ impl SecretMountMetadata for PostgresSecretMountMetadata {
     async fn persist_mount(
         &self,
         run_id: RunId,
-        mount: &EphemeralSecretMount,
+        opaque_directory: Uuid,
     ) -> Result<(), run_orchestrator::RunSecretError> {
-        let directory = mount
-            .host_path()
-            .file_name()
-            .and_then(|value| value.to_str())
-            .and_then(|value| Uuid::parse_str(value).ok())
-            .ok_or_else(|| redacted("ephemeral secret identity is invalid"))?;
         sqlx::query(
             "INSERT INTO secret_runtime_mounts
              (run_id, opaque_directory, state)
              VALUES ($1, $2, 'materialized')",
         )
         .bind(run_id.as_uuid())
-        .bind(directory)
+        .bind(opaque_directory)
         .execute(&self.pool)
         .await
         .map_err(db_error)?;
@@ -731,16 +725,20 @@ pub fn initialize_manager<D, R>(
     pool: PgPool,
     dispatch: SecretService<D>,
     runtime: SecretRuntimeService<R>,
-    config: secret_runtime::EphemeralSecretConfig,
+    config: EphemeralSecretConfig,
 ) -> Result<PgSecretMountManager<D, R>, run_orchestrator::RunSecretError>
 where
     D: secret_store::KeyProvider + Send + Sync,
     R: secret_store::KeyProvider + Send + Sync,
 {
+    let provider = runtime
+        .mount_provider()
+        .ok_or_else(|| redacted("secret filesystem provider is unavailable"))?;
     SecretMountManager::initialize(
         PostgresSecretMountMetadata::new(pool),
         dispatch,
         runtime,
+        provider,
         config,
     )
 }
@@ -760,4 +758,53 @@ fn db_error(_: sqlx::Error) -> run_orchestrator::RunSecretError {
 
 fn redacted(message: &str) -> run_orchestrator::RunSecretError {
     run_orchestrator::RunSecretError::redacted(message)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{SecretRuntimeService, SecretService, initialize_manager};
+    use authz_postgres::PostgresMelangeAuthorizer;
+    use heph_secret::EphemeralSecretConfig;
+    use secret_store::{EncryptedStore, LocalKeyProvider};
+    use sqlx::postgres::PgPoolOptions;
+    use std::{path::PathBuf, sync::Arc};
+
+    #[tokio::test]
+    async fn initialize_manager_fails_closed_without_mount_provider() {
+        let pool = PgPoolOptions::new()
+            .max_connections(1)
+            .connect_lazy("postgres://localhost/hephaestus")
+            .expect("lazy PostgreSQL pool");
+        let keys =
+            LocalKeyProvider::new("test/v1", [("test/v1", [7_u8; 32])]).expect("test key provider");
+        let authorizer = Arc::new(PostgresMelangeAuthorizer);
+        let dispatch = SecretService::new(
+            pool.clone(),
+            EncryptedStore::new(keys.clone()),
+            authorizer.clone(),
+        );
+        let runtime = SecretRuntimeService::new(
+            pool.clone(),
+            pool.clone(),
+            EncryptedStore::new(keys),
+            authorizer,
+        );
+        let result = initialize_manager(
+            pool,
+            dispatch,
+            runtime,
+            EphemeralSecretConfig {
+                root: PathBuf::from("/invalid/secret-root"),
+                require_memory_filesystem: true,
+            },
+        );
+        let error = match result {
+            Ok(_) => panic!("missing mount provider must fail closed"),
+            Err(error) => error,
+        };
+        assert_eq!(
+            error.to_string(),
+            "run secret operation failed: secret filesystem provider is unavailable"
+        );
+    }
 }

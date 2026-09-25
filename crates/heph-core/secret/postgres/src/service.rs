@@ -17,6 +17,7 @@ use capability_domain::{
 };
 use forge_domain::{CommitSha, GitRef, ProjectId};
 use gateway_domain::{GatewayError, GatewayInboundSecretResolver, InboundGatewaySecretRule};
+use heph_secret::SecretMountProvider;
 use http::{HeaderName, HeaderValue};
 use identity_domain::{AuthenticatedIdentity, OrganizationId};
 use release_domain::{AgentAttachmentId, AgentInstanceId, AgentInstanceRevisionId};
@@ -47,6 +48,7 @@ pub struct SecretRuntimeService<K> {
     resolver_pool: PgPool,
     encrypted_store: EncryptedStore<K>,
     authorizer: Arc<PostgresMelangeAuthorizer>,
+    mount_provider: Option<Arc<dyn SecretMountProvider>>,
 }
 
 /// Host-only resolver for declared inbound gateway webhook-secret rules.
@@ -2314,7 +2316,19 @@ impl<K: KeyProvider + Send + Sync> SecretRuntimeService<K> {
             resolver_pool,
             encrypted_store,
             authorizer,
+            mount_provider: None,
         }
+    }
+
+    /// Installs the host filesystem provider used by the run mount manager.
+    #[must_use]
+    pub fn with_mount_provider(mut self, provider: Arc<dyn SecretMountProvider>) -> Self {
+        self.mount_provider = Some(provider);
+        self
+    }
+
+    pub(crate) fn mount_provider(&self) -> Option<Arc<dyn SecretMountProvider>> {
+        self.mount_provider.clone()
     }
 
     /// Authenticates and resolves one exact raw lease for ephemeral mounting.
@@ -4089,8 +4103,85 @@ impl<K: KeyProvider + Send + Sync> SecretRuntimeResolver for SecretRuntimeServic
 
 #[cfg(test)]
 mod tests {
-    use super::{PreAdapterDenialClass, PreAdapterDenialStage, SecretServiceError};
-    use secret_store::SecretStoreError;
+    use super::{
+        PostgresMelangeAuthorizer, PreAdapterDenialClass, PreAdapterDenialStage,
+        SecretRuntimeService, SecretServiceError,
+    };
+    use heph_secret::{
+        EphemeralSecretConfig, MaterializedSecretMount, RawSecretFile, SecretMountProvider,
+        SecretRuntimeError,
+    };
+    use secret_store::{EncryptedStore, LocalKeyProvider, SecretStoreError};
+    use sqlx::postgres::PgPoolOptions;
+    use std::{collections::BTreeSet, sync::Arc};
+    use uuid::Uuid;
+
+    #[derive(Debug)]
+    struct TestMountProvider;
+
+    impl SecretMountProvider for TestMountProvider {
+        fn validate_config(
+            &self,
+            _config: &EphemeralSecretConfig,
+        ) -> Result<(), SecretRuntimeError> {
+            Ok(())
+        }
+
+        fn materialize(
+            &self,
+            _config: &EphemeralSecretConfig,
+            _run_id: runtime_types::RunId,
+            _files: Vec<RawSecretFile>,
+            _credential: Option<&secret_domain::OpaqueRuntimeCredential>,
+        ) -> Result<MaterializedSecretMount, SecretRuntimeError> {
+            Err(SecretRuntimeError::InvalidRoot)
+        }
+
+        fn discard_materialized(
+            &self,
+            _config: &EphemeralSecretConfig,
+            _opaque_directory: Uuid,
+        ) -> Result<(), SecretRuntimeError> {
+            Ok(())
+        }
+
+        fn destroy_confirmed(
+            &self,
+            _config: &EphemeralSecretConfig,
+            _opaque_directory: Uuid,
+        ) -> Result<(), SecretRuntimeError> {
+            Ok(())
+        }
+
+        fn reconcile_orphans(
+            &self,
+            _config: &EphemeralSecretConfig,
+            _live_directories: &BTreeSet<String>,
+        ) -> Result<usize, SecretRuntimeError> {
+            Ok(0)
+        }
+    }
+
+    fn runtime_service() -> SecretRuntimeService<LocalKeyProvider> {
+        let pool = PgPoolOptions::new()
+            .max_connections(1)
+            .connect_lazy("postgres://localhost/hephaestus")
+            .expect("lazy PostgreSQL pool");
+        let keys =
+            LocalKeyProvider::new("test/v1", [("test/v1", [7_u8; 32])]).expect("test key provider");
+        SecretRuntimeService::new(
+            pool.clone(),
+            pool,
+            EncryptedStore::new(keys),
+            Arc::new(PostgresMelangeAuthorizer),
+        )
+    }
+
+    #[tokio::test]
+    async fn mount_provider_builder_installs_provider() {
+        let runtime = runtime_service().with_mount_provider(Arc::new(TestMountProvider));
+        assert!(runtime.mount_provider().is_some());
+    }
 
     #[test]
     fn pre_adapter_denial_classes_are_distinct_and_payload_free() {

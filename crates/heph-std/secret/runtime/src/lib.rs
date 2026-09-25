@@ -4,17 +4,12 @@
 //! resulting directory is mounted read-only into a guest and may be destroyed
 //! only after the caller records that the guest has been destroyed.
 
-use async_trait::async_trait;
-use forge_domain::{CommitSha, GitRef};
-use identity_domain::{AuthenticatedIdentity, RequestId, UserId};
-use run_domain::{Run, RunKind};
-use run_orchestrator::{PreparedRunSecrets, RunSecretError, RunSecretManager};
-use runtime_types::RunId;
-use secret_application::{ResolveRunSecrets, SecretDispatchResolver, SecretRuntimeResolver};
-use secret_domain::{
-    DeliveryMode, ExecutionPhase, OpaqueRuntimeCredential, SecretCommandKey,
-    SecretRuntimeSessionId, SecretSlotKey, SecretValue,
+pub use heph_secret::{
+    EphemeralSecretConfig, MaterializedSecretMount, RawSecretFile, SecretDispatchInput,
+    SecretMountManager, SecretMountMetadata, SecretMountProvider, SecretRuntimeError,
 };
+use runtime_types::RunId;
+use secret_domain::{OpaqueRuntimeCredential, SecretSlotKey};
 use std::{
     collections::BTreeSet,
     fs::{self, OpenOptions},
@@ -22,7 +17,6 @@ use std::{
     os::unix::fs::{OpenOptionsExt, PermissionsExt},
     path::{Path, PathBuf},
 };
-use time::OffsetDateTime;
 use uuid::Uuid;
 use vm_trait::VmMount;
 
@@ -38,69 +32,6 @@ pub const RUNTIME_CREDENTIAL_FILE: &str = ".runtime-credential";
 pub const MAX_RAW_SECRET_FILES: usize = 32;
 /// Maximum aggregate plaintext in one mount.
 pub const MAX_RAW_SECRET_BYTES: usize = 256 * 1024;
-
-/// Exact persisted dispatch provenance needed to resolve runtime secrets.
-#[derive(Debug, Clone)]
-pub struct SecretDispatchInput {
-    /// Declared symbolic bindings from the immutable instance revision.
-    pub secret_bindings: serde_json::Value,
-    /// Authenticated actor selected by the dispatch request.
-    pub actor_id: Option<Uuid>,
-    /// Idempotent dispatch request identity.
-    pub request_id: Option<Uuid>,
-    /// Optional target ref for a normal run.
-    pub git_ref: Option<String>,
-    /// Optional target commit for a normal run.
-    pub commit_sha: Option<String>,
-}
-
-/// Database boundary for ephemeral secret mount lifecycle and provenance.
-///
-/// The runtime owns encrypted-store, broker, and filesystem effects; this
-/// narrow port owns only durable metadata and journal transitions. Adapters
-/// must keep mount inserts and state updates transactional with the same
-/// authorization queries used to resolve the exact run.
-#[async_trait]
-pub trait SecretMountMetadata: Send + Sync {
-    /// Loads exact dispatch provenance for one run.
-    async fn dispatch_input(
-        &self,
-        run: &Run,
-    ) -> Result<Option<SecretDispatchInput>, RunSecretError>;
-    /// Persists a materialized mount before guest attachment.
-    async fn persist_mount(
-        &self,
-        run_id: RunId,
-        mount: &EphemeralSecretMount,
-    ) -> Result<(), RunSecretError>;
-    /// Revalidates all active leases for one exact run.
-    async fn authorized(&self, run: &Run) -> Result<bool, RunSecretError>;
-    /// Returns a persisted materialized mount directory, if any.
-    async fn materialized_directory(&self, run_id: RunId) -> Result<Option<Uuid>, RunSecretError>;
-    /// Marks a mount destroyed after filesystem cleanup succeeds.
-    async fn mark_destroyed(&self, run_id: RunId) -> Result<(), RunSecretError>;
-    /// Returns opaque directories that belong to live runs.
-    async fn live_directories(&self) -> Result<BTreeSet<String>, RunSecretError>;
-    /// Marks cleaned-up run mounts destroyed in the durable journal.
-    async fn mark_cleaned_mounts_destroyed(&self) -> Result<(), RunSecretError>;
-}
-
-/// Configuration for the local ephemeral mount boundary.
-#[derive(Debug, Clone)]
-pub struct EphemeralSecretConfig {
-    /// Dedicated host root, normally below a `tmpfs` mounted at `/run`.
-    pub root: PathBuf,
-    /// Require the root to resolve to `tmpfs` or `ramfs`.
-    pub require_memory_filesystem: bool,
-}
-
-/// One symbolic raw value to materialize.
-pub struct RawSecretFile {
-    /// Stable release slot and guest filename.
-    pub slot: SecretSlotKey,
-    /// Redacted plaintext wrapper.
-    pub value: SecretValue,
-}
 
 /// Lifecycle of a raw secret mount.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -395,170 +326,70 @@ pub fn destroy_confirmed(
     }
 }
 
-/// Live-dispatch and ephemeral-mount integration for the run orchestrator.
-pub struct SecretMountManager<M, D, R> {
-    metadata: M,
-    dispatch: D,
-    runtime: R,
-    config: EphemeralSecretConfig,
+/// Standard filesystem implementation of the secret mount provider.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct FilesystemSecretMountProvider;
+
+impl FilesystemSecretMountProvider {
+    /// Creates the filesystem provider.
+    #[must_use]
+    pub const fn new() -> Self {
+        Self
+    }
 }
 
-impl<M, D, R> SecretMountManager<M, D, R>
-where
-    M: SecretMountMetadata + 'static,
-    D: SecretDispatchResolver,
-    R: SecretRuntimeResolver,
-{
-    /// Validates configuration and creates a manager from separate command and
-    /// narrow resolver services.
-    ///
-    /// # Errors
-    ///
-    /// Rejects an unsafe or non-memory-backed secret root.
-    pub fn initialize(
-        metadata: M,
-        dispatch: D,
-        runtime: R,
-        config: EphemeralSecretConfig,
-    ) -> Result<Self, RunSecretError> {
-        validate_root(&config).map_err(secret_runtime_error)?;
-        Ok(Self {
-            metadata,
-            dispatch,
-            runtime,
-            config,
+impl SecretMountProvider for FilesystemSecretMountProvider {
+    fn validate_config(&self, config: &EphemeralSecretConfig) -> Result<(), SecretRuntimeError> {
+        validate_root(config)
+    }
+
+    fn materialize(
+        &self,
+        config: &EphemeralSecretConfig,
+        run_id: RunId,
+        files: Vec<RawSecretFile>,
+        credential: Option<&OpaqueRuntimeCredential>,
+    ) -> Result<MaterializedSecretMount, SecretRuntimeError> {
+        let mount = match credential {
+            Some(credential) => materialize_with_authority(config, run_id, files, credential)?,
+            None => materialize(config, run_id, files)?,
+        };
+        let opaque_directory = mount
+            .host_path()
+            .file_name()
+            .and_then(|value| value.to_str())
+            .and_then(|value| Uuid::parse_str(value).ok())
+            .ok_or(SecretRuntimeError::InvalidOrphan)?;
+        Ok(MaterializedSecretMount {
+            opaque_directory,
+            vm_mount: mount.vm_mount(),
         })
     }
 
-    async fn dispatch_input(&self, run: &Run) -> Result<Option<DispatchInput>, RunSecretError> {
-        let row = self
-            .metadata
-            .dispatch_input(run)
-            .await?
-            .ok_or_else(|| secret_error("exact secret dispatch provenance is unavailable"))?;
-        let bindings: Vec<Uuid> =
-            serde_json::from_value(row.secret_bindings.clone()).map_err(secret_serialization)?;
-        if bindings.is_empty() {
-            Ok(None)
-        } else {
-            Ok(Some(row))
-        }
+    fn discard_materialized(
+        &self,
+        config: &EphemeralSecretConfig,
+        opaque_directory: Uuid,
+    ) -> Result<(), SecretRuntimeError> {
+        destroy_confirmed(config, opaque_directory)
+    }
+
+    fn destroy_confirmed(
+        &self,
+        config: &EphemeralSecretConfig,
+        opaque_directory: Uuid,
+    ) -> Result<(), SecretRuntimeError> {
+        destroy_confirmed(config, opaque_directory)
+    }
+
+    fn reconcile_orphans(
+        &self,
+        config: &EphemeralSecretConfig,
+        live_directories: &BTreeSet<String>,
+    ) -> Result<usize, SecretRuntimeError> {
+        reconcile_orphans(config, live_directories)
     }
 }
-
-#[async_trait]
-impl<M, D, R> RunSecretManager for SecretMountManager<M, D, R>
-where
-    M: SecretMountMetadata + 'static,
-    D: SecretDispatchResolver + 'static,
-    R: SecretRuntimeResolver + 'static,
-{
-    async fn prepare(&self, run: &Run) -> Result<PreparedRunSecrets, RunSecretError> {
-        let Some(input) = self.dispatch_input(run).await? else {
-            return Ok(PreparedRunSecrets::default());
-        };
-        let actor_id = input
-            .actor_id
-            .ok_or_else(|| secret_error("secret-bearing run has no authenticated actor"))?;
-        let request_id = input.request_id.unwrap_or_else(Uuid::new_v4);
-        let identity = AuthenticatedIdentity::new(
-            UserId::from_uuid(actor_id),
-            "internal-run-dispatch",
-            actor_id.to_string(),
-            serde_json::json!({}),
-            RequestId::from_uuid(request_id),
-        );
-        let target_ref = input
-            .git_ref
-            .map(GitRef::parse)
-            .transpose()
-            .map_err(|_| secret_error("secret-bearing run target ref is invalid"))?;
-        let target_commit = input
-            .commit_sha
-            .map(CommitSha::parse)
-            .transpose()
-            .map_err(|_| secret_error("secret-bearing run target commit is invalid"))?;
-        let command_key = SecretCommandKey::derive("dispatch", &[run.id.as_uuid().as_bytes()]);
-        let authority = self
-            .dispatch
-            .resolve_for_dispatch(
-                &identity,
-                ResolveRunSecrets {
-                    command_key,
-                    session_id: SecretRuntimeSessionId::new(),
-                    run_id: run.id,
-                    instance_id: run.instance_id,
-                    instance_revision_id: run.instance_revision_id,
-                    attachment_id: run.attachment_id,
-                    target_ref,
-                    target_commit,
-                    phase: match run.kind {
-                        RunKind::Normal => ExecutionPhase::Normal,
-                        RunKind::Update => ExecutionPhase::Update,
-                    },
-                    expires_at: OffsetDateTime::now_utc() + time::Duration::minutes(10),
-                },
-            )
-            .await
-            .map_err(secret_service_error)?;
-        let mut raw = Vec::new();
-        for lease in &authority.leases {
-            if lease.mode == DeliveryMode::Raw {
-                let resolved = self
-                    .runtime
-                    .receive_raw(&authority.credential, run.id, lease.slot.clone())
-                    .await
-                    .map_err(secret_service_error)?;
-                raw.push(RawSecretFile {
-                    slot: resolved.slot,
-                    value: resolved.value,
-                });
-            }
-        }
-        let mut mount =
-            materialize_with_authority(&self.config, run.id, raw, &authority.credential)
-                .map_err(secret_runtime_error)?;
-        if let Err(error) = self.metadata.persist_mount(run.id, &mount).await {
-            mount.mark_guest_destroyed().map_err(secret_runtime_error)?;
-            mount.destroy().map_err(secret_runtime_error)?;
-            return Err(error);
-        }
-        Ok(PreparedRunSecrets {
-            mounts: vec![mount.vm_mount()],
-        })
-    }
-
-    async fn reauthorize(&self, run: &Run) -> Result<(), RunSecretError> {
-        if self.dispatch_input(run).await?.is_none() {
-            return Ok(());
-        }
-        let authorized = self.metadata.authorized(run).await?;
-        if authorized {
-            Ok(())
-        } else {
-            Err(secret_error("live secret authority was revoked"))
-        }
-    }
-
-    async fn destroy_after_guest(&self, run_id: RunId) -> Result<(), RunSecretError> {
-        let directory = self.metadata.materialized_directory(run_id).await?;
-        let Some(directory) = directory else {
-            return Ok(());
-        };
-        destroy_confirmed(&self.config, directory).map_err(secret_runtime_error)?;
-        self.metadata.mark_destroyed(run_id).await?;
-        Ok(())
-    }
-
-    async fn recover(&self) -> Result<usize, RunSecretError> {
-        let names = self.metadata.live_directories().await?;
-        let removed = reconcile_orphans(&self.config, &names).map_err(secret_runtime_error)?;
-        self.metadata.mark_cleaned_mounts_destroyed().await?;
-        Ok(removed)
-    }
-}
-
-type DispatchInput = SecretDispatchInput;
 
 fn remove_secret_directory(path: &Path) -> Result<(), SecretRuntimeError> {
     let metadata = fs::symlink_metadata(path).map_err(io_error)?;
@@ -582,67 +413,6 @@ fn remove_secret_directory(path: &Path) -> Result<(), SecretRuntimeError> {
 #[allow(clippy::needless_pass_by_value)]
 fn io_error(error: std::io::Error) -> SecretRuntimeError {
     SecretRuntimeError::Io(error.kind())
-}
-
-fn secret_error(message: impl Into<String>) -> RunSecretError {
-    RunSecretError::redacted(message)
-}
-
-// Secret-service errors are already non-disclosing; the orchestration boundary
-// nevertheless exposes only a stable failure class.
-#[allow(clippy::needless_pass_by_value)]
-fn secret_service_error(_error: secret_application::SecretServiceError) -> RunSecretError {
-    secret_error("live secret dispatch failed")
-}
-
-#[allow(clippy::needless_pass_by_value)]
-fn secret_runtime_error(_error: SecretRuntimeError) -> RunSecretError {
-    secret_error("ephemeral secret filesystem operation failed")
-}
-
-#[allow(clippy::needless_pass_by_value)]
-#[allow(clippy::needless_pass_by_value)]
-fn secret_serialization(_error: serde_json::Error) -> RunSecretError {
-    secret_error("stored secret binding provenance is invalid")
-}
-
-/// Non-disclosing ephemeral runtime failure.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
-#[non_exhaustive]
-pub enum SecretRuntimeError {
-    /// Root is missing, a symlink, or not a directory.
-    #[error("ephemeral secret root is invalid")]
-    InvalidRoot,
-    /// Root is accessible by group or other users.
-    #[error("ephemeral secret root permissions are unsafe")]
-    InvalidRootPermissions,
-    /// Production policy requires `tmpfs` or `ramfs`.
-    #[error("ephemeral secret root is not memory-backed")]
-    NotMemoryBacked,
-    /// Slot count is empty or exceeds its ceiling.
-    #[error("raw secret file count is invalid")]
-    FileCount,
-    /// Aggregate value bytes exceed their ceiling.
-    #[error("raw secret aggregate size is invalid")]
-    TotalSize,
-    /// Two values selected one symbolic file.
-    #[error("raw secret slot is duplicated")]
-    DuplicateSlot,
-    /// Guest destruction must precede filesystem destruction.
-    #[error("raw secret guest still exists")]
-    GuestStillExists,
-    /// Cleanup lifecycle is invalid.
-    #[error("raw secret mount lifecycle is invalid")]
-    InvalidLifecycle,
-    /// A cleanup path contains a symlink or special file.
-    #[error("raw secret directory contains an unsafe object")]
-    UnsafeObject,
-    /// Orphan directory name is not an opaque UUID.
-    #[error("ephemeral secret orphan is invalid")]
-    InvalidOrphan,
-    /// Redacted filesystem failure category.
-    #[error("ephemeral secret filesystem operation failed: {0:?}")]
-    Io(std::io::ErrorKind),
 }
 
 #[cfg(test)]
