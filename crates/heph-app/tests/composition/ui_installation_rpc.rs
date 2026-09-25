@@ -32,6 +32,9 @@ mod ui_installation_seed_releases;
 #[cfg(test)]
 #[path = "ui_installation_rpc/seed_sessions.rs"]
 mod ui_installation_seed_sessions;
+#[cfg(test)]
+#[path = "ui_installation_rpc/trace_capture.rs"]
+mod ui_installation_trace_capture;
 
 #[cfg(test)]
 mod ui_installation_transport {
@@ -56,7 +59,6 @@ mod ui_installation_transport {
     use sqlx::{PgPool, postgres::PgPoolOptions};
     use std::time::{SystemTime, UNIX_EPOCH};
     use tempfile::tempdir;
-    use tracing_subscriber::{EnvFilter, fmt};
     use uuid::Uuid;
 
     const SECRET: &[u8] = b"service-log-retention-test-signing-secret";
@@ -212,16 +214,7 @@ mod ui_installation_transport {
     // no-row assertions share one production installation and generation chain.
     #[allow(clippy::too_many_lines)]
     async fn production_ui_installation_rpc_matrix() {
-        // Keep bounded transport-audit failures visible in the CI test log.
-        // `try_init` preserves compatibility with a harness that already owns
-        // the process-wide subscriber.
-        let _ = fmt()
-            .with_env_filter(
-                EnvFilter::try_from_default_env()
-                    .unwrap_or_else(|_| EnvFilter::new("hephaestus_app=warn")),
-            )
-            .with_test_writer()
-            .try_init();
+        let trace_capture = super::ui_installation_trace_capture::install();
         assert_eq!(
             std::env::var("REAL_UI_INSTALLATION_RPC"),
             Ok(String::from("1")),
@@ -262,6 +255,9 @@ mod ui_installation_transport {
             "REAL_UI_INSTALLATION_RPC=1 install_replay=1 organization=1 repository=1 receipts=1 list=1 cursor_actor=1 cursor_org=1 cursor_target=1 cursor_tamper=1 handoff_secret=32 handoff_parent_redacted=1 lifecycle_all5=1 stale_cas=1 wrong_tenant=1 wrong_audience=1 expired=1 revoked=1"
         );
         app.shutdown().await.expect("shutdown UI RPC application");
+        let (trace_bytes, trace_events) = trace_capture.assert_absent(HANDOFF_SENTINEL_TEXT);
+        assert!(trace_bytes > 0, "UI RPC trace capture observed no events");
+        println!("UI_RPC_TRACE_CAPTURE=1 bytes={trace_bytes} events={trace_events}");
         pool.close().await;
         cleanup_nats(&nats_url).await;
     }
