@@ -237,10 +237,12 @@ async fn generated_permissions_and_rls_enforce_the_same_perimeter() {
         .execute(&mut *outsider_tx)
         .await
         .expect("use normal application role");
-    let visible: Vec<String> = sqlx::query_scalar("SELECT name FROM repositories ORDER BY name")
-        .fetch_all(&mut *outsider_tx)
-        .await
-        .expect("RLS repository list");
+    let visible: Vec<String> =
+        sqlx::query_scalar("SELECT name FROM repositories WHERE project_id = $1 ORDER BY name")
+            .bind(fixture.project)
+            .fetch_all(&mut *outsider_tx)
+            .await
+            .expect("RLS repository list");
     assert_eq!(visible, vec![String::from("public")]);
     let private: Option<String> = sqlx::query_scalar("SELECT name FROM repositories WHERE id = $1")
         .bind(fixture.private_repository)
@@ -248,11 +250,17 @@ async fn generated_permissions_and_rls_enforce_the_same_perimeter() {
         .await
         .expect("RLS direct read");
     assert!(private.is_none());
-    let visible_releases: Vec<Uuid> =
-        sqlx::query_scalar("SELECT id FROM releases ORDER BY created_at, id")
-            .fetch_all(&mut *outsider_tx)
-            .await
-            .expect("RLS release list");
+    let visible_releases: Vec<Uuid> = sqlx::query_scalar(
+        "SELECT releases.id
+           FROM releases
+           JOIN repositories ON repositories.id = releases.repository_id
+          WHERE repositories.project_id = $1
+          ORDER BY releases.created_at, releases.id",
+    )
+    .bind(fixture.project)
+    .fetch_all(&mut *outsider_tx)
+    .await
+    .expect("RLS release list");
     assert!(visible_releases.is_empty());
     let private_release: Option<Uuid> = sqlx::query_scalar("SELECT id FROM releases WHERE id = $1")
         .bind(fixture.release)

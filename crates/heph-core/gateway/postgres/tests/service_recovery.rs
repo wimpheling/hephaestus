@@ -74,12 +74,13 @@ async fn service_recovery_terminalizes_only_abandoned_host_invocations() {
     let stateless = seed_fixture(&pool, "http.v1").await;
     let stateless_old = insert_invocation(&pool, stateless, now - Duration::minutes(10)).await;
 
-    assert_eq!(
-        authority
-            .recover_abandoned_service_invocations(now)
-            .await
-            .expect("recover abandoned service invocations"),
-        4
+    let processed = authority
+        .recover_abandoned_service_invocations(now)
+        .await
+        .expect("recover abandoned service invocations");
+    assert!(
+        processed >= 4,
+        "expected at least this test's four abandoned invocations to be recovered, got {processed}"
     );
     assert_eq!(outcome(&pool, expired).await, "timed_out");
     assert_eq!(outcome(&pool, revoked).await, "timed_out");
