@@ -34,6 +34,7 @@ EXPECTED_FACADE_TEST_TARGETS = {
     ("heph-forge", "api"),
     ("heph-run", "api"),
     ("heph-runtime", "api"),
+    ("heph-secret", "api"),
 }
 ALLOWED_ARCHITECTURE_METADATA_DELTA = {
     "package": "git-http",
