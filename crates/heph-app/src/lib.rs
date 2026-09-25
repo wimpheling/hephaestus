@@ -70,8 +70,8 @@ mod background_loops;
 #[cfg(test)]
 use background_loops::write_oci_manifest_if_dirty;
 use background_loops::{
-    OutboxWorker, build_secret_mount_manager, mailbox_recovery_loop, oci_builder_loop,
-    reap_failed_start, secret_revocation_loop, spawn_runtime_git_listener,
+    OutboxWorker, mailbox_recovery_loop, oci_builder_loop, reap_failed_start,
+    secret_revocation_loop, spawn_runtime_git_listener,
 };
 
 #[path = "update_completion.rs"]
@@ -102,13 +102,19 @@ use vm_spec_factory::StoredNetworkAccess;
 #[cfg(test)]
 use vm_spec_factory::{guest_environment, validate_runtime_policy};
 
+#[path = "build_preparation.rs"]
+mod build_preparation;
 #[path = "fixture_vm.rs"]
 mod fixture_vm;
+pub use build_preparation::{AppError, EXPECTED_DATABASE_MIGRATION};
+use build_preparation::{
+    BuildPreparation, GATEWAY_SERVICE_REPLACEMENT_CAPACITY, GATEWAY_SERVICE_REQUEST_CAPACITY,
+    GATEWAY_SERVICE_SERVING_CAPACITY, component, prepare as prepare_build,
+};
 #[cfg(test)]
 mod tests;
 mod ui_listener;
 use command_transport::{build_loop, command_loop, mailbox_command_loop};
-use fixture_vm::ResultFixtureProvider;
 
 /// Test-only lifecycle synchronization hooks used by daemon integration tests.
 #[cfg(feature = "test-fixtures")]
@@ -130,8 +136,7 @@ use build_postgres::PgBuildRepository;
 use builder_catalog_domain::OciImageReference;
 use control_plane_postgres::launch::PgRunLaunchAuthorizer;
 use control_plane_postgres::{
-    ControlPlanePool, connect as connect_control_plane, connect_app as connect_application,
-    connect_worker as connect_oci_worker,
+    ControlPlanePool, connect as connect_control_plane, connect_worker as connect_oci_worker,
 };
 use event_postgres::{ReleaseOutboxPublisher, ensure_release_jetstream_topology};
 use forge_postgres::PgForgeRepository;
@@ -155,7 +160,7 @@ use gateway_postgres::{
     PostgresGatewayEdgeAuthority, PostgresGatewayExecutionTargetResolver,
     PostgresGatewayMailboxPublisher, PostgresGatewayReleaseResolver,
     PostgresGatewayServiceFailureStore, PostgresGatewayServiceLaunchResolver,
-    PostgresGatewayServiceLogStore, PostgresGatewayServiceOwnership, PostgresGatewayServiceTargets,
+    PostgresGatewayServiceOwnership, PostgresGatewayServiceTargets,
 };
 use git_http::{
     CompositeGitAuthenticator, GitAuthenticator, GitHttpLimits, GitHttpService,
@@ -215,7 +220,7 @@ use release_postgres::{
 use release_service::{
     UiBrowserRepositoryGitAuthorization, UiBrowserSessionStore, UiGenerationHostResolver,
 };
-use review_postgres::{GitRepositoryLocator, PostgresReviewRepository};
+use review_postgres::PostgresReviewRepository;
 use review_service::{NatsControlHandler, ReviewControlService, ReviewOutboxPublisher};
 use run_orchestrator::{NatsCommandHandler, ensure_jetstream_topology};
 use run_postgres::PgRunRepository;
@@ -225,11 +230,10 @@ use run_runtime_local::{
 };
 use runtime_authority::{GatewayRuntimeAuthorityIssuer, RuntimeHandoffStore};
 use runtime_authority_postgres::PgGatewayRuntimeAuthorityIssuer;
-use runtime_git_authority_postgres::PgRuntimeGitCredentialRepository;
 use runtime_handoff_local::EncryptedFileHandoffStore;
 use runtime_types::{CommandId, RunId};
 use secret_application::BrokerAdapter;
-use secret_broker::{BrokerExecutor, BrokerServer, ServiceBrokerExecutor};
+use secret_broker::{BrokerExecutor, BrokerServer};
 use secret_postgres::{GatewayIngressSecretResolver, SecretService};
 use secret_store::{EncryptedStore, LocalKeyProvider};
 use serde::Deserialize;
@@ -258,19 +262,9 @@ use tokio::{
 };
 use tokio_util::sync::CancellationToken;
 use uuid::Uuid;
-use vm_fake::FakeProvider;
-use vm_libkrun::{LibkrunConfig, LibkrunProvider};
+use vm_libkrun::LibkrunConfig;
 use volume_local::{LocalVolumeConfig, LocalVolumeStore};
-use volume_postgres::PostgresVolumeMetadataRepository;
 use workspace_local::{LocalWorkspaceConfig, LocalWorkspaceManager};
-use workspace_postgres::PgWorkspaceMetadataRepository;
-
-/// Ordered database migration expected by this application version.
-pub const EXPECTED_DATABASE_MIGRATION: i64 = 100;
-
-const GATEWAY_SERVICE_SERVING_CAPACITY: usize = 8;
-const GATEWAY_SERVICE_REPLACEMENT_CAPACITY: usize = 2;
-const GATEWAY_SERVICE_REQUEST_CAPACITY: usize = 16;
 
 /// Constructed application whose external tasks have not started.
 pub struct HephaestusApp {
@@ -325,166 +319,44 @@ impl HephaestusApp {
     ///
     /// Returns an error for invalid configuration, incompatible migrations, or
     /// an unavailable required dependency.
-    // Keeping dependency construction in the composition root makes the
-    // production security boundaries directly auditable.
     #[allow(clippy::too_many_lines)]
-    pub async fn build(mut config: AppConfig) -> Result<Self, AppError> {
-        let runtime_git_socket_path = match &mut config.vm_backend {
-            VmBackendConfig::Libkrun(provider) => {
-                let path = provider
-                    .runtime_git_socket_path
-                    .get_or_insert_with(|| provider.runtime_root.join("runtime-git.sock"))
-                    .clone();
-                Some(path)
-            }
-            VmBackendConfig::CustomWithRuntimeGitSocket {
-                runtime_git_socket_path,
-                ..
-            } => Some(runtime_git_socket_path.clone()),
-            VmBackendConfig::Fake | VmBackendConfig::FixtureResult | VmBackendConfig::Custom(_) => {
-                None
-            }
-        };
-        config.validate()?;
-        let gateway_service_host_id = config.volumes.host_id.clone();
-        if let VmBackendConfig::Libkrun(provider) = &mut config.vm_backend {
-            if provider
-                .broker_socket_path
-                .as_ref()
-                .is_some_and(|path| path != &config.secret_broker_socket)
-            {
-                return Err(AppError::Configuration(String::from(
-                    "libkrun broker socket does not match the application broker",
-                )));
-            }
-            provider.broker_socket_path = Some(config.secret_broker_socket.clone());
-        }
-        let pool = connect_control_plane(&config.database_url, 20)
-            .await
-            .map_err(component("PostgreSQL connection"))?;
-        verify_database_contract(&pool).await?;
-        let application_pool = connect_application(&config.database_url, 10)
-            .await
-            .map_err(component("PostgreSQL application-role connection"))?;
-
-        let storage = Arc::new(
-            GitStorage::initialize(&config.repository_root)
-                .await
-                .map_err(component("Git storage"))?,
-        );
-        let forge = Arc::new(
-            PgForgeRepository::new(pool.clone(), Arc::clone(&storage))
-                .with_authorizer(Arc::new(authz_postgres::PostgresMelangeAuthorizer)),
-        );
-        let run_repository = Arc::new(PgRunRepository::new(pool.clone()));
-        let mailbox_repository = Arc::new(PostgresMailboxRepository::new(pool.clone()));
-        let review_repository = Arc::new(PostgresReviewRepository::new(pool.clone()));
-        let review_locator = Arc::new(GitRepositoryLocator::new(Arc::clone(&storage)));
-        let review_control = ReviewControlService::new(
-            Arc::clone(&review_repository) as Arc<dyn review_service::ReviewRepository>,
-            review_locator,
-        );
-        let volume_metadata = Arc::new(PostgresVolumeMetadataRepository::new(pool.clone()));
-        let volumes = Arc::new(
-            LocalVolumeStore::new(volume_metadata, config.volumes)
-                .map_err(component("volume configuration"))?,
-        );
-        volumes
-            .initialize()
-            .await
-            .map_err(component("volume initialization"))?;
-        let build_git_binary = config.workspaces.git_binary.clone();
-        let result_artifact_root = config.workspaces.artifact_root.clone();
-        let workspace_repository = Arc::new(PgWorkspaceMetadataRepository::new(pool.clone()));
-        let mut workspaces = LocalWorkspaceManager::new(
-            Arc::clone(&workspace_repository) as Arc<dyn heph_runtime::WorkspaceMetadataRepository>,
-            Arc::clone(&workspace_repository) as Arc<dyn heph_runtime::ResultRepository>,
-            config.workspaces,
-        )
-        .map_err(component("workspace configuration"))?;
-        workspaces
-            .initialize()
-            .map_err(component("workspace initialization"))?;
-        let result_artifact_root = std::fs::canonicalize(result_artifact_root)
-            .map_err(component("result artifact root"))?;
-        let workspaces = Arc::new(workspaces);
-        let release_artifact_root = config.run_runtime.release_artifact_root.clone();
-        let run_runtime = Arc::new(
-            LocalRunRuntimeManager::initialize(run_repository.clone(), config.run_runtime)
-                .map_err(component("run runtime initialization"))?,
-        );
-        let gateway_release_runtime = LocalGatewayReleaseMaterializer {
-            runtime: run_runtime.gateway_release_runtime(),
-        };
-        let gateway_edge_config = config.gateway_edge.take();
-        let gateway_secret_keys = config.secret_keys.clone();
-        let gateway_handoff_root = config.runtime_authority_handoff_root.clone();
-        let gateway_handoff_key = config.runtime_authority_handoff_key;
-        let gateway_root_images = config.root_images.clone();
-        // Service-log append and retention use one dedicated worker pool. It
-        // is created even when the optional gateway edge is disabled so the
-        // retention scheduler has stable ownership and shutdown semantics.
-        let service_log_pool = connect_oci_worker(&config.database_url, 2)
-            .await
-            .map_err(component("service-log PostgreSQL connection"))?;
-        let service_log_store = Arc::new(PostgresGatewayServiceLogStore::new(
-            service_log_pool.clone(),
-        ));
-        let service_log_projects: Arc<dyn gateway_edge::GatewayServiceLogMaintenanceProjects> =
-            service_log_store.clone();
-        let service_log_maintenance_port: Arc<dyn gateway_edge::GatewayServiceLogMaintenance> =
-            service_log_store.clone();
-        let service_log_maintenance = Arc::new(GatewayServiceLogMaintenanceScheduler::new(
-            service_log_projects,
-            service_log_maintenance_port,
-            gateway_edge::GatewayServiceLogMaintenancePolicy::default(),
-        ));
-        let (secret_mounts, secret_runtime, secret_service) = build_secret_mount_manager(
-            pool.clone(),
-            &config.database_url,
-            config.secret_keys,
-            config.secret_mounts,
-        )
-        .await?;
-        let runtime_git_credentials = PgRuntimeGitCredentialRepository::new(pool.clone());
-        let runtime_authority = Arc::new(PgRunAuthorityManager::new(
-            pool.clone(),
-            runtime_git_credentials.clone(),
-            config.runtime_authority_handoff_root,
-            config.runtime_authority_handoff_key,
-            config.runtime_authority_session_ttl,
-        )?);
-        let secret_broker_executor: Arc<dyn BrokerExecutor> = Arc::new(ServiceBrokerExecutor::new(
-            secret_runtime,
-            config.secret_broker_adapter,
-        ));
-
-        let provider: Arc<dyn VmProvider> = match config.vm_backend {
-            VmBackendConfig::Fake => Arc::new(FakeProvider::new()),
-            VmBackendConfig::FixtureResult => Arc::new(ResultFixtureProvider),
-            VmBackendConfig::Custom(provider)
-            | VmBackendConfig::CustomWithRuntimeGitSocket { provider, .. } => provider,
-            VmBackendConfig::Libkrun(provider) => {
-                Arc::new(LibkrunProvider::new(*provider).map_err(component("libkrun provider"))?)
-            }
-        };
-        let image_filesystems = Arc::new(RwLock::new(config.root_images.clone()));
-        let oci_builder_workers = match config.oci_builder.take() {
-            Some(worker) => {
-                let worker_pool = connect_oci_worker(&config.database_url, 4)
-                    .await
-                    .map_err(component("OCI worker PostgreSQL connection"))?;
-                Some(Arc::new(OciBuilderWorkers::initialize(
-                    worker_pool,
-                    worker,
-                    Arc::clone(&config.registry.token_issuer),
-                    Arc::clone(&provider),
-                    &config.root_images,
-                    Arc::clone(&image_filesystems),
-                )?))
-            }
-            None => None,
-        };
+    pub async fn build(config: AppConfig) -> Result<Self, AppError> {
+        let BuildPreparation {
+            config,
+            runtime_git_socket_path,
+            gateway_service_host_id,
+            pool,
+            application_pool,
+            storage,
+            forge,
+            run_repository,
+            mailbox_repository,
+            review_repository,
+            review_control,
+            volumes,
+            build_git_binary,
+            result_artifact_root,
+            workspaces,
+            release_artifact_root,
+            run_runtime,
+            gateway_release_runtime,
+            gateway_edge_config,
+            gateway_secret_keys,
+            gateway_handoff_root,
+            gateway_handoff_key,
+            gateway_root_images,
+            service_log_pool,
+            service_log_store,
+            service_log_maintenance,
+            secret_mounts,
+            secret_service,
+            runtime_git_credentials,
+            runtime_authority,
+            secret_broker_executor,
+            provider,
+            image_filesystems,
+            oci_builder_workers,
+        } = Box::pin(prepare_build(config)).await?;
         let gateway_edge = if let Some(gateway) = gateway_edge_config {
             // Gateway runtime snapshots and sessions are worker-owned
             // immutable authority records. Keep issuance on a dedicated
@@ -829,15 +701,6 @@ impl HephaestusApp {
         })
     }
 
-    /// Binds and constructs the optional UI-origin listener before shared
-    /// gateway configuration is reconciled.
-    async fn build_ui_listener(
-        &self,
-        git: Arc<GitHttpService>,
-    ) -> Result<Option<(tokio::net::TcpListener, Router)>, AppError> {
-        ui_listener::build_ui_listener(self, git).await
-    }
-
     /// Binds HTTP, establishes durable NATS topology, and starts supervised
     /// background workers.
     ///
@@ -906,7 +769,7 @@ impl HephaestusApp {
             .map(|_| runtime_git_listener::router(git.as_ref()));
         // Bind the optional UI listener after creating the shared Git service,
         // so browser and public Git requests share repository receive locks.
-        let ui_listener = self.build_ui_listener(Arc::clone(&git)).await?;
+        let ui_listener = ui_listener::build_ui_listener(&self, Arc::clone(&git)).await?;
         let broker = BrokerServer::bind(
             self.secret_broker_socket,
             Arc::clone(&self.secret_broker_executor),
@@ -1633,61 +1496,6 @@ impl RunningHephaestus {
         }
         result
     }
-}
-
-async fn verify_database_contract(pool: &PgPool) -> Result<(), AppError> {
-    let (migration, melange) = control_plane_postgres::verify_contract(pool)
-        .await
-        .map_err(component("database contract check"))?;
-    if migration != Some(EXPECTED_DATABASE_MIGRATION) {
-        return Err(AppError::Configuration(format!(
-            "database migration is {migration:?}; expected {EXPECTED_DATABASE_MIGRATION}"
-        )));
-    }
-    if !melange {
-        return Err(AppError::Configuration(String::from(
-            "Mélange check_permission dispatcher is missing",
-        )));
-    }
-    Ok(())
-}
-
-fn component<Error: std::fmt::Display>(
-    name: &'static str,
-) -> impl FnOnce(Error) -> AppError + Copy {
-    move |error| AppError::Component {
-        component: name,
-        message: error.to_string(),
-    }
-}
-
-/// Application construction, startup, supervision, or shutdown failure.
-#[derive(Debug, thiserror::Error)]
-#[non_exhaustive]
-pub enum AppError {
-    /// Static or migration configuration is invalid.
-    #[error("invalid application configuration: {0}")]
-    Configuration(String),
-    /// One application component failed.
-    #[error("{component} failed: {message}")]
-    Component {
-        /// Component name.
-        component: &'static str,
-        /// Non-sensitive failure.
-        message: String,
-    },
-    /// Readiness barrier failed.
-    #[error("application readiness failed: {0}")]
-    Readiness(String),
-    /// A supervised task failed.
-    #[error("supervised application task failed: {0}")]
-    Task(String),
-    /// An operation timed out.
-    #[error("application operation timed out: {0}")]
-    Timeout(String),
-    /// Resource shutdown failed.
-    #[error("application shutdown failed: {0}")]
-    Shutdown(String),
 }
 
 #[cfg(test)]
