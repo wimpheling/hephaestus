@@ -15,6 +15,7 @@ use runtime_types::RunId;
 use serde_json::json;
 use serial_test::serial;
 use sqlx::{PgPool, postgres::PgPoolOptions};
+use std::collections::HashSet;
 use time::{Duration, OffsetDateTime};
 use uuid::Uuid;
 
@@ -138,6 +139,116 @@ async fn records_redacted_exact_evidence_and_authorizes_inspection() {
     }
 }
 
+#[tokio::test(flavor = "multi_thread")]
+#[serial]
+async fn multikey_audit_pages_remain_stable_across_concurrent_writes() {
+    let Some(pool) = test_pool().await else {
+        return;
+    };
+    let fixture = seed(&pool).await;
+    let repository = PostgresCapabilityAuditRepository::new(pool);
+    let base = OffsetDateTime::now_utc() - Duration::days(1);
+    let id_prefix = Uuid::new_v4().as_u128() & !0xff;
+    let id_100 = Uuid::from_u128(id_prefix + 100);
+    let id_90 = Uuid::from_u128(id_prefix + 90);
+    let id_80 = Uuid::from_u128(id_prefix + 80);
+    let id_70 = Uuid::from_u128(id_prefix + 70);
+    let id_60 = Uuid::from_u128(id_prefix + 60);
+    let id_40 = Uuid::from_u128(id_prefix + 40);
+
+    for (id, offset) in [(id_100, 4), (id_80, 3), (id_60, 2), (id_40, 1)] {
+        repository
+            .append(&audit_decision(
+                &fixture,
+                id,
+                base + Duration::seconds(offset),
+            ))
+            .await
+            .expect("seed ordered capability audit event");
+    }
+
+    let first = repository
+        .list_for_run(
+            &fixture.owner,
+            RunId::from_uuid(fixture.run_id),
+            CapabilityAuditPage::new(2, None).expect("first page"),
+        )
+        .await
+        .expect("first capability audit page");
+    assert_eq!(
+        first.iter().map(|event| event.id).collect::<Vec<_>>(),
+        vec![id_100, id_80]
+    );
+
+    let (release_writer, writer_released) = tokio::sync::oneshot::channel();
+    let writer_repository = repository.clone();
+    let writer_fixture = fixture.clone();
+    let writer = tokio::spawn(async move {
+        writer_released
+            .await
+            .expect("release concurrent audit writer");
+        for (id, offset) in [(id_70, 3), (id_90, 3)] {
+            writer_repository
+                .append(&audit_decision(
+                    &writer_fixture,
+                    id,
+                    base + Duration::seconds(offset),
+                ))
+                .await
+                .expect("append concurrent capability audit event");
+        }
+    });
+    release_writer
+        .send(())
+        .expect("release concurrent audit writer");
+    writer.await.expect("concurrent audit writer task");
+
+    let mut observed = first;
+    let second = repository
+        .list_for_run(
+            &fixture.owner,
+            RunId::from_uuid(fixture.run_id),
+            CapabilityAuditPage::new(
+                2,
+                Some(CapabilityAuditCursor {
+                    occurred_at: observed[1].occurred_at,
+                    id: observed[1].id,
+                }),
+            )
+            .expect("second page"),
+        )
+        .await
+        .expect("second capability audit page");
+    assert_eq!(
+        second.iter().map(|event| event.id).collect::<Vec<_>>(),
+        vec![id_70, id_60]
+    );
+    let second_cursor = CapabilityAuditCursor {
+        occurred_at: second[1].occurred_at,
+        id: second[1].id,
+    };
+    observed.extend(second);
+
+    let third = repository
+        .list_for_run(
+            &fixture.owner,
+            RunId::from_uuid(fixture.run_id),
+            CapabilityAuditPage::new(2, Some(second_cursor)).expect("third page"),
+        )
+        .await
+        .expect("third capability audit page");
+    assert_eq!(
+        third.iter().map(|event| event.id).collect::<Vec<_>>(),
+        vec![id_40]
+    );
+    observed.extend(third);
+
+    let observed_ids: Vec<_> = observed.iter().map(|event| event.id).collect();
+    let unique_ids: HashSet<_> = observed_ids.iter().copied().collect();
+    assert_eq!(unique_ids.len(), observed_ids.len());
+    assert_eq!(observed_ids, vec![id_100, id_80, id_70, id_60, id_40]);
+}
+
 #[tokio::test]
 #[serial]
 async fn rejects_forged_ceiling_and_mutation() {
@@ -208,6 +319,25 @@ struct Fixture {
     snapshot_id: Uuid,
     binding_id: Uuid,
     session_id: Uuid,
+}
+
+fn audit_decision(
+    fixture: &Fixture,
+    id: Uuid,
+    occurred_at: OffsetDateTime,
+) -> NewCapabilityAuditEvent {
+    let context = CapabilityAuditContext {
+        runtime_session_id: RuntimeSessionId::from_uuid(fixture.session_id),
+        snapshot_id: AuthorizationSnapshotId::from_uuid(fixture.snapshot_id),
+        binding_id: CapabilityBindingId::from_uuid(fixture.binding_id),
+        operation: CapabilityOperation::Inspect,
+        request_id: RequestId::new(),
+        authorization_model_version: AUTHORIZATION_MODEL_VERSION,
+    };
+    let mut event =
+        NewCapabilityAuditEvent::decision(context, CapabilityDecision::Allow, None, occurred_at);
+    event.id = id;
+    event
 }
 
 #[allow(clippy::too_many_lines)]

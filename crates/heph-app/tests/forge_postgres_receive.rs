@@ -6,8 +6,8 @@ use forge_domain::{
 };
 use forge_postgres::PgForgeRepository;
 use forge_service::{
-    CreateRepository, ForgeNatsOutboxPublisher, GitStorage, INSTANCE_RUN_REQUESTED_SUBJECT,
-    ensure_forge_jetstream_topology,
+    BUILD_REQUESTED_SUBJECT, CreateRepository, ForgeNatsOutboxPublisher, GitStorage,
+    INSTANCE_RUN_REQUESTED_SUBJECT, RUN_START_SUBJECT, ensure_forge_jetstream_topology,
 };
 use futures_util::StreamExt;
 use identity_domain::{AuthenticatedIdentity, RequestId, UserId};
@@ -842,7 +842,11 @@ async fn forge_outbox_retry_is_deduplicated_by_jetstream() {
     let mut stream = context
         .create_stream(async_nats::jetstream::stream::Config {
             name: stream_name.clone(),
-            subjects: vec![String::from("hephaestus.>")],
+            subjects: vec![
+                String::from(BUILD_REQUESTED_SUBJECT),
+                String::from(INSTANCE_RUN_REQUESTED_SUBJECT),
+                String::from(RUN_START_SUBJECT),
+            ],
             duplicate_window: Duration::from_secs(60),
             ..Default::default()
         })

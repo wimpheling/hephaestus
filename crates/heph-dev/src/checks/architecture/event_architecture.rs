@@ -333,14 +333,13 @@ fn validate_source(path: &Path, source: &str, active: &[&str], diagnostics: &mut
         }
     }
     if active.contains(&"EVT-OUTBOX-PUBLISHER-ONLY")
-        && publishes_product_events(runtime_source)
-        && !designated_product_adapter
+        && let Some(label) = unauthorized_product_publication(path, runtime_source)
     {
         diagnostics.push(Diagnostic::new(
             "EVT-OUTBOX-PUBLISHER-ONLY",
             format!(
-                "{} publishes product events outside the designated item `EventPublisher::publish_pending` in crates/heph-app/src/event_adapter.rs",
-                path.display()
+                "{}::{label} publishes product events outside the designated item `EventPublisher::publish_pending` in crates/heph-app/src/event_adapter.rs",
+                path.display(),
             ),
         ));
     }
@@ -415,6 +414,7 @@ fn rust_item_sources(source: &str) -> Vec<RustItemRegion> {
     let mut visitor = ItemRegionVisitor {
         offsets: &offsets,
         regions: Vec::new(),
+        impl_name: None,
     };
     visitor.visit_file(&file);
     if visitor.regions.is_empty() {
@@ -430,16 +430,28 @@ fn rust_item_sources(source: &str) -> Vec<RustItemRegion> {
 struct ItemRegionVisitor<'a> {
     offsets: &'a [usize],
     regions: Vec<RustItemRegion>,
+    impl_name: Option<String>,
 }
 
 impl<'ast> Visit<'ast> for ItemRegionVisitor<'_> {
+    fn visit_item_impl(&mut self, item: &'ast syn::ItemImpl) {
+        let previous = self.impl_name.take();
+        self.impl_name = item_impl_name(item);
+        syn::visit::visit_item_impl(self, item);
+        self.impl_name = previous;
+    }
+
     fn visit_item_fn(&mut self, item: &'ast syn::ItemFn) {
         self.push(item.span(), item.sig.ident.to_string());
         syn::visit::visit_item_fn(self, item);
     }
 
     fn visit_impl_item_fn(&mut self, item: &'ast syn::ImplItemFn) {
-        self.push(item.span(), item.sig.ident.to_string());
+        let label = self.impl_name.as_ref().map_or_else(
+            || item.sig.ident.to_string(),
+            |name| format!("{name}::{}", item.sig.ident),
+        );
+        self.push(item.span(), label);
         syn::visit::visit_impl_item_fn(self, item);
     }
 
@@ -447,6 +459,17 @@ impl<'ast> Visit<'ast> for ItemRegionVisitor<'_> {
         self.push(item.span(), item.sig.ident.to_string());
         syn::visit::visit_trait_item_fn(self, item);
     }
+}
+
+fn item_impl_name(item: &syn::ItemImpl) -> Option<String> {
+    item.trait_
+        .as_ref()
+        .and_then(|(_, path, _)| path.segments.last())
+        .or_else(|| match item.self_ty.as_ref() {
+            syn::Type::Path(path) => path.path.segments.last(),
+            _ => None,
+        })
+        .map(|segment| segment.ident.to_string())
 }
 
 impl ItemRegionVisitor<'_> {
@@ -632,8 +655,24 @@ fn is_nats_event_adapter(path: &Path) -> bool {
 
 fn is_designated_product_event_adapter(path: &Path, source: &str) -> bool {
     path == Path::new("crates/heph-app/src/event_adapter.rs")
-        && source.contains("impl EventPublisher")
-        && source.contains("publish_pending")
+        && rust_item_sources(source).iter().any(|item| {
+            item.label == "EventPublisher::publish_pending"
+                && publishes_product_events(&without_nested_items(item, source))
+        })
+}
+
+fn unauthorized_product_publication(path: &Path, source: &str) -> Option<String> {
+    let designated_adapter = is_designated_product_event_adapter(path, source);
+    for item in rust_item_sources(source) {
+        if publishes_product_events(&without_nested_items(&item, source))
+            && !(designated_adapter
+                && path == Path::new("crates/heph-app/src/event_adapter.rs")
+                && item.label == "EventPublisher::publish_pending")
+        {
+            return Some(item.label);
+        }
+    }
+    None
 }
 
 fn is_legacy_command_outbox(path: &Path) -> bool {
@@ -654,6 +693,9 @@ mod tests {
     );
     const VALID: &str =
         include_str!("../../../tests/fixtures/event-architecture/valid/src/events/outbox.rs");
+    const INVALID_DESIGNATED_ITEM: &str = include_str!(
+        "../../../tests/fixtures/event-architecture/invalid/src/events/designated_wrong_item.rs"
+    );
     const COMMAND_VALID: &str =
         include_str!("../../../tests/fixtures/event-architecture/valid/src/command_transport.rs");
     const VALID_ATOMIC: &str = include_str!(
@@ -708,6 +750,23 @@ mod tests {
             &mut diagnostics,
         );
         assert!(diagnostics.is_empty());
+    }
+
+    #[test]
+    fn designated_event_adapter_rejects_publication_outside_publish_pending() {
+        let mut diagnostics = Vec::<Diagnostic>::new();
+        validate_source(
+            Path::new("crates/heph-app/src/event_adapter.rs"),
+            INVALID_DESIGNATED_ITEM,
+            &RULES,
+            &mut diagnostics,
+        );
+        assert!(diagnostics.iter().any(|diagnostic| {
+            diagnostic.rule_id == "EVT-OUTBOX-PUBLISHER-ONLY"
+                && diagnostic
+                    .message
+                    .contains("EventPublisher::publish_elsewhere")
+        }));
     }
 
     #[test]

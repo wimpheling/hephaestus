@@ -1,0 +1,11 @@
+# Stable cursor contract for the release UI installation navigation projection.
+
+[[queries]]
+item = "PgUiInstallationNavigator::list_ui_installations"
+query_index = 5
+order = ["installation.created_at DESC", "installation.id DESC"]
+cursor_keys = ["installation.created_at", "installation.id"]
+cursor_operator = "<"
+unique_tie_breaker = "installation.id"
+unique_keys = ["installation.id"]
+cursor_mode = "uuid_row_lookup"

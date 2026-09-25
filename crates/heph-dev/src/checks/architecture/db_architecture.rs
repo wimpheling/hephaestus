@@ -24,7 +24,7 @@ struct PaginationFile {
     queries: Vec<PaginationContract>,
 }
 
-#[derive(Debug, serde::Deserialize)]
+#[derive(Clone, Debug, serde::Deserialize)]
 struct PaginationContract {
     item: String,
     query_index: usize,
@@ -32,6 +32,13 @@ struct PaginationContract {
     cursor_keys: Vec<String>,
     cursor_operator: String,
     unique_tie_breaker: String,
+    unique_keys: Vec<String>,
+    #[serde(default = "default_cursor_mode")]
+    cursor_mode: String,
+}
+
+fn default_cursor_mode() -> String {
+    String::from("scalar")
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -40,9 +47,15 @@ struct OrderKey {
     direction: String,
 }
 
-#[derive(Default)]
+#[derive(Clone, Default)]
 struct PaginationContracts {
     queries: BTreeMap<(String, usize), PaginationContract>,
+}
+
+#[derive(Default)]
+struct PaginationRegistry {
+    contracts: BTreeMap<PathBuf, PaginationContracts>,
+    seen_queries: BTreeMap<PathBuf, BTreeSet<(String, usize)>>,
 }
 
 impl PaginationContracts {
@@ -73,6 +86,36 @@ impl PaginationContracts {
                     ),
                 ));
             }
+            if contract.unique_keys.is_empty()
+                || !contract
+                    .unique_keys
+                    .iter()
+                    .any(|key| key == &contract.unique_tie_breaker)
+            {
+                diagnostics.push(Diagnostic::new(
+                    PAGINATION_RULE,
+                    format!(
+                        "pagination declaration {}#{} must explicitly list `{}` in unique_keys",
+                        path.display(),
+                        contract.item,
+                        contract.unique_tie_breaker
+                    ),
+                ));
+            }
+            if !matches!(
+                contract.cursor_mode.as_str(),
+                "scalar" | "tuple" | "uuid_row_lookup" | "stored_function"
+            ) {
+                diagnostics.push(Diagnostic::new(
+                    PAGINATION_RULE,
+                    format!(
+                        "pagination declaration {}#{} uses unsupported cursor_mode `{}`",
+                        path.display(),
+                        contract.item,
+                        contract.cursor_mode
+                    ),
+                ));
+            }
             if queries.insert(key, contract).is_some() {
                 diagnostics.push(Diagnostic::new(
                     PAGINATION_RULE,
@@ -88,6 +131,47 @@ impl PaginationContracts {
 
     fn get(&self, item: Option<&str>, query_index: usize) -> Option<&PaginationContract> {
         item.and_then(|item| self.queries.get(&(item.to_owned(), query_index)))
+    }
+
+    fn iter(&self) -> impl Iterator<Item = (&(String, usize), &PaginationContract)> {
+        self.queries.iter()
+    }
+}
+
+impl PaginationRegistry {
+    fn contracts_for(
+        &mut self,
+        package_root: &Path,
+        diagnostics: &mut Vec<Diagnostic>,
+    ) -> PaginationContracts {
+        self.contracts
+            .entry(package_root.to_path_buf())
+            .or_insert_with(|| PaginationContracts::load(package_root, diagnostics))
+            .clone()
+    }
+
+    fn record_queries(&mut self, package_root: &Path, queries: BTreeSet<(String, usize)>) {
+        self.seen_queries
+            .entry(package_root.to_path_buf())
+            .or_default()
+            .extend(queries);
+    }
+
+    fn validate_stale(&self, diagnostics: &mut Vec<Diagnostic>) {
+        for (package_root, contracts) in &self.contracts {
+            let seen = self.seen_queries.get(package_root);
+            for ((item, query_index), _) in contracts.iter() {
+                if seen.is_none_or(|queries| !queries.contains(&(item.clone(), *query_index))) {
+                    diagnostics.push(Diagnostic::new(
+                        PAGINATION_RULE,
+                        format!(
+                            "pagination declaration {}#{item} query {query_index} targets no SQLx query",
+                            package_root.join("pagination.toml").display()
+                        ),
+                    ));
+                }
+            }
+        }
     }
 }
 
@@ -129,7 +213,18 @@ pub(super) fn validate(
         return;
     }
     validate_metadata(metadata, &active, diagnostics);
-    visit_sources(root, root, &active, exceptions, diagnostics);
+    let mut pagination = PaginationRegistry::default();
+    visit_sources(
+        root,
+        root,
+        &active,
+        exceptions,
+        diagnostics,
+        &mut pagination,
+    );
+    if active.contains(PAGINATION_RULE) {
+        pagination.validate_stale(diagnostics);
+    }
 }
 
 pub(super) fn audit(
@@ -140,7 +235,18 @@ pub(super) fn audit(
     let active = RULES.into_iter().collect::<BTreeSet<_>>();
     let mut diagnostics = Vec::new();
     validate_metadata(metadata, &active, &mut diagnostics);
-    visit_sources(root, root, &active, exceptions, &mut diagnostics);
+    let mut pagination = PaginationRegistry::default();
+    visit_sources(
+        root,
+        root,
+        &active,
+        exceptions,
+        &mut diagnostics,
+        &mut pagination,
+    );
+    if active.contains(PAGINATION_RULE) {
+        pagination.validate_stale(&mut diagnostics);
+    }
     let mut counts = BTreeMap::new();
     for diagnostic in diagnostics {
         *counts.entry(diagnostic.rule_id).or_insert(0) += 1;
@@ -325,6 +431,7 @@ fn visit_sources(
     active: &BTreeSet<&str>,
     exceptions: &[&ArchitectureException],
     diagnostics: &mut Vec<Diagnostic>,
+    pagination: &mut PaginationRegistry,
 ) {
     let Ok(entries) = fs::read_dir(directory) else {
         return;
@@ -336,9 +443,17 @@ fn visit_sources(
             if should_skip_directory(relative) {
                 continue;
             }
-            visit_sources(root, &path, active, exceptions, diagnostics);
+            visit_sources(root, &path, active, exceptions, diagnostics, pagination);
         } else if path.extension() == Some(OsStr::new("rs")) {
-            validate_rust_source(root, relative, &path, active, exceptions, diagnostics);
+            validate_rust_source_with_registry(
+                root,
+                relative,
+                &path,
+                active,
+                exceptions,
+                diagnostics,
+                pagination,
+            );
         } else if path.extension() == Some(OsStr::new("sql"))
             && active.contains(MIGRATION_RULE)
             && !relative.starts_with("migrations")
@@ -364,6 +479,7 @@ fn should_skip_directory(relative: &Path) -> bool {
         || relative.starts_with("crates/heph-dev/tests/fixtures")
 }
 
+#[cfg(test)]
 fn validate_rust_source(
     root: &Path,
     relative: &Path,
@@ -371,6 +487,30 @@ fn validate_rust_source(
     active: &BTreeSet<&str>,
     exceptions: &[&ArchitectureException],
     diagnostics: &mut Vec<Diagnostic>,
+) {
+    let mut pagination = PaginationRegistry::default();
+    validate_rust_source_with_registry(
+        root,
+        relative,
+        path,
+        active,
+        exceptions,
+        diagnostics,
+        &mut pagination,
+    );
+    if active.contains(PAGINATION_RULE) {
+        pagination.validate_stale(diagnostics);
+    }
+}
+
+fn validate_rust_source_with_registry(
+    root: &Path,
+    relative: &Path,
+    path: &Path,
+    active: &BTreeSet<&str>,
+    exceptions: &[&ArchitectureException],
+    diagnostics: &mut Vec<Diagnostic>,
+    pagination_registry: &mut PaginationRegistry,
 ) {
     let Ok(source) = fs::read_to_string(path) else {
         return;
@@ -383,7 +523,7 @@ fn validate_rust_source(
         .find(|ancestor| ancestor.join("Cargo.toml").is_file())
         .or_else(|| path.parent())
         .unwrap_or(path);
-    let pagination = PaginationContracts::load(package_root, diagnostics);
+    let pagination = pagination_registry.contracts_for(package_root, diagnostics);
     let imports = SqlImports::collect(&file);
     let mut visitor = SqlVisitor {
         repository_root: root,
@@ -400,8 +540,11 @@ fn validate_rust_source(
         impl_type: None,
         pagination,
         query_counts: BTreeMap::new(),
+        seen_queries: BTreeSet::new(),
+        has_pagination_parameter: false,
     };
     visitor.visit_file(&file);
+    pagination_registry.record_queries(package_root, visitor.seen_queries);
 }
 
 #[derive(Default)]
@@ -551,9 +694,22 @@ struct SqlVisitor<'a> {
     impl_type: Option<String>,
     pagination: PaginationContracts,
     query_counts: BTreeMap<String, usize>,
+    seen_queries: BTreeSet<(String, usize)>,
+    has_pagination_parameter: bool,
 }
 
 impl SqlVisitor<'_> {
+    fn fail_pagination(&mut self, item: Option<&str>, query_index: usize, message: &str) {
+        let item = item.unwrap_or("<unknown>");
+        self.diagnostics.push(Diagnostic::new(
+            PAGINATION_RULE,
+            format!(
+                "pagination query {item}#{query_index} in {}: {message}",
+                self.path.display()
+            ),
+        ));
+    }
+
     fn validate_argument(&mut self, argument: Option<&Expr>, kind: QueryKind) {
         let Some(argument) = argument else {
             return;
@@ -567,6 +723,9 @@ impl SqlVisitor<'_> {
                 *count
             })
             .unwrap_or_default();
+        if let Some(item) = self.current_item.as_ref() {
+            self.seen_queries.insert((item.clone(), query_index));
+        }
         match argument {
             Expr::Lit(literal) => {
                 if let Lit::Str(sql) = &literal.lit {
@@ -626,17 +785,41 @@ impl SqlVisitor<'_> {
     }
 
     fn validate_pagination(&mut self, sql: &str, query_index: usize) {
-        let Some(contract) = self
-            .pagination
-            .get(self.current_item.as_deref(), query_index)
+        if !self.active.contains(PAGINATION_RULE) {
+            return;
+        }
+        let item_path = self.current_item.clone();
+        let Some(contract) =
+            self.pagination
+                .get(item_path.as_deref(), query_index)
+                .map(|contract| PaginationContract {
+                    item: contract.item.clone(),
+                    query_index: contract.query_index,
+                    order: contract.order.clone(),
+                    cursor_keys: contract.cursor_keys.clone(),
+                    cursor_operator: contract.cursor_operator.clone(),
+                    unique_tie_breaker: contract.unique_tie_breaker.clone(),
+                    unique_keys: contract.unique_keys.clone(),
+                    cursor_mode: contract.cursor_mode.clone(),
+                })
         else {
+            if self.has_pagination_parameter && is_paginated_sql(sql) {
+                self.fail_pagination(
+                    item_path.as_deref(),
+                    query_index,
+                    "paginated SQL requires a pagination.toml declaration",
+                );
+            }
             return;
         };
+        self.validate_declared_pagination(sql, &contract);
+    }
+
+    fn validate_declared_pagination(&mut self, sql: &str, contract: &PaginationContract) {
         let item = contract.item.clone();
-        let order = contract.order.clone();
-        let cursor_keys = contract.cursor_keys.clone();
-        let cursor_operator = contract.cursor_operator.clone();
-        let tie_breaker = contract.unique_tie_breaker.clone();
+        let unique_keys = &contract.unique_keys;
+        let tie_breaker = &contract.unique_tie_breaker;
+        let cursor_mode = &contract.cursor_mode;
         let fail = |message: String, diagnostics: &mut Vec<Diagnostic>| {
             diagnostics.push(Diagnostic::new(
                 PAGINATION_RULE,
@@ -647,6 +830,53 @@ impl SqlVisitor<'_> {
             ));
         };
 
+        if cursor_mode == "stored_function" {
+            if !self.inspect_run_https_uses_contract_is_intact(sql) {
+                fail(
+                    String::from(
+                        "stored_function contract must match migration 0061 inspect_run_https_uses signature, cursor predicate, ORDER BY audit.id, and bounded LIMIT",
+                    ),
+                    self.diagnostics,
+                );
+            }
+            return;
+        }
+        if !is_paginated_sql(sql) {
+            fail(
+                String::from(
+                    "declared query is not canonical paginated SQL (requires LIMIT and a cursor predicate)",
+                ),
+                self.diagnostics,
+            );
+            return;
+        }
+        if !unique_keys.iter().any(|key| key == tie_breaker) {
+            fail(
+                format!("unique_tie_breaker `{tie_breaker}` has no explicit uniqueness metadata"),
+                self.diagnostics,
+            );
+        }
+        if cursor_mode == "uuid_row_lookup" && !uuid_row_lookup_matches(sql) {
+            fail(
+                String::from("uuid_row_lookup cursor_mode requires a cursor row lookup by UUID"),
+                self.diagnostics,
+            );
+        }
+
+        self.validate_order_contract(sql, contract, &fail);
+    }
+
+    fn validate_order_contract(
+        &mut self,
+        sql: &str,
+        contract: &PaginationContract,
+        fail: &dyn Fn(String, &mut Vec<Diagnostic>),
+    ) {
+        let order = &contract.order;
+        let cursor_keys = &contract.cursor_keys;
+        let cursor_operator = &contract.cursor_operator;
+        let tie_breaker = &contract.unique_tie_breaker;
+        let cursor_mode = &contract.cursor_mode;
         let parsed_order = match parse_order_by(sql) {
             Ok(order) => order,
             Err(message) => {
@@ -677,7 +907,7 @@ impl SqlVisitor<'_> {
             .iter()
             .map(|key| key.key.clone())
             .collect::<Vec<_>>();
-        if cursor_keys != order_keys {
+        if *cursor_keys != order_keys {
             fail(
                 format!(
                     "cursor keys {cursor_keys:?} must exactly match ORDER BY keys {order_keys:?}"
@@ -685,7 +915,7 @@ impl SqlVisitor<'_> {
                 self.diagnostics,
             );
         }
-        if order_keys.last() != Some(&tie_breaker) {
+        if order_keys.last().map(String::as_str) != Some(tie_breaker) {
             fail(
                 format!("unique_tie_breaker `{tie_breaker}` must be the final ORDER BY key"),
                 self.diagnostics,
@@ -704,7 +934,7 @@ impl SqlVisitor<'_> {
         } else {
             None
         };
-        if expected_operator != Some(cursor_operator.as_str()) {
+        if expected_operator != Some(cursor_operator) {
             fail(
                 format!(
                     "cursor_operator `{cursor_operator}` does not match the uniform ORDER BY direction"
@@ -712,7 +942,7 @@ impl SqlVisitor<'_> {
                 self.diagnostics,
             );
         }
-        if !cursor_predicate_matches(sql, &cursor_keys, &cursor_operator) {
+        if !cursor_predicate_matches(sql, cursor_keys, cursor_operator, cursor_mode) {
             fail(
                 format!(
                     "SQL cursor predicate does not compare {cursor_keys:?} with `{cursor_operator}`"
@@ -720,6 +950,28 @@ impl SqlVisitor<'_> {
                 self.diagnostics,
             );
         }
+    }
+
+    fn inspect_run_https_uses_contract_is_intact(&self, sql: &str) -> bool {
+        // Migration 0061 owns this function's SQL body. Keep the Rust escape
+        // hatch pinned to its public signature and the stable cursor/limit
+        // markers so a migration edit cannot silently invalidate the page.
+        if normalize_sql(sql) != "select * from inspect_run_https_uses($1,$2,$3)" {
+            return false;
+        }
+        let migration = self
+            .repository_root
+            .join("migrations/0061_run_provenance_inspection.sql");
+        let Ok(source) = fs::read_to_string(migration) else {
+            return false;
+        };
+        let normalized = normalize_sql(&source);
+        normalized.contains(
+            "create function inspect_run_https_uses(target_run uuid,after_id uuid,page_size integer)",
+        ) && (normalized.contains("and (after_id is null or audit.id > after_id)")
+            || normalized.contains("where (after_id is null or audit.id > after_id)"))
+            && normalized.contains("order by audit.id")
+            && normalized.contains("limit greatest(1,least(page_size,201))")
     }
 
     fn validate_schema_sql(&mut self, sql: &str, origin: Option<&Path>) {
@@ -753,11 +1005,14 @@ impl<'ast> Visit<'ast> for SqlVisitor<'_> {
     fn visit_item_fn(&mut self, item: &'ast syn::ItemFn) {
         let previous_item = self.current_item.take();
         let previous_path = self.function_path.clone();
+        let previous_pagination = self.has_pagination_parameter;
         self.function_path.push(item.sig.ident.to_string());
         self.current_item = Some(join_item_path(&self.module_path, &self.function_path));
+        self.has_pagination_parameter = has_pagination_parameter(&item.sig);
         syn::visit::visit_item_fn(self, item);
         self.function_path = previous_path;
         self.current_item = previous_item;
+        self.has_pagination_parameter = previous_pagination;
     }
 
     fn visit_item_impl(&mut self, item: &'ast syn::ItemImpl) {
@@ -770,14 +1025,17 @@ impl<'ast> Visit<'ast> for SqlVisitor<'_> {
     fn visit_impl_item_fn(&mut self, item: &'ast syn::ImplItemFn) {
         let previous_item = self.current_item.take();
         let previous_path = self.function_path.clone();
+        let previous_pagination = self.has_pagination_parameter;
         if let Some(impl_type) = self.impl_type.clone() {
             self.function_path.push(impl_type);
         }
         self.function_path.push(item.sig.ident.to_string());
         self.current_item = Some(join_item_path(&self.module_path, &self.function_path));
+        self.has_pagination_parameter = has_pagination_parameter(&item.sig);
         syn::visit::visit_impl_item_fn(self, item);
         self.function_path = previous_path;
         self.current_item = previous_item;
+        self.has_pagination_parameter = previous_pagination;
     }
 
     fn visit_expr_call(&mut self, call: &'ast ExprCall) {
@@ -821,6 +1079,27 @@ fn join_item_path(module_path: &[String], function_path: &[String]) -> String {
         .map(String::as_str)
         .collect::<Vec<_>>()
         .join("::")
+}
+
+fn has_pagination_parameter(signature: &syn::Signature) -> bool {
+    // Canonical page items expose `page`, `request`, `cursor`, or `before`; an
+    // `after` cursor counts only when paired with a page `size`.
+    // Fixed-size worker batches therefore remain outside this rule.
+    let names = signature
+        .inputs
+        .iter()
+        .filter_map(|argument| match argument {
+            syn::FnArg::Typed(argument) => match &*argument.pat {
+                syn::Pat::Ident(identifier) => Some(identifier.ident.to_string()),
+                _ => None,
+            },
+            syn::FnArg::Receiver(_) => None,
+        })
+        .collect::<BTreeSet<_>>();
+    names
+        .iter()
+        .any(|name| matches!(name.as_str(), "page" | "request" | "cursor" | "before"))
+        || (names.contains("after") && names.contains("size"))
 }
 
 fn sqlx_query_call(call: &ExprCall, imports: &SqlImports) -> Option<QueryKind> {
@@ -892,15 +1171,36 @@ fn normalize_sql(sql: &str) -> String {
         .replace(" )", ")")
 }
 
+/// The checker deliberately recognizes only SQL with a bound LIMIT and an
+/// explicit bound cursor comparison.  This avoids treating bounded worker
+/// batches and single-row lookups as page contracts; callers using another
+/// pagination shape must add a narrow declaration and checker support.
+fn is_paginated_sql(sql: &str) -> bool {
+    let normalized = normalize_sql(sql);
+    normalized.contains("limit $")
+        && (normalized.contains(" > $")
+            || normalized.contains(" < $")
+            || normalized.contains(") > (")
+            || normalized.contains(") < ("))
+}
+
+fn uuid_row_lookup_matches(sql: &str) -> bool {
+    let normalized = normalize_sql(sql);
+    normalized.contains("where cursor.id = $") || normalized.contains("where cursor_secret.id = $")
+}
+
 fn parse_order_by(sql: &str) -> Result<Vec<OrderKey>, String> {
     let normalized = normalize_sql(sql);
-    let Some(start) = normalized.rfind("order by ") else {
+    let Some(start) = top_level_clause_positions(&normalized, "order by ")
+        .last()
+        .copied()
+    else {
         return Err(String::from("SQL query has no ORDER BY clause"));
     };
     let order = &normalized[start + "order by ".len()..];
     let end = [" limit ", " offset ", " fetch ", ";"]
         .iter()
-        .filter_map(|marker| order.find(marker))
+        .filter_map(|marker| top_level_clause_positions(order, marker).first().copied())
         .min()
         .unwrap_or(order.len());
     let order = &order[..end];
@@ -916,14 +1216,39 @@ fn parse_order_by(sql: &str) -> Result<Vec<OrderKey>, String> {
     Ok(values)
 }
 
-fn cursor_predicate_matches(sql: &str, keys: &[String], operator: &str) -> bool {
+fn top_level_clause_positions(sql: &str, clause: &str) -> Vec<usize> {
+    let mut positions = Vec::new();
+    let mut depth = 0_usize;
+    let bytes = sql.as_bytes();
+    let clause_bytes = clause.as_bytes();
+    for index in 0..bytes.len() {
+        match bytes[index] {
+            b'(' => depth = depth.saturating_add(1),
+            b')' => depth = depth.saturating_sub(1),
+            _ => {}
+        }
+        if depth == 0 && bytes[index..].starts_with(clause_bytes) {
+            positions.push(index);
+        }
+    }
+    positions
+}
+
+fn cursor_predicate_matches(sql: &str, keys: &[String], operator: &str, mode: &str) -> bool {
     let normalized = normalize_sql(sql);
     let tuple = keys.join(",");
     let tuple_pattern = format!("({tuple}) {operator} ");
     if normalized.contains(&tuple_pattern) {
         return true;
     }
-    keys.len() == 1 && normalized.contains(&format!("{} {operator} ", keys[0]))
+    if keys.len() == 1 {
+        return normalized.contains(&format!("{} {operator} ", keys[0]));
+    }
+    mode == "tuple"
+        && keys.iter().all(|key| {
+            normalized.contains(&format!("{key} {operator} "))
+                || normalized.contains(&format!("{key} = "))
+        })
 }
 
 fn contains_schema_sql(sql: &str) -> bool {
@@ -1070,6 +1395,51 @@ mod tests {
         diagnostics
     }
 
+    fn scan_pagination_source(source: &str, declaration: Option<&str>) -> Vec<Diagnostic> {
+        scan_pagination_source_with_migration(source, declaration, None)
+    }
+
+    fn scan_pagination_source_with_migration(
+        source: &str,
+        declaration: Option<&str>,
+        migration: Option<&str>,
+    ) -> Vec<Diagnostic> {
+        let root = tempdir().expect("temporary pagination root");
+        let source_path = root.path().join("src/lib.rs");
+        fs::create_dir_all(source_path.parent().expect("source parent"))
+            .expect("create source parent");
+        fs::write(
+            root.path().join("Cargo.toml"),
+            "[package]\nname = \"fixture\"\n",
+        )
+        .expect("write fixture manifest");
+        fs::write(&source_path, source).expect("write pagination source");
+        if let Some(declaration) = declaration {
+            fs::write(root.path().join("pagination.toml"), declaration)
+                .expect("write pagination declaration");
+        }
+        if let Some(migration) = migration {
+            fs::create_dir_all(root.path().join("migrations")).expect("create migrations");
+            fs::write(
+                root.path()
+                    .join("migrations/0061_run_provenance_inspection.sql"),
+                migration,
+            )
+            .expect("write migration");
+        }
+        let active = BTreeSet::from([PAGINATION_RULE]);
+        let mut diagnostics = Vec::new();
+        validate_rust_source(
+            root.path(),
+            Path::new("src/lib.rs"),
+            &source_path,
+            &active,
+            &[],
+            &mut diagnostics,
+        );
+        diagnostics
+    }
+
     #[test]
     fn explicitly_marked_dev_sqlx_harness_is_allowed() {
         let root = fixture("valid");
@@ -1145,6 +1515,116 @@ mod tests {
             diagnostic.rule_id == PAGINATION_RULE
                 && diagnostic.message.contains("unique_tie_breaker")
                 && diagnostic.message.contains("list")
+        }));
+    }
+
+    #[test]
+    fn undeclared_canonical_page_query_is_rejected() {
+        let diagnostics = scan_pagination_source(
+            "fn list(page: i64) { let _ = sqlx::query(\"SELECT id FROM items WHERE id > $1 LIMIT $2\"); let _ = page; }",
+            None,
+        );
+        assert!(diagnostics.iter().any(|diagnostic| {
+            diagnostic.rule_id == PAGINATION_RULE
+                && diagnostic
+                    .message
+                    .contains("requires a pagination.toml declaration")
+        }));
+    }
+
+    #[test]
+    fn undeclared_descending_scalar_page_query_is_rejected() {
+        let diagnostics = scan_pagination_fixture("invalid/pagination-undeclared-desc-scalar");
+        assert!(diagnostics.iter().any(|diagnostic| {
+            diagnostic.rule_id == PAGINATION_RULE
+                && diagnostic
+                    .message
+                    .contains("requires a pagination.toml declaration")
+        }));
+    }
+
+    #[test]
+    fn undeclared_descending_tuple_page_query_is_rejected() {
+        let diagnostics = scan_pagination_fixture("invalid/pagination-undeclared-desc-tuple");
+        assert!(diagnostics.iter().any(|diagnostic| {
+            diagnostic.rule_id == PAGINATION_RULE
+                && diagnostic
+                    .message
+                    .contains("requires a pagination.toml declaration")
+        }));
+    }
+
+    #[test]
+    fn stale_pagination_contract_is_rejected() {
+        let diagnostics = scan_pagination_source(
+            "fn list(page: i64) { let _ = page; }",
+            Some(
+                "[[queries]]\nitem = \"missing\"\nquery_index = 1\norder = [\"id ASC\"]\ncursor_keys = [\"id\"]\ncursor_operator = \">\"\nunique_tie_breaker = \"id\"\nunique_keys = [\"id\"]\n",
+            ),
+        );
+        assert!(diagnostics.iter().any(|diagnostic| {
+            diagnostic.rule_id == PAGINATION_RULE
+                && diagnostic.message.contains("targets no SQLx query")
+        }));
+    }
+
+    #[test]
+    fn declared_page_query_requires_a_limit() {
+        let diagnostics = scan_pagination_source(
+            "fn list(page: i64) { let _ = sqlx::query(\"SELECT id FROM items WHERE id > $1\"); let _ = page; }",
+            Some(
+                "[[queries]]\nitem = \"list\"\nquery_index = 1\norder = [\"id ASC\"]\ncursor_keys = [\"id\"]\ncursor_operator = \">\"\nunique_tie_breaker = \"id\"\nunique_keys = [\"id\"]\n",
+            ),
+        );
+        assert!(diagnostics.iter().any(|diagnostic| {
+            diagnostic.rule_id == PAGINATION_RULE && diagnostic.message.contains("requires LIMIT")
+        }));
+    }
+
+    #[test]
+    fn uuid_row_lookup_mode_rejects_scalar_cursor_predicates() {
+        let diagnostics = scan_pagination_source(
+            "fn list(page: i64) { let _ = sqlx::query(\"SELECT id FROM items WHERE id > $1 LIMIT $2\"); let _ = page; }",
+            Some(
+                "[[queries]]\nitem = \"list\"\nquery_index = 1\norder = [\"id ASC\"]\ncursor_keys = [\"id\"]\ncursor_operator = \">\"\nunique_tie_breaker = \"id\"\nunique_keys = [\"id\"]\ncursor_mode = \"uuid_row_lookup\"\n",
+            ),
+        );
+        assert!(diagnostics.iter().any(|diagnostic| {
+            diagnostic.rule_id == PAGINATION_RULE && diagnostic.message.contains("uuid_row_lookup")
+        }));
+    }
+
+    #[test]
+    fn mixed_order_directions_are_rejected_without_a_matching_operator_contract() {
+        let diagnostics = scan_pagination_source(
+            "fn list(page: i64) { let _ = sqlx::query(\"SELECT id FROM items WHERE (items.name, items.id) > ($1, $2) ORDER BY items.name ASC, items.id DESC LIMIT $3\"); let _ = page; }",
+            Some(
+                "[[queries]]\nitem = \"list\"\nquery_index = 1\norder = [\"items.name ASC\", \"items.id DESC\"]\ncursor_keys = [\"items.name\", \"items.id\"]\ncursor_operator = \">\"\nunique_tie_breaker = \"items.id\"\nunique_keys = [\"items.id\"]\n",
+            ),
+        );
+        assert!(diagnostics.iter().any(|diagnostic| {
+            diagnostic.rule_id == PAGINATION_RULE
+                && diagnostic.message.contains("uniform ORDER BY direction")
+        }));
+    }
+
+    #[test]
+    fn stored_function_contract_is_pinned_to_migration_cursor_and_limit() {
+        let declaration = "[[queries]]\nitem = \"inspect\"\nquery_index = 1\norder = [\"audit.id ASC\"]\ncursor_keys = [\"audit.id\"]\ncursor_operator = \">\"\nunique_tie_breaker = \"audit.id\"\nunique_keys = [\"audit.id\"]\ncursor_mode = \"stored_function\"\n";
+        let source = "fn inspect(page: i64) { let _ = sqlx::query(\"SELECT * FROM inspect_run_https_uses($1, $2, $3)\"); let _ = page; }";
+        let migration = "CREATE FUNCTION inspect_run_https_uses(target_run uuid, after_id uuid, page_size integer) RETURNS TABLE (id uuid) AS $$ SELECT id FROM audit WHERE (after_id IS NULL OR audit.id > after_id) ORDER BY audit.id LIMIT greatest(1, least(page_size, 201)) $$;";
+        assert!(
+            scan_pagination_source_with_migration(source, Some(declaration), Some(migration))
+                .is_empty()
+        );
+        let changed_migration = migration.replace("least(page_size, 201)", "page_size");
+        let diagnostics = scan_pagination_source_with_migration(
+            source,
+            Some(declaration),
+            Some(&changed_migration),
+        );
+        assert!(diagnostics.iter().any(|diagnostic| {
+            diagnostic.rule_id == PAGINATION_RULE && diagnostic.message.contains("migration 0061")
         }));
     }
 

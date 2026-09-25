@@ -12,6 +12,7 @@ use std::{
 };
 
 mod db_architecture;
+mod db_rls;
 mod event_architecture;
 mod layer_architecture;
 mod rpc_architecture;
@@ -27,7 +28,7 @@ const HARNESS_RULE_IDS: [&str; 3] = [
     "ARCH-RULE-REGISTRY",
 ];
 
-const REQUIRED_RULE_IDS: [&str; 61] = [
+const REQUIRED_RULE_IDS: [&str; 63] = [
     "ARCH-CONTROLLED-PUBLIC-MODULES",
     "ARCH-CORE-NO-STD-DEPENDENCIES",
     "ARCH-CRATE-LAYERS",
@@ -38,6 +39,8 @@ const REQUIRED_RULE_IDS: [&str; 61] = [
     "ARCH-PROCESS-ONLY-IN-ADAPTERS",
     "ARCH-VM-PROVIDER-ONLY-IN-COMPOSITION",
     "DB-MIGRATIONS-ONLY-IN-MIGRATIONS",
+    "DB-PAGINATION-STABLE-ORDER",
+    "DB-RLS-CONTEXT-REQUIRED",
     "DB-SQLX-ONLY-IN-POSTGRES-ADAPTERS",
     "DB-STATIC-SQL",
     "EVT-CANONICAL-ENVELOPE",
@@ -230,6 +233,19 @@ pub fn run(context: &DevContext) -> Result<()> {
                     .join(", ")
             );
         }
+        let rls_audit = db_rls::audit(root);
+        if rls_audit.is_empty() {
+            println!("migration-gated database RLS structural dry-run: clean");
+        } else {
+            println!(
+                "migration-gated database RLS structural dry-run: {}",
+                rls_audit
+                    .iter()
+                    .map(|(rule, count)| format!("{rule}={count}"))
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            );
+        }
         let rust_audit = rust_architecture::audit(root);
         if rust_audit.is_empty() {
             println!("migration-gated Rust semantic dry-run: clean");
@@ -331,6 +347,12 @@ fn validate_repository(
         &configuration.enabled_rules,
         metadata,
         &usable_exceptions,
+        &mut diagnostics,
+    );
+    db_rls::validate(
+        root,
+        &configuration.enabled_rules,
+        metadata,
         &mut diagnostics,
     );
     event_architecture::validate(root, &configuration.enabled_rules, &mut diagnostics);
