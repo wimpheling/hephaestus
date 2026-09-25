@@ -251,6 +251,7 @@ fn media_type(path: &str) -> &'static str {
 #[cfg(test)]
 mod tests {
     use super::{Boundary, parse_cursor, send_with_budget};
+    use rpc_proto::messages::hephaestus::repository_browser::v1::StreamFileResponse;
     use std::time::{Duration, Instant};
     use tokio::sync::mpsc;
     #[test]
@@ -268,7 +269,13 @@ mod tests {
         let cancellation = tokio_util::sync::CancellationToken::new();
         let (sender, receiver) = mpsc::channel(1);
         drop(receiver);
-        let result = send_with_budget(&sender, Ok(Default::default()), &cancellation, None).await;
+        let result = send_with_budget(
+            &sender,
+            Ok(StreamFileResponse::default()),
+            &cancellation,
+            None,
+        )
+        .await;
         assert_eq!(result, Err(Boundary::Closed));
         assert!(cancellation.is_cancelled());
     }
@@ -279,9 +286,13 @@ mod tests {
         let (sender, _receiver) = mpsc::channel(1);
         let result = send_with_budget(
             &sender,
-            Ok(Default::default()),
+            Ok(StreamFileResponse::default()),
             &cancellation,
-            Some(Instant::now() - Duration::from_millis(1)),
+            Some(
+                Instant::now()
+                    .checked_sub(Duration::from_millis(1))
+                    .expect("instant supports subtraction"),
+            ),
         )
         .await;
         assert_eq!(result, Err(Boundary::Deadline));
