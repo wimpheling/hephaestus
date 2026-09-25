@@ -1,3 +1,7 @@
+use super::release_capability_binding::permission_allowed;
+use super::release_capability_selection::{
+    parse_capability_operation, parse_capability_resource_kind,
+};
 use super::{
     AgentInstanceRevisionId, BTreeMap, BTreeSet, BoundGitCapability, BranchRefPolicy,
     BranchUpdatePolicy, CapabilityBinding, CapabilityBindingId, CapabilityOperation,
@@ -5,8 +9,7 @@ use super::{
     CapabilitySlotKey, CarriedCapabilityBinding, ChangedPathGlob, GitCapabilityCeiling,
     GitCapabilityCeilingInput, GitCapabilityRow, GitOperation, GitRepositoryId, Postgres, RefGlob,
     RefMutationPermission, RefNamespacePolicy, RefUpdatePolicy, ReleaseServiceError,
-    StoredCapabilityBindingRow, Transaction, TransferLimits, Uuid, parse_capability_operation,
-    parse_capability_resource_kind, permission_allowed,
+    StoredCapabilityBindingRow, Transaction, TransferLimits, Uuid,
 };
 
 pub fn stored_requirement(
