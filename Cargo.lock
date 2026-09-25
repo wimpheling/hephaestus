@@ -2478,6 +2478,7 @@ dependencies = [
  "vm-trait",
  "volume-local",
  "volume-postgres",
+ "volume-trait",
  "workspace-domain",
  "workspace-local",
  "workspace-postgres",
@@ -5780,13 +5781,11 @@ version = "0.1.0"
 dependencies = [
  "async-trait",
  "runtime-types",
- "sqlx",
  "tempfile",
  "time",
  "tokio",
  "tracing",
  "uuid",
- "volume-postgres",
  "volume-trait",
 ]
 
