@@ -16,6 +16,7 @@ mod event_architecture;
 mod layer_architecture;
 mod rpc_architecture;
 mod rust_architecture;
+mod topology_architecture;
 
 const DOCUMENT: &str = "ARCHITECTURE.md";
 const CONFIGURATION: &str = "architecture.toml";
@@ -26,8 +27,9 @@ const HARNESS_RULE_IDS: [&str; 3] = [
     "ARCH-RULE-REGISTRY",
 ];
 
-const REQUIRED_RULE_IDS: [&str; 60] = [
+const REQUIRED_RULE_IDS: [&str; 61] = [
     "ARCH-CONTROLLED-PUBLIC-MODULES",
+    "ARCH-CORE-NO-STD-DEPENDENCIES",
     "ARCH-CRATE-LAYERS",
     "ARCH-ENV-ONLY-IN-CONFIG",
     "ARCH-FILESYSTEM-ONLY-IN-ADAPTERS",
@@ -318,6 +320,12 @@ fn validate_repository(
     let usable_exceptions = usable_exceptions(root, configuration);
     validate_metadata(root, metadata, &mut diagnostics);
     layer_architecture::validate(&configuration.enabled_rules, metadata, &mut diagnostics);
+    topology_architecture::validate(
+        root,
+        &configuration.enabled_rules,
+        metadata,
+        &mut diagnostics,
+    );
     db_architecture::validate(
         root,
         &configuration.enabled_rules,

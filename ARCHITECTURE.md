@@ -507,6 +507,7 @@ exception must follow the policy above.
 
 | Rule | Class / state | Rationale and scope | Command | Exceptions and remediation |
 | --- | --- | --- | --- | --- |
+| `ARCH-CORE-NO-STD-DEPENDENCIES` | Structural + lint / harness | Keeps the portable and opinionated core independent from swappable standard providers; covers normal, build, and development Cargo dependency edges classified by canonical `crates/heph-core` and `crates/heph-std` manifest directories. | `cargo dev check architecture` | Introduce a core port or move concrete provider wiring to the `heph-app` composition root. |
 | `ARCH-CRATE-LAYERS` | Structural + lint / harness | Cargo package layers make the complete workspace dependency graph reviewable; covers every workspace package, edge, cycle, and undeclared layer. | `cargo dev check architecture` | Exact edge only; declare the package metadata or invert/extract the dependency. |
 | `ARCH-CONTROLLED-PUBLIC-MODULES` | Structural + lint / migration-gated | Prevents accidental architectural entry points; covers top-level public modules in every layered crate. | `cargo dev check architecture` | One module only; move it under an approved area or add the bounded metadata declaration. |
 | `ARCH-ENV-ONLY-IN-CONFIG` | Semantic lint / harness | Makes runtime configuration auditable; covers all Rust environment reads. | `cargo dev check architecture` | One source item only; inject typed config instead. |
