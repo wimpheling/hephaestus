@@ -13,8 +13,8 @@ rustdoc lint baseline enabled; use only narrow, accountable exceptions.
 The SQLx boundary is already enabled as
 `DB-SQLX-ONLY-IN-POSTGRES-ADAPTERS`. Preserve and regression-check its existing
 metadata-based rule; do not add a duplicate SQLx rule. Workspace placement and
-the core-to-standard dependency direction belong to the sibling
-[workspace topology task](clarify-workspace-crate-topology-and-extension-boundaries.md),
+the core-to-standard dependency direction were completed in the
+[workspace topology migration](https://github.com/wimpheling/hephaestus/pull/57),
 which owns `ARCH-CORE-NO-STD-DEPENDENCIES`.
 
 ## Locked decisions
@@ -90,9 +90,9 @@ which owns `ARCH-CORE-NO-STD-DEPENDENCIES`.
 
 ## Dependencies and ownership
 
-- The [workspace topology task](clarify-workspace-crate-topology-and-extension-boundaries.md)
+- The completed [workspace topology migration](https://github.com/wimpheling/hephaestus/pull/57)
   owns canonical manifest-directory prefixes, provider placement, facades, and
-  `ARCH-CORE-NO-STD-DEPENDENCIES`, including its normal, build, and development
+  `ARCH-CORE-NO-STD-DEPENDENCIES`, including normal, build, and development
   dependency edges. Do not duplicate that implementation or its fixtures here.
 - This task depends on the existing architecture registry, exception format,
   SQLx metadata rule, and `cargo dev check architecture` / `cargo dev quality`

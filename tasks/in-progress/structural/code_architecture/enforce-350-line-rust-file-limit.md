@@ -1,6 +1,6 @@
 # Enforce a 350-line limit for Rust files
 
-Owner: unassigned
+Owner: Codex session on `chore/code-architecture-tasks` (2026-09-25)
 
 ## Outcome
 
@@ -12,11 +12,10 @@ Do not introduce another rule ID or a Dylint dependency.
 
 ## Dependency and current state
 
-- Start implementation after the [workspace topology migration](../../../in-progress/structural/code_architecture/clarify-workspace-crate-topology-and-extension-boundaries.md)
-  completes. That task explicitly defers activating this rule until paths are
-  stable. Recount the post-migration tree before splitting files or enabling the
-  check; the pre-migration measurement below is a planning baseline, not an
-  allowlist.
+- The workspace topology migration completed in [PR #57](https://github.com/wimpheling/hephaestus/pull/57),
+  with 90 reconciled packages and `cargo dev quality` passing. Its one-off task
+  was deleted as requested. The post-migration inventory below is the starting
+  measurement for this implementation, not an allowlist.
 - The topology task's non-goal against a universal 300/350-line limit applies
   to that migration's scope. This separate task deliberately establishes the
   350-line Rust limit after the move; do not retain larger Rust thresholds on
@@ -69,6 +68,16 @@ exceed 350 lines: 200 under `crates/` and 13 under `examples/`.
 These counts describe the current tree before the topology migration. Recompute
 the baseline at implementation time and update this section if the inventory or
 count changes; do not carry individual files forward as grandfathered entries.
+
+## Post-migration implementation inventory
+
+Recounted from the full checkout on 2026-09-25 after the topology quality gate:
+1,265 Rust files under `crates/` and `examples/`, with the exact 98 generated
+RPC and 687 Cooking vendor files excluded. The remaining 480 hand-maintained
+files comprise 463 under `crates/` and 17 under `examples/`. Of those, 216
+exceed 350 lines: 203 under `crates/` and 13 under `examples/`, for 173,017
+excess physical lines. A path-and-count inventory is required before splitting;
+these totals are not a grandfathered baseline.
 
 ## Implementation checklist
 
