@@ -22,6 +22,7 @@ pub(super) async fn handle(
         request.context.as_option(),
     )
     .map_err(into_connect_error)?;
+    let budget = shared_request::RequestBudget::from_transport(&ctx);
     let repository_id = shared_request::required_id(request.repository_id.as_option())
         .and_then(|value| Uuid::parse_str(&value).map_err(|_| RpcError::InvalidArgument))
         .map_err(into_connect_error)?;
@@ -32,9 +33,9 @@ pub(super) async fn handle(
         .ok_or_else(|| into_connect_error(RpcError::InvalidArgument))?;
     let configuration_hash = decode_hash(&request.configuration_hash)
         .ok_or_else(|| into_connect_error(RpcError::InvalidArgument))?;
-    let result = service
-        .application
-        .request_build(
+    let result = shared_request::run_with_budget(
+        &budget,
+        service.application.request_build(
             &identity,
             RequestBuild {
                 repository_id,
@@ -42,18 +43,24 @@ pub(super) async fn handle(
                 build_definition_hash,
                 configuration_hash,
             },
-        )
-        .await
-        .map_err(super::model::application_error)
-        .map_err(into_connect_error)?;
-    let receipt = crate::rpc::mutation_receipt(
-        &service.receipts,
-        identity.idempotency_id,
-        identity.user_id,
-        "build",
-        "repository",
+        ),
     )
-    .await?;
+    .await
+    .map_err(into_connect_error)?
+    .map_err(super::model::application_error)
+    .map_err(into_connect_error)?;
+    let receipt = shared_request::run_with_budget(
+        &budget,
+        crate::rpc::mutation_receipt(
+            &service.receipts,
+            identity.idempotency_id,
+            identity.user_id,
+            "build",
+            "repository",
+        ),
+    )
+    .await
+    .map_err(into_connect_error)??;
     connectrpc::Response::ok(RequestBuildResponse {
         build_id: super::model::opaque(result.id).into(),
         operation: Operation {

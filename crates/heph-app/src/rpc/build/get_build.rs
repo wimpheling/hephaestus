@@ -14,18 +14,19 @@ pub(super) async fn handle(
 
     let identity = shared_request::query_identity(&ctx, &service.authenticator, AUDIENCE)
         .map_err(into_connect_error)?;
+    let budget = shared_request::RequestBudget::from_transport(&ctx);
     let request = request.to_owned_message();
     let id = shared_request::required_id(request.build_id.as_option())
         .and_then(|value| {
             Uuid::parse_str(&value).map_err(|_| super::super::RpcError::InvalidArgument)
         })
         .map_err(into_connect_error)?;
-    let result = service
-        .application
-        .get_build(&identity, id)
-        .await
-        .map_err(super::model::application_error)
-        .map_err(into_connect_error)?;
+    let result =
+        shared_request::run_with_budget(&budget, service.application.get_build(&identity, id))
+            .await
+            .map_err(into_connect_error)?
+            .map_err(super::model::application_error)
+            .map_err(into_connect_error)?;
     connectrpc::Response::ok(GetBuildResponse {
         build: super::model::build(result).into(),
         ..Default::default()

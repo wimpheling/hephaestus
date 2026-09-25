@@ -20,6 +20,7 @@ pub(super) async fn handle(
 
     let identity = shared_request::query_identity(&ctx, &service.authenticator, AUDIENCE)
         .map_err(into_connect_error)?;
+    let budget = shared_request::RequestBudget::from_transport(&ctx);
     let request = request.to_owned_message();
     let repository_id = shared_request::required_id(request.repository_id.as_option())
         .and_then(|value| Uuid::parse_str(&value).map_err(|_| RpcError::InvalidArgument))
@@ -41,19 +42,21 @@ pub(super) async fn handle(
         .map(|page| decode_cursor(&page.page_token).ok_or(RpcError::InvalidArgument))
         .transpose()
         .map_err(into_connect_error)?;
-    let result = service
-        .application
-        .list_builds(
+    let result = shared_request::run_with_budget(
+        &budget,
+        service.application.list_builds(
             &identity,
             repository_id,
             BuildPage {
                 size: i64::from(page_size),
                 after,
             },
-        )
-        .await
-        .map_err(super::model::application_error)
-        .map_err(into_connect_error)?;
+        ),
+    )
+    .await
+    .map_err(into_connect_error)?
+    .map_err(super::model::application_error)
+    .map_err(into_connect_error)?;
     connectrpc::Response::ok(ListBuildsResponse {
         builds: result.builds.into_iter().map(super::model::build).collect(),
         page: PageResponse {

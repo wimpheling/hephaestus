@@ -25,20 +25,24 @@ pub(super) async fn handle(
     let id = request::required_id(request.build_id.as_option())
         .and_then(|value| Uuid::parse_str(&value).map_err(|_| RpcError::InvalidArgument))
         .map_err(into_connect_error)?;
-    let result = service
-        .application
-        .retry_build(&identity, id)
+    let budget = request::RequestBudget::from_transport(&ctx);
+    let result = request::run_with_budget(&budget, service.application.retry_build(&identity, id))
         .await
+        .map_err(into_connect_error)?
         .map_err(action_error)
         .map_err(into_connect_error)?;
-    let receipt = mutation_receipt(
-        &service.receipts,
-        identity.idempotency_id,
-        identity.user_id,
-        "build",
-        "repository",
+    let receipt = request::run_with_budget(
+        &budget,
+        mutation_receipt(
+            &service.receipts,
+            identity.idempotency_id,
+            identity.user_id,
+            "build",
+            "repository",
+        ),
     )
-    .await?;
+    .await
+    .map_err(into_connect_error)??;
     Response::ok(RetryBuildResponse {
         build_id: opaque(result.id).into(),
         operation: Operation {
