@@ -6,6 +6,21 @@
 mod app_fixture;
 
 #[cfg(test)]
+#[path = "ui_installation_rpc/scenario_handoff.rs"]
+mod ui_installation_scenario_handoff;
+#[cfg(test)]
+#[path = "ui_installation_rpc/scenario_install.rs"]
+mod ui_installation_scenario_install;
+#[cfg(test)]
+#[path = "ui_installation_rpc/scenario_lifecycle.rs"]
+mod ui_installation_scenario_lifecycle;
+#[cfg(test)]
+#[path = "ui_installation_rpc/scenario_listing.rs"]
+mod ui_installation_scenario_listing;
+#[cfg(test)]
+#[path = "ui_installation_rpc/scenario_state.rs"]
+mod ui_installation_scenario_state;
+#[cfg(test)]
 #[path = "ui_installation_rpc/seed.rs"]
 mod ui_installation_seed;
 #[cfg(test)]
@@ -22,11 +37,9 @@ mod ui_installation_seed_sessions;
 mod ui_installation_transport {
     use super::app_fixture::{app_config, cleanup_nats, require_disposable_nats};
     use super::ui_installation_seed::seed_fixture;
-    use buffa::Message as _;
     use connectrpc::{
         Protocol,
         client::{CallOptions, ClientConfig, Http2Connection, SharedHttp2Connection},
-        error::ErrorCode,
     };
     use hephaestus_app::HephaestusApp;
     use identity_domain::BrowserSessionSid;
@@ -34,12 +47,8 @@ mod ui_installation_transport {
     use rpc_proto::{
         connect::hephaestus::release::v1::ReleaseServiceClient,
         messages::hephaestus::{
-            common::v1::{MutationReceipt, OpaqueId, PageRequest, RequestContext},
-            release::v1::{
-                ActivateUiRequest, CreateUiBrowserHandoffRequest, DisableUiRequest,
-                InstallUiRequest, ListUiInstallationsRequest, RemoveUiRequest, RollbackUiRequest,
-                UiInstallationTarget, ui_installation_target,
-            },
+            common::v1::{MutationReceipt, OpaqueId, RequestContext},
+            release::v1::{UiInstallationTarget, ui_installation_target},
         },
     };
     use serde_json::json;
@@ -47,23 +56,23 @@ mod ui_installation_transport {
     use sqlx::{PgPool, postgres::PgPoolOptions};
     use std::time::{SystemTime, UNIX_EPOCH};
     use tempfile::tempdir;
-    use time::OffsetDateTime;
     use tracing_subscriber::{EnvFilter, fmt};
     use uuid::Uuid;
 
     const SECRET: &[u8] = b"service-log-retention-test-signing-secret";
-    const ISSUER: &str = "https://ui-rpc-test.invalid";
-    const UI_AUDIENCE: &str = "/hephaestus.release.v1.ReleaseService/InstallUi";
-    const ACTIVATE_AUDIENCE: &str = "/hephaestus.release.v1.ReleaseService/ActivateUi";
-    const ROLLBACK_AUDIENCE: &str = "/hephaestus.release.v1.ReleaseService/RollbackUi";
-    const DISABLE_AUDIENCE: &str = "/hephaestus.release.v1.ReleaseService/DisableUi";
-    const REMOVE_AUDIENCE: &str = "/hephaestus.release.v1.ReleaseService/RemoveUi";
-    const LIST_AUDIENCE: &str = "/hephaestus.release.v1.ReleaseService/ListUiInstallations";
-    const HANDOFF_AUDIENCE: &str = "/hephaestus.release.v1.ReleaseService/CreateUiBrowserHandoff";
-    const HANDOFF_SENTINEL_TEXT: &str = "handoff-secret-sentinel-9e25143x";
-    const HANDOFF_SENTINEL: &[u8] = HANDOFF_SENTINEL_TEXT.as_bytes();
+    pub(crate) const UI_AUDIENCE: &str = "/hephaestus.release.v1.ReleaseService/InstallUi";
+    pub(crate) const ACTIVATE_AUDIENCE: &str = "/hephaestus.release.v1.ReleaseService/ActivateUi";
+    pub(crate) const ROLLBACK_AUDIENCE: &str = "/hephaestus.release.v1.ReleaseService/RollbackUi";
+    pub(crate) const DISABLE_AUDIENCE: &str = "/hephaestus.release.v1.ReleaseService/DisableUi";
+    pub(crate) const REMOVE_AUDIENCE: &str = "/hephaestus.release.v1.ReleaseService/RemoveUi";
+    pub(crate) const LIST_AUDIENCE: &str =
+        "/hephaestus.release.v1.ReleaseService/ListUiInstallations";
+    pub(crate) const HANDOFF_AUDIENCE: &str =
+        "/hephaestus.release.v1.ReleaseService/CreateUiBrowserHandoff";
+    pub(crate) const HANDOFF_SENTINEL_TEXT: &str = "handoff-secret-sentinel-9e25143x";
+    pub(crate) const HANDOFF_SENTINEL: &[u8] = HANDOFF_SENTINEL_TEXT.as_bytes();
 
-    type InvalidSecretAudit = (
+    pub(crate) type InvalidSecretAudit = (
         Uuid,
         String,
         String,
@@ -74,14 +83,14 @@ mod ui_installation_transport {
         Option<Uuid>,
     );
 
-    fn opaque(id: Uuid) -> OpaqueId {
+    pub(crate) fn opaque(id: Uuid) -> OpaqueId {
         OpaqueId {
             value: id.to_string(),
             ..Default::default()
         }
     }
 
-    fn request_context(key: &str) -> RequestContext {
+    pub(crate) fn request_context(key: &str) -> RequestContext {
         RequestContext {
             request_id: opaque(Uuid::new_v4()).into(),
             idempotency_key: key.to_owned(),
@@ -98,11 +107,11 @@ mod ui_installation_transport {
             .expect("test clock fits i64")
     }
 
-    fn session_token(user_id: Uuid, sid: BrowserSessionSid, audience: &str) -> String {
+    pub(crate) fn session_token(user_id: Uuid, sid: BrowserSessionSid, audience: &str) -> String {
         session_token_for_lifetime(user_id, sid, audience, 25)
     }
 
-    fn session_token_for_lifetime(
+    pub(crate) fn session_token_for_lifetime(
         user_id: Uuid,
         sid: BrowserSessionSid,
         audience: &str,
@@ -126,11 +135,11 @@ mod ui_installation_transport {
         .expect("sign browser session assertion")
     }
 
-    fn authorization(token: &str) -> CallOptions {
+    pub(crate) fn authorization(token: &str) -> CallOptions {
         CallOptions::default().with_header("authorization", format!("Bearer {token}"))
     }
 
-    fn project_target(project_id: Uuid) -> UiInstallationTarget {
+    pub(crate) fn project_target(project_id: Uuid) -> UiInstallationTarget {
         UiInstallationTarget {
             target: Some(ui_installation_target::Target::ProjectId(Box::new(opaque(
                 project_id,
@@ -139,14 +148,14 @@ mod ui_installation_transport {
         }
     }
 
-    fn organization_target() -> UiInstallationTarget {
+    pub(crate) fn organization_target() -> UiInstallationTarget {
         UiInstallationTarget {
             target: Some(ui_installation_target::Target::Global(Box::default())),
             ..Default::default()
         }
     }
 
-    fn repository_target(repository_id: Uuid) -> UiInstallationTarget {
+    pub(crate) fn repository_target(repository_id: Uuid) -> UiInstallationTarget {
         UiInstallationTarget {
             target: Some(ui_installation_target::Target::RepositoryId(Box::new(
                 opaque(repository_id),
@@ -169,7 +178,7 @@ mod ui_installation_transport {
         )
     }
 
-    async fn assert_receipt_scope(
+    pub(crate) async fn assert_receipt_scope(
         pool: &PgPool,
         receipt: &MutationReceipt,
         expected_aggregate: &str,
@@ -245,798 +254,10 @@ mod ui_installation_transport {
         .await
         .expect("start production UI RPC application");
         let release = release_client(app.http_addr()).await;
-        let target = project_target(fixture.project_id);
-        let install_token = session_token(fixture.user_id, fixture.sid, UI_AUDIENCE);
-        let install_request = InstallUiRequest {
-            context: request_context("ui-install").into(),
-            organization_id: opaque(fixture.organization_id).into(),
-            target: Some(target.clone()).into(),
-            release_id: opaque(fixture.release_id).into(),
-            ui_key: String::from("assistant"),
-            ..Default::default()
-        };
-        let wrong_audience = release
-            .install_ui_with_options(
-                install_request.clone(),
-                authorization(&session_token(fixture.user_id, fixture.sid, LIST_AUDIENCE)),
-            )
-            .await
-            .expect_err("wrong procedure audience must be rejected");
-        assert_eq!(wrong_audience.code, ErrorCode::Unauthenticated);
-        let expired = release
-            .install_ui_with_options(
-                install_request.clone(),
-                authorization(&session_token_for_lifetime(
-                    fixture.user_id,
-                    fixture.sid,
-                    UI_AUDIENCE,
-                    -1,
-                )),
-            )
-            .await
-            .expect_err("expired parent assertion must be rejected");
-        assert_eq!(expired.code, ErrorCode::Unauthenticated);
-        let inactive_parent = release
-            .install_ui_with_options(
-                install_request.clone(),
-                authorization(&session_token(
-                    fixture.user_id,
-                    BrowserSessionSid::new(),
-                    UI_AUDIENCE,
-                )),
-            )
-            .await
-            .expect_err("signed assertion without an active parent must be rejected");
-        assert_eq!(inactive_parent.code, ErrorCode::Unauthenticated);
-        let wrong_organization = release
-            .install_ui_with_options(
-                InstallUiRequest {
-                    context: request_context("cross-org-target").into(),
-                    organization_id: opaque(fixture.foreign_organization_id).into(),
-                    ..install_request.clone()
-                },
-                authorization(&session_token(fixture.user_id, fixture.sid, UI_AUDIENCE)),
-            )
-            .await
-            .expect_err("target organization mismatch must be rejected");
-        assert_eq!(wrong_organization.code, ErrorCode::InvalidArgument);
-        let denied_installations: i64 = sqlx::query_scalar("SELECT count(*) FROM ui_installations")
-            .fetch_one(&pool)
-            .await
-            .expect("count installations after denied requests");
-        assert_eq!(denied_installations, 0);
-        let installed = release
-            .install_ui_with_options(install_request.clone(), authorization(&install_token))
-            .await
-            .expect("authenticated UI install")
-            .into_owned();
-        let receipt = installed.receipt.as_option().expect("install receipt");
-        assert_receipt_scope(&pool, receipt, "project", "project").await;
-        let replay = release
-            .install_ui_with_options(install_request, authorization(&install_token))
-            .await
-            .expect("exact install replay")
-            .into_owned();
-        assert_eq!(replay.installation_id, installed.installation_id);
-        assert_eq!(replay.generation_id, installed.generation_id);
-        assert_eq!(replay.receipt, installed.receipt);
-
-        let organization = organization_target();
-        let organization_installed = release
-            .install_ui_with_options(
-                InstallUiRequest {
-                    context: request_context("ui-install-organization").into(),
-                    organization_id: opaque(fixture.organization_id).into(),
-                    target: Some(organization.clone()).into(),
-                    release_id: opaque(fixture.global_release_id).into(),
-                    ui_key: String::from("assistant"),
-                    ..Default::default()
-                },
-                authorization(&install_token),
-            )
-            .await
-            .expect("authenticated organization UI install")
-            .into_owned();
-        assert_receipt_scope(
-            &pool,
-            organization_installed
-                .receipt
-                .as_option()
-                .expect("organization receipt"),
-            "organization",
-            "organization",
-        )
-        .await;
-        let repository = repository_target(fixture.repository_id);
-        let repository_installed = release
-            .install_ui_with_options(
-                InstallUiRequest {
-                    context: request_context("ui-install-repository").into(),
-                    organization_id: opaque(fixture.organization_id).into(),
-                    target: Some(repository.clone()).into(),
-                    release_id: opaque(fixture.repository_release_id).into(),
-                    ui_key: String::from("assistant"),
-                    ..Default::default()
-                },
-                authorization(&install_token),
-            )
-            .await
-            .expect("authenticated repository UI install")
-            .into_owned();
-        assert_receipt_scope(
-            &pool,
-            repository_installed
-                .receipt
-                .as_option()
-                .expect("repository receipt"),
-            "repository",
-            "project",
-        )
-        .await;
-        let global_console = release
-            .install_ui_with_options(
-                InstallUiRequest {
-                    context: request_context("ui-install-global-console").into(),
-                    organization_id: opaque(fixture.organization_id).into(),
-                    target: Some(organization.clone()).into(),
-                    release_id: opaque(fixture.global_release_id).into(),
-                    ui_key: String::from("console"),
-                    ..Default::default()
-                },
-                authorization(&install_token),
-            )
-            .await
-            .expect("second organization UI install for cursor paging")
-            .into_owned();
-        assert_receipt_scope(
-            &pool,
-            global_console
-                .receipt
-                .as_option()
-                .expect("global console receipt"),
-            "organization",
-            "organization",
-        )
-        .await;
-
-        let organization_activated = release
-            .activate_ui_with_options(
-                ActivateUiRequest {
-                    context: request_context("ui-activate-organization").into(),
-                    installation_id: organization_installed.installation_id.clone(),
-                    expected_generation_id: organization_installed.generation_id.clone(),
-                    release_id: opaque(fixture.global_release_id).into(),
-                    ui_key: String::from("assistant"),
-                    ..Default::default()
-                },
-                authorization(&session_token(
-                    fixture.user_id,
-                    fixture.sid,
-                    ACTIVATE_AUDIENCE,
-                )),
-            )
-            .await
-            .expect("activate organization UI")
-            .into_owned();
-        assert_receipt_scope(
-            &pool,
-            organization_activated
-                .receipt
-                .as_option()
-                .expect("organization activation receipt"),
-            "organization",
-            "organization",
-        )
-        .await;
-        let repository_activated = release
-            .activate_ui_with_options(
-                ActivateUiRequest {
-                    context: request_context("ui-activate-repository").into(),
-                    installation_id: repository_installed.installation_id.clone(),
-                    expected_generation_id: repository_installed.generation_id.clone(),
-                    release_id: opaque(fixture.repository_release_id).into(),
-                    ui_key: String::from("assistant"),
-                    ..Default::default()
-                },
-                authorization(&session_token(
-                    fixture.user_id,
-                    fixture.sid,
-                    ACTIVATE_AUDIENCE,
-                )),
-            )
-            .await
-            .expect("activate repository UI")
-            .into_owned();
-        assert_receipt_scope(
-            &pool,
-            repository_activated
-                .receipt
-                .as_option()
-                .expect("repository activation receipt"),
-            "repository",
-            "project",
-        )
-        .await;
-
-        let list_token = session_token(fixture.user_id, fixture.sid, LIST_AUDIENCE);
-        let list_request = ListUiInstallationsRequest {
-            organization_id: opaque(fixture.organization_id).into(),
-            target: Some(target.clone()).into(),
-            page: PageRequest {
-                page_size: 50,
-                ..Default::default()
-            }
-            .into(),
-            ..Default::default()
-        };
-        let listed = release
-            .list_ui_installations_with_options(list_request.clone(), authorization(&list_token))
-            .await
-            .expect("list installed UI")
-            .into_owned();
-        assert_eq!(listed.installations.len(), 1);
-        assert!(listed.installations[0].launchable);
-        assert!(listed.page.as_option().is_some());
-        let tampered_cursor = release
-            .list_ui_installations_with_options(
-                ListUiInstallationsRequest {
-                    page: PageRequest {
-                        page_token: String::from("tampered-cursor"),
-                        ..Default::default()
-                    }
-                    .into(),
-                    ..list_request
-                },
-                authorization(&list_token),
-            )
-            .await
-            .expect_err("tampered installation cursor must be rejected");
-        assert_eq!(tampered_cursor.code, ErrorCode::InvalidArgument);
-
-        let organization_list_request = ListUiInstallationsRequest {
-            organization_id: opaque(fixture.organization_id).into(),
-            target: Some(organization.clone()).into(),
-            page: PageRequest {
-                page_size: 1,
-                ..Default::default()
-            }
-            .into(),
-            ..Default::default()
-        };
-        let organization_page = release
-            .list_ui_installations_with_options(
-                organization_list_request.clone(),
-                authorization(&list_token),
-            )
-            .await
-            .expect("list organization UI installations")
-            .into_owned();
-        assert_eq!(organization_page.installations.len(), 1);
-        let scoped_cursor = organization_page
-            .page
-            .as_option()
-            .expect("organization page response")
-            .next_page_token
-            .clone();
-        assert!(
-            !scoped_cursor.is_empty(),
-            "organization list must produce a cursor"
-        );
-
-        let second_actor_cursor = release
-            .list_ui_installations_with_options(
-                ListUiInstallationsRequest {
-                    page: PageRequest {
-                        page_token: scoped_cursor.clone(),
-                        ..Default::default()
-                    }
-                    .into(),
-                    ..organization_list_request.clone()
-                },
-                authorization(&session_token(
-                    fixture.second_user_id,
-                    fixture.second_sid,
-                    LIST_AUDIENCE,
-                )),
-            )
-            .await
-            .expect_err("cursor must reject a different actor");
-        assert_eq!(second_actor_cursor.code, ErrorCode::InvalidArgument);
-
-        let second_organization_cursor = release
-            .list_ui_installations_with_options(
-                ListUiInstallationsRequest {
-                    organization_id: opaque(fixture.foreign_organization_id).into(),
-                    target: Some(organization_target()).into(),
-                    page: PageRequest {
-                        page_token: scoped_cursor.clone(),
-                        ..Default::default()
-                    }
-                    .into(),
-                    ..Default::default()
-                },
-                authorization(&list_token),
-            )
-            .await
-            .expect_err("cursor must reject a different organization");
-        assert_eq!(second_organization_cursor.code, ErrorCode::InvalidArgument);
-
-        let second_target_cursor = release
-            .list_ui_installations_with_options(
-                ListUiInstallationsRequest {
-                    target: Some(target.clone()).into(),
-                    page: PageRequest {
-                        page_token: scoped_cursor,
-                        ..Default::default()
-                    }
-                    .into(),
-                    ..organization_list_request
-                },
-                authorization(&list_token),
-            )
-            .await
-            .expect_err("cursor must reject a different target");
-        assert_eq!(second_target_cursor.code, ErrorCode::InvalidArgument);
-
-        let handoff_token = session_token(fixture.user_id, fixture.sid, HANDOFF_AUDIENCE);
-        assert_eq!(HANDOFF_SENTINEL.len(), 32);
-        let secret = HANDOFF_SENTINEL.to_vec();
-        let handoffs_before_invalid_secret: i64 =
-            sqlx::query_scalar("SELECT count(*) FROM ui_browser_handoffs")
-                .fetch_one(&pool)
-                .await
-                .expect("count handoffs before invalid secret");
-        let audit_before_invalid_secret: i64 = sqlx::query_scalar(
-            "SELECT count(*) FROM ui_request_audit_events
-              WHERE surface = 'handoff_issue'",
-        )
-        .fetch_one(&pool)
-        .await
-        .expect("count handoff audit rows before invalid secret");
-        let invalid_secret_request_id = Uuid::new_v4();
-        let invalid_secret = release
-            .create_ui_browser_handoff_with_options(
-                CreateUiBrowserHandoffRequest {
-                    context: RequestContext {
-                        request_id: opaque(invalid_secret_request_id).into(),
-                        ..Default::default()
-                    }
-                    .into(),
-                    installation_id: installed.installation_id.clone(),
-                    generation_id: installed.generation_id.clone(),
-                    route: String::from("assistant"),
-                    handoff_secret: vec![0x5a; 31],
-                    ..Default::default()
-                },
-                authorization(&handoff_token),
-            )
-            .await
-            .expect_err("invalid handoff secret must be rejected by production handler");
-        assert_eq!(invalid_secret.code, ErrorCode::InvalidArgument);
-        let handoffs_after_invalid_secret: i64 =
-            sqlx::query_scalar("SELECT count(*) FROM ui_browser_handoffs")
-                .fetch_one(&pool)
-                .await
-                .expect("count handoffs after invalid secret");
-        assert_eq!(
-            handoffs_after_invalid_secret, handoffs_before_invalid_secret,
-            "invalid secret must not create a handoff row"
-        );
-        let audit_after_invalid_secret: i64 = sqlx::query_scalar(
-            "SELECT count(*) FROM ui_request_audit_events
-              WHERE surface = 'handoff_issue'",
-        )
-        .fetch_one(&pool)
-        .await
-        .expect("count handoff audit rows after invalid secret");
-        assert_eq!(
-            audit_after_invalid_secret,
-            audit_before_invalid_secret + 1,
-            "invalid secret must create exactly one handoff denial audit"
-        );
-        let invalid_secret_audit: InvalidSecretAudit = sqlx::query_as(
-            "SELECT request_id, decision, outcome, reason_code,
-                    actor_id, organization_id, installation_id, generation_id
-               FROM ui_request_audit_events
-              WHERE surface = 'handoff_issue'
-              ORDER BY occurred_at DESC, id DESC
-              LIMIT 1",
-        )
-        .fetch_one(&pool)
-        .await
-        .expect("load invalid secret audit row");
-        assert_eq!(invalid_secret_audit.1, "denied");
-        assert_eq!(invalid_secret_audit.2, "not_attempted");
-        assert_eq!(invalid_secret_audit.3, "invalid_input");
-        assert_eq!(invalid_secret_audit.4, Some(fixture.user_id));
-        assert_eq!(invalid_secret_audit.5, None);
-        assert_eq!(invalid_secret_audit.6, None);
-        assert_eq!(invalid_secret_audit.7, None);
-        assert_ne!(invalid_secret_audit.0, Uuid::nil());
-        assert_ne!(
-            invalid_secret_audit.0, invalid_secret_request_id,
-            "audit correlation must use the server marker, not caller input"
-        );
-
-        let handoffs_before_malformed_wire: i64 =
-            sqlx::query_scalar("SELECT count(*) FROM ui_browser_handoffs")
-                .fetch_one(&pool)
-                .await
-                .expect("count handoffs before malformed wire request");
-        let audit_before_malformed_wire: i64 = sqlx::query_scalar(
-            "SELECT count(*) FROM ui_request_audit_events
-              WHERE surface = 'handoff_issue'",
-        )
-        .fetch_one(&pool)
-        .await
-        .expect("count handoff audits before malformed wire request");
-        let malformed_wire = reqwest::Client::new()
-            .post(format!(
-                "http://{}/hephaestus.release.v1.ReleaseService/CreateUiBrowserHandoff",
-                app.http_addr()
-            ))
-            .header("authorization", format!("Bearer {handoff_token}"))
-            .header("content-type", "application/proto")
-            .body(vec![0xff, 0x00, 0x7f])
-            .send()
-            .await
-            .expect("send malformed handoff wire request");
-        let malformed_wire_status = malformed_wire.status();
-        let _ = malformed_wire
-            .bytes()
-            .await
-            .expect("read malformed handoff wire response");
-        assert!(
-            malformed_wire_status.is_client_error(),
-            "malformed wire request must retain a client error status"
-        );
-        let handoffs_after_malformed_wire: i64 =
-            sqlx::query_scalar("SELECT count(*) FROM ui_browser_handoffs")
-                .fetch_one(&pool)
-                .await
-                .expect("count handoffs after malformed wire request");
-        assert_eq!(
-            handoffs_after_malformed_wire, handoffs_before_malformed_wire,
-            "malformed wire request must not create a handoff row"
-        );
-        let audit_after_malformed_wire: i64 = sqlx::query_scalar(
-            "SELECT count(*) FROM ui_request_audit_events
-              WHERE surface = 'handoff_issue'",
-        )
-        .fetch_one(&pool)
-        .await
-        .expect("count handoff audits after malformed wire request");
-        assert_eq!(
-            audit_after_malformed_wire,
-            audit_before_malformed_wire + 1,
-            "malformed wire request must create exactly one transport denial audit"
-        );
-        let malformed_wire_audit: (String, String, String, Option<Uuid>) = sqlx::query_as(
-            "SELECT decision, outcome, reason_code, actor_id
-               FROM ui_request_audit_events
-              WHERE surface = 'handoff_issue'
-              ORDER BY occurred_at DESC, id DESC
-              LIMIT 1",
-        )
-        .fetch_one(&pool)
-        .await
-        .expect("load malformed wire audit row");
-        assert_eq!(malformed_wire_audit.0, "denied");
-        assert_eq!(malformed_wire_audit.1, "not_attempted");
-        assert_eq!(malformed_wire_audit.2, "invalid_input");
-        assert_eq!(malformed_wire_audit.3, Some(fixture.user_id));
-        let valid_handoff_request_id = Uuid::new_v4();
-        let handoff = release
-            .create_ui_browser_handoff_with_options(
-                CreateUiBrowserHandoffRequest {
-                    context: RequestContext {
-                        request_id: opaque(valid_handoff_request_id).into(),
-                        ..Default::default()
-                    }
-                    .into(),
-                    installation_id: installed.installation_id.clone(),
-                    generation_id: installed.generation_id.clone(),
-                    route: String::from("assistant"),
-                    handoff_secret: secret.clone(),
-                    ..Default::default()
-                },
-                authorization(&handoff_token),
-            )
-            .await
-            .expect("authenticated UI handoff")
-            .into_owned();
-        assert!(handoff.handoff_id.as_option().is_some());
-        assert_eq!(handoff.route, "assistant");
-        let handoff_id =
-            Uuid::parse_str(&handoff.handoff_id.as_option().expect("handoff ID").value)
-                .expect("canonical handoff ID");
-        let stored_handoff_request_id: Uuid =
-            sqlx::query_scalar("SELECT request_id FROM ui_browser_handoffs WHERE id = $1")
-                .bind(handoff_id)
-                .fetch_one(&pool)
-                .await
-                .expect("load handoff correlation ID");
-        assert_ne!(
-            stored_handoff_request_id, valid_handoff_request_id,
-            "worker store must receive the server marker, not caller input"
-        );
-        let handoff_debug = format!("{handoff:?}");
-        assert!(!handoff_debug.contains(HANDOFF_SENTINEL_TEXT));
-        assert!(!handoff_debug.contains(&fixture.parent_session_id.to_string()));
-        let handoff_bytes = handoff.encode_to_vec();
-        assert!(
-            !handoff_bytes
-                .windows(HANDOFF_SENTINEL.len())
-                .any(|window| window == HANDOFF_SENTINEL)
-        );
-        let persisted_handoff_json: String = sqlx::query_scalar(
-            "SELECT row_to_json(ui_browser_handoffs)::text
-               FROM ui_browser_handoffs
-              WHERE id = $1",
-        )
-        .bind(handoff_id)
-        .fetch_one(&pool)
-        .await
-        .expect("load persisted handoff JSON");
-        assert!(!persisted_handoff_json.contains(HANDOFF_SENTINEL_TEXT));
-        let handoff_events: String = sqlx::query_scalar(
-            "SELECT COALESCE(string_agg(row_to_json(application_events)::text, ' '), '')
-               FROM application_events
-              WHERE request_id = $1",
-        )
-        .bind(stored_handoff_request_id)
-        .fetch_one(&pool)
-        .await
-        .expect("load handoff application event rows");
-        assert!(!handoff_events.contains(HANDOFF_SENTINEL_TEXT));
-
-        let invalid_route_context = request_context("invalid-route-secret");
-        let invalid_route_request_id = invalid_route_context
-            .request_id
-            .as_option()
-            .expect("invalid-route request ID")
-            .value
-            .parse::<Uuid>()
-            .expect("invalid-route request UUID");
-        let invalid_route_started_at: OffsetDateTime =
-            sqlx::query_scalar("SELECT clock_timestamp()")
-                .fetch_one(&pool)
-                .await
-                .expect("capture invalid-route audit timestamp");
-        let handoff_audits_before_invalid_route: i64 = sqlx::query_scalar(
-            "SELECT count(*) FROM ui_request_audit_events
-              WHERE surface = 'handoff_issue'",
-        )
-        .fetch_one(&pool)
-        .await
-        .expect("count handoff audits before invalid route");
-        let invalid_route = release
-            .create_ui_browser_handoff_with_options(
-                CreateUiBrowserHandoffRequest {
-                    context: invalid_route_context.into(),
-                    installation_id: installed.installation_id.clone(),
-                    generation_id: installed.generation_id.clone(),
-                    route: String::from("invalid route"),
-                    handoff_secret: HANDOFF_SENTINEL.to_vec(),
-                    ..Default::default()
-                },
-                authorization(&handoff_token),
-            )
-            .await
-            .expect_err("invalid route must reject a parsed handoff secret");
-        assert_eq!(invalid_route.code, ErrorCode::InvalidArgument);
-        assert!(!invalid_route.to_string().contains(HANDOFF_SENTINEL_TEXT));
-        assert!(!format!("{invalid_route:?}").contains(HANDOFF_SENTINEL_TEXT));
-        let handoff_audits_after_invalid_route: i64 = sqlx::query_scalar(
-            "SELECT count(*) FROM ui_request_audit_events
-              WHERE surface = 'handoff_issue'",
-        )
-        .fetch_one(&pool)
-        .await
-        .expect("count handoff audits after invalid route");
-        assert_eq!(
-            handoff_audits_after_invalid_route,
-            handoff_audits_before_invalid_route + 1,
-            "invalid route must append exactly one denial audit"
-        );
-        let (invalid_route_audit_request_id, invalid_route_audit_reason): (Uuid, String) =
-            sqlx::query_as(
-                "SELECT request_id, reason_code
-                   FROM ui_request_audit_events
-                  WHERE surface = 'handoff_issue'
-                    AND occurred_at >= $1
-                  ORDER BY occurred_at ASC, id ASC
-                  LIMIT 1",
-            )
-            .bind(invalid_route_started_at)
-            .fetch_one(&pool)
-            .await
-            .expect("load invalid-route handoff audit provenance");
-        assert_eq!(invalid_route_audit_reason, "invalid_input");
-        assert_ne!(
-            invalid_route_audit_request_id, invalid_route_request_id,
-            "handoff middleware must use its generated audit marker"
-        );
-        let caller_audit_rows: i64 = sqlx::query_scalar(
-            "SELECT count(*) FROM ui_request_audit_events
-              WHERE surface = 'handoff_issue' AND request_id = $1",
-        )
-        .bind(invalid_route_request_id)
-        .fetch_one(&pool)
-        .await
-        .expect("query caller request audit provenance");
-        assert_eq!(caller_audit_rows, 0);
-        let invalid_route_audit_json: String = sqlx::query_scalar(
-            "SELECT row_to_json(ui_request_audit_events)::text
-               FROM ui_request_audit_events
-              WHERE surface = 'handoff_issue' AND request_id = $1
-                AND reason_code = 'invalid_input'
-                AND occurred_at >= $2",
-        )
-        .bind(invalid_route_audit_request_id)
-        .bind(invalid_route_started_at)
-        .fetch_one(&pool)
-        .await
-        .expect("load invalid-route handoff audit JSON");
-        assert!(!invalid_route_audit_json.contains(HANDOFF_SENTINEL_TEXT));
-
-        let denied = release
-            .create_ui_browser_handoff_with_options(
-                CreateUiBrowserHandoffRequest {
-                    context: request_context("must-be-empty").into(),
-                    installation_id: installed.installation_id.clone(),
-                    generation_id: installed.generation_id.clone(),
-                    route: String::from("assistant"),
-                    handoff_secret: secret,
-                    ..Default::default()
-                },
-                authorization(&handoff_token),
-            )
-            .await
-            .expect_err("handoff idempotency key must be rejected");
-        assert_eq!(denied.code, ErrorCode::InvalidArgument);
-
-        let activated = release
-            .activate_ui_with_options(
-                ActivateUiRequest {
-                    context: request_context("ui-activate").into(),
-                    installation_id: installed.installation_id.clone(),
-                    expected_generation_id: installed.generation_id.clone(),
-                    release_id: opaque(fixture.release_id).into(),
-                    ui_key: String::from("assistant"),
-                    ..Default::default()
-                },
-                authorization(&session_token(
-                    fixture.user_id,
-                    fixture.sid,
-                    ACTIVATE_AUDIENCE,
-                )),
-            )
-            .await
-            .expect("activate UI with current CAS")
-            .into_owned();
-        assert_ne!(activated.generation_id, installed.generation_id);
-
-        let rolled_back = release
-            .rollback_ui_with_options(
-                RollbackUiRequest {
-                    context: request_context("ui-rollback").into(),
-                    installation_id: installed.installation_id.clone(),
-                    expected_generation_id: activated.generation_id.clone(),
-                    release_id: opaque(fixture.release_id).into(),
-                    ui_key: String::from("assistant"),
-                    ..Default::default()
-                },
-                authorization(&session_token(
-                    fixture.user_id,
-                    fixture.sid,
-                    ROLLBACK_AUDIENCE,
-                )),
-            )
-            .await
-            .expect("rollback UI with current CAS")
-            .into_owned();
-        assert_ne!(rolled_back.generation_id, activated.generation_id);
-
-        let disabled = release
-            .disable_ui_with_options(
-                DisableUiRequest {
-                    context: request_context("ui-disable").into(),
-                    installation_id: installed.installation_id.clone(),
-                    expected_generation_id: rolled_back.generation_id.clone(),
-                    ..Default::default()
-                },
-                authorization(&session_token(
-                    fixture.user_id,
-                    fixture.sid,
-                    DISABLE_AUDIENCE,
-                )),
-            )
-            .await
-            .expect("disable UI with current CAS")
-            .into_owned();
-        assert_eq!(disabled.lifecycle.to_i32(), 2);
-        assert_eq!(disabled.generation_id, rolled_back.generation_id);
-
-        let disabled_installation_id = disabled
-            .installation_id
-            .as_option()
-            .expect("disabled installation id")
-            .value
-            .parse::<Uuid>()
-            .expect("disabled installation UUID");
-        let commands_before_stale: i64 = sqlx::query_scalar(
-            "SELECT count(*) FROM ui_installation_commands WHERE installation_id = $1",
-        )
-        .bind(disabled_installation_id)
-        .fetch_one(&pool)
-        .await
-        .expect("count lifecycle commands before stale CAS");
-
-        let stale = release
-            .remove_ui_with_options(
-                RemoveUiRequest {
-                    context: request_context("ui-stale-remove").into(),
-                    installation_id: disabled.installation_id.clone(),
-                    expected_generation_id: installed.generation_id,
-                    ..Default::default()
-                },
-                authorization(&session_token(
-                    fixture.user_id,
-                    fixture.sid,
-                    REMOVE_AUDIENCE,
-                )),
-            )
-            .await
-            .expect_err("removed lifecycle must not accept stale mutation");
-        assert_eq!(stale.code, ErrorCode::FailedPrecondition);
-        let commands_after_stale: i64 = sqlx::query_scalar(
-            "SELECT count(*) FROM ui_installation_commands WHERE installation_id = $1",
-        )
-        .bind(disabled_installation_id)
-        .fetch_one(&pool)
-        .await
-        .expect("count lifecycle commands after stale CAS");
-        assert_eq!(commands_after_stale, commands_before_stale);
-        let removed = release
-            .remove_ui_with_options(
-                RemoveUiRequest {
-                    context: request_context("ui-remove").into(),
-                    installation_id: disabled.installation_id,
-                    expected_generation_id: disabled.generation_id,
-                    ..Default::default()
-                },
-                authorization(&session_token(
-                    fixture.user_id,
-                    fixture.sid,
-                    REMOVE_AUDIENCE,
-                )),
-            )
-            .await
-            .expect("remove UI with current CAS")
-            .into_owned();
-        assert_eq!(removed.lifecycle.to_i32(), 3);
-        sqlx::query(
-            "UPDATE human_browser_sessions
-             SET revoked_at = now(), revocation_reason = 'logout'
-             WHERE id = $1",
-        )
-        .bind(fixture.parent_session_id)
-        .execute(&pool)
-        .await
-        .expect("revoke parent browser session");
-        let revoked_parent = release
-            .list_ui_installations_with_options(
-                ListUiInstallationsRequest {
-                    organization_id: opaque(fixture.organization_id).into(),
-                    target: Some(target).into(),
-                    ..Default::default()
-                },
-                authorization(&list_token),
-            )
-            .await
-            .expect_err("revoked parent session must be rejected");
-        assert_eq!(revoked_parent.code, ErrorCode::Unauthenticated);
+        let state = super::ui_installation_scenario_install::run(&pool, &release, &fixture).await;
+        super::ui_installation_scenario_listing::run(&release, &fixture, &state).await;
+        super::ui_installation_scenario_handoff::run(&pool, &release, &fixture, &app, &state).await;
+        super::ui_installation_scenario_lifecycle::run(&pool, &release, &fixture, &state).await;
         println!(
             "REAL_UI_INSTALLATION_RPC=1 install_replay=1 organization=1 repository=1 receipts=1 list=1 cursor_actor=1 cursor_org=1 cursor_target=1 cursor_tamper=1 handoff_secret=32 handoff_parent_redacted=1 lifecycle_all5=1 stale_cas=1 wrong_tenant=1 wrong_audience=1 expired=1 revoked=1"
         );
