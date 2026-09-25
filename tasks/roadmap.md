@@ -94,7 +94,7 @@ in parallel:
   as the product boundary and source for the distribution's decisions.
 - [ ] Clarify the [workspace crate topology and extension boundaries](in-progress/structural/code_architecture/clarify-workspace-crate-topology-and-extension-boundaries.md).
 - [ ] After topology is complete, enforce the [350-line Rust file limit](todo/structural/code_architecture/enforce-350-line-rust-file-limit.md).
-- [ ] Complete [architecture and boundary lint hardening](todo/structural/code_architecture/harden-architecture-linter-boundaries.md), using the topology task's package boundaries.
+- [ ] Complete [architecture and boundary lint hardening](in-progress/structural/code_architecture/harden-architecture-linter-boundaries.md), using the topology task's package boundaries.
 - [ ] Define [first-class private-volume, SQLite, and S3-compatible object primitives](todo/structural/generic_capacity_trait/first-class-sqlite-and-s3-object-primitives.md).
 - [ ] After the resource model is defined, support [agent state-capability transitions](todo/structural/generic_capacity_trait/support-agent-state-capability-transitions.md) against explicit resource bindings.
 - [ ] Add [parent-scoped resource slugs](todo/structural/add-parent-scoped-resource-slugs.md) before shipping canonical organization, project, and repository routes.

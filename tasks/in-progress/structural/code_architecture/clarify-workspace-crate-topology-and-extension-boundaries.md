@@ -74,7 +74,7 @@ Names in the tree are directory names. Existing package names remain unchanged
 | `build`, `release`, `review`, and `registry` are forge subcontexts. | Place their product contracts and PostgreSQL packages beneath `heph-core/forge/`; place only provider-specific build and registry implementations beneath `heph-std/forge/`. This is a workspace-discovery decision; it does not alter architecture-layer metadata or relax cross-context dependency restrictions. |
 | Facades define intended public seams. | Add `heph-secret`, `heph-runtime`, `heph-run`, `heph-forge`, and `heph-build` packages at the indicated parent paths. Each re-exports only explicitly approved types/operations; no blanket `pub use child::*`. |
 | `heph-core` must not import `heph-std`. | Add the hard-enabled `ARCH-CORE-NO-STD-DEPENDENCIES` rule. It rejects every normal, build, and development dependency from a package under `crates/heph-core/` to one under `crates/heph-std/`; direction from standard to core is permitted. |
-| PostgreSQL adapters retain both their package naming and explicit capability metadata. | Preserve the existing `*-postgres` package names and `postgres_adapter = true` / `database_context` metadata. SQLx authorization requires the suffix and the explicit adapter metadata together; the suffix alone grants no authorization. Implement that checker contract in the sibling [architecture linter hardening task](../../../todo/structural/code_architecture/harden-architecture-linter-boundaries.md), without adding a second SQLx rule. |
+| PostgreSQL adapters retain both their package naming and explicit capability metadata. | Preserve the existing `*-postgres` package names and `postgres_adapter = true` / `database_context` metadata. SQLx authorization requires the suffix and the explicit adapter metadata together; the suffix alone grants no authorization. Implement that checker contract in the sibling [architecture linter hardening task](harden-architecture-linter-boundaries.md), without adding a second SQLx rule. |
 | Moving directories must not change behavior. | Preserve package names, package metadata, features, binaries, migration ownership, generated-code locations, and all public Rust paths of existing leaf packages. |
 | File length remains the existing architecture-policy concern. | Do not add Dylint. `ARCH-MAX-FILE-LENGTH` already has configured per-layer thresholds; the separate [350-line Rust limit task](../../../todo/structural/code_architecture/enforce-350-line-rust-file-limit.md) activates a uniform limit after this move is complete. |
 
@@ -86,7 +86,7 @@ Names in the tree are directory names. Existing package names remain unchanged
   or sensitive-data boundaries. Dependency rewiring needed to enforce the new
   core-to-standard direction is in scope.
 - Add broader semantic lint families; track those separately in the sibling
-  [architecture linter hardening task](../../../todo/structural/code_architecture/harden-architecture-linter-boundaries.md).
+  [architecture linter hardening task](harden-architecture-linter-boundaries.md).
 - Move `migrations/`, `proto/`, `web/`, `platform/`, or deployment assets.
 - Introduce a universal 300/350-line Rust-file limit or a Dylint dependency.
 
@@ -101,6 +101,9 @@ Names in the tree are directory names. Existing package names remain unchanged
     and architecture metadata, and account for exactly five new facades; the
     expected target is 90 workspace packages unless this reconciliation finds
     and documents a concrete correction.
+    Baseline captured in `workspace-package-inventory.before.json` (85 packages,
+    22 declared PostgreSQL adapters); use
+    `scripts/reconcile-workspace-package-inventory.py` for post-move reconciliation.
   - [ ] Add the target directory structure without copying crate contents; use
     `git mv` for every existing package directory so history follows the move.
   - [ ] Replace `members = ["crates/*"]` with explicit recursive member globs
@@ -160,7 +163,7 @@ Names in the tree are directory names. Existing package names remain unchanged
     `postgres_adapter = true` packages are named `*-postgres`; preserve those
     names, their `postgres_adapter` / `database_context` and other architecture
     metadata, and require both the suffix and explicit metadata for SQLx
-    authorization. The sibling [architecture linter hardening task](../../../todo/structural/code_architecture/harden-architecture-linter-boundaries.md)
+    authorization. The sibling [architecture linter hardening task](harden-architecture-linter-boundaries.md)
     owns this checker enforcement; do not add a duplicate SQLx boundary rule.
 
 - [ ] **Move genuinely replaceable standard implementations**
