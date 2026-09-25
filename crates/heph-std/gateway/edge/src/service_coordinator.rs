@@ -2380,6 +2380,24 @@ mod tests {
         replied.notify_one();
     }
 
+    fn mock_ownership() -> Arc<MockOwnership> {
+        Arc::new(MockOwnership {
+            events: Mutex::new(Vec::new()),
+            renewals: AtomicUsize::new(0),
+            renewal_activity: None,
+            renew_fails: AtomicBool::new(false),
+            stopping_fails: AtomicBool::new(false),
+            drain_conflict: AtomicBool::new(false),
+            drain_blocked: AtomicBool::new(false),
+            drain_started: Notify::new(),
+            drain_release: Notify::new(),
+            promote_fails: AtomicBool::new(false),
+            promote_started: Notify::new(),
+            promote_release: Notify::new(),
+            promote_blocked: AtomicBool::new(false),
+        })
+    }
+
     struct DrainFixture {
         control: GatewayServiceCoordinatorControl,
         task: tokio::task::JoinHandle<Result<(), GatewayServiceCoordinatorFailure>>,
@@ -3118,22 +3136,6 @@ mod tests {
             release: Notify::new(),
             blocked: AtomicBool::new(false),
         });
-        let (events, _) = broadcast::channel(2);
-        let _vm = Arc::new(MockVm {
-            id: VmId(format!("gateway-service-{}", identity.instance_id)),
-            events,
-            connections: Mutex::new(VecDeque::new()),
-            starts: AtomicUsize::new(0),
-            destroys: AtomicUsize::new(0),
-            destroy_started: Notify::new(),
-            destroy_release: Notify::new(),
-            destroy_blocked: AtomicBool::new(false),
-            destroy_fails: AtomicBool::new(false),
-            wait_exit: Notify::new(),
-            should_exit: AtomicBool::new(false),
-            opens: AtomicUsize::new(0),
-            health_activity: None,
-        });
         let ownership = Arc::new(MockOwnership {
             events: Mutex::new(Vec::new()),
             renewals: AtomicUsize::new(0),
@@ -3470,21 +3472,8 @@ mod tests {
             release: Notify::new(),
             blocked: AtomicBool::new(false),
         });
-        let ownership = Arc::new(MockOwnership {
-            events: Mutex::new(Vec::new()),
-            renewals: AtomicUsize::new(0),
-            renewal_activity: None,
-            renew_fails: AtomicBool::new(false),
-            stopping_fails: AtomicBool::new(false),
-            drain_conflict: AtomicBool::new(false),
-            drain_blocked: AtomicBool::new(false),
-            drain_started: Notify::new(),
-            drain_release: Notify::new(),
-            promote_fails: AtomicBool::new(true),
-            promote_started: Notify::new(),
-            promote_release: Notify::new(),
-            promote_blocked: AtomicBool::new(false),
-        });
+        let ownership = mock_ownership();
+        ownership.promote_fails.store(true, Ordering::Relaxed);
         let now = Instant::now();
         let (coordinator, control) = GatewayServiceCoordinator::new(
             lease(&owner, identity),
