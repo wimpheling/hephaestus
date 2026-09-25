@@ -15,9 +15,7 @@ use gateway_domain::{
     GatewayConfigRevision, GatewayDesiredConfiguration, GatewayEdgeError, GatewayInvocationOutcome,
     GatewayInvocationRecorder, GatewayLimits, GatewayRouteBinding, GatewayRouteResolver,
 };
-use gateway_domain::{
-    GatewayId, GatewayRevisionId, GatewayServiceConfig, ServiceLogCaptureMode, ServiceProbePath,
-};
+use gateway_domain::{GatewayId, GatewayRevisionId};
 #[cfg(test)]
 use http::Method;
 use identity_domain::AuthenticatedIdentity;
@@ -26,11 +24,11 @@ use mailbox_domain::{
     BodyReference, BodyReferenceId, ContentMetadata, DeduplicationKey, EnvelopeMethod,
     EnvelopeRoute, MailboxEnvelope,
 };
-use release_domain::{ParameterName, ParameterValue, ReleaseCommandKey, ReleaseId};
+use release_domain::ReleaseId;
 use runtime_authority::{GatewayRuntimeAuthorityIssuer, GatewayRuntimeSessionRequest};
 use sha2::{Digest, Sha256};
 use sqlx::{PgPool, Postgres, Transaction};
-use std::{collections::BTreeMap, sync::Arc, time::Duration};
+use std::{sync::Arc, time::Duration};
 use time::OffsetDateTime;
 use uuid::Uuid;
 use vm_trait::VmMount;
@@ -62,6 +60,21 @@ pub use gateway_mailbox_publisher::{
 #[cfg(test)]
 use installer_declaration::{exposure_name, installation_hash, method_name, parse_manifest};
 pub(crate) use management_configuration_validation::validate_secret_selections;
+pub(crate) use management_helpers::{
+    binding_command_key, binding_payload_hash, configure_payload_hash, load_mailbox_binding,
+    secret_selection_hash, valid_gateway_producer, valid_gateway_slot, valid_header_name,
+};
+pub use management_models::{
+    ConfigureGatewayRequest, ConfigureGatewayResult, GatewayConfigureError, GatewayIngressSummary,
+    GatewayMailboxBindingSummary, GatewayMailboxPublicationSummary, GatewayManagementError,
+    GatewayManagementRevision, GatewayManagementRoute, GatewayManagementSummary, GatewayPage,
+    GatewaySecretSelection,
+};
+pub(crate) use management_rows::{
+    ConfigureCommandRow, ConfigureRevisionRow, ConfigureRouteRow, GatewayIngressRow,
+    GatewayMailboxBindingCommandRow, GatewayMailboxBindingRow, GatewayMailboxBindingTargetRow,
+    GatewayMailboxPublicationManagementRow, GatewayRevisionRow, GatewayRouteRow, GatewaySummaryRow,
+};
 pub(crate) use release_artifacts::gateway_release_artifacts;
 pub use release_resolver::PostgresGatewayReleaseResolver;
 pub(crate) use route_authority::AcceptedInvocationRow;
@@ -645,230 +658,11 @@ const fn outcome_name(outcome: GatewayInvocationOutcome) -> &'static str {
     }
 }
 
-/// A bounded cursor request for redacted gateway management projections.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct GatewayPage {
-    /// Maximum number of rows returned.
-    pub limit: i64,
-    /// Strictly older record id in the documented stable order.
-    pub after: Option<Uuid>,
-}
-
-/// Safe gateway projection for management clients.
-#[derive(Debug, Clone)]
-pub struct GatewayManagementSummary {
-    /// Durable gateway identity.
-    pub id: Uuid,
-    /// Owning project identity.
-    pub project_id: Uuid,
-    /// Owning repository identity.
-    pub repository_id: Uuid,
-    /// Stable declaration name.
-    pub name: String,
-    /// Current lifecycle.
-    pub lifecycle: String,
-    /// Exact current immutable revision, when installed.
-    pub active_revision_id: Option<Uuid>,
-    /// Latest declared HTTP service revision, which may still be pending
-    /// readiness and therefore differ from the serving revision.
-    pub desired_service_revision_id: Option<Uuid>,
-    /// Latest lifecycle/configuration change time.
-    pub updated_at: OffsetDateTime,
-}
-
-/// Safe immutable revision projection without parameters or secrets.
-#[derive(Debug, Clone)]
-pub struct GatewayManagementRevision {
-    /// Immutable revision identity.
-    pub id: Uuid,
-    /// Source release identity.
-    pub release_id: Option<Uuid>,
-    /// Exact published agent identity that produced this revision.
-    pub release_agent_id: Option<Uuid>,
-    /// Supported handler contract.
-    pub handler_contract: String,
-    /// Typed loopback service declaration, when this is a persistent service.
-    pub service: Option<GatewayServiceConfig>,
-    /// Declared exposure policy.
-    pub exposure: String,
-    /// Symbolic declared secret slot names only.
-    pub secret_slots: Vec<String>,
-    /// Symbolic mailbox slots declared by the immutable source manifest.
-    pub mailbox_slots: Vec<String>,
-    /// Immutable creation time.
-    pub created_at: OffsetDateTime,
-    /// Immutable route intents in this revision.
-    pub routes: Vec<GatewayManagementRoute>,
-}
-
-/// Safe route intent projection.
-#[derive(Debug, Clone)]
-pub struct GatewayManagementRoute {
-    /// Durable route identity.
-    pub id: Uuid,
-    /// Canonical path below the reserved namespace.
-    pub path: String,
-    /// Bounded accepted methods.
-    pub methods: Vec<String>,
-    /// Whether this declared route is selectable.
-    pub enabled: bool,
-}
-
-/// Value-free ingress audit projection.
-#[derive(Debug, Clone)]
-pub struct GatewayIngressSummary {
-    /// Invocation identity.
-    pub id: Uuid,
-    /// Exact selected revision.
-    pub gateway_revision_id: Uuid,
-    /// Exact selected route.
-    pub gateway_route_id: Uuid,
-    /// Terminal or pending safe outcome.
-    pub outcome: String,
-    /// Acceptance time.
-    pub accepted_at: OffsetDateTime,
-    /// Terminal time, if the invocation completed.
-    pub completed_at: Option<OffsetDateTime>,
-}
-
-/// Value-free projection of one immutable gateway mailbox binding and its
-/// separately revocable grant.
-#[derive(Debug, Clone)]
-pub struct GatewayMailboxBindingSummary {
-    /// Immutable binding identity.
-    pub id: Uuid,
-    /// Exact gateway revision that declared the slot.
-    pub gateway_revision_id: Uuid,
-    /// Exact target mailbox.
-    pub mailbox_id: Uuid,
-    /// Declared symbolic slot key.
-    pub slot_key: String,
-    /// Stable bound producer identity.
-    pub producer_id: String,
-    /// Separately revocable grant identity.
-    pub grant_id: Uuid,
-    /// `active` or `revoked`.
-    pub grant_status: String,
-    /// Immutable binding creation time.
-    pub created_at: OffsetDateTime,
-    /// Grant creation time.
-    pub granted_at: OffsetDateTime,
-    /// Grant revocation time, when revoked.
-    pub revoked_at: Option<OffsetDateTime>,
-}
-
-/// Value-free correlation from a gateway invocation to one publication
-/// settlement. Payload, headers, deduplication keys, and denial detail stay
-/// outside management projections.
-#[derive(Debug, Clone)]
-pub struct GatewayMailboxPublicationSummary {
-    /// Immutable publication audit identity.
-    pub id: Uuid,
-    /// Exact gateway invocation.
-    pub invocation_id: Uuid,
-    /// Revision selected for the invocation.
-    pub gateway_revision_id: Uuid,
-    /// Binding used when publication was accepted, if any.
-    pub binding_id: Option<Uuid>,
-    /// Grant used when publication was accepted, if any.
-    pub grant_id: Option<Uuid>,
-    /// Mailbox selected by the binding, if any.
-    pub mailbox_id: Option<Uuid>,
-    /// Accepted logical mailbox event, if any.
-    pub event_id: Option<Uuid>,
-    /// Declared slot selected by the guest.
-    pub slot_key: String,
-    /// Redacted `accepted`, `duplicate`, or `denied` result.
-    pub outcome: String,
-    /// Publication acceptance attempt time.
-    pub accepted_at: OffsetDateTime,
-    /// Publication settlement time.
-    pub settled_at: OffsetDateTime,
-    /// Immutable authorization snapshot selected for the invocation.
-    pub authorization_snapshot_id: Option<Uuid>,
-    /// Exact mailbox binding ordinal copied into that authorization snapshot.
-    pub snapshot_binding_ordinal: Option<i32>,
-    /// Current or terminal state of the accepted mailbox delivery.
-    pub delivery_disposition: Option<String>,
-    /// Number of logical delivery attempts so far.
-    pub delivery_attempt_count: Option<i32>,
-    /// Durable terminal time, when delivery reached a final disposition.
-    pub delivery_terminal_at: Option<OffsetDateTime>,
-    /// Most recent delivery-attempt identity, when one exists.
-    pub delivery_attempt_id: Option<Uuid>,
-    /// Run started by that delivery attempt, when one exists.
-    pub run_id: Option<Uuid>,
-    /// Current lifecycle state of that run.
-    pub run_state: Option<String>,
-    /// Final run outcome, when the run is terminal.
-    pub run_outcome: Option<String>,
-}
-
 /// Authorized `PostgreSQL` management query and lifecycle adapter.
 #[derive(Clone)]
 pub struct PostgresGatewayManagement {
     pool: PgPool,
     authorizer: Arc<PostgresMelangeAuthorizer>,
-}
-
-/// One explicitly selected inbound secret for a configured gateway revision.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct GatewaySecretSelection {
-    /// Declaration slot receiving this imported secret.
-    pub slot_key: String,
-    /// Project-owned import authority.
-    pub import_id: Uuid,
-    /// Exact immutable secret version.
-    pub secret_version_id: Uuid,
-    /// Declared route receiving the brokered header.
-    pub route_path: String,
-    /// Header populated by the broker.
-    pub header_name: String,
-}
-
-/// Runtime values and secret selections for one immutable gateway revision.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct ConfigureGatewayRequest {
-    /// Gateway whose declared revision is being configured.
-    pub gateway_id: Uuid,
-    /// Stateless gateways compare this with the active revision. Service
-    /// gateways compare it with the latest desired revision, falling back to
-    /// the active revision only when no desired candidate exists.
-    pub expected_revision_id: Uuid,
-    /// Typed values validated against the published agent schema.
-    pub parameters: BTreeMap<ParameterName, ParameterValue>,
-    /// Explicit inbound secret selections; no existing grants are copied.
-    pub secret_selections: Vec<GatewaySecretSelection>,
-}
-
-/// Result of configuring one immutable gateway revision.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct ConfigureGatewayResult {
-    /// New immutable candidate revision, or the original result on replay.
-    pub revision_id: Uuid,
-}
-
-/// Safe failures for the narrow gateway configuration operation.
-#[derive(Debug, thiserror::Error)]
-pub enum GatewayConfigureError {
-    /// Caller lacks project/gateway/secret-import authority.
-    #[error("gateway configuration is not authorized")]
-    Denied,
-    /// Selected gateway or revision is absent.
-    #[error("gateway configuration target is unavailable")]
-    NotFound,
-    /// Typed values or secret selections violate the released declaration.
-    #[error("gateway configuration request is invalid")]
-    InvalidArgument,
-    /// The expected active revision has changed.
-    #[error("gateway configuration target is stale")]
-    Stale,
-    /// The same idempotency key was submitted with another payload.
-    #[error("gateway configuration idempotency key conflicts")]
-    Conflict,
-    /// Database operation failed.
-    #[error("gateway configuration is unavailable")]
-    Persistence(#[from] sqlx::Error),
 }
 
 mod installer_command_ledger;
@@ -877,7 +671,10 @@ mod installer_declaration;
 mod management_commands;
 mod management_configuration;
 mod management_configuration_validation;
+mod management_helpers;
+mod management_models;
 mod management_queries;
+mod management_rows;
 
 impl PostgresGatewayManagement {
     /// Creates the management adapter over the control-plane connection pool.
@@ -911,394 +708,6 @@ impl PostgresGatewayManagement {
             Ok(())
         } else {
             Err(GatewayManagementError::Denied)
-        }
-    }
-}
-
-/// Safe failure category for management operations.
-#[derive(Debug, thiserror::Error)]
-pub enum GatewayManagementError {
-    /// Caller lacks the exact project or gateway relation.
-    #[error("gateway management is not authorized")]
-    Denied,
-    /// The selected gateway is hidden or absent.
-    #[error("gateway is not found")]
-    NotFound,
-    /// Request values violate the bounded binding contract.
-    #[error("gateway mailbox binding request is invalid")]
-    InvalidArgument,
-    /// A binding already exists or its grant is no longer active.
-    #[error("gateway mailbox binding state conflicts")]
-    Conflict,
-    /// A storage failure prevented a safe result.
-    #[error("gateway management is unavailable")]
-    Unavailable,
-    /// `PostgreSQL` persistence failed.
-    #[error("gateway management persistence failed")]
-    Persistence(#[from] sqlx::Error),
-}
-
-#[derive(sqlx::FromRow)]
-struct ConfigureRevisionRow {
-    project_id: Uuid,
-    repository_id: Uuid,
-    active_revision_id: Option<Uuid>,
-    desired_service_revision_id: Option<Uuid>,
-    lifecycle: String,
-    release_id: Option<Uuid>,
-    release_agent_id: Option<Uuid>,
-    release_agent_key: Option<String>,
-    handler_contract: String,
-    service_loopback_port: Option<i32>,
-    service_readiness_path: Option<String>,
-    service_health_path: Option<String>,
-    service_log_capture_mode: String,
-    exposure: String,
-    secret_slots: Vec<String>,
-    mailbox_slots: Vec<String>,
-    parameter_schema: Option<serde_json::Value>,
-    release_state: Option<String>,
-}
-
-#[derive(sqlx::FromRow)]
-struct ConfigureRouteRow {
-    path: String,
-    methods: Vec<String>,
-    enabled: bool,
-}
-
-#[derive(sqlx::FromRow)]
-struct ConfigureCommandRow {
-    gateway_id: Uuid,
-    expected_revision_id: Uuid,
-    payload_hash: Vec<u8>,
-    actor_id: Uuid,
-    result_revision_id: Option<Uuid>,
-}
-
-fn valid_header_name(value: &str) -> bool {
-    http::HeaderName::from_bytes(value.as_bytes()).is_ok()
-}
-
-fn configure_payload_hash(
-    gateway_id: Uuid,
-    expected_revision_id: Uuid,
-    release_id: Uuid,
-    release_agent_id: Uuid,
-    parameter_hash: &[u8],
-    selections: &[GatewaySecretSelection],
-) -> [u8; 32] {
-    let mut digest = Sha256::new();
-    digest.update(b"hephaestus.gateway.configure.v1\0");
-    digest.update(gateway_id.as_bytes());
-    digest.update(expected_revision_id.as_bytes());
-    digest.update(release_id.as_bytes());
-    digest.update(release_agent_id.as_bytes());
-    digest.update(parameter_hash);
-    let mut ordered = selections.to_vec();
-    ordered.sort_by(|left, right| {
-        left.slot_key
-            .cmp(&right.slot_key)
-            .then_with(|| left.route_path.cmp(&right.route_path))
-            .then_with(|| left.header_name.cmp(&right.header_name))
-    });
-    for selection in ordered {
-        digest.update(selection.slot_key.as_bytes());
-        digest.update([0]);
-        digest.update(selection.import_id.as_bytes());
-        digest.update(selection.secret_version_id.as_bytes());
-        digest.update(selection.route_path.as_bytes());
-        digest.update([0]);
-        digest.update(selection.header_name.as_bytes());
-        digest.update([0]);
-    }
-    digest.finalize().into()
-}
-
-fn secret_selection_hash(selection: &GatewaySecretSelection, revision_id: Uuid) -> [u8; 32] {
-    let mut digest = Sha256::new();
-    digest.update(b"hephaestus.gateway.secret-selection.v1\0");
-    digest.update(revision_id.as_bytes());
-    digest.update(selection.slot_key.as_bytes());
-    digest.update(selection.import_id.as_bytes());
-    digest.update(selection.secret_version_id.as_bytes());
-    digest.update(selection.route_path.as_bytes());
-    digest.update(selection.header_name.as_bytes());
-    digest.finalize().into()
-}
-
-fn valid_gateway_slot(value: &str) -> bool {
-    (1..=64).contains(&value.len())
-        && value.as_bytes().first().is_some_and(u8::is_ascii_lowercase)
-        && value.bytes().all(|byte| {
-            byte.is_ascii_lowercase() || byte.is_ascii_digit() || byte == b'_' || byte == b'-'
-        })
-}
-
-fn valid_gateway_producer(value: &str) -> bool {
-    (1..=128).contains(&value.len())
-        && value.trim() == value
-        && !value.chars().any(char::is_control)
-}
-
-#[derive(sqlx::FromRow)]
-struct GatewaySummaryRow {
-    id: Uuid,
-    project_id: Uuid,
-    repository_id: Uuid,
-    name: String,
-    lifecycle: String,
-    active_revision_id: Option<Uuid>,
-    desired_service_revision_id: Option<Uuid>,
-    updated_at: OffsetDateTime,
-}
-impl From<GatewaySummaryRow> for GatewayManagementSummary {
-    fn from(row: GatewaySummaryRow) -> Self {
-        Self {
-            id: row.id,
-            project_id: row.project_id,
-            repository_id: row.repository_id,
-            name: row.name,
-            lifecycle: row.lifecycle,
-            active_revision_id: row.active_revision_id,
-            desired_service_revision_id: row.desired_service_revision_id,
-            updated_at: row.updated_at,
-        }
-    }
-}
-#[derive(sqlx::FromRow)]
-struct GatewayRevisionRow {
-    id: Uuid,
-    release_id: Option<Uuid>,
-    release_agent_id: Option<Uuid>,
-    handler_contract: String,
-    service_loopback_port: Option<i32>,
-    service_readiness_path: Option<String>,
-    service_health_path: Option<String>,
-    service_log_capture_mode: String,
-    exposure: String,
-    secret_slots: Vec<String>,
-    mailbox_slots: Vec<String>,
-    created_at: OffsetDateTime,
-}
-
-impl GatewayRevisionRow {
-    fn service_config(&self) -> Result<Option<GatewayServiceConfig>, GatewayManagementError> {
-        service_config_from_columns(
-            self.service_loopback_port,
-            self.service_readiness_path.clone(),
-            self.service_health_path.clone(),
-            &self.service_log_capture_mode,
-        )
-    }
-}
-
-fn service_config_from_columns(
-    loopback_port: Option<i32>,
-    readiness_path: Option<String>,
-    health_path: Option<String>,
-    log_capture_mode: &str,
-) -> Result<Option<GatewayServiceConfig>, GatewayManagementError> {
-    let log_capture_mode = ServiceLogCaptureMode::from_name(log_capture_mode)
-        .ok_or(GatewayManagementError::Unavailable)?;
-    match (loopback_port, readiness_path, health_path) {
-        (None, None, None) if log_capture_mode.is_disabled() => Ok(None),
-        (Some(port), Some(readiness), Some(health)) => {
-            let port = u16::try_from(port).map_err(|_| GatewayManagementError::Unavailable)?;
-            let readiness = ServiceProbePath::parse(readiness)
-                .map_err(|_| GatewayManagementError::Unavailable)?;
-            let health =
-                ServiceProbePath::parse(health).map_err(|_| GatewayManagementError::Unavailable)?;
-            GatewayServiceConfig::new(port, readiness, health)
-                .map(|service| service.with_log_capture_mode(log_capture_mode))
-                .map(Some)
-                .map_err(|_| GatewayManagementError::Unavailable)
-        }
-        _ => Err(GatewayManagementError::Unavailable),
-    }
-}
-#[derive(sqlx::FromRow)]
-struct GatewayRouteRow {
-    id: Uuid,
-    path: String,
-    methods: Vec<String>,
-    enabled: bool,
-}
-impl From<GatewayRouteRow> for GatewayManagementRoute {
-    fn from(row: GatewayRouteRow) -> Self {
-        Self {
-            id: row.id,
-            path: row.path,
-            methods: row.methods,
-            enabled: row.enabled,
-        }
-    }
-}
-#[derive(sqlx::FromRow)]
-struct GatewayIngressRow {
-    id: Uuid,
-    gateway_revision_id: Uuid,
-    gateway_route_id: Uuid,
-    outcome: String,
-    accepted_at: OffsetDateTime,
-    completed_at: Option<OffsetDateTime>,
-}
-impl From<GatewayIngressRow> for GatewayIngressSummary {
-    fn from(row: GatewayIngressRow) -> Self {
-        Self {
-            id: row.id,
-            gateway_revision_id: row.gateway_revision_id,
-            gateway_route_id: row.gateway_route_id,
-            outcome: row.outcome,
-            accepted_at: row.accepted_at,
-            completed_at: row.completed_at,
-        }
-    }
-}
-#[derive(sqlx::FromRow)]
-struct GatewayMailboxBindingRow {
-    id: Uuid,
-    gateway_revision_id: Uuid,
-    mailbox_id: Uuid,
-    slot_key: String,
-    producer_id: String,
-    grant_id: Uuid,
-    grant_status: String,
-    created_at: OffsetDateTime,
-    granted_at: OffsetDateTime,
-    revoked_at: Option<OffsetDateTime>,
-}
-impl From<GatewayMailboxBindingRow> for GatewayMailboxBindingSummary {
-    fn from(row: GatewayMailboxBindingRow) -> Self {
-        Self {
-            id: row.id,
-            gateway_revision_id: row.gateway_revision_id,
-            mailbox_id: row.mailbox_id,
-            slot_key: row.slot_key,
-            producer_id: row.producer_id,
-            grant_id: row.grant_id,
-            grant_status: row.grant_status,
-            created_at: row.created_at,
-            granted_at: row.granted_at,
-            revoked_at: row.revoked_at,
-        }
-    }
-}
-#[derive(sqlx::FromRow)]
-struct GatewayMailboxBindingTargetRow {
-    gateway_revision_id: Uuid,
-    instance_id: Uuid,
-}
-
-#[derive(sqlx::FromRow)]
-struct GatewayMailboxBindingCommandRow {
-    operation: String,
-    gateway_revision_id: Uuid,
-    slot_key: Option<String>,
-    mailbox_id: Option<Uuid>,
-    producer_id: Option<String>,
-    target_binding_id: Option<Uuid>,
-    payload_hash: Vec<u8>,
-    actor_id: Uuid,
-    result_binding_id: Option<Uuid>,
-}
-
-async fn load_mailbox_binding(
-    tx: &mut Transaction<'_, Postgres>,
-    binding_id: Uuid,
-) -> Result<Option<GatewayMailboxBindingRow>, sqlx::Error> {
-    sqlx::query_as::<_, GatewayMailboxBindingRow>(
-        "SELECT binding.id, binding.gateway_revision_id, binding.mailbox_id,
-                binding.slot_key, binding.producer_id, binding_grant.id AS grant_id,
-                binding_grant.status AS grant_status, binding.created_at,
-                binding_grant.granted_at, binding_grant.revoked_at
-         FROM gateway_mailbox_bindings binding
-         JOIN gateway_mailbox_binding_grants binding_grant
-           ON binding_grant.binding_id = binding.id
-         WHERE binding.id = $1",
-    )
-    .bind(binding_id)
-    .fetch_optional(&mut **tx)
-    .await
-}
-
-fn binding_command_key(identity: &AuthenticatedIdentity, operation: &str) -> ReleaseCommandKey {
-    ReleaseCommandKey::derive(operation, &[identity.idempotency_id.as_uuid().as_bytes()])
-}
-
-fn binding_payload_hash(
-    operation: &str,
-    gateway_revision_id: Uuid,
-    slot_key: &str,
-    mailbox_id: Option<Uuid>,
-    producer_id: &str,
-    target_binding_id: Option<Uuid>,
-) -> [u8; 32] {
-    let mut digest = Sha256::new();
-    digest.update(operation.as_bytes());
-    digest.update([0]);
-    digest.update(gateway_revision_id.as_bytes());
-    digest.update([0]);
-    digest.update(slot_key.as_bytes());
-    digest.update([0]);
-    if let Some(mailbox_id) = mailbox_id {
-        digest.update(mailbox_id.as_bytes());
-    }
-    digest.update([0]);
-    digest.update(producer_id.as_bytes());
-    digest.update([0]);
-    if let Some(target_binding_id) = target_binding_id {
-        digest.update(target_binding_id.as_bytes());
-    }
-    digest.finalize().into()
-}
-
-#[derive(sqlx::FromRow)]
-struct GatewayMailboxPublicationManagementRow {
-    id: Uuid,
-    invocation_id: Uuid,
-    gateway_revision_id: Uuid,
-    binding_id: Option<Uuid>,
-    grant_id: Option<Uuid>,
-    mailbox_id: Option<Uuid>,
-    event_id: Option<Uuid>,
-    slot_key: String,
-    outcome: String,
-    accepted_at: OffsetDateTime,
-    settled_at: OffsetDateTime,
-    authorization_snapshot_id: Option<Uuid>,
-    snapshot_binding_ordinal: Option<i32>,
-    delivery_disposition: Option<String>,
-    delivery_attempt_count: Option<i32>,
-    delivery_terminal_at: Option<OffsetDateTime>,
-    delivery_attempt_id: Option<Uuid>,
-    run_id: Option<Uuid>,
-    run_state: Option<String>,
-    run_outcome: Option<String>,
-}
-impl From<GatewayMailboxPublicationManagementRow> for GatewayMailboxPublicationSummary {
-    fn from(row: GatewayMailboxPublicationManagementRow) -> Self {
-        Self {
-            id: row.id,
-            invocation_id: row.invocation_id,
-            gateway_revision_id: row.gateway_revision_id,
-            binding_id: row.binding_id,
-            grant_id: row.grant_id,
-            mailbox_id: row.mailbox_id,
-            event_id: row.event_id,
-            slot_key: row.slot_key,
-            outcome: row.outcome,
-            accepted_at: row.accepted_at,
-            settled_at: row.settled_at,
-            authorization_snapshot_id: row.authorization_snapshot_id,
-            snapshot_binding_ordinal: row.snapshot_binding_ordinal,
-            delivery_disposition: row.delivery_disposition,
-            delivery_attempt_count: row.delivery_attempt_count,
-            delivery_terminal_at: row.delivery_terminal_at,
-            delivery_attempt_id: row.delivery_attempt_id,
-            run_id: row.run_id,
-            run_state: row.run_state,
-            run_outcome: row.run_outcome,
         }
     }
 }
