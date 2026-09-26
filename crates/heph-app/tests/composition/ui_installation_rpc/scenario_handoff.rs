@@ -25,6 +25,7 @@ pub(super) async fn run(
     let installed = &state.installed;
     assert_invalid_secret(pool, release, fixture, installed, &handoff_token).await;
     assert_malformed_wire(pool, fixture, app, &handoff_token).await;
+    assert_failure_response_bytes_redact_secret(app, installed, &handoff_token).await;
     assert_valid_handoff(pool, release, fixture, installed, &handoff_token).await;
     super::ui_installation_handoff_validation::assert_invalid_route(
         pool,
@@ -39,6 +40,51 @@ pub(super) async fn run(
         &handoff_token,
     )
     .await;
+}
+
+async fn assert_failure_response_bytes_redact_secret(
+    app: &hephaestus_app::RunningHephaestus,
+    installed: &InstallUiResponse,
+    handoff_token: &str,
+) {
+    let response = reqwest::Client::new()
+        .post(format!(
+            "http://{}/hephaestus.release.v1.ReleaseService/CreateUiBrowserHandoff",
+            app.http_addr()
+        ))
+        .header("authorization", format!("Bearer {handoff_token}"))
+        .header("content-type", "application/proto")
+        .body(
+            CreateUiBrowserHandoffRequest {
+                context: super::ui_installation_transport::request_context("wire-secret-redaction")
+                    .into(),
+                installation_id: installed.installation_id.clone(),
+                generation_id: installed.generation_id.clone(),
+                route: String::from("invalid route"),
+                handoff_secret: HANDOFF_SENTINEL.to_vec(),
+                ..Default::default()
+            }
+            .encode_to_vec(),
+        )
+        .send()
+        .await
+        .expect("send invalid handoff request");
+    let status = response.status();
+    let bytes = response
+        .bytes()
+        .await
+        .expect("read invalid handoff response");
+    assert!(status.is_client_error(), "invalid handoff status: {status}");
+    assert!(
+        !bytes.is_empty(),
+        "invalid handoff response must have bytes"
+    );
+    assert!(
+        !bytes
+            .windows(HANDOFF_SENTINEL.len())
+            .any(|window| window == HANDOFF_SENTINEL),
+        "invalid handoff response bytes contained the submitted secret"
+    );
 }
 
 async fn assert_invalid_secret(
