@@ -15,6 +15,7 @@ use runtime_types::RunId;
 use serial_test::serial;
 use std::collections::HashSet;
 
+#[path = "postgres/support.rs"]
 mod support;
 use support::{audit_decision, seed, test_pool};
 use time::{Duration, OffsetDateTime};
