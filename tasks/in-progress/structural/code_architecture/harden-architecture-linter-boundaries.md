@@ -99,27 +99,112 @@ which owns `ARCH-CORE-NO-STD-DEPENDENCIES`.
   entry points. Register only genuinely new rule IDs; update the existing event
   and sensitive-data rule definitions when extending their checks.
 
+## Current static contracts and proof boundaries
+
+The repository already contains focused implementations for the static portions
+of these boundaries. The contracts below describe what the checkers can actually
+recognize and the evidence still required for behavior they cannot infer.
+
+- **RLS context:** `DB-RLS-CONTEXT-REQUIRED` scans the six inventoried
+  application-role pool bindings in five known adapter sources. It recognizes
+  `begin_actor_transaction` and
+  `begin_repeatable_read_actor_transaction`, tracks transaction locals, and
+  requires the verified context helper to set actor, subject, request, and
+  occurrence settings. Only six exact migration-backed security-definer
+  resolver forms are allowlisted. Dynamic SQL, opaque helper internals, and
+  unlisted pool fields are outside the proof. The real database context reuse
+  evidence is `crates/heph-core/control-plane/postgres/tests/app_pool.rs`.
+- **Pagination:** `DB-PAGINATION-STABLE-ORDER` reads package-local
+  `pagination.toml` contracts. Each entry has a 1-based query index, exact
+  `order` and `cursor_keys`, a uniform cursor operator, an explicit unique
+  tie-breaker listed in `unique_keys`, and one supported cursor mode:
+  `scalar`, `tuple`, `uuid_row_lookup`, or the pinned `stored_function` mode.
+  The checker compares the declaration with literal SQL `ORDER BY` and cursor
+  predicates and reports stale declarations. Representative concurrent-write
+  coverage passed for UUID pages, snapshot pages, and the organization
+  composite-key insertion path in
+  `crates/heph-core/gateway/postgres/tests/service_targets/uuid_pages.rs`,
+  `crates/heph-core/gateway/postgres/tests/service_log_reader/snapshot.rs`,
+  and `crates/heph-core/control-plane/postgres/tests/organization_pagination.rs`.
+  Other implementations still rely on the static contract until their runtime
+  paths are exercised; each path does not require a duplicate test merely for
+  the rule to remain enforceable.
+- **Durable events:** `EVT-STATE-AND-EVENT-COMMIT-ATOMICALLY` checks the durable
+  migration for the append function, capture functions/triggers, and product
+  outbox trigger. Its Rust scan strips `#[cfg(test)]`, rejects literal direct
+  writes to `application_events` or `product_event_outbox`, and accepts
+  `append_application_event` only with a recognized transaction executor in the
+  same Rust item. It cannot prove dynamic SQL, deployed trigger state, crash
+  timing, or arbitrary transaction ownership. Existing rollback, visibility,
+  and schema evidence is under `crates/heph-app/tests/event_durability/`.
+- **RPC budget propagation:**
+  `RPC-DEADLINE-CANCELLATION-PROPAGATION` scans production RPC files, resolves
+  supported service-method delegations, and requires one
+  `RequestBudget::from_transport`, an approved budget helper, and syntactically
+  bounded detached-stream waits. It recognizes only listed helper names,
+  argument positions, adapter/receipt await markers, and send/receive/sleep
+  forms. It cannot prove arbitrary future taint, opaque helper behavior, or
+  runtime cancellation. The opt-in transport evidence is
+  `crates/heph-app/tests/artifact_deadline_cancellation.rs` with its
+  `test-fixtures` implementation.
+- **Sensitive flows:** the Rust source checker tracks eight known request field
+  names through local bindings, assignments, request-rooted access, references,
+  casts, and simple expressions. It checks supported tracing/log macros,
+  response/event/payload/error calls, JSON/event macros, metric-label methods,
+  and sensitive output structs; three opaque ID conversions terminate the plain
+  text flow. The production UI installation RPC matrix passed success/failure
+  non-disclosure coverage at `crates/heph-app/tests/ui_installation_rpc.rs`.
+  No request-derived metric-label emission exists in current production paths,
+  so the metric sink is guarded by static fixtures and a runtime metric
+  assertion is currently inapplicable. Interprocedural and dynamic behavior
+  remains outside the checker. Focused source fixtures are in
+  `crates/heph-dev/src/checks/architecture/rust_architecture/tests.rs`.
+- **SQLx metadata:** `DB-SQLX-ONLY-IN-POSTGRES-ADAPTERS` follows normal and
+  build dependency paths transitively, checks dev-only SQLx separately, and
+  requires boolean `postgres_adapter = true`, a lowercase nonempty
+  `database_context`, and a `-postgres` package name. A suffix alone grants no
+  capability. Metadata regression fixtures are in
+  `crates/heph-dev/src/checks/architecture/db_architecture_tests/metadata.rs`.
+
+The static diagnostics identify paths/items and remediation without printing
+sensitive values. Runtime claims below are recorded only for the PostgreSQL,
+event, pagination, and sensitive-flow runs that have passed; RPC cancellation
+and full-quality behavior remain unchecked.
+
+The current disposable-service evidence passed for two app-pool context tests,
+eleven event-durability tests, one organization composite-pagination test, and
+one production UI-installation RPC success/failure matrix. These are the
+runtime references for the RLS, event, representative concurrent-pagination,
+and sensitive-flow portions above. RPC cancellation remains pending its real
+run, and no metric-label runtime assertion is required while production emits
+no request-derived metric labels.
+
 ## Implementation checklist
 
-- [ ] For each priority, define the statically enforceable syntax/metadata
+- [x] For each priority, define the statically enforceable syntax/metadata
   boundary, diagnostic and remediation, and any runtime behavior the checker
   cannot prove.
-- [ ] Add valid and invalid fixtures for each static change, including nested
+- [x] Add valid and invalid fixtures for each static change, including nested
   module/helper paths and test-only cases where relevant. Retain regression
   fixtures for the existing direct, transitive, and dev-only SQLx boundary.
-- [ ] Add focused Rust/Phoenix integration coverage for RLS context isolation,
-  concurrent pagination, event atomicity and publish timing, cancellation,
-  and sensitive-value non-disclosure.
-- [ ] Use exact, item-level or line-level exceptions only where a real boundary
-  cannot be expressed otherwise; document owner, rationale, and expiry or
-  tracking task.
-- [ ] Update the architecture rule index with each new rule's owner, rationale,
+- [x] Add focused Rust/Phoenix integration coverage for RLS context isolation,
+  representative concurrent pagination, event atomicity and publish timing,
+  and UI-installation sensitive-value success/failure non-disclosure. The
+  disposable-service evidence is recorded above; RPC cancellation remains
+  pending its real integration run.
+- [x] Use exact, item-level or line-level exceptions only where a real boundary
+  cannot be expressed otherwise; no new hardening exception was needed or
+  added.
+- [x] Update the architecture rule index with each new rule's owner, rationale,
   command, state, and remediation. For extensions, update the existing rule row
   without adding a duplicate ID.
-- [ ] Run focused fixture and integration checks, then `cargo dev check
-  architecture` and `cargo dev quality`; resolve violations without weakening
-  the lint baseline.
-- [ ] Document the final static-analysis limits and required runtime evidence
+- [x] Run focused fixture and available disposable-service integration checks,
+  then `cargo dev check architecture`; resolve violations without weakening the
+  lint baseline. The static, RLS, representative pagination, event, and UI
+  installation sensitive-flow checks passed.
+- [ ] Run `cargo dev quality` and the RPC cancellation integration check; these
+  full-quality and cancellation gates remain pending.
+- [x] Document the final static-analysis limits and required runtime evidence
   beside the diagnostics and in `ARCHITECTURE.md`.
 
 ## Acceptance criteria
