@@ -11,7 +11,9 @@ use hephaestus_app::test_hooks::{
 use identity_domain::BrowserSessionSid;
 #[cfg(feature = "test-fixtures")]
 use std::sync::Arc;
+#[cfg(feature = "test-fixtures")]
 use std::time::Duration;
+#[cfg(feature = "test-fixtures")]
 use uuid::Uuid;
 
 #[path = "../update_admission/lifecycle.rs"]
