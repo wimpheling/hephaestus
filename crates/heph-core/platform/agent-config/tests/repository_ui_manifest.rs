@@ -1,63 +1,16 @@
 //! Parser contract tests for the repository-owned release UI manifest.
 
-use agent_config::ui::{
-    MAX_REPOSITORY_UIS, MAX_REPOSITORY_UIS_BYTES, MAX_UI_APIS, MAX_UI_FILES,
-    REPOSITORY_UIS_VERSION, UI_KIT_VERSION,
-};
-use agent_config::{parse_repository_uis, ui::ParsedRepositoryUis};
+#[path = "repository_ui_manifest/limits.rs"]
+mod limits;
+#[path = "repository_ui_manifest/support.rs"]
+mod support;
+
+use agent_config::parse_repository_uis;
+use agent_config::ui::{MAX_REPOSITORY_UIS_BYTES, REPOSITORY_UIS_VERSION, UI_KIT_VERSION};
 use release_domain::ui::UiRepositoryGitAccess;
 use sha2::{Digest, Sha256};
 use std::fmt::Write as _;
-
-const VALID_STATIC: &str = r#"
-version = 1
-
-[[uis]]
-key = "assistant"
-scope = "project"
-label = "Assistant"
-icon = "chat"
-presentation = "iframe"
-route_base = "assistant"
-ui_kit_version = 1
-cache = "no_store"
-
-[[uis.apis]]
-key = "release-read"
-gateway_name = "release-api"
-method = "GET"
-route = "/releases"
-
-[uis.content]
-kind = "static"
-entrypoint = "index.html"
-
-[[uis.content.files]]
-route = "app.js"
-artifact = "dist/app.js"
-media_type = "text/javascript"
-
-[[uis.content.files]]
-route = "index.html"
-artifact = "dist/index.html"
-media_type = "text/html"
-
-[[uis]]
-key = "ops"
-scope = "global"
-label = "Operations"
-icon = "chart"
-presentation = "full_page"
-route_base = "ops"
-ui_kit_version = 1
-cache = "no_store"
-
-[uis.content]
-kind = "managed_service"
-gateway_name = "ops-service"
-route = "/ops"
-entrypoint = "index.html"
-"#;
+use support::{VALID_STATIC, assert_code};
 
 #[test]
 fn parses_static_and_managed_service_declarations() {
@@ -371,68 +324,7 @@ fn rejects_ui_route_and_artifact_traversal_or_url_forms() {
 }
 
 #[test]
-fn enforces_manifest_ui_api_and_file_limits() {
-    let mut uis = String::from("version = 1\n");
-    for index in 0..=MAX_REPOSITORY_UIS {
-        write!(
-            &mut uis,
-            "\n[[uis]]\nkey = \"ui-{index}\"\nscope = \"global\"\nlabel = \"UI {index}\"\nicon = \"app\"\npresentation = \"iframe\"\nroute_base = \"ui-{index}\"\nui_kit_version = 1\ncache = \"no_store\"\n\n[uis.content]\nkind = \"static\"\nentrypoint = \"index.html\"\n\n[[uis.content.files]]\nroute = \"index.html\"\nartifact = \"dist/{index}.html\"\nmedia_type = \"text/html\"\n"
-        )
-        .expect("writing to a String cannot fail");
-    }
-    assert_code(
-        &parse_repository_uis(uis.as_bytes()),
-        "too_many_repository_uis",
-    );
-
-    let mut apis = String::from(
-        "version = 1\n\n[[uis]]\nkey = \"api-ui\"\nscope = \"global\"\nlabel = \"API UI\"\nicon = \"app\"\npresentation = \"iframe\"\nroute_base = \"api-ui\"\nui_kit_version = 1\ncache = \"no_store\"\n",
-    );
-    for index in 0..=MAX_UI_APIS {
-        write!(
-            &mut apis,
-            "\n[[uis.apis]]\nkey = \"api-{index}\"\ngateway_name = \"release-api\"\nmethod = \"GET\"\nroute = \"/api-{index}\"\n"
-        )
-        .expect("writing to a String cannot fail");
-    }
-    apis.push_str(
-        "\n[uis.content]\nkind = \"static\"\nentrypoint = \"index.html\"\n\n[[uis.content.files]]\nroute = \"index.html\"\nartifact = \"dist/index.html\"\nmedia_type = \"text/html\"\n",
-    );
-    assert_code(
-        &parse_repository_uis(apis.as_bytes()),
-        "too_many_repository_ui_apis",
-    );
-
-    let mut files = String::from(
-        "version = 1\n\n[[uis]]\nkey = \"files-ui\"\nscope = \"global\"\nlabel = \"Files UI\"\nicon = \"app\"\npresentation = \"iframe\"\nroute_base = \"files-ui\"\nui_kit_version = 1\ncache = \"no_store\"\n\n[uis.content]\nkind = \"static\"\nentrypoint = \"index.html\"\n\n[[uis.content.files]]\nroute = \"index.html\"\nartifact = \"dist/index.html\"\nmedia_type = \"text/html\"\n",
-    );
-    for index in 0..MAX_UI_FILES {
-        write!(
-            &mut files,
-            "\n[[uis.content.files]]\nroute = \"file-{index}.txt\"\nartifact = \"dist/file-{index}.txt\"\nmedia_type = \"text/plain\"\n"
-        )
-        .expect("writing to a String cannot fail");
-    }
-    assert_code(
-        &parse_repository_uis(files.as_bytes()),
-        "invalid_repository_ui_static_files",
-    );
-}
-
-#[test]
 fn rejects_oversized_source_before_toml_parsing() {
     let source = vec![b'x'; MAX_REPOSITORY_UIS_BYTES + 1];
     assert_code(&parse_repository_uis(&source), "repository_uis_too_large");
-}
-
-fn assert_code(parsed: &ParsedRepositoryUis, expected: &str) {
-    assert!(parsed.config.is_none(), "unexpected valid config");
-    assert!(
-        parsed
-            .diagnostics
-            .iter()
-            .any(|diagnostic| diagnostic.code == expected),
-        "expected {expected}, got {:?}",
-        parsed.diagnostics
-    );
 }
