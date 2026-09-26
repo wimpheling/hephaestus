@@ -61,16 +61,20 @@ pub(super) fn consumes_product_events(source: &str) -> bool {
 
 pub(super) fn is_nats_event_adapter(path: &Path) -> bool {
     let stem = path.file_stem().and_then(OsStr::to_str);
-    let rendered = path.to_string_lossy();
-    matches!(
-        stem,
-        Some("command_transport" | "event_adapter" | "nats" | "outbox")
-    ) || path.components().any(|component| {
-        matches!(
-            component.as_os_str().to_str(),
-            Some("events" | "workers" | "composition")
+    matches!(stem, Some("command_transport" | "event_adapter" | "outbox"))
+        || is_mailbox_command_adapter(path)
+        || matches!(
+            path,
+            path if path == Path::new("crates/heph-core/forge/service/src/nats.rs")
+                || path == Path::new("crates/heph-core/run/orchestrator/src/nats.rs")
         )
-    }) || rendered == "crates/heph-app/src/lib.rs"
+        || path.components().any(|component| {
+            matches!(
+                component.as_os_str().to_str(),
+                Some("events" | "workers" | "composition")
+            )
+        })
+        || path == Path::new("crates/heph-app/src/lib.rs")
 }
 
 pub(super) fn is_designated_product_event_adapter(path: &Path, source: &str) -> bool {
@@ -98,6 +102,18 @@ pub(super) fn unauthorized_product_publication(path: &Path, source: &str) -> Opt
 pub(super) fn is_legacy_command_outbox(path: &Path) -> bool {
     matches!(
         path.file_stem().and_then(OsStr::to_str),
-        Some("command_transport" | "outbox" | "nats")
+        Some("command_transport" | "outbox")
+    ) || matches!(
+        path,
+        path if path == Path::new("crates/heph-core/mailbox/dispatch/src/nats/publisher.rs")
     )
 }
+
+fn is_mailbox_command_adapter(path: &Path) -> bool {
+    path == Path::new("crates/heph-core/mailbox/dispatch/src/nats.rs")
+        || path.starts_with(Path::new("crates/heph-core/mailbox/dispatch/src/nats"))
+}
+
+#[cfg(test)]
+#[path = "consumer/tests.rs"]
+mod tests;
