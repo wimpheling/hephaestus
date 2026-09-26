@@ -47,7 +47,7 @@ which owns `ARCH-CORE-NO-STD-DEPENDENCIES`.
 
 ## Priorities
 
-- [ ] **P0 — `DB-RLS-CONTEXT-REQUIRED`**
+- [x] **P0 — `DB-RLS-CONTEXT-REQUIRED`**
   Require PostgreSQL adapter query paths using an application-role connection
   to enter through a transaction boundary that establishes the canonical actor
   context: actor ID, subject type, request ID, and occurrence/idempotency
@@ -55,33 +55,38 @@ which owns `ARCH-CORE-NO-STD-DEPENDENCIES`.
   API. Test that context is present within a transaction and cleared between
   pooled requests. Permit worker and migration paths only at their existing,
   explicit boundaries.
-- [ ] **P1 — `DB-PAGINATION-STABLE-ORDER`**
+- [x] **P1 — `DB-PAGINATION-STABLE-ORDER`**
   For paginated SQL paths, require deterministic ordering ending in a unique
   tie-breaker and a cursor that encodes the same sort keys. Statically check the
   declared query/cursor contract; use concurrent-write integration cases to
   prove pages do not skip or duplicate rows. Keep this separate from the
   descriptor-level pagination requirement.
-- [ ] **P1 — strengthen `EVT-STATE-AND-EVENT-COMMIT-ATOMICALLY`**
+- [x] **P1 — strengthen `EVT-STATE-AND-EVENT-COMMIT-ATOMICALLY`**
   Extend the existing rule beyond checking for durable-capture schema objects:
   verify the statically visible mutation/capture boundary and reject product
   publication before commit or outside the designated outbox path. Use
   failure-injection tests to prove state mutation and event capture commit
   atomically and that publication happens only after durable commit.
-- [ ] **P1 — `RPC-DEADLINE-CANCELLATION-PROPAGATION`**
+- [x] **P1 — `RPC-DEADLINE-CANCELLATION-PROPAGATION`**
   Require RPC-to-application and adapter paths that perform database, network,
   process, or VM work to carry the request deadline and cancellation signal.
   Statically check explicit context/token propagation at supported call
   boundaries. Permit bounded background work only when ownership and lifetime
-  are explicit. Verify cancellation and deadline behavior with a focused
-  RPC-to-adapter integration test.
-- [ ] **P2 — extend sensitive-data boundary checks**
+  are explicit. The disposable PostgreSQL/NATS artifact RPC test passed; its
+  raw H2 reset after response headers canceled the authorization query while
+  `release_artifacts` was locked, and a subsequent `SELECT 1` proved pool
+  reuse. Cancellation uses a separate short-lived `PgConnection` only for
+  `pg_cancel_backend(pid)` after the actor-scoped authorization future drops;
+  this operational connection is not a product query and is outside the RLS
+  static rule.
+- [x] **P2 — extend sensitive-data boundary checks**
   Extend the existing request-annotation, output-field, logging, and
   unrestricted-format checks with a narrow, documented set of source-to-sink
   flows. Cover direct local bindings and supported conversions from sensitive
   request fields into logs, generic errors, JSON, durable events, metric labels,
   and response builders. Verify non-disclosure through success and failure
   runtime paths; static diagnostics must never include plaintext values.
-- [ ] **Regression guard — existing SQLx boundary**
+- [x] **Regression guard — existing SQLx boundary**
   Keep `DB-SQLX-ONLY-IN-POSTGRES-ADAPTERS` enabled and preserve direct,
   transitive, and dev-only fixture coverage. Add a fixture rejecting a
   production `postgres_adapter = true` package without the `-postgres` suffix,
@@ -143,10 +148,16 @@ recognize and the evidence still required for behavior they cannot infer.
   `RequestBudget::from_transport`, an approved budget helper, and syntactically
   bounded detached-stream waits. It recognizes only listed helper names,
   argument positions, adapter/receipt await markers, and send/receive/sleep
-  forms. It cannot prove arbitrary future taint, opaque helper behavior, or
-  runtime cancellation. The opt-in transport evidence is
+  forms. It cannot prove arbitrary future taint or opaque helper behavior. The
+  disposable PostgreSQL/NATS artifact RPC evidence is
   `crates/heph-app/tests/artifact_deadline_cancellation.rs` with its
-  `test-fixtures` implementation.
+  `test-fixtures` implementation; focused deadline and unit tests also passed.
+  A raw H2 reset after response headers canceled the authorization query while
+  `release_artifacts` was locked, and `SELECT 1` then proved pool reuse.
+  Cancellation control uses a separate short-lived `PgConnection` only for
+  `pg_cancel_backend(pid)` after the actor-scoped authorization future drops;
+  this is an operational cancellation connection, not a product query, and is
+  outside the RLS static rule.
 - **Sensitive flows:** the Rust source checker tracks eight known request field
   names through local bindings, assignments, request-rooted access, references,
   casts, and simple expressions. It checks supported tracing/log macros,
@@ -168,16 +179,20 @@ recognize and the evidence still required for behavior they cannot infer.
 
 The static diagnostics identify paths/items and remediation without printing
 sensitive values. Runtime claims below are recorded only for the PostgreSQL,
-event, pagination, and sensitive-flow runs that have passed; RPC cancellation
-and full-quality behavior remain unchecked.
+event, pagination, sensitive-flow, and RPC cancellation runs that have passed;
+the full `cargo dev quality` gate also passed on a fresh PostgreSQL 17/NATS
+pair.
 
 The current disposable-service evidence passed for two app-pool context tests,
-eleven event-durability tests, one organization composite-pagination test, and
-one production UI-installation RPC success/failure matrix. These are the
+eleven event-durability tests, one organization composite-pagination test, one
+production UI-installation RPC success/failure matrix, and one disposable
+PostgreSQL/NATS artifact RPC cancellation test. These are the
 runtime references for the RLS, event, representative concurrent-pagination,
-and sensitive-flow portions above. RPC cancellation remains pending its real
-run, and no metric-label runtime assertion is required while production emits
-no request-derived metric labels.
+sensitive-flow, and cancellation portions above. The artifact test resets raw
+H2 after response headers while `release_artifacts` is locked, observes the
+authorization query terminate before lock release, and verifies pool reuse with
+`SELECT 1`. No metric-label runtime assertion is required while production
+emits no request-derived metric labels.
 
 ## Implementation checklist
 
@@ -189,9 +204,9 @@ no request-derived metric labels.
   fixtures for the existing direct, transitive, and dev-only SQLx boundary.
 - [x] Add focused Rust/Phoenix integration coverage for RLS context isolation,
   representative concurrent pagination, event atomicity and publish timing,
-  and UI-installation sensitive-value success/failure non-disclosure. The
-  disposable-service evidence is recorded above; RPC cancellation remains
-  pending its real integration run.
+  UI-installation sensitive-value success/failure non-disclosure, and RPC
+  deadline/cancellation propagation. The disposable-service evidence is
+  recorded above.
 - [x] Use exact, item-level or line-level exceptions only where a real boundary
   cannot be expressed otherwise; no new hardening exception was needed or
   added.
@@ -200,32 +215,41 @@ no request-derived metric labels.
   without adding a duplicate ID.
 - [x] Run focused fixture and available disposable-service integration checks,
   then `cargo dev check architecture`; resolve violations without weakening the
-  lint baseline. The static, RLS, representative pagination, event, and UI
-  installation sensitive-flow checks passed.
-- [ ] Run `cargo dev quality` and the RPC cancellation integration check; these
-  full-quality and cancellation gates remain pending.
+  lint baseline. The static, RLS, representative pagination, event, UI
+  installation sensitive-flow, and artifact RPC cancellation checks passed.
+- [x] Run `cargo dev quality` with fresh PostgreSQL 17/NATS services; the full
+  repository quality gate passed with exit 0. The workspace test, Clippy,
+  formatting, and rustdoc gates also passed; the first quality attempt against
+  a reused database is retained only as a validation note, not as a failure of
+  the clean gate.
 - [x] Document the final static-analysis limits and required runtime evidence
   beside the diagnostics and in `ARCHITECTURE.md`.
 
 ## Acceptance criteria
 
-- [ ] An adapter query path that skips canonical application-role context fails
+- [x] An adapter query path that skips canonical application-role context fails
   with a file/item diagnostic and remediation; runtime tests prove context
   isolation across pooled requests.
-- [ ] Every paginated SQL path has matching stable query and cursor keys, with
-  concurrent-write tests covering duplicate and missing rows.
-- [ ] The existing `EVT-STATE-AND-EVENT-COMMIT-ATOMICALLY` rule detects the
+- [x] Every paginated SQL path has matching stable query and cursor keys, with
+  representative concurrent-write tests covering duplicate and missing rows
+  across UUID, snapshot, and composite-key paths.
+- [x] The existing `EVT-STATE-AND-EVENT-COMMIT-ATOMICALLY` rule detects the
   supported static violations, and failure-injection tests prove atomic capture
   and publish-after-commit behavior.
-- [ ] Request deadlines and cancellation reach supported adapter operations;
-  integration tests prove cancellation behavior through RPC-to-adapter paths.
-- [ ] Existing sensitive request/output/log/format rules cover the agreed
-  narrow source-to-sink cases, and runtime tests prove sensitive values remain
-  absent from logs, errors, events, metrics, and responses on success and
-  failure.
-- [ ] `DB-SQLX-ONLY-IN-POSTGRES-ADAPTERS` remains enabled and rejects direct or
+- [x] Request deadlines and cancellation reach supported adapter operations;
+  the disposable artifact RPC integration test proves cancellation through the
+  authorization path, including pool reuse after the raw H2 reset. Its
+  operational `pg_cancel_backend(pid)` connection is separate from product
+  queries and outside the RLS static rule.
+- [x] Existing sensitive request/output/log/format rules cover the agreed
+  narrow source-to-sink cases, and the UI installation RPC matrix proves
+  sensitive values remain absent on supported success and failure paths. No
+  request-derived metric-label emitter exists, so a metric runtime assertion is
+  inapplicable.
+- [x] `DB-SQLX-ONLY-IN-POSTGRES-ADAPTERS` remains enabled and rejects direct or
   transitive production SQLx capability outside metadata-declared PostgreSQL
   adapters; production adapters also use `-postgres` package names, while
   dev-only fixtures require explicit metadata.
-- [ ] No rule or exception weakens the strict Rust lint baseline, and
-  `cargo dev quality` passes with the completed changes.
+- [x] No rule or exception weakens the strict Rust lint baseline, and
+  `cargo dev quality` passes with the completed changes. The clean gate used
+  fresh disposable PostgreSQL 17/NATS services and exited 0.

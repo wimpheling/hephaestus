@@ -122,8 +122,9 @@ these totals are the final active-rule inventory, not a grandfathered baseline.
 - [x] Run focused checker fixtures, `cargo dev check architecture`, and
   `git diff --check`; keep the workspace Rust, Clippy, and rustdoc lint baseline
   enabled.
-- [ ] Run the full `cargo dev quality` workspace gate after concurrent source
-  migrations settle; this activation does not claim that broader gate.
+- [x] Run the full `cargo dev quality` workspace gate after concurrent source
+  migrations settle. The clean gate passed with fresh disposable PostgreSQL
+  17/NATS services and exit 0.
 
 ## Final validation
 
@@ -131,21 +132,22 @@ The focused `ARCH-MAX-FILE-LENGTH` checker fixtures pass, including exact-limit
 acceptance, one-line-over rejection, nested source paths, untracked files,
 physical-line counting, and the exact generated/vendor exclusions.
 `cargo dev check architecture` passes with the rule hard-enabled, and
-`git diff --check` passes for the activation changes.
-The broader `cargo dev quality` gate was not rerun during this activation.
+`git diff --check` passes for the activation changes. The clean full
+`cargo dev quality` gate subsequently passed with fresh disposable PostgreSQL
+17/NATS services and exit 0.
 
 ## Acceptance criteria
 
-- Every repository-owned Rust source under `crates/` and `examples/` is
+- [x] Every repository-owned Rust source under `crates/` and `examples/` is
   checked, with only the named generated RPC subtree and third-party vendor
   subtree excluded.
-- A 350-line source passes and a 351-line source fails with a path, count,
+- [x] A 350-line source passes and a 351-line source fails with a path, count,
   threshold, and split-remediation diagnostic. The check includes tests,
   build scripts, examples, and untracked sources.
-- No Rust-specific architecture threshold exceeds 350, and
+- [x] No Rust-specific architecture threshold exceeds 350, and
   `ARCH-MAX-FILE-LENGTH` is hard-enabled through `cargo dev check architecture`
   and `cargo dev quality`.
-- All existing hand-maintained violations are split before activation; no
+- [x] All existing hand-maintained violations are split before activation; no
   grandfathered baseline or migration exception remains.
-- The workspace topology task is complete before activation, and the final
+- [x] The workspace topology task is complete before activation, and the final
   post-migration inventory and counts are recorded here.
