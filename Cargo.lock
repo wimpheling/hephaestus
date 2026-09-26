@@ -2459,6 +2459,7 @@ dependencies = [
  "gateway-postgres",
  "git-capability-domain",
  "git-http",
+ "h2",
  "heph-run",
  "heph-runtime",
  "heph-secret",

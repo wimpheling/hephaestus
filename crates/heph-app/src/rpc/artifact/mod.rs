@@ -14,19 +14,19 @@ use sha2::{Digest, Sha256};
 use std::sync::Arc;
 
 pub(super) struct ArtifactRpc {
-    application: ArtifactApplication,
+    application: Arc<ArtifactApplication>,
     authenticator: MediatorAuthenticator,
 }
 
 impl ArtifactRpc {
-    const fn new(
+    fn new(
         pool: PgPool,
         store: LocalArtifactStore,
         cursor_key: [u8; 32],
         authenticator: MediatorAuthenticator,
     ) -> Self {
         Self {
-            application: ArtifactApplication::new(pool, store, cursor_key),
+            application: Arc::new(ArtifactApplication::new(pool, store, cursor_key)),
             authenticator,
         }
     }
@@ -71,7 +71,7 @@ impl ArtifactService for ArtifactRpc {
             rpc_proto::messages::hephaestus::artifact::v1::StreamArtifactResponse,
         >,
     > {
-        stream_artifact::handle(self, ctx, request).await
+        stream_artifact::handle(self, &ctx, request).await
     }
 }
 

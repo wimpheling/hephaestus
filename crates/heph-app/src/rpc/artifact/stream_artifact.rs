@@ -1,7 +1,9 @@
-use std::{future::Future, pin::Pin};
+use std::{future::Future, pin::Pin, sync::Arc};
 
 use connectrpc::ConnectError;
-use control_plane_postgres::artifact::{ArtifactCancellation, ArtifactChunk, ArtifactError};
+use control_plane_postgres::artifact::{
+    ArtifactCancellation, ArtifactChunk, ArtifactError, ArtifactStream,
+};
 use rpc_proto::messages::hephaestus::{artifact::v1::StreamArtifactResponse, common::v1::Cursor};
 use tokio_util::sync::CancellationToken;
 
@@ -22,9 +24,22 @@ impl ArtifactCancellation for RequestCancellation {
     }
 }
 
+enum ResponseStreamState {
+    Starting {
+        operation: Pin<Box<dyn Future<Output = Result<ArtifactStream, ArtifactError>> + Send>>,
+        budget: super::super::request::RequestBudget,
+    },
+    Reading {
+        receiver: tokio::sync::mpsc::Receiver<Result<ArtifactChunk, ArtifactError>>,
+        budget: super::super::request::RequestBudget,
+        deadline_sent: bool,
+    },
+    Finished,
+}
+
 pub(super) async fn handle(
     service: &super::ArtifactRpc,
-    ctx: connectrpc::RequestContext,
+    ctx: &connectrpc::RequestContext,
     request: connectrpc::ServiceRequest<
         '_,
         rpc_proto::messages::hephaestus::artifact::v1::StreamArtifactRequest,
@@ -35,52 +50,107 @@ pub(super) async fn handle(
     >,
 > {
     use crate::application::artifact::StreamArtifact;
-    use futures_util::stream;
     use uuid::Uuid;
 
     use super::super::{RpcError, into_connect_error, request as shared_request};
 
     const AUDIENCE: &str = "/hephaestus.artifact.v1.ArtifactService/StreamArtifact";
 
-    let identity = shared_request::query_identity(&ctx, &service.authenticator, AUDIENCE)
+    let identity = shared_request::query_identity(ctx, &service.authenticator, AUDIENCE)
         .map_err(into_connect_error)?;
     let request = request.to_owned_message();
     let artifact_id = shared_request::required_id(request.artifact_id.as_option())
         .and_then(|value| Uuid::parse_str(&value).map_err(|_| RpcError::InvalidArgument))
         .map_err(into_connect_error)?;
-    let budget = shared_request::RequestBudget::from_transport(&ctx);
-    let result = shared_request::run_with_budget(
-        &budget,
-        service.application.stream_artifact_with_budget(
-            &identity,
-            StreamArtifact {
-                artifact_id,
-                resume_cursor: request
-                    .resume_cursor
-                    .as_option()
-                    .filter(|cursor| !cursor.value.is_empty())
-                    .map(|cursor| cursor.value.clone()),
-                max_total_bytes: request.max_total_bytes,
-                max_chunk_bytes: request.max_chunk_bytes,
-            },
-            RequestCancellation(budget.cancellation_token()),
-            ctx.deadline(),
-        ),
+    let budget = shared_request::RequestBudget::from_transport(ctx);
+    let request = StreamArtifact {
+        artifact_id,
+        resume_cursor: request
+            .resume_cursor
+            .as_option()
+            .filter(|cursor| !cursor.value.is_empty())
+            .map(|cursor| cursor.value.clone()),
+        max_total_bytes: request.max_total_bytes,
+        max_chunk_bytes: request.max_chunk_bytes,
+    };
+    let deadline = ctx.deadline();
+    let operation = Box::pin({
+        let application = Arc::clone(&service.application);
+        let cancellation = RequestCancellation(budget.cancellation_token());
+        async move {
+            application
+                .stream_artifact_with_budget(&identity, request, cancellation, deadline)
+                .await
+        }
+    });
+    let response = response_stream(operation, budget);
+    // The generated service contract and RPC architecture check require an awaited handler.
+    std::future::ready(()).await;
+    connectrpc::Response::ok(Box::pin(response))
+}
+
+fn response_stream(
+    operation: Pin<Box<dyn Future<Output = Result<ArtifactStream, ArtifactError>> + Send>>,
+    budget: super::super::request::RequestBudget,
+) -> impl futures_util::Stream<Item = Result<StreamArtifactResponse, ConnectError>> + Send {
+    futures_util::stream::unfold(
+        ResponseStreamState::Starting { operation, budget },
+        next_stream_item,
     )
-    .await
-    .map_err(into_connect_error)?
-    .map_err(super::model::application_error)
-    .map_err(into_connect_error)?;
-    let receiver = result.receiver;
-    let response = stream::unfold(
-        (receiver, budget, false),
-        |(mut receiver, budget, deadline_sent)| async move {
+}
+
+async fn next_stream_item(
+    state: ResponseStreamState,
+) -> Option<(
+    Result<StreamArtifactResponse, ConnectError>,
+    ResponseStreamState,
+)> {
+    match state {
+        ResponseStreamState::Starting { operation, budget } => {
+            match super::super::request::run_with_budget(&budget, operation).await {
+                Ok(Ok(result)) => {
+                    let mut receiver = result.receiver;
+                    let (item, deadline_sent) =
+                        next_response(&mut receiver, &budget, false).await?;
+                    Some((
+                        item,
+                        ResponseStreamState::Reading {
+                            receiver,
+                            budget,
+                            deadline_sent,
+                        },
+                    ))
+                }
+                Ok(Err(error)) => Some((
+                    Err(super::super::into_connect_error(
+                        super::model::application_error(error),
+                    )),
+                    ResponseStreamState::Finished,
+                )),
+                Err(error) => Some((
+                    Err(super::super::into_connect_error(error)),
+                    ResponseStreamState::Finished,
+                )),
+            }
+        }
+        ResponseStreamState::Reading {
+            mut receiver,
+            budget,
+            deadline_sent,
+        } => {
             let (item, deadline_sent) =
                 next_response(&mut receiver, &budget, deadline_sent).await?;
-            Some((item, (receiver, budget, deadline_sent)))
-        },
-    );
-    connectrpc::Response::ok(Box::pin(response))
+            Some((
+                item,
+                ResponseStreamState::Reading {
+                    receiver,
+                    budget,
+                    deadline_sent,
+                },
+            ))
+        }
+        ResponseStreamState::Finished => None,
+    }
 }
 
 async fn next_response(

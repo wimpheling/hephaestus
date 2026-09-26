@@ -1,11 +1,9 @@
 //! Authorized, bounded artifact read application operations.
 
-use authz_domain::{ObjectRef, ObjectType, Permission, Subject};
-use authz_postgres::{PostgresMelangeAuthorizer, audit_decision, begin_actor_transaction};
+use authz_postgres::PostgresMelangeAuthorizer;
 use identity_domain::AuthenticatedIdentity;
 use release_artifact_store::LocalArtifactStore;
-use serde_json::Value;
-use sqlx::{FromRow, PgPool};
+use sqlx::PgPool;
 use std::path::PathBuf;
 use tokio::{
     fs::File,
@@ -13,12 +11,15 @@ use tokio::{
 };
 use uuid::Uuid;
 
+#[path = "artifact/authorization.rs"]
+mod authorization;
 #[path = "artifact/cursor.rs"]
 mod cursor;
 #[path = "artifact/model.rs"]
 mod model;
 #[path = "artifact/stream.rs"]
 mod stream;
+use authorization::authorize_artifact;
 use cursor::decode_cursor;
 pub use model::{ArtifactError, ArtifactMetadata, ArtifactPreview};
 pub use stream::{ArtifactCancellation, ArtifactChunk, ArtifactStream, StreamArtifact};
@@ -62,7 +63,7 @@ impl ArtifactApplication {
         if maximum > MAX_PREVIEW_BYTES {
             return Err(ArtifactError::ResourceExhausted);
         }
-        let (artifact, path) = self.authorize_artifact(identity, artifact_id).await?;
+        let (artifact, path) = authorize_artifact(self, identity, artifact_id).await?;
         let file = open_validated(&path, artifact.size_bytes).await?;
         let capacity = usize::try_from(maximum)
             .map_err(|_| ArtifactError::ResourceExhausted)?
@@ -122,9 +123,7 @@ impl ArtifactApplication {
         if total_limit == 0 || chunk_limit == 0 {
             return Err(ArtifactError::InvalidArgument);
         }
-        let (artifact, path) = self
-            .authorize_artifact(identity, request.artifact_id)
-            .await?;
+        let (artifact, path) = authorize_artifact(self, identity, request.artifact_id).await?;
         let offset = request.resume_cursor.as_deref().map_or(Ok(0), |cursor| {
             decode_cursor(
                 cursor,
@@ -156,107 +155,6 @@ impl ArtifactApplication {
             cancellation,
             deadline,
         ))
-    }
-
-    async fn authorize_artifact(
-        &self,
-        identity: &AuthenticatedIdentity,
-        artifact_id: Uuid,
-    ) -> Result<(ArtifactMetadata, PathBuf), ArtifactError> {
-        let mut transaction = begin_actor_transaction(&self.pool, identity)
-            .await
-            .map_err(ArtifactError::Persistence)?;
-        let row = sqlx::query_as::<_, ArtifactRow>(
-            "SELECT artifact.id, artifact.release_id, release.build_request_id,
-                    release.source_commit, artifact.path, artifact.kind,
-                    artifact.mode, encode(artifact.content_hash, 'hex') AS sha256,
-                    artifact.size_bytes, artifact.media_type, artifact.storage_key,
-                    artifact.provenance
-             FROM release_artifacts artifact
-             JOIN releases release ON release.id = artifact.release_id
-             WHERE artifact.id = $1",
-        )
-        .bind(artifact_id)
-        .fetch_optional(&mut *transaction)
-        .await
-        .map_err(ArtifactError::Persistence)?
-        .ok_or(ArtifactError::NotFound)?;
-        let object = ObjectRef::new(ObjectType::Release, row.release_id);
-        let decision = self
-            .authorizer
-            .check(
-                &mut transaction,
-                Subject::User(identity.user_id),
-                Permission::CanRead,
-                object,
-            )
-            .await
-            .map_err(ArtifactError::Authorization)?;
-        audit_decision(
-            &mut transaction,
-            identity.user_id,
-            Permission::CanRead,
-            object,
-            decision,
-            identity.request_id,
-        )
-        .await
-        .map_err(ArtifactError::Persistence)?;
-        if !decision.is_allowed() {
-            transaction
-                .commit()
-                .await
-                .map_err(ArtifactError::Persistence)?;
-            return Err(ArtifactError::NotFound);
-        }
-        transaction
-            .commit()
-            .await
-            .map_err(ArtifactError::Persistence)?;
-        let storage_key = row.storage_key;
-        let artifact = ArtifactMetadata::try_from(row)?;
-        let path = self
-            .store
-            .resolve(storage_key)
-            .map_err(ArtifactError::Storage)?;
-        Ok((artifact, path))
-    }
-}
-
-#[derive(FromRow)]
-struct ArtifactRow {
-    id: Uuid,
-    release_id: Uuid,
-    build_request_id: Uuid,
-    source_commit: String,
-    path: String,
-    kind: String,
-    mode: i32,
-    sha256: String,
-    size_bytes: i64,
-    media_type: String,
-    storage_key: Uuid,
-    #[allow(dead_code)]
-    provenance: Value,
-}
-
-impl TryFrom<ArtifactRow> for ArtifactMetadata {
-    type Error = ArtifactError;
-
-    fn try_from(row: ArtifactRow) -> Result<Self, Self::Error> {
-        Ok(Self {
-            id: row.id,
-            release_id: row.release_id,
-            build_id: row.build_request_id,
-            source_commit: row.source_commit,
-            path: row.path,
-            kind: row.kind,
-            mode: u32::try_from(row.mode).map_err(|_| ArtifactError::InvalidStoredData)?,
-            sha256: row.sha256,
-            size_bytes: u64::try_from(row.size_bytes)
-                .map_err(|_| ArtifactError::InvalidStoredData)?,
-            media_type: row.media_type,
-        })
     }
 }
 

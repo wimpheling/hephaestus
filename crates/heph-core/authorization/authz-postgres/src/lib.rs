@@ -7,7 +7,7 @@ use authz_domain::{
 };
 use identity_domain::{AuthenticatedIdentity, RequestId, UserId};
 use runtime_types::RunId;
-use sqlx::{PgPool, Postgres, Transaction};
+use sqlx::{PgConnection, PgPool, Postgres, Transaction};
 
 /// Canonical authorization model revision recorded with audit events.
 pub const AUTHORIZATION_MODEL_VERSION: &str =
@@ -125,6 +125,20 @@ pub async fn begin_actor_transaction<'pool>(
     identity: &AuthenticatedIdentity,
 ) -> Result<Transaction<'pool, Postgres>, sqlx::Error> {
     let mut transaction = pool.begin().await?;
+    set_actor_context(&mut transaction, identity).await?;
+    Ok(transaction)
+}
+
+/// Begins an actor transaction on a caller-owned connection.
+///
+/// # Errors
+///
+/// Returns a database error when the transaction or actor context cannot be created.
+pub async fn begin_actor_transaction_on_connection<'connection>(
+    connection: &'connection mut PgConnection,
+    identity: &AuthenticatedIdentity,
+) -> Result<Transaction<'connection, Postgres>, sqlx::Error> {
+    let mut transaction = Transaction::begin(connection, None).await?;
     set_actor_context(&mut transaction, identity).await?;
     Ok(transaction)
 }

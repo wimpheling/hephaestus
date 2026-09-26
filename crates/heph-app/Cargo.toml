@@ -122,6 +122,7 @@ workspace-domain = { path = "../heph-core/runtime/workspace/domain" }
 
 [dev-dependencies]
 base64.workspace = true
+h2 = "0.4.15"
 registry-token = { path = "../heph-core/forge/registry/token" }
 rpc-proto = { path = "../heph-core/platform/rpc-proto", features = ["client"] }
 brokered-egress-domain = { path = "../heph-core/secret/brokered-egress-domain" }
