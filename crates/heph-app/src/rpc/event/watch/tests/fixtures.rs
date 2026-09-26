@@ -57,8 +57,20 @@ pub(super) async fn publish_events_until_published(
             if delivered_count == found {
                 return;
             }
+            // The CI database is shared by the workspace tests. The real
+            // outbox adapter orders every pending event globally, so a fixed
+            // batch can repeatedly miss this fixture's events behind older
+            // rows. Drain the current pending set through the real publisher.
+            let pending_count: i64 = sqlx::query_scalar(
+                "SELECT count(*)
+                   FROM product_event_outbox
+                  WHERE published_at IS NULL AND dead_lettered_at IS NULL",
+            )
+            .fetch_one(pool)
+            .await
+            .expect("pending product event count");
             publisher
-                .publish_pending(100)
+                .publish_pending(pending_count.max(1))
                 .await
                 .expect("publish targeted events");
         }
