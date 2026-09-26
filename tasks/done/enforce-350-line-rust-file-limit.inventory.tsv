@@ -2,10 +2,10 @@
 # Measured 2026-09-26 from the full checkout, including untracked .rs files.
 # Scope: crates/ and examples/; physical lines via Rust source line counting.
 # Cargo target directories are build output and are omitted from this inventory.
-# Total Rust files: 2836 (crates=2027, examples=809)
+# Total Rust files: 2838 (crates=2029, examples=809)
 # Excluded generated RPC files: 98
 # Excluded Cooking vendor files: 687
-# Hand-maintained Rust files: 2051 (crates=1929, examples=122)
+# Hand-maintained Rust files: 2053 (crates=1931, examples=122)
 # Over-limit files (>350): 0 (crates=0, examples=0)
 # Excess physical lines: 0
 # Columns below: physical_lines<TAB>repository_path

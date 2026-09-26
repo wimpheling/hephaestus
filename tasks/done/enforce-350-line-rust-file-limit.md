@@ -88,9 +88,9 @@ historical per-path violation rows.
 ## Final implementation inventory
 
 Recounted from the full checkout on 2026-09-26, including untracked Rust files:
-2,836 Rust source files under `crates/` and `examples/`, with Cargo `target/`
+2,838 Rust source files under `crates/` and `examples/`, with Cargo `target/`
 build output omitted, and the exact 98 generated RPC and 687 Cooking vendor
-files excluded. The remaining 2,051 hand-maintained files comprise 1,929 under
+files excluded. The remaining 2,053 hand-maintained files comprise 1,931 under
 `crates/` and 122 under `examples/`. None exceed 350 lines and excess physical
 lines total zero. The final scope and count inventory is recorded in
 [`enforce-350-line-rust-file-limit.inventory.tsv`](enforce-350-line-rust-file-limit.inventory.tsv);
