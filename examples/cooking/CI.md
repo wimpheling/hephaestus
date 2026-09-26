@@ -156,6 +156,10 @@ GitHub token or VM credential is supplied to the guest. The cloud job is
 serialized, has a 50-minute GitHub timeout, and skips the self-hosted `cooking`
 job.
 
+The self-hosted `heph-kvm` GitHub Actions runner is currently unmaintained. The
+workflow does not run for pull requests or `main` pushes; use the manual
+`gcp-cooking` mode from trusted `main` for supported hosted E2E validation.
+
 Run quota and cache checks before a paid VM:
 
 ```sh
@@ -307,10 +311,11 @@ gh workflow run cooking-e2e.yml --repo wimpheling/hephaestus --ref main \
 Keep one current image and one rollback image. Custom image storage is
 billable; failed candidates and builder disks require verified cleanup.
 
-## Local self-hosted Cooking
+## Legacy local self-hosted Cooking
 
-The normal `cooking` mode runs on an x86_64 Linux runner labelled `self-hosted`,
-`Linux`, `X64`, `heph-kvm`. Configure the repository variable
+The GitHub Actions `cooking` mode is disabled while the `heph-kvm` runner is
+unmaintained. The local harness remains available on a prepared x86_64 Linux
+host labelled `self-hosted`, `Linux`, `X64`, `heph-kvm`. Configure the repository variable
 `HEPHAESTUS_COOKING_RUNNER_ENV` with an absolute path to an operator-maintained
 environment file outside the checkout. It supplies the reviewed digest-pinned
 Python/Rust guest images and OCI builder inputs; it contains no Telegram
@@ -323,16 +328,16 @@ Chromium dependencies. Use disk-backed paths for `TMPDIR` and
 `HEPHAESTUS_LIBKRUN_TMP_ROOT`; RAM-backed `/tmp` can exhaust memory during OCI
 verification. The entry point defaults these paths to `/var/tmp`.
 
-The workflow runs the same `examples/cooking/run.sh` entry point as local
-execution and performs real builds, installations, updates and the browser
-journey. The browser harness uses the host-side request bridge because
+The supported hosted workflow is `gcp-cooking`, dispatched from trusted `main`.
+The old self-hosted workflow ran the same `examples/cooking/run.sh` entry point
+as local execution and performed real builds, installations, updates and the
+browser journey. The browser harness uses the host-side request bridge because
 rootless Podman cannot be launched from the VM fixture's mapped user namespace;
 each browser phase still runs the actual Phoenix service and Playwright
-journey. Same-repository pull requests and `main` pushes use the prepared
-runner; fork pull requests do not execute on it.
+journey. It is no longer triggered by pull requests or `main` pushes.
 
-The self-hosted workflow performs real builds, installations, updates and the
-browser journey. It uses a 30-minute job limit and the reviewed local fixture
+The old self-hosted workflow performed real builds, installations, updates and
+the browser journey. It used a 30-minute job limit and the reviewed local fixture
 settings, including `HEPHAESTUS_COOKING_TIMEOUT_SECONDS=1500`. The retained
 evidence directory is run-specific under `RUNNER_TEMP`; fixture credentials
 cause the evidence check to fail even if matching bytes are redacted from
