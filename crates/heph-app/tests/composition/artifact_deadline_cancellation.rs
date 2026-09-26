@@ -10,10 +10,11 @@ mod artifact_deadline_transport {
     #[path = "artifact_deadline_stream.rs"]
     mod stream_support;
 
+    use self::stream_support::{now_seconds, request_context};
     use super::app_fixture::{app_config, cleanup_nats, require_disposable_nats};
     use connectrpc::{
         Protocol,
-        client::{CallOptions, ClientConfig, Http2Connection},
+        client::{CallOptions, ClientConfig, Http2Connection, ServiceTransport},
         error::ErrorCode,
     };
     use hephaestus_app::HephaestusApp;
@@ -24,18 +25,12 @@ mod artifact_deadline_transport {
             artifact::v1::ArtifactServiceClient, identity::v1::IdentityServiceClient,
         },
         messages::hephaestus::common::v1::OpaqueId,
-        messages::hephaestus::{
-            common::v1::RequestContext, identity::v1::CreateBrowserSessionRequest,
-        },
+        messages::hephaestus::identity::v1::CreateBrowserSessionRequest,
     };
     use serde_json::json;
     use sha2::{Digest, Sha256};
     use sqlx::{PgPool, postgres::PgPoolOptions};
-    use std::{
-        env, fs,
-        path::Path,
-        time::{Duration, SystemTime, UNIX_EPOCH},
-    };
+    use std::{env, fs, path::Path, time::Duration};
     use tempfile::tempdir;
     use uuid::Uuid;
 
@@ -50,15 +45,6 @@ mod artifact_deadline_transport {
             value: id.to_string(),
             ..Default::default()
         }
-    }
-
-    fn now_seconds() -> i64 {
-        SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .expect("test clock is after Unix epoch")
-            .as_secs()
-            .try_into()
-            .expect("test clock fits i64")
     }
 
     fn session_token(user_id: Uuid, sid: BrowserSessionSid) -> String {
@@ -78,14 +64,6 @@ mod artifact_deadline_transport {
             &EncodingKey::from_secret(&hephaestus_app::rpc::mediator_signing_key(SECRET)),
         )
         .expect("sign artifact session assertion")
-    }
-
-    fn request_context(key: &str) -> RequestContext {
-        RequestContext {
-            request_id: opaque(Uuid::new_v4()).into(),
-            idempotency_key: key.to_owned(),
-            ..Default::default()
-        }
     }
 
     fn bootstrap_token(issuer: &str, subject: &str) -> String {
@@ -221,32 +199,6 @@ mod artifact_deadline_transport {
         (artifact, user, issuer, subject)
     }
 
-    async fn wait_for_artifact_lock(pool: &PgPool) {
-        tokio::time::timeout(Duration::from_millis(400), async {
-            loop {
-                let waiting: bool = sqlx::query_scalar(
-                    "SELECT EXISTS (
-                         SELECT 1 FROM pg_stat_activity
-                         WHERE pid <> pg_backend_pid()
-                           AND datname = current_database()
-                           AND state = 'active'
-                           AND wait_event_type = 'Lock'
-                           AND query LIKE '%FROM release_artifacts%'
-                     )",
-                )
-                .fetch_one(pool)
-                .await
-                .expect("inspect artifact authorization wait");
-                if waiting {
-                    return;
-                }
-                tokio::task::yield_now().await;
-            }
-        })
-        .await
-        .expect("artifact authorization must reach a database lock wait");
-    }
-
     #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
     #[serial_test::serial]
     async fn artifact_rpc_propagates_transport_deadline_to_real_adapter() {
@@ -277,10 +229,18 @@ mod artifact_deadline_transport {
         let uri: axum::http::Uri = format!("http://{}", app.http_addr())
             .parse()
             .expect("artifact RPC URI");
-        let connection = Http2Connection::connect_plaintext(uri.clone())
+        let raw_connection = Http2Connection::connect_plaintext(uri.clone())
             .await
-            .expect("connect artifact RPC")
-            .shared(2);
+            .expect("connect artifact RPC");
+        let (buffer, worker) = tower::buffer::Buffer::pair(raw_connection, 2);
+        let connection_worker = tokio::spawn(async move {
+            worker.await;
+        });
+        let connection = ServiceTransport::new(
+            tower::ServiceBuilder::new()
+                .map_err(stream_support::TransportError::from_display)
+                .service(buffer),
+        );
         let sid = BrowserSessionSid::new();
         let identity = IdentityServiceClient::new(
             connection.clone(),
@@ -308,10 +268,11 @@ mod artifact_deadline_transport {
             .await
             .expect("create artifact browser session");
         let client = ArtifactServiceClient::new(
-            connection,
-            ClientConfig::new(uri).with_protocol(Protocol::Connect),
+            connection.clone(),
+            ClientConfig::new(uri.clone()).with_protocol(Protocol::Connect),
         );
-        let error = stream_support::artifact_stream_error(&client, artifact, user, sid, "1").await;
+        let error =
+            stream_support::artifact_stream_error(client.clone(), artifact, user, sid, "1").await;
         assert_eq!(error.code, ErrorCode::DeadlineExceeded);
 
         let mut lock_transaction = pool
@@ -323,19 +284,59 @@ mod artifact_deadline_transport {
             .await
             .expect("lock artifact metadata table");
         let locked_client = client.clone();
-        let rpc = tokio::spawn(async move {
-            stream_support::artifact_stream_error(&locked_client, artifact, user, sid, "500").await
+        let mut rpc = Box::pin(async move {
+            stream_support::artifact_stream_error(locked_client, artifact, user, sid, "500").await
         });
-        wait_for_artifact_lock(&pool).await;
-        let waiting = tokio::time::timeout(Duration::from_secs(2), rpc)
+        tokio::select! {
+            result = &mut rpc => panic!("artifact RPC completed before reaching its lock: {result:?}"),
+            () = stream_support::wait_for_artifact_lock(&pool) => {}
+        }
+        let waiting = tokio::time::timeout(Duration::from_secs(2), &mut rpc)
             .await
-            .expect("locked artifact RPC must remain bounded")
-            .expect("locked artifact RPC task must finish");
+            .expect("locked artifact RPC must remain bounded");
         assert_eq!(waiting.code, ErrorCode::DeadlineExceeded);
+        stream_support::wait_for_artifact_query_to_terminate(&pool).await;
         lock_transaction
             .rollback()
             .await
             .expect("release artifact authorization lock");
+
+        let mut cancellation_lock = pool
+            .begin()
+            .await
+            .expect("begin artifact cancellation lock transaction");
+        sqlx::query("LOCK TABLE release_artifacts IN ACCESS EXCLUSIVE MODE")
+            .execute(&mut *cancellation_lock)
+            .await
+            .expect("lock artifact metadata table for cancellation");
+        let mut raw_request =
+            stream_support::start_raw_artifact_request(uri.clone(), artifact, user, sid).await;
+        raw_request.await_headers().await;
+        stream_support::wait_for_artifact_lock(&pool).await;
+        raw_request.reset();
+        stream_support::wait_for_artifact_query_to_terminate(&pool).await;
+        raw_request.finish().await;
+        drop(client);
+        drop(identity);
+        drop(connection);
+        if !connection_worker.is_finished() {
+            connection_worker.abort();
+        }
+        if let Err(error) = connection_worker.await {
+            assert!(
+                error.is_cancelled(),
+                "artifact connection worker failed: {error}"
+            );
+        }
+        let pool_probe: i32 = sqlx::query_scalar("SELECT 1")
+            .fetch_one(&pool)
+            .await
+            .expect("artifact pool remains usable after cancellation");
+        assert_eq!(pool_probe, 1);
+        cancellation_lock
+            .rollback()
+            .await
+            .expect("release artifact cancellation lock");
         app.shutdown()
             .await
             .expect("shutdown artifact RPC application");
