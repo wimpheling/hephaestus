@@ -29,6 +29,7 @@ use std::{
     sync::{Arc, Mutex},
 };
 use time::{Duration, OffsetDateTime};
+use tokio::time::sleep;
 use tower::ServiceExt;
 use uuid::Uuid;
 
@@ -103,6 +104,11 @@ struct RecordingAuditSink {
 #[derive(Clone, Copy, Default)]
 struct HangingAuditSink;
 
+struct DelayedAuditSink {
+    delay: std::time::Duration,
+    events: Arc<Mutex<Vec<NewUiRequestAuditEvent>>>,
+}
+
 #[async_trait]
 impl UiRequestAuditSink for HangingAuditSink {
     async fn append(
@@ -110,6 +116,21 @@ impl UiRequestAuditSink for HangingAuditSink {
         _event: NewUiRequestAuditEvent,
     ) -> Result<(), release_service::UiRequestAuditError> {
         pending().await
+    }
+}
+
+#[async_trait]
+impl UiRequestAuditSink for DelayedAuditSink {
+    async fn append(
+        &self,
+        event: NewUiRequestAuditEvent,
+    ) -> Result<(), release_service::UiRequestAuditError> {
+        sleep(self.delay).await;
+        self.events
+            .lock()
+            .expect("delayed audit sink lock")
+            .push(event);
+        Ok(())
     }
 }
 

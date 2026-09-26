@@ -1,6 +1,26 @@
 use super::*;
 
 #[tokio::test]
+async fn delayed_audit_append_within_budget_is_retained() {
+    let events = Arc::new(Mutex::new(Vec::new()));
+    let sink = DelayedAuditSink {
+        delay: std::time::Duration::from_millis(300),
+        events: Arc::clone(&events),
+    };
+    let event = NewUiRequestAuditEvent::now(
+        identity_domain::RequestId::new(),
+        UiRequestAuditSurface::HandoffIssue,
+        UiRequestAuditDecision::Denied,
+        UiRequestAuditOutcome::NotAttempted,
+        UiRequestAuditReason::InvalidInput,
+        release_service::UiRequestAuditContext::anonymous(),
+    );
+
+    assert!(super::super::append_ui_request_audit_bounded(&sink, event).await);
+    assert_eq!(events.lock().expect("delayed audit events").len(), 1);
+}
+
+#[tokio::test]
 async fn active_middleware_checks_sid_and_maps_store_results() {
     let key = mediator_signing_key(TOKEN);
     let user_id = UserId::new();

@@ -20,7 +20,10 @@ const REVOKE_AUDIENCE: &str = "/hephaestus.identity.v1.IdentityService/RevokeBro
 const HANDOFF_AUDIENCE: &str = "/hephaestus.release.v1.ReleaseService/CreateUiBrowserHandoff";
 const MAX_LIFETIME_SECONDS: i64 = 30;
 const CLOCK_SKEW_SECONDS: i64 = 5;
-const UI_AUDIT_APPEND_BUDGET: Duration = Duration::from_millis(250);
+// Worker-pool acquisition and the audit transaction can exceed 250 ms under
+// shared PostgreSQL test and startup load. Keep the append bounded while
+// leaving enough time for one normal transaction to complete.
+const UI_AUDIT_APPEND_BUDGET: Duration = Duration::from_millis(500);
 
 /// Request-local state shared by the authentication layer, Connect dispatch,
 /// and the handoff handler. The generated ID is correlation-only: it never
