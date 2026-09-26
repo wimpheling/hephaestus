@@ -1,0 +1,136 @@
+# Static contracts for cursor-paginated PostgreSQL adapter queries.
+# `unique_keys` is an explicit schema-backed uniqueness assertion supplied by
+# the adapter owner; the checker requires the final tie breaker to be listed.
+
+[[queries]]
+item = "BuildApplication::list_builds"
+query_index = 1
+order = ["request.created_at DESC", "request.id DESC"]
+cursor_keys = ["request.created_at", "request.id"]
+cursor_operator = "<"
+unique_tie_breaker = "request.id"
+unique_keys = ["request.id"]
+cursor_mode = "uuid_row_lookup"
+
+[[queries]]
+item = "EventApplication::read_after"
+query_index = 1
+order = ["cursor ASC"]
+cursor_keys = ["cursor"]
+cursor_operator = ">"
+unique_tie_breaker = "cursor"
+unique_keys = ["cursor"]
+
+[[queries]]
+item = "ProjectApplication::repositories"
+query_index = 1
+order = ["repository.id ASC"]
+cursor_keys = ["repository.id"]
+cursor_operator = ">"
+unique_tie_breaker = "repository.id"
+unique_keys = ["repository.id"]
+
+[[queries]]
+item = "ProjectApplication::repository_images"
+query_index = 1
+order = ["image.id ASC"]
+cursor_keys = ["image.id"]
+cursor_operator = ">"
+unique_tie_breaker = "image.id"
+unique_keys = ["image.id"]
+
+[[queries]]
+item = "ProjectApplication::repository_image"
+query_index = 2
+order = ["event.id ASC"]
+cursor_keys = ["event.id"]
+cursor_operator = ">"
+unique_tie_breaker = "event.id"
+unique_keys = ["event.id"]
+
+[[queries]]
+item = "ProjectApplication::instances"
+query_index = 1
+order = ["instance.id ASC"]
+cursor_keys = ["instance.id"]
+cursor_operator = ">"
+unique_tie_breaker = "instance.id"
+unique_keys = ["instance.id"]
+
+[[queries]]
+item = "ProjectApplication::importable_agents"
+query_index = 1
+order = ["release_agent.id ASC"]
+cursor_keys = ["release_agent.id"]
+cursor_operator = ">"
+unique_tie_breaker = "release_agent.id"
+unique_keys = ["release_agent.id"]
+
+[[queries]]
+item = "OrganizationApplication::list_organizations"
+query_index = 2
+order = ["organization.name ASC", "organization.id ASC"]
+cursor_keys = ["organization.name", "organization.id"]
+cursor_operator = ">"
+unique_tie_breaker = "organization.id"
+unique_keys = ["organization.id"]
+cursor_mode = "uuid_row_lookup"
+
+[[queries]]
+item = "OrganizationApplication::list_repositories"
+query_index = 1
+order = ["project.name ASC", "repository.name ASC", "repository.id ASC"]
+cursor_keys = ["project.name", "repository.name", "repository.id"]
+cursor_operator = ">"
+unique_tie_breaker = "repository.id"
+unique_keys = ["repository.id"]
+cursor_mode = "uuid_row_lookup"
+
+[[queries]]
+item = "OrganizationApplication::list_projects"
+query_index = 1
+order = ["project.name ASC", "project.id ASC"]
+cursor_keys = ["project.name", "project.id"]
+cursor_operator = ">"
+unique_tie_breaker = "project.id"
+unique_keys = ["project.id"]
+cursor_mode = "uuid_row_lookup"
+
+[[queries]]
+item = "RepositoryApplication::attachments"
+query_index = 1
+order = ["attachment.id ASC"]
+cursor_keys = ["attachment.id"]
+cursor_operator = ">"
+unique_tie_breaker = "attachment.id"
+unique_keys = ["attachment.id"]
+
+[[queries]]
+item = "ReleaseApplication::list_repository_releases"
+query_index = 1
+order = ["release.created_at DESC", "release.id DESC"]
+cursor_keys = ["release.created_at", "release.id"]
+cursor_operator = "<"
+unique_tie_breaker = "release.id"
+unique_keys = ["release.id"]
+cursor_mode = "uuid_row_lookup"
+
+[[queries]]
+item = "RunApplication::get_run_provenance"
+query_index = 3
+order = ["audit.id ASC"]
+cursor_keys = ["audit.id"]
+cursor_operator = ">"
+unique_tie_breaker = "audit.id"
+unique_keys = ["audit.id"]
+cursor_mode = "stored_function"
+
+[[queries]]
+item = "RunApplication::list_project_runs"
+query_index = 1
+order = ["run.created_at DESC", "run.id DESC"]
+cursor_keys = ["run.created_at", "run.id"]
+cursor_operator = "<"
+unique_tie_breaker = "run.id"
+unique_keys = ["run.id"]
+cursor_mode = "uuid_row_lookup"

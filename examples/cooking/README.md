@@ -21,7 +21,7 @@ the automated scenario, its acceptance specification, and the run command.
 | [cooking-blog/](cooking-blog/) | Hugo source, templates and source checker. |
 
 The Rust scenario modules are compiled by the shared
-[`golden` integration test](../../crates/hephaestus-app/tests/golden.rs).
+[`golden` integration test](../../crates/heph-app/tests/golden.rs).
 That test provides daemon setup and selects this scenario when `run.sh` sets
 `HEPHAESTUS_APP_COOKING_E2E=1`. The shared
 [Caddy/libkrun launcher](../../scripts/run-gateway-libkrun-e2e.sh) owns the

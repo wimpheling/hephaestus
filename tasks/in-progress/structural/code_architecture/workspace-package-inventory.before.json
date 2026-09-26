@@ -1,0 +1,3516 @@
+{
+  "package_count": 85,
+  "packages": [
+    {
+      "features": {},
+      "manifest_path": "/home/a/projects/hephaestus/crates/agent-config/Cargo.toml",
+      "manifest_path_relative": "crates/agent-config/Cargo.toml",
+      "metadata_hephaestus": {
+        "context": "platform",
+        "layer": "application"
+      },
+      "name": "agent-config",
+      "targets": [
+        {
+          "crate_types": [
+            "lib"
+          ],
+          "doc": true,
+          "doctest": true,
+          "edition": "2024",
+          "kind": [
+            "lib"
+          ],
+          "name": "agent_config",
+          "src_path": "crates/agent-config/src/lib.rs",
+          "test": true
+        },
+        {
+          "crate_types": [
+            "bin"
+          ],
+          "doc": false,
+          "doctest": false,
+          "edition": "2024",
+          "kind": [
+            "test"
+          ],
+          "name": "cooking_reference_service_ui",
+          "src_path": "crates/agent-config/tests/cooking_reference_service_ui.rs",
+          "test": true
+        },
+        {
+          "crate_types": [
+            "bin"
+          ],
+          "doc": false,
+          "doctest": false,
+          "edition": "2024",
+          "kind": [
+            "test"
+          ],
+          "name": "cooking_service_manifest",
+          "src_path": "crates/agent-config/tests/cooking_service_manifest.rs",
+          "test": true
+        },
+        {
+          "crate_types": [
+            "bin"
+          ],
+          "doc": false,
+          "doctest": false,
+          "edition": "2024",
+          "kind": [
+            "test"
+          ],
+          "name": "repository_ui_gateway_validation",
+          "src_path": "crates/agent-config/tests/repository_ui_gateway_validation.rs",
+          "test": true
+        },
+        {
+          "crate_types": [
+            "bin"
+          ],
+          "doc": false,
+          "doctest": false,
+          "edition": "2024",
+          "kind": [
+            "test"
+          ],
+          "name": "repository_ui_manifest",
+          "src_path": "crates/agent-config/tests/repository_ui_manifest.rs",
+          "test": true
+        },
+        {
+          "crate_types": [
+            "bin"
+          ],
+          "doc": false,
+          "doctest": false,
+          "edition": "2024",
+          "kind": [
+            "test"
+          ],
+          "name": "repository_ui_reference_fixture",
+          "src_path": "crates/agent-config/tests/repository_ui_reference_fixture.rs",
+          "test": true
+        }
+      ],
+      "version": "0.1.0"
+    },
+    {
+      "features": {},
+      "manifest_path": "/home/a/projects/hephaestus/crates/authz-domain/Cargo.toml",
+      "manifest_path_relative": "crates/authz-domain/Cargo.toml",
+      "metadata_hephaestus": {
+        "context": "authorization",
+        "layer": "domain"
+      },
+      "name": "authz-domain",
+      "targets": [
+        {
+          "crate_types": [
+            "lib"
+          ],
+          "doc": true,
+          "doctest": true,
+          "edition": "2024",
+          "kind": [
+            "lib"
+          ],
+          "name": "authz_domain",
+          "src_path": "crates/authz-domain/src/lib.rs",
+          "test": true
+        }
+      ],
+      "version": "0.1.0"
+    },
+    {
+      "features": {},
+      "manifest_path": "/home/a/projects/hephaestus/crates/authz-postgres/Cargo.toml",
+      "manifest_path_relative": "crates/authz-postgres/Cargo.toml",
+      "metadata_hephaestus": {
+        "context": "authorization",
+        "database_context": "authorization",
+        "layer": "adapter",
+        "postgres_adapter": true
+      },
+      "name": "authz-postgres",
+      "targets": [
+        {
+          "crate_types": [
+            "lib"
+          ],
+          "doc": true,
+          "doctest": true,
+          "edition": "2024",
+          "kind": [
+            "lib"
+          ],
+          "name": "authz_postgres",
+          "src_path": "crates/authz-postgres/src/lib.rs",
+          "test": true
+        },
+        {
+          "crate_types": [
+            "bin"
+          ],
+          "doc": false,
+          "doctest": false,
+          "edition": "2024",
+          "kind": [
+            "test"
+          ],
+          "name": "postgres",
+          "src_path": "crates/authz-postgres/tests/postgres.rs",
+          "test": true
+        }
+      ],
+      "version": "0.1.0"
+    },
+    {
+      "features": {},
+      "manifest_path": "/home/a/projects/hephaestus/crates/bootstrap-postgres/Cargo.toml",
+      "manifest_path_relative": "crates/bootstrap-postgres/Cargo.toml",
+      "metadata_hephaestus": {
+        "context": "bootstrap",
+        "database_context": "bootstrap",
+        "layer": "composition",
+        "postgres_adapter": true
+      },
+      "name": "bootstrap-postgres",
+      "targets": [
+        {
+          "crate_types": [
+            "bin"
+          ],
+          "doc": false,
+          "doctest": false,
+          "edition": "2024",
+          "kind": [
+            "custom-build"
+          ],
+          "name": "build-script-e2e_seed_build",
+          "src_path": "crates/bootstrap-postgres/src/bin/e2e_seed_build.rs",
+          "test": false
+        },
+        {
+          "crate_types": [
+            "bin"
+          ],
+          "doc": true,
+          "doctest": false,
+          "edition": "2024",
+          "kind": [
+            "bin"
+          ],
+          "name": "hephaestus-e2e-seed",
+          "src_path": "crates/bootstrap-postgres/src/bin/hephaestus-e2e-seed.rs",
+          "test": true
+        },
+        {
+          "crate_types": [
+            "bin"
+          ],
+          "doc": true,
+          "doctest": false,
+          "edition": "2024",
+          "kind": [
+            "bin"
+          ],
+          "name": "hephaestus-operator",
+          "src_path": "crates/bootstrap-postgres/src/bin/hephaestus-operator.rs",
+          "test": true
+        }
+      ],
+      "version": "0.1.0"
+    },
+    {
+      "features": {},
+      "manifest_path": "/home/a/projects/hephaestus/crates/brokered-egress-client/Cargo.toml",
+      "manifest_path_relative": "crates/brokered-egress-client/Cargo.toml",
+      "metadata_hephaestus": {
+        "context": "secret",
+        "layer": "domain"
+      },
+      "name": "brokered-egress-client",
+      "targets": [
+        {
+          "crate_types": [
+            "lib"
+          ],
+          "doc": true,
+          "doctest": true,
+          "edition": "2024",
+          "kind": [
+            "lib"
+          ],
+          "name": "brokered_egress_client",
+          "src_path": "crates/brokered-egress-client/src/lib.rs",
+          "test": true
+        }
+      ],
+      "version": "0.1.0"
+    },
+    {
+      "features": {},
+      "manifest_path": "/home/a/projects/hephaestus/crates/brokered-egress-domain/Cargo.toml",
+      "manifest_path_relative": "crates/brokered-egress-domain/Cargo.toml",
+      "metadata_hephaestus": {
+        "context": "secret",
+        "layer": "domain"
+      },
+      "name": "brokered-egress-domain",
+      "targets": [
+        {
+          "crate_types": [
+            "lib"
+          ],
+          "doc": true,
+          "doctest": true,
+          "edition": "2024",
+          "kind": [
+            "lib"
+          ],
+          "name": "brokered_egress_domain",
+          "src_path": "crates/brokered-egress-domain/src/lib.rs",
+          "test": true
+        }
+      ],
+      "version": "0.1.0"
+    },
+    {
+      "features": {},
+      "manifest_path": "/home/a/projects/hephaestus/crates/build-orchestrator/Cargo.toml",
+      "manifest_path_relative": "crates/build-orchestrator/Cargo.toml",
+      "metadata_hephaestus": {
+        "allow_cross_context_dependencies": [
+          "release-artifact-store",
+          "release-postgres"
+        ],
+        "context": "build",
+        "layer": "worker"
+      },
+      "name": "build-orchestrator",
+      "targets": [
+        {
+          "crate_types": [
+            "lib"
+          ],
+          "doc": true,
+          "doctest": true,
+          "edition": "2024",
+          "kind": [
+            "lib"
+          ],
+          "name": "build_orchestrator",
+          "src_path": "crates/build-orchestrator/src/lib.rs",
+          "test": true
+        }
+      ],
+      "version": "0.1.0"
+    },
+    {
+      "features": {},
+      "manifest_path": "/home/a/projects/hephaestus/crates/build-postgres/Cargo.toml",
+      "manifest_path_relative": "crates/build-postgres/Cargo.toml",
+      "metadata_hephaestus": {
+        "allow_cross_context_dependencies": [
+          "authz-postgres",
+          "release-postgres"
+        ],
+        "context": "build",
+        "database_context": "build",
+        "layer": "adapter",
+        "postgres_adapter": true
+      },
+      "name": "build-postgres",
+      "targets": [
+        {
+          "crate_types": [
+            "lib"
+          ],
+          "doc": true,
+          "doctest": true,
+          "edition": "2024",
+          "kind": [
+            "lib"
+          ],
+          "name": "build_postgres",
+          "src_path": "crates/build-postgres/src/lib.rs",
+          "test": true
+        },
+        {
+          "crate_types": [
+            "bin"
+          ],
+          "doc": false,
+          "doctest": false,
+          "edition": "2024",
+          "kind": [
+            "test"
+          ],
+          "name": "postgres",
+          "src_path": "crates/build-postgres/tests/postgres.rs",
+          "test": true
+        }
+      ],
+      "version": "0.1.0"
+    },
+    {
+      "features": {},
+      "manifest_path": "/home/a/projects/hephaestus/crates/builder-catalog-application/Cargo.toml",
+      "manifest_path_relative": "crates/builder-catalog-application/Cargo.toml",
+      "metadata_hephaestus": {
+        "allow_cross_context_dependencies": [
+          "identity-domain"
+        ],
+        "context": "image",
+        "layer": "application"
+      },
+      "name": "builder-catalog-application",
+      "targets": [
+        {
+          "crate_types": [
+            "lib"
+          ],
+          "doc": true,
+          "doctest": true,
+          "edition": "2024",
+          "kind": [
+            "lib"
+          ],
+          "name": "builder_catalog_application",
+          "src_path": "crates/builder-catalog-application/src/lib.rs",
+          "test": true
+        }
+      ],
+      "version": "0.1.0"
+    },
+    {
+      "features": {},
+      "manifest_path": "/home/a/projects/hephaestus/crates/builder-catalog-domain/Cargo.toml",
+      "manifest_path_relative": "crates/builder-catalog-domain/Cargo.toml",
+      "metadata_hephaestus": {
+        "context": "image",
+        "layer": "domain"
+      },
+      "name": "builder-catalog-domain",
+      "targets": [
+        {
+          "crate_types": [
+            "lib"
+          ],
+          "doc": true,
+          "doctest": true,
+          "edition": "2024",
+          "kind": [
+            "lib"
+          ],
+          "name": "builder_catalog_domain",
+          "src_path": "crates/builder-catalog-domain/src/lib.rs",
+          "test": true
+        }
+      ],
+      "version": "0.1.0"
+    },
+    {
+      "features": {},
+      "manifest_path": "/home/a/projects/hephaestus/crates/builder-catalog-postgres/Cargo.toml",
+      "manifest_path_relative": "crates/builder-catalog-postgres/Cargo.toml",
+      "metadata_hephaestus": {
+        "allow_cross_context_dependencies": [
+          "authz-postgres",
+          "identity-domain"
+        ],
+        "context": "image",
+        "database_context": "image",
+        "layer": "adapter",
+        "postgres_adapter": true
+      },
+      "name": "builder-catalog-postgres",
+      "targets": [
+        {
+          "crate_types": [
+            "lib"
+          ],
+          "doc": true,
+          "doctest": true,
+          "edition": "2024",
+          "kind": [
+            "lib"
+          ],
+          "name": "builder_catalog_postgres",
+          "src_path": "crates/builder-catalog-postgres/src/lib.rs",
+          "test": true
+        }
+      ],
+      "version": "0.1.0"
+    },
+    {
+      "features": {},
+      "manifest_path": "/home/a/projects/hephaestus/crates/capability-audit/Cargo.toml",
+      "manifest_path_relative": "crates/capability-audit/Cargo.toml",
+      "metadata_hephaestus": {
+        "context": "authorization",
+        "layer": "application"
+      },
+      "name": "capability-audit",
+      "targets": [
+        {
+          "crate_types": [
+            "lib"
+          ],
+          "doc": true,
+          "doctest": true,
+          "edition": "2024",
+          "kind": [
+            "lib"
+          ],
+          "name": "capability_audit",
+          "src_path": "crates/capability-audit/src/lib.rs",
+          "test": true
+        }
+      ],
+      "version": "0.1.0"
+    },
+    {
+      "features": {},
+      "manifest_path": "/home/a/projects/hephaestus/crates/capability-audit-postgres/Cargo.toml",
+      "manifest_path_relative": "crates/capability-audit-postgres/Cargo.toml",
+      "metadata_hephaestus": {
+        "context": "authorization",
+        "database_context": "authorization",
+        "layer": "adapter",
+        "postgres_adapter": true
+      },
+      "name": "capability-audit-postgres",
+      "targets": [
+        {
+          "crate_types": [
+            "lib"
+          ],
+          "doc": true,
+          "doctest": true,
+          "edition": "2024",
+          "kind": [
+            "lib"
+          ],
+          "name": "capability_audit_postgres",
+          "src_path": "crates/capability-audit-postgres/src/lib.rs",
+          "test": true
+        },
+        {
+          "crate_types": [
+            "bin"
+          ],
+          "doc": false,
+          "doctest": false,
+          "edition": "2024",
+          "kind": [
+            "test"
+          ],
+          "name": "postgres",
+          "src_path": "crates/capability-audit-postgres/tests/postgres.rs",
+          "test": true
+        }
+      ],
+      "version": "0.1.0"
+    },
+    {
+      "features": {},
+      "manifest_path": "/home/a/projects/hephaestus/crates/capability-domain/Cargo.toml",
+      "manifest_path_relative": "crates/capability-domain/Cargo.toml",
+      "metadata_hephaestus": {
+        "context": "authorization",
+        "layer": "domain"
+      },
+      "name": "capability-domain",
+      "targets": [
+        {
+          "crate_types": [
+            "lib"
+          ],
+          "doc": true,
+          "doctest": true,
+          "edition": "2024",
+          "kind": [
+            "lib"
+          ],
+          "name": "capability_domain",
+          "src_path": "crates/capability-domain/src/lib.rs",
+          "test": true
+        }
+      ],
+      "version": "0.1.0"
+    },
+    {
+      "features": {},
+      "manifest_path": "/home/a/projects/hephaestus/crates/control-plane-postgres/Cargo.toml",
+      "manifest_path_relative": "crates/control-plane-postgres/Cargo.toml",
+      "metadata_hephaestus": {
+        "allow_cross_context_dependencies": [
+          "authz-postgres",
+          "release-artifact-store"
+        ],
+        "context": "control-plane",
+        "database_context": "control-plane",
+        "layer": "adapter",
+        "postgres_adapter": true
+      },
+      "name": "control-plane-postgres",
+      "targets": [
+        {
+          "crate_types": [
+            "bin"
+          ],
+          "doc": false,
+          "doctest": false,
+          "edition": "2024",
+          "kind": [
+            "test"
+          ],
+          "name": "app_pool",
+          "src_path": "crates/control-plane-postgres/tests/app_pool.rs",
+          "test": true
+        },
+        {
+          "crate_types": [
+            "bin"
+          ],
+          "doc": false,
+          "doctest": false,
+          "edition": "2024",
+          "kind": [
+            "test"
+          ],
+          "name": "artifact_authorization",
+          "src_path": "crates/control-plane-postgres/tests/artifact_authorization.rs",
+          "test": true
+        },
+        {
+          "crate_types": [
+            "lib"
+          ],
+          "doc": true,
+          "doctest": true,
+          "edition": "2024",
+          "kind": [
+            "lib"
+          ],
+          "name": "control_plane_postgres",
+          "src_path": "crates/control-plane-postgres/src/lib.rs",
+          "test": true
+        },
+        {
+          "crate_types": [
+            "bin"
+          ],
+          "doc": false,
+          "doctest": false,
+          "edition": "2024",
+          "kind": [
+            "test"
+          ],
+          "name": "manual_ui_build",
+          "src_path": "crates/control-plane-postgres/tests/manual_ui_build.rs",
+          "test": true
+        },
+        {
+          "crate_types": [
+            "bin"
+          ],
+          "doc": false,
+          "doctest": false,
+          "edition": "2024",
+          "kind": [
+            "test"
+          ],
+          "name": "release_ui_authorization",
+          "src_path": "crates/control-plane-postgres/tests/release_ui_authorization.rs",
+          "test": true
+        }
+      ],
+      "version": "0.1.0"
+    },
+    {
+      "features": {},
+      "manifest_path": "/home/a/projects/hephaestus/crates/event-application/Cargo.toml",
+      "manifest_path_relative": "crates/event-application/Cargo.toml",
+      "metadata_hephaestus": {
+        "context": "event",
+        "layer": "application"
+      },
+      "name": "event-application",
+      "targets": [
+        {
+          "crate_types": [
+            "lib"
+          ],
+          "doc": true,
+          "doctest": true,
+          "edition": "2024",
+          "kind": [
+            "lib"
+          ],
+          "name": "event_application",
+          "src_path": "crates/event-application/src/lib.rs",
+          "test": true
+        },
+        {
+          "crate_types": [
+            "bin"
+          ],
+          "doc": false,
+          "doctest": false,
+          "edition": "2024",
+          "kind": [
+            "test"
+          ],
+          "name": "mutation_receipt_contract",
+          "src_path": "crates/event-application/tests/mutation_receipt_contract.rs",
+          "test": true
+        }
+      ],
+      "version": "0.1.0"
+    },
+    {
+      "features": {},
+      "manifest_path": "/home/a/projects/hephaestus/crates/event-postgres/Cargo.toml",
+      "manifest_path_relative": "crates/event-postgres/Cargo.toml",
+      "metadata_hephaestus": {
+        "context": "event",
+        "database_context": "event",
+        "layer": "adapter",
+        "postgres_adapter": true
+      },
+      "name": "event-postgres",
+      "targets": [
+        {
+          "crate_types": [
+            "lib"
+          ],
+          "doc": true,
+          "doctest": true,
+          "edition": "2024",
+          "kind": [
+            "lib"
+          ],
+          "name": "event_postgres",
+          "src_path": "crates/event-postgres/src/lib.rs",
+          "test": true
+        },
+        {
+          "crate_types": [
+            "bin"
+          ],
+          "doc": false,
+          "doctest": false,
+          "edition": "2024",
+          "kind": [
+            "test"
+          ],
+          "name": "mutation_receipt",
+          "src_path": "crates/event-postgres/tests/mutation_receipt.rs",
+          "test": true
+        }
+      ],
+      "version": "0.1.0"
+    },
+    {
+      "features": {},
+      "manifest_path": "/home/a/projects/hephaestus/crates/forge-domain/Cargo.toml",
+      "manifest_path_relative": "crates/forge-domain/Cargo.toml",
+      "metadata_hephaestus": {
+        "context": "forge",
+        "layer": "domain"
+      },
+      "name": "forge-domain",
+      "targets": [
+        {
+          "crate_types": [
+            "lib"
+          ],
+          "doc": true,
+          "doctest": true,
+          "edition": "2024",
+          "kind": [
+            "lib"
+          ],
+          "name": "forge_domain",
+          "src_path": "crates/forge-domain/src/lib.rs",
+          "test": true
+        }
+      ],
+      "version": "0.1.0"
+    },
+    {
+      "features": {},
+      "manifest_path": "/home/a/projects/hephaestus/crates/forge-postgres/Cargo.toml",
+      "manifest_path_relative": "crates/forge-postgres/Cargo.toml",
+      "metadata_hephaestus": {
+        "allow_cross_context_dependencies": [
+          "authz-postgres"
+        ],
+        "context": "forge",
+        "database_context": "forge",
+        "layer": "adapter",
+        "postgres_adapter": true
+      },
+      "name": "forge-postgres",
+      "targets": [
+        {
+          "crate_types": [
+            "lib"
+          ],
+          "doc": true,
+          "doctest": true,
+          "edition": "2024",
+          "kind": [
+            "lib"
+          ],
+          "name": "forge_postgres",
+          "src_path": "crates/forge-postgres/src/lib.rs",
+          "test": true
+        },
+        {
+          "crate_types": [
+            "bin"
+          ],
+          "doc": false,
+          "doctest": false,
+          "edition": "2024",
+          "kind": [
+            "test"
+          ],
+          "name": "postgres",
+          "src_path": "crates/forge-postgres/tests/postgres.rs",
+          "test": true
+        },
+        {
+          "crate_types": [
+            "bin"
+          ],
+          "doc": false,
+          "doctest": false,
+          "edition": "2024",
+          "kind": [
+            "test"
+          ],
+          "name": "smart_http",
+          "src_path": "crates/forge-postgres/tests/smart_http.rs",
+          "test": true
+        },
+        {
+          "crate_types": [
+            "bin"
+          ],
+          "doc": false,
+          "doctest": false,
+          "edition": "2024",
+          "kind": [
+            "test"
+          ],
+          "name": "ui_source_manifest_schema",
+          "src_path": "crates/forge-postgres/tests/ui_source_manifest_schema.rs",
+          "test": true
+        }
+      ],
+      "version": "0.1.0"
+    },
+    {
+      "features": {},
+      "manifest_path": "/home/a/projects/hephaestus/crates/forge-service/Cargo.toml",
+      "manifest_path_relative": "crates/forge-service/Cargo.toml",
+      "metadata_hephaestus": {
+        "context": "forge",
+        "layer": "application"
+      },
+      "name": "forge-service",
+      "targets": [
+        {
+          "crate_types": [
+            "lib"
+          ],
+          "doc": true,
+          "doctest": true,
+          "edition": "2024",
+          "kind": [
+            "lib"
+          ],
+          "name": "forge_service",
+          "src_path": "crates/forge-service/src/lib.rs",
+          "test": true
+        }
+      ],
+      "version": "0.1.0"
+    },
+    {
+      "features": {},
+      "manifest_path": "/home/a/projects/hephaestus/crates/gateway-domain/Cargo.toml",
+      "manifest_path_relative": "crates/gateway-domain/Cargo.toml",
+      "metadata_hephaestus": {
+        "context": "gateway",
+        "layer": "domain"
+      },
+      "name": "gateway-domain",
+      "targets": [
+        {
+          "crate_types": [
+            "lib"
+          ],
+          "doc": true,
+          "doctest": true,
+          "edition": "2024",
+          "kind": [
+            "lib"
+          ],
+          "name": "gateway_domain",
+          "src_path": "crates/gateway-domain/src/lib.rs",
+          "test": true
+        }
+      ],
+      "version": "0.1.0"
+    },
+    {
+      "features": {},
+      "manifest_path": "/home/a/projects/hephaestus/crates/gateway-edge/Cargo.toml",
+      "manifest_path_relative": "crates/gateway-edge/Cargo.toml",
+      "metadata_hephaestus": {
+        "context": "gateway",
+        "layer": "adapter"
+      },
+      "name": "gateway-edge",
+      "targets": [
+        {
+          "crate_types": [
+            "bin"
+          ],
+          "doc": false,
+          "doctest": false,
+          "edition": "2024",
+          "kind": [
+            "test"
+          ],
+          "name": "caddy_ingress",
+          "src_path": "crates/gateway-edge/tests/caddy_ingress.rs",
+          "test": true
+        },
+        {
+          "crate_types": [
+            "lib"
+          ],
+          "doc": true,
+          "doctest": true,
+          "edition": "2024",
+          "kind": [
+            "lib"
+          ],
+          "name": "gateway_edge",
+          "src_path": "crates/gateway-edge/src/lib.rs",
+          "test": true
+        }
+      ],
+      "version": "0.1.0"
+    },
+    {
+      "features": {},
+      "manifest_path": "/home/a/projects/hephaestus/crates/gateway-postgres/Cargo.toml",
+      "manifest_path_relative": "crates/gateway-postgres/Cargo.toml",
+      "metadata_hephaestus": {
+        "allow_cross_context_dependencies": [
+          "authz-postgres",
+          "runtime-authority"
+        ],
+        "context": "gateway",
+        "database_context": "gateway",
+        "layer": "adapter",
+        "postgres_adapter": true
+      },
+      "name": "gateway-postgres",
+      "targets": [
+        {
+          "crate_types": [
+            "lib"
+          ],
+          "doc": true,
+          "doctest": true,
+          "edition": "2024",
+          "kind": [
+            "lib"
+          ],
+          "name": "gateway_postgres",
+          "src_path": "crates/gateway-postgres/src/lib.rs",
+          "test": true
+        },
+        {
+          "crate_types": [
+            "bin"
+          ],
+          "doc": false,
+          "doctest": false,
+          "edition": "2024",
+          "kind": [
+            "test"
+          ],
+          "name": "postgres",
+          "src_path": "crates/gateway-postgres/tests/postgres.rs",
+          "test": true
+        },
+        {
+          "crate_types": [
+            "bin"
+          ],
+          "doc": false,
+          "doctest": false,
+          "edition": "2024",
+          "kind": [
+            "test"
+          ],
+          "name": "service_acceptance",
+          "src_path": "crates/gateway-postgres/tests/service_acceptance.rs",
+          "test": true
+        },
+        {
+          "crate_types": [
+            "bin"
+          ],
+          "doc": false,
+          "doctest": false,
+          "edition": "2024",
+          "kind": [
+            "test"
+          ],
+          "name": "service_execution",
+          "src_path": "crates/gateway-postgres/tests/service_execution.rs",
+          "test": true
+        },
+        {
+          "crate_types": [
+            "bin"
+          ],
+          "doc": false,
+          "doctest": false,
+          "edition": "2024",
+          "kind": [
+            "test"
+          ],
+          "name": "service_log_reader",
+          "src_path": "crates/gateway-postgres/tests/service_log_reader.rs",
+          "test": true
+        },
+        {
+          "crate_types": [
+            "bin"
+          ],
+          "doc": false,
+          "doctest": false,
+          "edition": "2024",
+          "kind": [
+            "test"
+          ],
+          "name": "service_ownership",
+          "src_path": "crates/gateway-postgres/tests/service_ownership.rs",
+          "test": true
+        },
+        {
+          "crate_types": [
+            "bin"
+          ],
+          "doc": false,
+          "doctest": false,
+          "edition": "2024",
+          "kind": [
+            "test"
+          ],
+          "name": "service_recovery",
+          "src_path": "crates/gateway-postgres/tests/service_recovery.rs",
+          "test": true
+        },
+        {
+          "crate_types": [
+            "bin"
+          ],
+          "doc": false,
+          "doctest": false,
+          "edition": "2024",
+          "kind": [
+            "test"
+          ],
+          "name": "service_targets",
+          "src_path": "crates/gateway-postgres/tests/service_targets.rs",
+          "test": true
+        },
+        {
+          "crate_types": [
+            "bin"
+          ],
+          "doc": false,
+          "doctest": false,
+          "edition": "2024",
+          "kind": [
+            "test"
+          ],
+          "name": "ui_browser_authority",
+          "src_path": "crates/gateway-postgres/tests/ui_browser_authority.rs",
+          "test": true
+        }
+      ],
+      "version": "0.1.0"
+    },
+    {
+      "features": {},
+      "manifest_path": "/home/a/projects/hephaestus/crates/git-capability-domain/Cargo.toml",
+      "manifest_path_relative": "crates/git-capability-domain/Cargo.toml",
+      "metadata_hephaestus": {
+        "context": "forge",
+        "layer": "domain"
+      },
+      "name": "git-capability-domain",
+      "targets": [
+        {
+          "crate_types": [
+            "lib"
+          ],
+          "doc": true,
+          "doctest": true,
+          "edition": "2024",
+          "kind": [
+            "lib"
+          ],
+          "name": "git_capability_domain",
+          "src_path": "crates/git-capability-domain/src/lib.rs",
+          "test": true
+        }
+      ],
+      "version": "0.1.0"
+    },
+    {
+      "features": {},
+      "manifest_path": "/home/a/projects/hephaestus/crates/git-credential-hephaestus/Cargo.toml",
+      "manifest_path_relative": "crates/git-credential-hephaestus/Cargo.toml",
+      "metadata_hephaestus": {
+        "context": "identity",
+        "layer": "adapter"
+      },
+      "name": "git-credential-hephaestus",
+      "targets": [
+        {
+          "crate_types": [
+            "bin"
+          ],
+          "doc": true,
+          "doctest": false,
+          "edition": "2024",
+          "kind": [
+            "bin"
+          ],
+          "name": "git-credential-hephaestus",
+          "src_path": "crates/git-credential-hephaestus/src/main.rs",
+          "test": true
+        }
+      ],
+      "version": "0.1.0"
+    },
+    {
+      "features": {},
+      "manifest_path": "/home/a/projects/hephaestus/crates/git-http/Cargo.toml",
+      "manifest_path_relative": "crates/git-http/Cargo.toml",
+      "metadata_hephaestus": {
+        "allow_cross_context_dependencies": [
+          "identity-oidc"
+        ],
+        "context": "forge",
+        "layer": "transport"
+      },
+      "name": "git-http",
+      "targets": [
+        {
+          "crate_types": [
+            "lib"
+          ],
+          "doc": true,
+          "doctest": true,
+          "edition": "2024",
+          "kind": [
+            "lib"
+          ],
+          "name": "git_http",
+          "src_path": "crates/git-http/src/lib.rs",
+          "test": true
+        },
+        {
+          "crate_types": [
+            "bin"
+          ],
+          "doc": true,
+          "doctest": false,
+          "edition": "2024",
+          "kind": [
+            "bin"
+          ],
+          "name": "pre-receive",
+          "src_path": "crates/git-http/src/bin/hephaestus-git-pre-receive.rs",
+          "test": true
+        },
+        {
+          "crate_types": [
+            "bin"
+          ],
+          "doc": false,
+          "doctest": false,
+          "edition": "2024",
+          "kind": [
+            "test"
+          ],
+          "name": "pre_receive_hook",
+          "src_path": "crates/git-http/tests/pre_receive_hook.rs",
+          "test": true
+        },
+        {
+          "crate_types": [
+            "bin"
+          ],
+          "doc": false,
+          "doctest": false,
+          "edition": "2024",
+          "kind": [
+            "test"
+          ],
+          "name": "receive_policy",
+          "src_path": "crates/git-http/tests/receive_policy.rs",
+          "test": true
+        }
+      ],
+      "version": "0.1.0"
+    },
+    {
+      "features": {
+        "default": [],
+        "test-fixtures": []
+      },
+      "manifest_path": "/home/a/projects/hephaestus/crates/hephaestus-app/Cargo.toml",
+      "manifest_path_relative": "crates/hephaestus-app/Cargo.toml",
+      "metadata_hephaestus": {
+        "context": "platform",
+        "layer": "composition",
+        "sqlx_test_dependency": true
+      },
+      "name": "hephaestus-app",
+      "targets": [
+        {
+          "crate_types": [
+            "bin"
+          ],
+          "doc": false,
+          "doctest": false,
+          "edition": "2024",
+          "kind": [
+            "test"
+          ],
+          "name": "browser_session_lifecycle",
+          "src_path": "crates/hephaestus-app/tests/browser_session_lifecycle.rs",
+          "test": true
+        },
+        {
+          "crate_types": [
+            "bin"
+          ],
+          "doc": false,
+          "doctest": false,
+          "edition": "2024",
+          "kind": [
+            "test"
+          ],
+          "name": "event_durability",
+          "src_path": "crates/hephaestus-app/tests/event_durability.rs",
+          "test": true
+        },
+        {
+          "crate_types": [
+            "bin"
+          ],
+          "doc": false,
+          "doctest": false,
+          "edition": "2024",
+          "kind": [
+            "test"
+          ],
+          "name": "golden",
+          "src_path": "crates/hephaestus-app/tests/golden.rs",
+          "test": true
+        },
+        {
+          "crate_types": [
+            "lib"
+          ],
+          "doc": true,
+          "doctest": true,
+          "edition": "2024",
+          "kind": [
+            "lib"
+          ],
+          "name": "hephaestus_app",
+          "src_path": "crates/hephaestus-app/src/lib.rs",
+          "test": true
+        },
+        {
+          "crate_types": [
+            "bin"
+          ],
+          "doc": true,
+          "doctest": false,
+          "edition": "2024",
+          "kind": [
+            "bin"
+          ],
+          "name": "hephaestusd",
+          "src_path": "crates/hephaestus-app/src/bin/hephaestusd.rs",
+          "test": true
+        },
+        {
+          "crate_types": [
+            "bin"
+          ],
+          "doc": false,
+          "doctest": false,
+          "edition": "2024",
+          "kind": [
+            "test"
+          ],
+          "name": "receive_manual_ui_ordering",
+          "src_path": "crates/hephaestus-app/tests/receive_manual_ui_ordering.rs",
+          "test": true
+        },
+        {
+          "crate_types": [
+            "bin"
+          ],
+          "doc": false,
+          "doctest": false,
+          "edition": "2024",
+          "kind": [
+            "test"
+          ],
+          "name": "service_log_maintenance",
+          "src_path": "crates/hephaestus-app/tests/service_log_maintenance.rs",
+          "test": true
+        },
+        {
+          "crate_types": [
+            "bin"
+          ],
+          "doc": false,
+          "doctest": false,
+          "edition": "2024",
+          "kind": [
+            "test"
+          ],
+          "name": "ui_installation_rpc",
+          "src_path": "crates/hephaestus-app/tests/ui_installation_rpc.rs",
+          "test": true
+        }
+      ],
+      "version": "0.1.0"
+    },
+    {
+      "features": {},
+      "manifest_path": "/home/a/projects/hephaestus/crates/hephaestus-dev/Cargo.toml",
+      "manifest_path_relative": "crates/hephaestus-dev/Cargo.toml",
+      "metadata_hephaestus": {
+        "context": "platform",
+        "layer": "development",
+        "publish": false
+      },
+      "name": "hephaestus-dev",
+      "targets": [
+        {
+          "crate_types": [
+            "bin"
+          ],
+          "doc": true,
+          "doctest": false,
+          "edition": "2024",
+          "kind": [
+            "bin"
+          ],
+          "name": "hephaestus-dev",
+          "src_path": "crates/hephaestus-dev/src/main.rs",
+          "test": true
+        }
+      ],
+      "version": "0.1.0"
+    },
+    {
+      "features": {},
+      "manifest_path": "/home/a/projects/hephaestus/crates/identity-application/Cargo.toml",
+      "manifest_path_relative": "crates/identity-application/Cargo.toml",
+      "metadata_hephaestus": {
+        "context": "identity",
+        "layer": "application"
+      },
+      "name": "identity-application",
+      "targets": [
+        {
+          "crate_types": [
+            "lib"
+          ],
+          "doc": true,
+          "doctest": true,
+          "edition": "2024",
+          "kind": [
+            "lib"
+          ],
+          "name": "identity_application",
+          "src_path": "crates/identity-application/src/lib.rs",
+          "test": true
+        },
+        {
+          "crate_types": [
+            "bin"
+          ],
+          "doc": false,
+          "doctest": false,
+          "edition": "2024",
+          "kind": [
+            "test"
+          ],
+          "name": "identity_application",
+          "src_path": "crates/identity-application/tests/identity_application.rs",
+          "test": true
+        }
+      ],
+      "version": "0.1.0"
+    },
+    {
+      "features": {},
+      "manifest_path": "/home/a/projects/hephaestus/crates/identity-domain/Cargo.toml",
+      "manifest_path_relative": "crates/identity-domain/Cargo.toml",
+      "metadata_hephaestus": {
+        "context": "identity",
+        "layer": "domain"
+      },
+      "name": "identity-domain",
+      "targets": [
+        {
+          "crate_types": [
+            "lib"
+          ],
+          "doc": true,
+          "doctest": true,
+          "edition": "2024",
+          "kind": [
+            "lib"
+          ],
+          "name": "identity_domain",
+          "src_path": "crates/identity-domain/src/lib.rs",
+          "test": true
+        }
+      ],
+      "version": "0.1.0"
+    },
+    {
+      "features": {},
+      "manifest_path": "/home/a/projects/hephaestus/crates/identity-oidc/Cargo.toml",
+      "manifest_path_relative": "crates/identity-oidc/Cargo.toml",
+      "metadata_hephaestus": {
+        "context": "identity",
+        "layer": "adapter"
+      },
+      "name": "identity-oidc",
+      "targets": [
+        {
+          "crate_types": [
+            "lib"
+          ],
+          "doc": true,
+          "doctest": true,
+          "edition": "2024",
+          "kind": [
+            "lib"
+          ],
+          "name": "identity_oidc",
+          "src_path": "crates/identity-oidc/src/lib.rs",
+          "test": true
+        }
+      ],
+      "version": "0.1.0"
+    },
+    {
+      "features": {},
+      "manifest_path": "/home/a/projects/hephaestus/crates/identity-postgres/Cargo.toml",
+      "manifest_path_relative": "crates/identity-postgres/Cargo.toml",
+      "metadata_hephaestus": {
+        "context": "identity",
+        "database_context": "identity",
+        "layer": "adapter",
+        "postgres_adapter": true
+      },
+      "name": "identity-postgres",
+      "targets": [
+        {
+          "crate_types": [
+            "bin"
+          ],
+          "doc": false,
+          "doctest": false,
+          "edition": "2024",
+          "kind": [
+            "test"
+          ],
+          "name": "browser_session_authenticate",
+          "src_path": "crates/identity-postgres/tests/browser_session_authenticate.rs",
+          "test": true
+        },
+        {
+          "crate_types": [
+            "bin"
+          ],
+          "doc": false,
+          "doctest": false,
+          "edition": "2024",
+          "kind": [
+            "test"
+          ],
+          "name": "browser_session_create",
+          "src_path": "crates/identity-postgres/tests/browser_session_create.rs",
+          "test": true
+        },
+        {
+          "crate_types": [
+            "bin"
+          ],
+          "doc": false,
+          "doctest": false,
+          "edition": "2024",
+          "kind": [
+            "test"
+          ],
+          "name": "browser_session_revocation_schema",
+          "src_path": "crates/identity-postgres/tests/browser_session_revocation_schema.rs",
+          "test": true
+        },
+        {
+          "crate_types": [
+            "bin"
+          ],
+          "doc": false,
+          "doctest": false,
+          "edition": "2024",
+          "kind": [
+            "test"
+          ],
+          "name": "browser_session_revoke",
+          "src_path": "crates/identity-postgres/tests/browser_session_revoke.rs",
+          "test": true
+        },
+        {
+          "crate_types": [
+            "bin"
+          ],
+          "doc": false,
+          "doctest": false,
+          "edition": "2024",
+          "kind": [
+            "test"
+          ],
+          "name": "browser_session_schema",
+          "src_path": "crates/identity-postgres/tests/browser_session_schema.rs",
+          "test": true
+        },
+        {
+          "crate_types": [
+            "lib"
+          ],
+          "doc": true,
+          "doctest": true,
+          "edition": "2024",
+          "kind": [
+            "lib"
+          ],
+          "name": "identity_postgres",
+          "src_path": "crates/identity-postgres/src/lib.rs",
+          "test": true
+        },
+        {
+          "crate_types": [
+            "bin"
+          ],
+          "doc": false,
+          "doctest": false,
+          "edition": "2024",
+          "kind": [
+            "test"
+          ],
+          "name": "postgres",
+          "src_path": "crates/identity-postgres/tests/postgres.rs",
+          "test": true
+        }
+      ],
+      "version": "0.1.0"
+    },
+    {
+      "features": {},
+      "manifest_path": "/home/a/projects/hephaestus/crates/mailbox-dispatch/Cargo.toml",
+      "manifest_path_relative": "crates/mailbox-dispatch/Cargo.toml",
+      "metadata_hephaestus": {
+        "context": "mailbox",
+        "layer": "worker"
+      },
+      "name": "mailbox-dispatch",
+      "targets": [
+        {
+          "crate_types": [
+            "lib"
+          ],
+          "doc": true,
+          "doctest": true,
+          "edition": "2024",
+          "kind": [
+            "lib"
+          ],
+          "name": "mailbox_dispatch",
+          "src_path": "crates/mailbox-dispatch/src/nats.rs",
+          "test": true
+        }
+      ],
+      "version": "0.1.0"
+    },
+    {
+      "features": {},
+      "manifest_path": "/home/a/projects/hephaestus/crates/mailbox-domain/Cargo.toml",
+      "manifest_path_relative": "crates/mailbox-domain/Cargo.toml",
+      "metadata_hephaestus": {
+        "context": "mailbox",
+        "layer": "domain"
+      },
+      "name": "mailbox-domain",
+      "targets": [
+        {
+          "crate_types": [
+            "lib"
+          ],
+          "doc": true,
+          "doctest": true,
+          "edition": "2024",
+          "kind": [
+            "lib"
+          ],
+          "name": "mailbox_domain",
+          "src_path": "crates/mailbox-domain/src/lib.rs",
+          "test": true
+        }
+      ],
+      "version": "0.1.0"
+    },
+    {
+      "features": {},
+      "manifest_path": "/home/a/projects/hephaestus/crates/mailbox-postgres/Cargo.toml",
+      "manifest_path_relative": "crates/mailbox-postgres/Cargo.toml",
+      "metadata_hephaestus": {
+        "allow_cross_context_dependencies": [
+          "authz-postgres"
+        ],
+        "context": "mailbox",
+        "database_context": "mailbox",
+        "layer": "adapter",
+        "postgres_adapter": true
+      },
+      "name": "mailbox-postgres",
+      "targets": [
+        {
+          "crate_types": [
+            "lib"
+          ],
+          "doc": true,
+          "doctest": true,
+          "edition": "2024",
+          "kind": [
+            "lib"
+          ],
+          "name": "mailbox_postgres",
+          "src_path": "crates/mailbox-postgres/src/lib.rs",
+          "test": true
+        },
+        {
+          "crate_types": [
+            "bin"
+          ],
+          "doc": false,
+          "doctest": false,
+          "edition": "2024",
+          "kind": [
+            "test"
+          ],
+          "name": "postgres",
+          "src_path": "crates/mailbox-postgres/tests/postgres.rs",
+          "test": true
+        }
+      ],
+      "version": "0.1.0"
+    },
+    {
+      "features": {},
+      "manifest_path": "/home/a/projects/hephaestus/crates/oci-builder-postgres/Cargo.toml",
+      "manifest_path_relative": "crates/oci-builder-postgres/Cargo.toml",
+      "metadata_hephaestus": {
+        "allow_cross_context_dependencies": [
+          "registry-postgres"
+        ],
+        "context": "build",
+        "database_context": "build",
+        "layer": "adapter",
+        "postgres_adapter": true
+      },
+      "name": "oci-builder-postgres",
+      "targets": [
+        {
+          "crate_types": [
+            "bin"
+          ],
+          "doc": false,
+          "doctest": false,
+          "edition": "2024",
+          "kind": [
+            "test"
+          ],
+          "name": "durable_jobs",
+          "src_path": "crates/oci-builder-postgres/tests/durable_jobs.rs",
+          "test": true
+        },
+        {
+          "crate_types": [
+            "lib"
+          ],
+          "doc": true,
+          "doctest": true,
+          "edition": "2024",
+          "kind": [
+            "lib"
+          ],
+          "name": "oci_builder_postgres",
+          "src_path": "crates/oci-builder-postgres/src/lib.rs",
+          "test": true
+        }
+      ],
+      "version": "0.1.0"
+    },
+    {
+      "features": {},
+      "manifest_path": "/home/a/projects/hephaestus/crates/oci-builder-runtime-local/Cargo.toml",
+      "manifest_path_relative": "crates/oci-builder-runtime-local/Cargo.toml",
+      "metadata_hephaestus": {
+        "allow_cross_context_dependencies": [
+          "registry-publisher"
+        ],
+        "context": "build",
+        "layer": "adapter"
+      },
+      "name": "oci-builder-runtime-local",
+      "targets": [
+        {
+          "crate_types": [
+            "lib"
+          ],
+          "doc": true,
+          "doctest": true,
+          "edition": "2024",
+          "kind": [
+            "lib"
+          ],
+          "name": "oci_builder_runtime_local",
+          "src_path": "crates/oci-builder-runtime-local/src/lib.rs",
+          "test": true
+        }
+      ],
+      "version": "0.1.0"
+    },
+    {
+      "features": {},
+      "manifest_path": "/home/a/projects/hephaestus/crates/oci-builder-worker/Cargo.toml",
+      "manifest_path_relative": "crates/oci-builder-worker/Cargo.toml",
+      "metadata_hephaestus": {
+        "context": "build",
+        "layer": "adapter"
+      },
+      "name": "oci-builder-worker",
+      "targets": [
+        {
+          "crate_types": [
+            "lib"
+          ],
+          "doc": true,
+          "doctest": true,
+          "edition": "2024",
+          "kind": [
+            "lib"
+          ],
+          "name": "oci_builder_worker",
+          "src_path": "crates/oci-builder-worker/src/lib.rs",
+          "test": true
+        }
+      ],
+      "version": "0.1.0"
+    },
+    {
+      "features": {},
+      "manifest_path": "/home/a/projects/hephaestus/crates/pat-domain/Cargo.toml",
+      "manifest_path_relative": "crates/pat-domain/Cargo.toml",
+      "metadata_hephaestus": {
+        "context": "forge",
+        "layer": "domain"
+      },
+      "name": "pat-domain",
+      "targets": [
+        {
+          "crate_types": [
+            "lib"
+          ],
+          "doc": true,
+          "doctest": true,
+          "edition": "2024",
+          "kind": [
+            "lib"
+          ],
+          "name": "pat_domain",
+          "src_path": "crates/pat-domain/src/lib.rs",
+          "test": true
+        }
+      ],
+      "version": "0.1.0"
+    },
+    {
+      "features": {},
+      "manifest_path": "/home/a/projects/hephaestus/crates/pat-postgres/Cargo.toml",
+      "manifest_path_relative": "crates/pat-postgres/Cargo.toml",
+      "metadata_hephaestus": {
+        "context": "forge",
+        "database_context": "forge",
+        "layer": "adapter",
+        "postgres_adapter": true
+      },
+      "name": "pat-postgres",
+      "targets": [
+        {
+          "crate_types": [
+            "lib"
+          ],
+          "doc": true,
+          "doctest": true,
+          "edition": "2024",
+          "kind": [
+            "lib"
+          ],
+          "name": "pat_postgres",
+          "src_path": "crates/pat-postgres/src/lib.rs",
+          "test": true
+        },
+        {
+          "crate_types": [
+            "bin"
+          ],
+          "doc": false,
+          "doctest": false,
+          "edition": "2024",
+          "kind": [
+            "test"
+          ],
+          "name": "postgres",
+          "src_path": "crates/pat-postgres/tests/postgres.rs",
+          "test": true
+        }
+      ],
+      "version": "0.1.0"
+    },
+    {
+      "features": {},
+      "manifest_path": "/home/a/projects/hephaestus/crates/registry-domain/Cargo.toml",
+      "manifest_path_relative": "crates/registry-domain/Cargo.toml",
+      "metadata_hephaestus": {
+        "context": "registry",
+        "layer": "domain"
+      },
+      "name": "registry-domain",
+      "targets": [
+        {
+          "crate_types": [
+            "lib"
+          ],
+          "doc": true,
+          "doctest": true,
+          "edition": "2024",
+          "kind": [
+            "lib"
+          ],
+          "name": "registry_domain",
+          "src_path": "crates/registry-domain/src/lib.rs",
+          "test": true
+        }
+      ],
+      "version": "0.1.0"
+    },
+    {
+      "features": {},
+      "manifest_path": "/home/a/projects/hephaestus/crates/registry-http/Cargo.toml",
+      "manifest_path_relative": "crates/registry-http/Cargo.toml",
+      "metadata_hephaestus": {
+        "context": "registry",
+        "layer": "transport"
+      },
+      "name": "registry-http",
+      "targets": [
+        {
+          "crate_types": [
+            "lib"
+          ],
+          "doc": true,
+          "doctest": true,
+          "edition": "2024",
+          "kind": [
+            "lib"
+          ],
+          "name": "registry_http",
+          "src_path": "crates/registry-http/src/lib.rs",
+          "test": true
+        }
+      ],
+      "version": "0.1.0"
+    },
+    {
+      "features": {},
+      "manifest_path": "/home/a/projects/hephaestus/crates/registry-notification/Cargo.toml",
+      "manifest_path_relative": "crates/registry-notification/Cargo.toml",
+      "metadata_hephaestus": {
+        "context": "registry",
+        "layer": "domain"
+      },
+      "name": "registry-notification",
+      "targets": [
+        {
+          "crate_types": [
+            "lib"
+          ],
+          "doc": true,
+          "doctest": true,
+          "edition": "2024",
+          "kind": [
+            "lib"
+          ],
+          "name": "registry_notification",
+          "src_path": "crates/registry-notification/src/lib.rs",
+          "test": true
+        }
+      ],
+      "version": "0.1.0"
+    },
+    {
+      "features": {},
+      "manifest_path": "/home/a/projects/hephaestus/crates/registry-notification-http/Cargo.toml",
+      "manifest_path_relative": "crates/registry-notification-http/Cargo.toml",
+      "metadata_hephaestus": {
+        "context": "registry",
+        "layer": "transport"
+      },
+      "name": "registry-notification-http",
+      "targets": [
+        {
+          "crate_types": [
+            "lib"
+          ],
+          "doc": true,
+          "doctest": true,
+          "edition": "2024",
+          "kind": [
+            "lib"
+          ],
+          "name": "registry_notification_http",
+          "src_path": "crates/registry-notification-http/src/lib.rs",
+          "test": true
+        }
+      ],
+      "version": "0.1.0"
+    },
+    {
+      "features": {},
+      "manifest_path": "/home/a/projects/hephaestus/crates/registry-postgres/Cargo.toml",
+      "manifest_path_relative": "crates/registry-postgres/Cargo.toml",
+      "metadata_hephaestus": {
+        "allow_cross_context_dependencies": [
+          "authz-postgres"
+        ],
+        "context": "registry",
+        "database_context": "registry",
+        "layer": "adapter",
+        "postgres_adapter": true
+      },
+      "name": "registry-postgres",
+      "targets": [
+        {
+          "crate_types": [
+            "bin"
+          ],
+          "doc": false,
+          "doctest": false,
+          "edition": "2024",
+          "kind": [
+            "test"
+          ],
+          "name": "postgres",
+          "src_path": "crates/registry-postgres/tests/postgres.rs",
+          "test": true
+        },
+        {
+          "crate_types": [
+            "lib"
+          ],
+          "doc": true,
+          "doctest": true,
+          "edition": "2024",
+          "kind": [
+            "lib"
+          ],
+          "name": "registry_postgres",
+          "src_path": "crates/registry-postgres/src/lib.rs",
+          "test": true
+        }
+      ],
+      "version": "0.1.0"
+    },
+    {
+      "features": {},
+      "manifest_path": "/home/a/projects/hephaestus/crates/registry-publisher/Cargo.toml",
+      "manifest_path_relative": "crates/registry-publisher/Cargo.toml",
+      "metadata_hephaestus": {
+        "context": "registry",
+        "layer": "adapter"
+      },
+      "name": "registry-publisher",
+      "targets": [
+        {
+          "crate_types": [
+            "lib"
+          ],
+          "doc": true,
+          "doctest": true,
+          "edition": "2024",
+          "kind": [
+            "lib"
+          ],
+          "name": "registry_publisher",
+          "src_path": "crates/registry-publisher/src/lib.rs",
+          "test": true
+        }
+      ],
+      "version": "0.1.0"
+    },
+    {
+      "features": {},
+      "manifest_path": "/home/a/projects/hephaestus/crates/registry-reconciler/Cargo.toml",
+      "manifest_path_relative": "crates/registry-reconciler/Cargo.toml",
+      "metadata_hephaestus": {
+        "context": "registry",
+        "layer": "application"
+      },
+      "name": "registry-reconciler",
+      "targets": [
+        {
+          "crate_types": [
+            "lib"
+          ],
+          "doc": true,
+          "doctest": true,
+          "edition": "2024",
+          "kind": [
+            "lib"
+          ],
+          "name": "registry_reconciler",
+          "src_path": "crates/registry-reconciler/src/lib.rs",
+          "test": true
+        }
+      ],
+      "version": "0.1.0"
+    },
+    {
+      "features": {},
+      "manifest_path": "/home/a/projects/hephaestus/crates/registry-release/Cargo.toml",
+      "manifest_path_relative": "crates/registry-release/Cargo.toml",
+      "metadata_hephaestus": {
+        "context": "registry",
+        "layer": "composition"
+      },
+      "name": "registry-release",
+      "targets": [
+        {
+          "crate_types": [
+            "bin"
+          ],
+          "doc": true,
+          "doctest": false,
+          "edition": "2024",
+          "kind": [
+            "bin"
+          ],
+          "name": "hephaestus-registry-release",
+          "src_path": "crates/registry-release/src/main.rs",
+          "test": true
+        }
+      ],
+      "version": "0.1.0"
+    },
+    {
+      "features": {},
+      "manifest_path": "/home/a/projects/hephaestus/crates/registry-token/Cargo.toml",
+      "manifest_path_relative": "crates/registry-token/Cargo.toml",
+      "metadata_hephaestus": {
+        "context": "registry",
+        "layer": "domain"
+      },
+      "name": "registry-token",
+      "targets": [
+        {
+          "crate_types": [
+            "lib"
+          ],
+          "doc": true,
+          "doctest": true,
+          "edition": "2024",
+          "kind": [
+            "lib"
+          ],
+          "name": "registry_token",
+          "src_path": "crates/registry-token/src/lib.rs",
+          "test": true
+        }
+      ],
+      "version": "0.1.0"
+    },
+    {
+      "features": {},
+      "manifest_path": "/home/a/projects/hephaestus/crates/registry-zot/Cargo.toml",
+      "manifest_path_relative": "crates/registry-zot/Cargo.toml",
+      "metadata_hephaestus": {
+        "context": "registry",
+        "layer": "adapter"
+      },
+      "name": "registry-zot",
+      "targets": [
+        {
+          "crate_types": [
+            "lib"
+          ],
+          "doc": true,
+          "doctest": true,
+          "edition": "2024",
+          "kind": [
+            "lib"
+          ],
+          "name": "registry_zot",
+          "src_path": "crates/registry-zot/src/lib.rs",
+          "test": true
+        }
+      ],
+      "version": "0.1.0"
+    },
+    {
+      "features": {},
+      "manifest_path": "/home/a/projects/hephaestus/crates/release-artifact-store/Cargo.toml",
+      "manifest_path_relative": "crates/release-artifact-store/Cargo.toml",
+      "metadata_hephaestus": {
+        "context": "release",
+        "layer": "adapter"
+      },
+      "name": "release-artifact-store",
+      "targets": [
+        {
+          "crate_types": [
+            "lib"
+          ],
+          "doc": true,
+          "doctest": true,
+          "edition": "2024",
+          "kind": [
+            "lib"
+          ],
+          "name": "release_artifact_store",
+          "src_path": "crates/release-artifact-store/src/lib.rs",
+          "test": true
+        }
+      ],
+      "version": "0.1.0"
+    },
+    {
+      "features": {},
+      "manifest_path": "/home/a/projects/hephaestus/crates/release-domain/Cargo.toml",
+      "manifest_path_relative": "crates/release-domain/Cargo.toml",
+      "metadata_hephaestus": {
+        "context": "release",
+        "layer": "domain"
+      },
+      "name": "release-domain",
+      "targets": [
+        {
+          "crate_types": [
+            "lib"
+          ],
+          "doc": true,
+          "doctest": true,
+          "edition": "2024",
+          "kind": [
+            "lib"
+          ],
+          "name": "release_domain",
+          "src_path": "crates/release-domain/src/lib.rs",
+          "test": true
+        }
+      ],
+      "version": "0.1.0"
+    },
+    {
+      "features": {},
+      "manifest_path": "/home/a/projects/hephaestus/crates/release-postgres/Cargo.toml",
+      "manifest_path_relative": "crates/release-postgres/Cargo.toml",
+      "metadata_hephaestus": {
+        "allow_cross_context_dependencies": [
+          "authz-postgres"
+        ],
+        "context": "release",
+        "database_context": "release",
+        "layer": "adapter",
+        "postgres_adapter": true
+      },
+      "name": "release-postgres",
+      "targets": [
+        {
+          "crate_types": [
+            "bin"
+          ],
+          "doc": false,
+          "doctest": false,
+          "edition": "2024",
+          "kind": [
+            "test"
+          ],
+          "name": "postgres",
+          "src_path": "crates/release-postgres/tests/postgres.rs",
+          "test": true
+        },
+        {
+          "crate_types": [
+            "lib"
+          ],
+          "doc": true,
+          "doctest": true,
+          "edition": "2024",
+          "kind": [
+            "lib"
+          ],
+          "name": "release_postgres",
+          "src_path": "crates/release-postgres/src/lib.rs",
+          "test": true
+        },
+        {
+          "crate_types": [
+            "bin"
+          ],
+          "doc": false,
+          "doctest": false,
+          "edition": "2024",
+          "kind": [
+            "test"
+          ],
+          "name": "ui_browser_resources",
+          "src_path": "crates/release-postgres/tests/ui_browser_resources.rs",
+          "test": true
+        },
+        {
+          "crate_types": [
+            "bin"
+          ],
+          "doc": false,
+          "doctest": false,
+          "edition": "2024",
+          "kind": [
+            "test"
+          ],
+          "name": "ui_browser_schema",
+          "src_path": "crates/release-postgres/tests/ui_browser_schema.rs",
+          "test": true
+        },
+        {
+          "crate_types": [
+            "bin"
+          ],
+          "doc": false,
+          "doctest": false,
+          "edition": "2024",
+          "kind": [
+            "test"
+          ],
+          "name": "ui_installation_navigation",
+          "src_path": "crates/release-postgres/tests/ui_installation_navigation.rs",
+          "test": true
+        },
+        {
+          "crate_types": [
+            "bin"
+          ],
+          "doc": false,
+          "doctest": false,
+          "edition": "2024",
+          "kind": [
+            "test"
+          ],
+          "name": "ui_installation_schema",
+          "src_path": "crates/release-postgres/tests/ui_installation_schema.rs",
+          "test": true
+        },
+        {
+          "crate_types": [
+            "bin"
+          ],
+          "doc": false,
+          "doctest": false,
+          "edition": "2024",
+          "kind": [
+            "test"
+          ],
+          "name": "ui_request_audit_schema",
+          "src_path": "crates/release-postgres/tests/ui_request_audit_schema.rs",
+          "test": true
+        }
+      ],
+      "version": "0.1.0"
+    },
+    {
+      "features": {},
+      "manifest_path": "/home/a/projects/hephaestus/crates/release-service/Cargo.toml",
+      "manifest_path_relative": "crates/release-service/Cargo.toml",
+      "metadata_hephaestus": {
+        "context": "release",
+        "layer": "application"
+      },
+      "name": "release-service",
+      "targets": [
+        {
+          "crate_types": [
+            "lib"
+          ],
+          "doc": true,
+          "doctest": true,
+          "edition": "2024",
+          "kind": [
+            "lib"
+          ],
+          "name": "release_service",
+          "src_path": "crates/release-service/src/lib.rs",
+          "test": true
+        }
+      ],
+      "version": "0.1.0"
+    },
+    {
+      "features": {},
+      "manifest_path": "/home/a/projects/hephaestus/crates/review-domain/Cargo.toml",
+      "manifest_path_relative": "crates/review-domain/Cargo.toml",
+      "metadata_hephaestus": {
+        "context": "review",
+        "layer": "domain"
+      },
+      "name": "review-domain",
+      "targets": [
+        {
+          "crate_types": [
+            "lib"
+          ],
+          "doc": true,
+          "doctest": true,
+          "edition": "2024",
+          "kind": [
+            "lib"
+          ],
+          "name": "review_domain",
+          "src_path": "crates/review-domain/src/lib.rs",
+          "test": true
+        }
+      ],
+      "version": "0.1.0"
+    },
+    {
+      "features": {},
+      "manifest_path": "/home/a/projects/hephaestus/crates/review-postgres/Cargo.toml",
+      "manifest_path_relative": "crates/review-postgres/Cargo.toml",
+      "metadata_hephaestus": {
+        "allow_cross_context_dependencies": [
+          "authz-postgres"
+        ],
+        "context": "review",
+        "database_context": "review",
+        "layer": "adapter",
+        "postgres_adapter": true
+      },
+      "name": "review-postgres",
+      "targets": [
+        {
+          "crate_types": [
+            "bin"
+          ],
+          "doc": false,
+          "doctest": false,
+          "edition": "2024",
+          "kind": [
+            "test"
+          ],
+          "name": "postgres_git",
+          "src_path": "crates/review-postgres/tests/postgres_git.rs",
+          "test": true
+        },
+        {
+          "crate_types": [
+            "lib"
+          ],
+          "doc": true,
+          "doctest": true,
+          "edition": "2024",
+          "kind": [
+            "lib"
+          ],
+          "name": "review_postgres",
+          "src_path": "crates/review-postgres/src/lib.rs",
+          "test": true
+        }
+      ],
+      "version": "0.1.0"
+    },
+    {
+      "features": {},
+      "manifest_path": "/home/a/projects/hephaestus/crates/review-service/Cargo.toml",
+      "manifest_path_relative": "crates/review-service/Cargo.toml",
+      "metadata_hephaestus": {
+        "context": "review",
+        "layer": "application"
+      },
+      "name": "review-service",
+      "targets": [
+        {
+          "crate_types": [
+            "lib"
+          ],
+          "doc": true,
+          "doctest": true,
+          "edition": "2024",
+          "kind": [
+            "lib"
+          ],
+          "name": "review_service",
+          "src_path": "crates/review-service/src/lib.rs",
+          "test": true
+        }
+      ],
+      "version": "0.1.0"
+    },
+    {
+      "features": {
+        "client": [
+          "connectrpc/client"
+        ],
+        "default": [
+          "client"
+        ]
+      },
+      "manifest_path": "/home/a/projects/hephaestus/crates/rpc-proto/Cargo.toml",
+      "manifest_path_relative": "crates/rpc-proto/Cargo.toml",
+      "metadata_hephaestus": {
+        "context": "platform",
+        "layer": "transport"
+      },
+      "name": "rpc-proto",
+      "targets": [
+        {
+          "crate_types": [
+            "bin"
+          ],
+          "doc": false,
+          "doctest": false,
+          "edition": "2024",
+          "kind": [
+            "test"
+          ],
+          "name": "descriptor_policy",
+          "src_path": "crates/rpc-proto/tests/descriptor_policy.rs",
+          "test": true
+        },
+        {
+          "crate_types": [
+            "bin"
+          ],
+          "doc": false,
+          "doctest": false,
+          "edition": "2024",
+          "kind": [
+            "test"
+          ],
+          "name": "protocol_interop",
+          "src_path": "crates/rpc-proto/tests/protocol_interop.rs",
+          "test": true
+        },
+        {
+          "crate_types": [
+            "lib"
+          ],
+          "doc": true,
+          "doctest": true,
+          "edition": "2024",
+          "kind": [
+            "lib"
+          ],
+          "name": "rpc_proto",
+          "src_path": "crates/rpc-proto/src/lib.rs",
+          "test": true
+        }
+      ],
+      "version": "0.1.0"
+    },
+    {
+      "features": {},
+      "manifest_path": "/home/a/projects/hephaestus/crates/run-domain/Cargo.toml",
+      "manifest_path_relative": "crates/run-domain/Cargo.toml",
+      "metadata_hephaestus": {
+        "context": "run",
+        "layer": "domain"
+      },
+      "name": "run-domain",
+      "targets": [
+        {
+          "crate_types": [
+            "lib"
+          ],
+          "doc": true,
+          "doctest": true,
+          "edition": "2024",
+          "kind": [
+            "lib"
+          ],
+          "name": "run_domain",
+          "src_path": "crates/run-domain/src/lib.rs",
+          "test": true
+        }
+      ],
+      "version": "0.1.0"
+    },
+    {
+      "features": {},
+      "manifest_path": "/home/a/projects/hephaestus/crates/run-orchestrator/Cargo.toml",
+      "manifest_path_relative": "crates/run-orchestrator/Cargo.toml",
+      "metadata_hephaestus": {
+        "context": "run",
+        "layer": "worker"
+      },
+      "name": "run-orchestrator",
+      "targets": [
+        {
+          "crate_types": [
+            "bin"
+          ],
+          "doc": false,
+          "doctest": false,
+          "edition": "2024",
+          "kind": [
+            "test"
+          ],
+          "name": "orchestrator",
+          "src_path": "crates/run-orchestrator/tests/orchestrator.rs",
+          "test": true
+        },
+        {
+          "crate_types": [
+            "lib"
+          ],
+          "doc": true,
+          "doctest": true,
+          "edition": "2024",
+          "kind": [
+            "lib"
+          ],
+          "name": "run_orchestrator",
+          "src_path": "crates/run-orchestrator/src/lib.rs",
+          "test": true
+        }
+      ],
+      "version": "0.1.0"
+    },
+    {
+      "features": {},
+      "manifest_path": "/home/a/projects/hephaestus/crates/run-postgres/Cargo.toml",
+      "manifest_path_relative": "crates/run-postgres/Cargo.toml",
+      "metadata_hephaestus": {
+        "allow_cross_context_dependencies": [
+          "authz-postgres"
+        ],
+        "context": "run",
+        "database_context": "run",
+        "layer": "adapter",
+        "postgres_adapter": true
+      },
+      "name": "run-postgres",
+      "targets": [
+        {
+          "crate_types": [
+            "bin"
+          ],
+          "doc": false,
+          "doctest": false,
+          "edition": "2024",
+          "kind": [
+            "test"
+          ],
+          "name": "phase1b_libkrun",
+          "src_path": "crates/run-postgres/tests/phase1b_libkrun.rs",
+          "test": true
+        },
+        {
+          "crate_types": [
+            "bin"
+          ],
+          "doc": false,
+          "doctest": false,
+          "edition": "2024",
+          "kind": [
+            "test"
+          ],
+          "name": "postgres",
+          "src_path": "crates/run-postgres/tests/postgres.rs",
+          "test": true
+        },
+        {
+          "crate_types": [
+            "lib"
+          ],
+          "doc": true,
+          "doctest": true,
+          "edition": "2024",
+          "kind": [
+            "lib"
+          ],
+          "name": "run_postgres",
+          "src_path": "crates/run-postgres/src/lib.rs",
+          "test": true
+        }
+      ],
+      "version": "0.1.0"
+    },
+    {
+      "features": {},
+      "manifest_path": "/home/a/projects/hephaestus/crates/run-runtime-local/Cargo.toml",
+      "manifest_path_relative": "crates/run-runtime-local/Cargo.toml",
+      "metadata_hephaestus": {
+        "context": "run",
+        "layer": "adapter"
+      },
+      "name": "run-runtime-local",
+      "targets": [
+        {
+          "crate_types": [
+            "lib"
+          ],
+          "doc": true,
+          "doctest": true,
+          "edition": "2024",
+          "kind": [
+            "lib"
+          ],
+          "name": "run_runtime_local",
+          "src_path": "crates/run-runtime-local/src/lib.rs",
+          "test": true
+        }
+      ],
+      "version": "0.1.0"
+    },
+    {
+      "features": {},
+      "manifest_path": "/home/a/projects/hephaestus/crates/runtime-authority/Cargo.toml",
+      "manifest_path_relative": "crates/runtime-authority/Cargo.toml",
+      "metadata_hephaestus": {
+        "context": "authorization",
+        "layer": "application"
+      },
+      "name": "runtime-authority",
+      "targets": [
+        {
+          "crate_types": [
+            "lib"
+          ],
+          "doc": true,
+          "doctest": true,
+          "edition": "2024",
+          "kind": [
+            "lib"
+          ],
+          "name": "runtime_authority",
+          "src_path": "crates/runtime-authority/src/lib.rs",
+          "test": true
+        }
+      ],
+      "version": "0.1.0"
+    },
+    {
+      "features": {},
+      "manifest_path": "/home/a/projects/hephaestus/crates/runtime-authority-postgres/Cargo.toml",
+      "manifest_path_relative": "crates/runtime-authority-postgres/Cargo.toml",
+      "metadata_hephaestus": {
+        "context": "authorization",
+        "database_context": "authorization",
+        "layer": "adapter",
+        "postgres_adapter": true
+      },
+      "name": "runtime-authority-postgres",
+      "targets": [
+        {
+          "crate_types": [
+            "bin"
+          ],
+          "doc": false,
+          "doctest": false,
+          "edition": "2024",
+          "kind": [
+            "custom-build"
+          ],
+          "name": "build-script-build",
+          "src_path": "crates/runtime-authority-postgres/build.rs",
+          "test": false
+        },
+        {
+          "crate_types": [
+            "bin"
+          ],
+          "doc": false,
+          "doctest": false,
+          "edition": "2024",
+          "kind": [
+            "test"
+          ],
+          "name": "postgres",
+          "src_path": "crates/runtime-authority-postgres/tests/postgres.rs",
+          "test": true
+        },
+        {
+          "crate_types": [
+            "lib"
+          ],
+          "doc": true,
+          "doctest": true,
+          "edition": "2024",
+          "kind": [
+            "lib"
+          ],
+          "name": "runtime_authority_postgres",
+          "src_path": "crates/runtime-authority-postgres/src/lib.rs",
+          "test": true
+        }
+      ],
+      "version": "0.1.0"
+    },
+    {
+      "features": {},
+      "manifest_path": "/home/a/projects/hephaestus/crates/runtime-git-authority/Cargo.toml",
+      "manifest_path_relative": "crates/runtime-git-authority/Cargo.toml",
+      "metadata_hephaestus": {
+        "context": "authorization",
+        "layer": "application"
+      },
+      "name": "runtime-git-authority",
+      "targets": [
+        {
+          "crate_types": [
+            "lib"
+          ],
+          "doc": true,
+          "doctest": true,
+          "edition": "2024",
+          "kind": [
+            "lib"
+          ],
+          "name": "runtime_git_authority",
+          "src_path": "crates/runtime-git-authority/src/lib.rs",
+          "test": true
+        }
+      ],
+      "version": "0.1.0"
+    },
+    {
+      "features": {},
+      "manifest_path": "/home/a/projects/hephaestus/crates/runtime-git-authority-postgres/Cargo.toml",
+      "manifest_path_relative": "crates/runtime-git-authority-postgres/Cargo.toml",
+      "metadata_hephaestus": {
+        "context": "authorization",
+        "database_context": "authorization",
+        "layer": "adapter",
+        "postgres_adapter": true
+      },
+      "name": "runtime-git-authority-postgres",
+      "targets": [
+        {
+          "crate_types": [
+            "lib"
+          ],
+          "doc": true,
+          "doctest": true,
+          "edition": "2024",
+          "kind": [
+            "lib"
+          ],
+          "name": "runtime_git_authority_postgres",
+          "src_path": "crates/runtime-git-authority-postgres/src/lib.rs",
+          "test": true
+        }
+      ],
+      "version": "0.1.0"
+    },
+    {
+      "features": {},
+      "manifest_path": "/home/a/projects/hephaestus/crates/runtime-handoff-local/Cargo.toml",
+      "manifest_path_relative": "crates/runtime-handoff-local/Cargo.toml",
+      "metadata_hephaestus": {
+        "context": "authorization",
+        "layer": "adapter"
+      },
+      "name": "runtime-handoff-local",
+      "targets": [
+        {
+          "crate_types": [
+            "lib"
+          ],
+          "doc": true,
+          "doctest": true,
+          "edition": "2024",
+          "kind": [
+            "lib"
+          ],
+          "name": "runtime_handoff_local",
+          "src_path": "crates/runtime-handoff-local/src/lib.rs",
+          "test": true
+        }
+      ],
+      "version": "0.1.0"
+    },
+    {
+      "features": {},
+      "manifest_path": "/home/a/projects/hephaestus/crates/runtime-types/Cargo.toml",
+      "manifest_path_relative": "crates/runtime-types/Cargo.toml",
+      "metadata_hephaestus": {
+        "context": "platform",
+        "layer": "domain"
+      },
+      "name": "runtime-types",
+      "targets": [
+        {
+          "crate_types": [
+            "lib"
+          ],
+          "doc": true,
+          "doctest": true,
+          "edition": "2024",
+          "kind": [
+            "lib"
+          ],
+          "name": "runtime_types",
+          "src_path": "crates/runtime-types/src/lib.rs",
+          "test": true
+        }
+      ],
+      "version": "0.1.0"
+    },
+    {
+      "features": {},
+      "manifest_path": "/home/a/projects/hephaestus/crates/secret-application/Cargo.toml",
+      "manifest_path_relative": "crates/secret-application/Cargo.toml",
+      "metadata_hephaestus": {
+        "context": "secret",
+        "layer": "application"
+      },
+      "name": "secret-application",
+      "targets": [
+        {
+          "crate_types": [
+            "lib"
+          ],
+          "doc": true,
+          "doctest": true,
+          "edition": "2024",
+          "kind": [
+            "lib"
+          ],
+          "name": "secret_application",
+          "src_path": "crates/secret-application/src/lib.rs",
+          "test": true
+        }
+      ],
+      "version": "0.1.0"
+    },
+    {
+      "features": {
+        "test-fixtures": []
+      },
+      "manifest_path": "/home/a/projects/hephaestus/crates/secret-broker/Cargo.toml",
+      "manifest_path_relative": "crates/secret-broker/Cargo.toml",
+      "metadata_hephaestus": {
+        "context": "secret",
+        "layer": "adapter"
+      },
+      "name": "secret-broker",
+      "targets": [
+        {
+          "crate_types": [
+            "lib"
+          ],
+          "doc": true,
+          "doctest": true,
+          "edition": "2024",
+          "kind": [
+            "lib"
+          ],
+          "name": "secret_broker",
+          "src_path": "crates/secret-broker/src/lib.rs",
+          "test": true
+        }
+      ],
+      "version": "0.1.0"
+    },
+    {
+      "features": {},
+      "manifest_path": "/home/a/projects/hephaestus/crates/secret-domain/Cargo.toml",
+      "manifest_path_relative": "crates/secret-domain/Cargo.toml",
+      "metadata_hephaestus": {
+        "context": "secret",
+        "layer": "domain"
+      },
+      "name": "secret-domain",
+      "targets": [
+        {
+          "crate_types": [
+            "lib"
+          ],
+          "doc": true,
+          "doctest": true,
+          "edition": "2024",
+          "kind": [
+            "lib"
+          ],
+          "name": "secret_domain",
+          "src_path": "crates/secret-domain/src/lib.rs",
+          "test": true
+        }
+      ],
+      "version": "0.1.0"
+    },
+    {
+      "features": {},
+      "manifest_path": "/home/a/projects/hephaestus/crates/secret-postgres/Cargo.toml",
+      "manifest_path_relative": "crates/secret-postgres/Cargo.toml",
+      "metadata_hephaestus": {
+        "allow_cross_context_dependencies": [
+          "authz-postgres"
+        ],
+        "context": "secret",
+        "database_context": "secret",
+        "layer": "adapter",
+        "postgres_adapter": true,
+        "row_level_security": true,
+        "transactional_outbox": false
+      },
+      "name": "secret-postgres",
+      "targets": [
+        {
+          "crate_types": [
+            "bin"
+          ],
+          "doc": false,
+          "doctest": false,
+          "edition": "2024",
+          "kind": [
+            "test"
+          ],
+          "name": "postgres",
+          "src_path": "crates/secret-postgres/tests/postgres.rs",
+          "test": true
+        },
+        {
+          "crate_types": [
+            "lib"
+          ],
+          "doc": true,
+          "doctest": true,
+          "edition": "2024",
+          "kind": [
+            "lib"
+          ],
+          "name": "secret_postgres",
+          "src_path": "crates/secret-postgres/src/lib.rs",
+          "test": true
+        }
+      ],
+      "version": "0.1.0"
+    },
+    {
+      "features": {},
+      "manifest_path": "/home/a/projects/hephaestus/crates/secret-runtime/Cargo.toml",
+      "manifest_path_relative": "crates/secret-runtime/Cargo.toml",
+      "metadata_hephaestus": {
+        "context": "secret",
+        "layer": "adapter"
+      },
+      "name": "secret-runtime",
+      "targets": [
+        {
+          "crate_types": [
+            "lib"
+          ],
+          "doc": true,
+          "doctest": true,
+          "edition": "2024",
+          "kind": [
+            "lib"
+          ],
+          "name": "secret_runtime",
+          "src_path": "crates/secret-runtime/src/lib.rs",
+          "test": true
+        }
+      ],
+      "version": "0.1.0"
+    },
+    {
+      "features": {},
+      "manifest_path": "/home/a/projects/hephaestus/crates/secret-service/Cargo.toml",
+      "manifest_path_relative": "crates/secret-service/Cargo.toml",
+      "metadata_hephaestus": {
+        "context": "secret",
+        "layer": "application"
+      },
+      "name": "secret-service",
+      "targets": [
+        {
+          "crate_types": [
+            "lib"
+          ],
+          "doc": true,
+          "doctest": true,
+          "edition": "2024",
+          "kind": [
+            "lib"
+          ],
+          "name": "secret_service",
+          "src_path": "crates/secret-service/src/lib.rs",
+          "test": true
+        }
+      ],
+      "version": "0.1.0"
+    },
+    {
+      "features": {},
+      "manifest_path": "/home/a/projects/hephaestus/crates/secret-store/Cargo.toml",
+      "manifest_path_relative": "crates/secret-store/Cargo.toml",
+      "metadata_hephaestus": {
+        "context": "secret",
+        "layer": "domain"
+      },
+      "name": "secret-store",
+      "targets": [
+        {
+          "crate_types": [
+            "lib"
+          ],
+          "doc": true,
+          "doctest": true,
+          "edition": "2024",
+          "kind": [
+            "lib"
+          ],
+          "name": "secret_store",
+          "src_path": "crates/secret-store/src/lib.rs",
+          "test": true
+        }
+      ],
+      "version": "0.1.0"
+    },
+    {
+      "features": {},
+      "manifest_path": "/home/a/projects/hephaestus/crates/vm-conformance/Cargo.toml",
+      "manifest_path_relative": "crates/vm-conformance/Cargo.toml",
+      "metadata_hephaestus": {
+        "context": "vm",
+        "layer": "development"
+      },
+      "name": "vm-conformance",
+      "targets": [
+        {
+          "crate_types": [
+            "lib"
+          ],
+          "doc": true,
+          "doctest": true,
+          "edition": "2024",
+          "kind": [
+            "lib"
+          ],
+          "name": "vm_conformance",
+          "src_path": "crates/vm-conformance/src/lib.rs",
+          "test": true
+        }
+      ],
+      "version": "0.1.0"
+    },
+    {
+      "features": {},
+      "manifest_path": "/home/a/projects/hephaestus/crates/vm-fake/Cargo.toml",
+      "manifest_path_relative": "crates/vm-fake/Cargo.toml",
+      "metadata_hephaestus": {
+        "context": "vm",
+        "layer": "adapter"
+      },
+      "name": "vm-fake",
+      "targets": [
+        {
+          "crate_types": [
+            "lib"
+          ],
+          "doc": true,
+          "doctest": true,
+          "edition": "2024",
+          "kind": [
+            "lib"
+          ],
+          "name": "vm_fake",
+          "src_path": "crates/vm-fake/src/lib.rs",
+          "test": true
+        }
+      ],
+      "version": "0.1.0"
+    },
+    {
+      "features": {
+        "integration-guest": []
+      },
+      "manifest_path": "/home/a/projects/hephaestus/crates/vm-libkrun/Cargo.toml",
+      "manifest_path_relative": "crates/vm-libkrun/Cargo.toml",
+      "metadata_hephaestus": {
+        "context": "vm",
+        "layer": "adapter"
+      },
+      "name": "vm-libkrun",
+      "targets": [
+        {
+          "crate_types": [
+            "bin"
+          ],
+          "doc": true,
+          "doctest": false,
+          "edition": "2024",
+          "kind": [
+            "bin"
+          ],
+          "name": "heph-git-credential",
+          "src_path": "crates/vm-libkrun/src/bin/heph-git-credential.rs",
+          "test": true
+        },
+        {
+          "crate_types": [
+            "bin"
+          ],
+          "doc": true,
+          "doctest": false,
+          "edition": "2024",
+          "kind": [
+            "bin"
+          ],
+          "name": "heph-init",
+          "src_path": "crates/vm-libkrun/src/bin/heph-init.rs",
+          "test": true
+        },
+        {
+          "crate_types": [
+            "bin"
+          ],
+          "doc": true,
+          "doctest": false,
+          "edition": "2024",
+          "kind": [
+            "bin"
+          ],
+          "name": "heph-integration-check",
+          "required-features": [
+            "integration-guest"
+          ],
+          "src_path": "crates/vm-libkrun/src/bin/heph-integration-check.rs",
+          "test": true
+        },
+        {
+          "crate_types": [
+            "bin"
+          ],
+          "doc": true,
+          "doctest": false,
+          "edition": "2024",
+          "kind": [
+            "bin"
+          ],
+          "name": "hephaestus-vm-libkrun-worker",
+          "src_path": "crates/vm-libkrun/src/bin/hephaestus-vm-libkrun-worker.rs",
+          "test": true
+        },
+        {
+          "crate_types": [
+            "bin"
+          ],
+          "doc": false,
+          "doctest": false,
+          "edition": "2024",
+          "kind": [
+            "test"
+          ],
+          "name": "libkrun_integration",
+          "src_path": "crates/vm-libkrun/tests/libkrun_integration.rs",
+          "test": true
+        },
+        {
+          "crate_types": [
+            "bin"
+          ],
+          "doc": false,
+          "doctest": false,
+          "edition": "2024",
+          "kind": [
+            "test"
+          ],
+          "name": "runtime_git_credential",
+          "src_path": "crates/vm-libkrun/tests/runtime_git_credential.rs",
+          "test": true
+        },
+        {
+          "crate_types": [
+            "lib"
+          ],
+          "doc": true,
+          "doctest": true,
+          "edition": "2024",
+          "kind": [
+            "lib"
+          ],
+          "name": "vm_libkrun",
+          "src_path": "crates/vm-libkrun/src/lib.rs",
+          "test": true
+        }
+      ],
+      "version": "0.1.0"
+    },
+    {
+      "features": {},
+      "manifest_path": "/home/a/projects/hephaestus/crates/vm-trait/Cargo.toml",
+      "manifest_path_relative": "crates/vm-trait/Cargo.toml",
+      "metadata_hephaestus": {
+        "context": "vm",
+        "layer": "port"
+      },
+      "name": "vm-trait",
+      "targets": [
+        {
+          "crate_types": [
+            "lib"
+          ],
+          "doc": true,
+          "doctest": true,
+          "edition": "2024",
+          "kind": [
+            "lib"
+          ],
+          "name": "vm_trait",
+          "src_path": "crates/vm-trait/src/lib.rs",
+          "test": true
+        }
+      ],
+      "version": "0.1.0"
+    },
+    {
+      "features": {},
+      "manifest_path": "/home/a/projects/hephaestus/crates/volume-local/Cargo.toml",
+      "manifest_path_relative": "crates/volume-local/Cargo.toml",
+      "metadata_hephaestus": {
+        "context": "volume",
+        "layer": "adapter"
+      },
+      "name": "volume-local",
+      "targets": [
+        {
+          "crate_types": [
+            "lib"
+          ],
+          "doc": true,
+          "doctest": true,
+          "edition": "2024",
+          "kind": [
+            "lib"
+          ],
+          "name": "volume_local",
+          "src_path": "crates/volume-local/src/lib.rs",
+          "test": true
+        }
+      ],
+      "version": "0.1.0"
+    },
+    {
+      "features": {},
+      "manifest_path": "/home/a/projects/hephaestus/crates/volume-postgres/Cargo.toml",
+      "manifest_path_relative": "crates/volume-postgres/Cargo.toml",
+      "metadata_hephaestus": {
+        "context": "volume",
+        "database_context": "volume",
+        "layer": "adapter",
+        "postgres_adapter": true
+      },
+      "name": "volume-postgres",
+      "targets": [
+        {
+          "crate_types": [
+            "bin"
+          ],
+          "doc": false,
+          "doctest": false,
+          "edition": "2024",
+          "kind": [
+            "test"
+          ],
+          "name": "postgres",
+          "src_path": "crates/volume-postgres/tests/postgres.rs",
+          "test": true
+        },
+        {
+          "crate_types": [
+            "lib"
+          ],
+          "doc": true,
+          "doctest": true,
+          "edition": "2024",
+          "kind": [
+            "lib"
+          ],
+          "name": "volume_postgres",
+          "src_path": "crates/volume-postgres/src/lib.rs",
+          "test": true
+        }
+      ],
+      "version": "0.1.0"
+    },
+    {
+      "features": {},
+      "manifest_path": "/home/a/projects/hephaestus/crates/volume-trait/Cargo.toml",
+      "manifest_path_relative": "crates/volume-trait/Cargo.toml",
+      "metadata_hephaestus": {
+        "context": "volume",
+        "layer": "port"
+      },
+      "name": "volume-trait",
+      "targets": [
+        {
+          "crate_types": [
+            "lib"
+          ],
+          "doc": true,
+          "doctest": true,
+          "edition": "2024",
+          "kind": [
+            "lib"
+          ],
+          "name": "volume_trait",
+          "src_path": "crates/volume-trait/src/lib.rs",
+          "test": true
+        }
+      ],
+      "version": "0.1.0"
+    },
+    {
+      "features": {},
+      "manifest_path": "/home/a/projects/hephaestus/crates/workspace-domain/Cargo.toml",
+      "manifest_path_relative": "crates/workspace-domain/Cargo.toml",
+      "metadata_hephaestus": {
+        "context": "workspace",
+        "layer": "domain"
+      },
+      "name": "workspace-domain",
+      "targets": [
+        {
+          "crate_types": [
+            "lib"
+          ],
+          "doc": true,
+          "doctest": true,
+          "edition": "2024",
+          "kind": [
+            "lib"
+          ],
+          "name": "workspace_domain",
+          "src_path": "crates/workspace-domain/src/lib.rs",
+          "test": true
+        }
+      ],
+      "version": "0.1.0"
+    },
+    {
+      "features": {},
+      "manifest_path": "/home/a/projects/hephaestus/crates/workspace-local/Cargo.toml",
+      "manifest_path_relative": "crates/workspace-local/Cargo.toml",
+      "metadata_hephaestus": {
+        "context": "workspace",
+        "layer": "adapter"
+      },
+      "name": "workspace-local",
+      "targets": [
+        {
+          "crate_types": [
+            "lib"
+          ],
+          "doc": true,
+          "doctest": true,
+          "edition": "2024",
+          "kind": [
+            "lib"
+          ],
+          "name": "workspace_local",
+          "src_path": "crates/workspace-local/src/lib.rs",
+          "test": true
+        }
+      ],
+      "version": "0.1.0"
+    },
+    {
+      "features": {},
+      "manifest_path": "/home/a/projects/hephaestus/crates/workspace-postgres/Cargo.toml",
+      "manifest_path_relative": "crates/workspace-postgres/Cargo.toml",
+      "metadata_hephaestus": {
+        "context": "workspace",
+        "database_context": "workspace",
+        "layer": "adapter",
+        "postgres_adapter": true
+      },
+      "name": "workspace-postgres",
+      "targets": [
+        {
+          "crate_types": [
+            "bin"
+          ],
+          "doc": false,
+          "doctest": false,
+          "edition": "2024",
+          "kind": [
+            "test"
+          ],
+          "name": "postgres_git",
+          "src_path": "crates/workspace-postgres/tests/postgres_git.rs",
+          "test": true
+        },
+        {
+          "crate_types": [
+            "lib"
+          ],
+          "doc": true,
+          "doctest": true,
+          "edition": "2024",
+          "kind": [
+            "lib"
+          ],
+          "name": "workspace_postgres",
+          "src_path": "crates/workspace-postgres/src/lib.rs",
+          "test": true
+        }
+      ],
+      "version": "0.1.0"
+    }
+  ],
+  "schema_version": 1,
+  "workspace_member_count": 85,
+  "workspace_member_names": [
+    "agent-config",
+    "authz-domain",
+    "authz-postgres",
+    "bootstrap-postgres",
+    "brokered-egress-client",
+    "brokered-egress-domain",
+    "build-orchestrator",
+    "build-postgres",
+    "builder-catalog-application",
+    "builder-catalog-domain",
+    "builder-catalog-postgres",
+    "capability-audit",
+    "capability-audit-postgres",
+    "capability-domain",
+    "control-plane-postgres",
+    "event-application",
+    "event-postgres",
+    "forge-domain",
+    "forge-postgres",
+    "forge-service",
+    "gateway-domain",
+    "gateway-edge",
+    "gateway-postgres",
+    "git-capability-domain",
+    "git-credential-hephaestus",
+    "git-http",
+    "hephaestus-app",
+    "hephaestus-dev",
+    "identity-application",
+    "identity-domain",
+    "identity-oidc",
+    "identity-postgres",
+    "mailbox-dispatch",
+    "mailbox-domain",
+    "mailbox-postgres",
+    "oci-builder-postgres",
+    "oci-builder-runtime-local",
+    "oci-builder-worker",
+    "pat-domain",
+    "pat-postgres",
+    "registry-domain",
+    "registry-http",
+    "registry-notification",
+    "registry-notification-http",
+    "registry-postgres",
+    "registry-publisher",
+    "registry-reconciler",
+    "registry-release",
+    "registry-token",
+    "registry-zot",
+    "release-artifact-store",
+    "release-domain",
+    "release-postgres",
+    "release-service",
+    "review-domain",
+    "review-postgres",
+    "review-service",
+    "rpc-proto",
+    "run-domain",
+    "run-orchestrator",
+    "run-postgres",
+    "run-runtime-local",
+    "runtime-authority",
+    "runtime-authority-postgres",
+    "runtime-git-authority",
+    "runtime-git-authority-postgres",
+    "runtime-handoff-local",
+    "runtime-types",
+    "secret-application",
+    "secret-broker",
+    "secret-domain",
+    "secret-postgres",
+    "secret-runtime",
+    "secret-service",
+    "secret-store",
+    "vm-conformance",
+    "vm-fake",
+    "vm-libkrun",
+    "vm-trait",
+    "volume-local",
+    "volume-postgres",
+    "volume-trait",
+    "workspace-domain",
+    "workspace-local",
+    "workspace-postgres"
+  ],
+  "workspace_root": "/home/a/projects/hephaestus"
+}

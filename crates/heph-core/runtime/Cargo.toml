@@ -1,0 +1,18 @@
+[package]
+name = "heph-runtime"
+description = "Provider-neutral runtime contracts for Hephaestus"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+
+[package.metadata.hephaestus]
+layer = "port"
+context = "runtime"
+
+[dependencies]
+vm-trait.workspace = true
+volume-trait = { path = "volume/trait" }
+workspace-domain = { path = "workspace/domain" }
+
+[lints]
+workspace = true

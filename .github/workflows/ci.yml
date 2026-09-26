@@ -60,6 +60,9 @@ jobs:
       - name: UI installation RPC integration
         timeout-minutes: 5
         run: scripts/test-ui-installation-rpc.sh
+      - name: Artifact RPC deadline integration
+        timeout-minutes: 5
+        run: scripts/test-artifact-deadline-rpc.sh
       - name: Deferred update admission and reconciler race
         timeout-minutes: 15
         env:
@@ -234,7 +237,7 @@ jobs:
         run: |
           node --test --test-isolation=none --test-reporter=tap \
             web/assets/js/design_system/hooks/installed_ui_navigation_test.mjs \
-            crates/hephaestus-app/tests/ui_bootstrap_script.mjs \
+            crates/heph-app/tests/ui_bootstrap_script.mjs \
             e2e/playwright/cooking-tests/session-chat-concurrent-parser.test.mjs \
             e2e/playwright/reporter-tests/safe-installed-ui-reporter.test.mjs
       - name: Installed UI bridge protocol

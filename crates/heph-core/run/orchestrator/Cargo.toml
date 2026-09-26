@@ -1,0 +1,34 @@
+[package]
+name = "run-orchestrator"
+description = "Durable VM run orchestration for Hephaestus"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+
+[package.metadata.hephaestus]
+layer = "worker"
+context = "run"
+
+[dependencies]
+async-nats.workspace = true
+async-trait.workspace = true
+futures-util.workspace = true
+run-domain = { path = "../domain" }
+review-domain = { path = "../../forge/review/domain" }
+runtime-types = { path = "../../platform/runtime-types" }
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+time.workspace = true
+tokio = { workspace = true, features = ["rt", "sync", "time"] }
+tracing.workspace = true
+uuid.workspace = true
+vm-trait.workspace = true
+volume-trait = { path = "../../runtime/volume/trait" }
+workspace-domain = { path = "../../runtime/workspace/domain" }
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["macros", "rt-multi-thread", "test-util"] }
+
+[lints]
+workspace = true

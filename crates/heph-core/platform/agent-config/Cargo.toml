@@ -1,0 +1,25 @@
+[package]
+name = "agent-config"
+description = "Versioned parser and validator for repository agent.toml files"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+
+[package.metadata.hephaestus]
+layer = "application"
+context = "platform"
+
+[dependencies]
+capability-domain = { path = "../../authorization/capability-domain" }
+git-capability-domain = { path = "../../forge/git-capability" }
+forge-domain = { path = "../../forge/domain" }
+gateway-domain = { path = "../../gateway/domain" }
+release-domain = { path = "../../forge/release/domain" }
+serde.workspace = true
+serde_json.workspace = true
+sha2.workspace = true
+toml.workspace = true
+uuid.workspace = true
+
+[lints]
+workspace = true

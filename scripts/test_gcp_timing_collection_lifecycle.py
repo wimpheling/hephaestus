@@ -23,7 +23,7 @@ class TimingCollectionLifecycleTests(unittest.TestCase):
         with tempfile.TemporaryDirectory(prefix="heph-real-timer-lifecycle-") as directory:
             repo = Path(__file__).resolve().parent.parent
             root = Path(directory)
-            source = (repo / "crates/hephaestus-app/tests/golden.rs").read_text()
+            source = (repo / "crates/heph-app/tests/golden.rs").read_text()
             timer = source[
                 source.index("const WORKLOAD_PHASE_TIMING_EVENT"):
                 source.index("fn cooking_base_layout")

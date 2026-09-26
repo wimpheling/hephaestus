@@ -185,7 +185,7 @@ stdout_path="$probe_dir/passt.stdout"
 install -o "$probe_uid" -g "$probe_gid" -m 600 /dev/null "$stderr_path"
 install -o "$probe_uid" -g "$probe_gid" -m 600 /dev/null "$stdout_path"
 
-# Keep the control-socket arguments aligned with crates/vm-libkrun/src/network.rs.
+# Keep the control-socket arguments aligned with crates/heph-std/runtime/vm/libkrun/src/network.rs.
 # Debug is intentional here so the accepted-connection event is observable;
 # no forwarded ports means passt cannot expose or connect a test service.
 runuser -u "$probe_user" -- env HOME=/home/forge "$passt_binary" \

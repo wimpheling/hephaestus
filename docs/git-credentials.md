@@ -9,7 +9,7 @@ Install `git-credential-hephaestus` on the developer machine and register the
 helper globally:
 
 ```sh
-cargo install --path crates/git-credential-hephaestus
+cargo install --path crates/heph-core/identity/git-credential
 git config --global credential.helper hephaestus
 ```
 

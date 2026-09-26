@@ -1347,7 +1347,6 @@ dependencies = [
  "run-postgres",
  "runtime-git-authority",
  "runtime-git-authority-postgres",
- "runtime-handoff-local",
  "runtime-types",
  "serde_json",
  "serial_test",
@@ -1359,9 +1358,7 @@ dependencies = [
  "tokio",
  "tracing",
  "uuid",
- "vm-fake",
  "vm-trait",
- "volume-local",
  "volume-postgres",
 ]
 
@@ -1501,13 +1498,16 @@ name = "gateway-domain"
 version = "0.1.0"
 dependencies = [
  "async-trait",
+ "bytes",
  "capability-domain",
  "http",
  "serde",
  "serde_json",
  "sha2",
  "thiserror 2.0.19",
+ "time",
  "uuid",
+ "vm-trait",
 ]
 
 [[package]]
@@ -1548,7 +1548,6 @@ dependencies = [
  "forge-domain",
  "futures-util",
  "gateway-domain",
- "gateway-edge",
  "http",
  "identity-domain",
  "mailbox-dispatch",
@@ -1667,7 +1666,6 @@ dependencies = [
  "http",
  "identity-application",
  "identity-domain",
- "identity-oidc",
  "pat-domain",
  "pat-postgres",
  "runtime-git-authority",
@@ -2370,6 +2368,63 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "2304e00983f87ffb38b55b444b5e3b60a884b5d30c0fca7d82fe33449bbe55ea"
 
 [[package]]
+name = "heph-build"
+version = "0.1.0"
+dependencies = [
+ "async-trait",
+ "builder-catalog-domain",
+ "registry-domain",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.19",
+ "uuid",
+]
+
+[[package]]
+name = "heph-forge"
+version = "0.1.0"
+dependencies = [
+ "forge-domain",
+ "forge-service",
+]
+
+[[package]]
+name = "heph-run"
+version = "0.1.0"
+dependencies = [
+ "run-domain",
+ "run-orchestrator",
+]
+
+[[package]]
+name = "heph-runtime"
+version = "0.1.0"
+dependencies = [
+ "vm-trait",
+ "volume-trait",
+ "workspace-domain",
+]
+
+[[package]]
+name = "heph-secret"
+version = "0.1.0"
+dependencies = [
+ "async-trait",
+ "forge-domain",
+ "identity-domain",
+ "run-domain",
+ "run-orchestrator",
+ "runtime-types",
+ "secret-application",
+ "secret-domain",
+ "serde_json",
+ "thiserror 2.0.19",
+ "time",
+ "uuid",
+ "vm-trait",
+]
+
+[[package]]
 name = "hephaestus-app"
 version = "0.1.0"
 dependencies = [
@@ -2404,6 +2459,10 @@ dependencies = [
  "gateway-postgres",
  "git-capability-domain",
  "git-http",
+ "h2",
+ "heph-run",
+ "heph-runtime",
+ "heph-secret",
  "hmac",
  "http",
  "identity-application",
@@ -2478,6 +2537,7 @@ dependencies = [
  "vm-trait",
  "volume-local",
  "volume-postgres",
+ "volume-trait",
  "workspace-domain",
  "workspace-local",
  "workspace-postgres",
@@ -2765,7 +2825,6 @@ dependencies = [
  "git-http",
  "identity-application",
  "identity-domain",
- "identity-oidc",
  "jsonwebtoken",
  "serde_json",
  "serial_test",
@@ -3267,7 +3326,7 @@ dependencies = [
  "async-trait",
  "build-orchestrator",
  "builder-catalog-domain",
- "oci-builder-worker",
+ "heph-build",
  "registry-domain",
  "registry-postgres",
  "serde_json",
@@ -3303,6 +3362,7 @@ version = "0.1.0"
 dependencies = [
  "async-trait",
  "builder-catalog-domain",
+ "heph-build",
  "registry-domain",
  "registry-token",
  "serde",
@@ -4213,9 +4273,7 @@ dependencies = [
  "time",
  "tokio",
  "uuid",
- "vm-libkrun",
  "vm-trait",
- "volume-local",
  "volume-postgres",
  "volume-trait",
 ]
@@ -4562,6 +4620,7 @@ dependencies = [
  "capability-domain",
  "forge-domain",
  "gateway-domain",
+ "heph-secret",
  "http",
  "identity-domain",
  "release-domain",
@@ -4570,7 +4629,6 @@ dependencies = [
  "runtime-types",
  "secret-application",
  "secret-domain",
- "secret-runtime",
  "secret-store",
  "serde_json",
  "serial_test",
@@ -4587,19 +4645,10 @@ dependencies = [
 name = "secret-runtime"
 version = "0.1.0"
 dependencies = [
- "async-trait",
- "forge-domain",
- "identity-domain",
- "run-domain",
- "run-orchestrator",
+ "heph-secret",
  "runtime-types",
- "secret-application",
  "secret-domain",
- "secret-store",
- "serde_json",
  "tempfile",
- "thiserror 2.0.19",
- "time",
  "uuid",
  "vm-trait",
 ]
@@ -5801,7 +5850,6 @@ dependencies = [
  "time",
  "tokio",
  "uuid",
- "volume-local",
  "volume-trait",
 ]
 
@@ -6220,7 +6268,6 @@ dependencies = [
  "tokio",
  "uuid",
  "workspace-domain",
- "workspace-local",
 ]
 
 [[package]]

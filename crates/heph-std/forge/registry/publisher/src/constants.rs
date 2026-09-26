@@ -1,0 +1,10 @@
+pub const OCI_IMAGE_LAYOUT_VERSION: &str = "1.0.0";
+pub const OCI_INDEX_MEDIA_TYPE: &str = "application/vnd.oci.image.index.v1+json";
+pub const OCI_MANIFEST_MEDIA_TYPE: &str = "application/vnd.oci.image.manifest.v1+json";
+pub const SBOM_ARTIFACT_TYPE: &str = "application/spdx+json";
+pub const PROVENANCE_ARTIFACT_TYPE: &str = "application/vnd.in-toto+json";
+pub const SCAN_ARTIFACT_TYPE: &str = "application/vnd.hephaestus.vulnerability-scan.v1+json";
+pub const SIGNATURE_ARTIFACT_TYPE: &str = "application/vnd.dev.cosign.simplesigning.v1+json";
+pub const OCI_REFERENCE_NAME_ANNOTATION: &str = "org.opencontainers.image.ref.name";
+pub const MAX_REGISTRY_DOCUMENT_BYTES: usize = 4 * 1024 * 1024;
+pub const REGISTRY_REQUEST_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(30);
