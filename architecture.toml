@@ -14,6 +14,7 @@ enabled_rules = [
   "ARCH-FILESYSTEM-ONLY-IN-ADAPTERS",
   "ARCH-CORE-NO-STD-DEPENDENCIES",
   "ARCH-CRATE-LAYERS",
+  "ARCH-MAX-FILE-LENGTH",
   "DB-MIGRATIONS-ONLY-IN-MIGRATIONS",
   "DB-PAGINATION-STABLE-ORDER",
   "DB-RLS-CONTEXT-REQUIRED",
@@ -71,8 +72,8 @@ enabled_rules = [
   "UI-PAGE-IS-PURE",
 ]
 
-# ARCH-MAX-FILE-LENGTH consumes these values when its global migration is
-# complete. Keeping them here makes the eventual policy reviewable and avoids
+# ARCH-MAX-FILE-LENGTH is hard-enabled after the repository-wide migration.
+# Keeping these values here makes the active policy reviewable and avoids
 # layer-specific constants in checker code.
 [maximum_file_lines]
 domain = 350

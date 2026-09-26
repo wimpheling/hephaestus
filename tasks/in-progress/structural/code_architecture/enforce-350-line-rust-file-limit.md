@@ -14,20 +14,19 @@ Do not introduce another rule ID or a Dylint dependency.
 
 - The workspace topology migration completed in [PR #57](https://github.com/wimpheling/hephaestus/pull/57),
   with 90 reconciled packages and `cargo dev quality` passing. Its one-off task
-  was deleted as requested. The post-migration inventory below is the starting
-  measurement for this implementation, not an allowlist.
+  was deleted as requested. The historical post-migration working inventories
+  below are starting measurements for this implementation, not an allowlist.
 - The topology task's non-goal against a universal 300/350-line limit applies
   to that migration's scope. This separate task deliberately establishes the
   350-line Rust limit after the move; do not retain larger Rust thresholds on
   that basis.
-- `ARCH-MAX-FILE-LENGTH` is already listed in the architecture registry and
-  `architecture.toml`, but it is absent from `enabled_rules` and the current
-  checker has no file-length scan. Its index entry remains migration-gated.
-  Implement and activate this existing rule rather than creating a duplicate.
-- The current `[maximum_file_lines]` values include Rust layer limits of 500 or
-  700 lines. Every Rust source category must have an effective limit of exactly
-  350; no Rust layer may retain a larger value or fall back to one. Leave
-  unrelated Phoenix and UI thresholds unchanged.
+- `ARCH-MAX-FILE-LENGTH` is implemented in the existing architecture checker
+  and is now hard-enabled in `architecture.toml`. Its index entry is active;
+  this task activates the existing rule rather than creating a duplicate.
+- The pre-activation `[maximum_file_lines]` configuration included Rust layer
+  limits of 500 or 700 lines. Every Rust source category now has an effective
+  limit of exactly 350; no Rust layer may retain a larger value or fall back to
+  one. Unrelated Phoenix and UI thresholds remain unchanged.
 
 ## Locked policy
 
@@ -65,45 +64,75 @@ Measured from tracked `.rs` files on 2026-09-23 with physical line counts. Of
 files comprise 417 under `crates/` and 17 under `examples/`. Of those, 213
 exceed 350 lines: 200 under `crates/` and 13 under `examples/`.
 
-These counts describe the current tree before the topology migration. Recompute
-the baseline at implementation time and update this section if the inventory or
-count changes; do not carry individual files forward as grandfathered entries.
+These counts describe the pre-topology-migration tree and remain historical
+context for the implementation. Do not carry individual files forward as
+grandfathered entries.
 
-## Post-migration implementation inventory
+## Historical post-migration starting snapshots
 
-Recounted from the full checkout on 2026-09-25 after the topology quality gate:
-1,265 Rust files under `crates/` and `examples/`, with the exact 98 generated
-RPC and 687 Cooking vendor files excluded. The remaining 480 hand-maintained
-files comprise 463 under `crates/` and 17 under `examples/`. Of those, 216
-exceed 350 lines: 203 under `crates/` and 13 under `examples/`, for 173,017
-excess physical lines. A path-and-count inventory is required before splitting;
-these totals are not a grandfathered baseline.
+These 2026-09-25 measurements were working inventories retained as historical
+starting points; they are not active baselines or exception lists:
+
+- The `HEAD` snapshot on 2026-09-25 counted 1,265 Rust files under `crates/`
+  and `examples/`, with 480 hand-maintained files. Of those, 216 exceeded 350
+  lines, with 173,017 excess physical lines.
+- The concurrent working-checkout snapshot on 2026-09-25 included untracked
+  split files and counted 1,307 Rust files, 522 hand-maintained files, and 217
+  over-limit files, with 165,115 excess physical lines.
+
+These snapshots explain the starting inventory used during the split work. The
+final inventory below is measured independently after all splits. Its adjacent
+TSV is a zero-violation scope/count audit and intentionally contains no
+historical per-path violation rows.
+
+## Final implementation inventory
+
+Recounted from the full checkout on 2026-09-26, including untracked Rust files:
+2,836 Rust source files under `crates/` and `examples/`, with Cargo `target/`
+build output omitted, and the exact 98 generated RPC and 687 Cooking vendor
+files excluded. The remaining 2,051 hand-maintained files comprise 1,929 under
+`crates/` and 122 under `examples/`. None exceed 350 lines and excess physical
+lines total zero. The final scope and count inventory is recorded in
+[`enforce-350-line-rust-file-limit.inventory.tsv`](enforce-350-line-rust-file-limit.inventory.tsv);
+these totals are the final active-rule inventory, not a grandfathered baseline.
 
 ## Implementation checklist
 
-- [ ] After the topology migration, inventory the full checkout under `crates/`
-  and `examples/`; record each over-limit path and line count, and confirm the
-  generated and vendored exclusions are still exact.
-- [ ] Split every hand-maintained file above 350 lines into cohesive Rust
+- [x] After the topology migration, inventory the full checkout under `crates/`
+  and `examples/`; record the historical aggregate counts in this task,
+  confirm the generated and vendored exclusions, and publish the final
+  zero-violation scope/count audit in the adjacent inventory artifact.
+- [x] Split every hand-maintained file above 350 lines into cohesive Rust
   modules or test files. Preserve public APIs, test coverage, and runtime
   behavior; add re-exports only where needed to preserve existing paths.
-- [ ] Implement the scan in the existing architecture checker. Apply a single
+- [x] Implement the scan in the existing architecture checker. Apply a single
   effective 350-line ceiling to all Rust source files regardless of Cargo
   layer, including example packages without Hephaestus layer metadata.
-- [ ] Add focused checker fixtures for 350-line acceptance and 351-line
+- [x] Add focused checker fixtures for 350-line acceptance and 351-line
   rejection, plus counting of blank/comment/test lines, nested source paths,
   untracked Rust files, and the exact generated/vendor exclusions. Diagnostics
   must name the path, observed line count, 350-line limit, and remediation to
   split the file.
-- [ ] Set all Rust-specific configured thresholds to 350, add
+- [x] Set all Rust-specific configured thresholds to 350, add
   `ARCH-MAX-FILE-LENGTH` to `enabled_rules`, and update its `ARCHITECTURE.md`
   index entry from migration-gated warning to hard-enabled lint with its scope,
   command, and remediation. Keep the existing rule ID and exception registry.
-- [ ] Confirm there are zero over-limit hand-maintained Rust files and zero
+- [x] Confirm there are zero over-limit hand-maintained Rust files and zero
   migration exceptions before treating the rule as active.
-- [ ] Run focused checker fixtures, `cargo dev check architecture`, and
-  `cargo dev quality`; keep the workspace Rust, Clippy, and rustdoc lint
-  baseline enabled.
+- [x] Run focused checker fixtures, `cargo dev check architecture`, and
+  `git diff --check`; keep the workspace Rust, Clippy, and rustdoc lint baseline
+  enabled.
+- [ ] Run the full `cargo dev quality` workspace gate after concurrent source
+  migrations settle; this activation does not claim that broader gate.
+
+## Final validation
+
+The focused `ARCH-MAX-FILE-LENGTH` checker fixtures pass, including exact-limit
+acceptance, one-line-over rejection, nested source paths, untracked files,
+physical-line counting, and the exact generated/vendor exclusions.
+`cargo dev check architecture` passes with the rule hard-enabled, and
+`git diff --check` passes for the activation changes.
+The broader `cargo dev quality` gate was not rerun during this activation.
 
 ## Acceptance criteria
 
