@@ -1,4 +1,5 @@
 use super::{TEST_ROOT_IMAGE, TEST_SIGNING_SECRET};
+use heph_runtime::RootFilesystem;
 use hephaestus_app::{AppConfig, OidcConfig, RegistryConfig, RuntimePolicy, VmBackendConfig};
 use jsonwebtoken::Algorithm;
 use registry_domain::RegistryAuthority;
@@ -15,7 +16,6 @@ use std::{
     sync::Arc,
     time::Duration,
 };
-use vm_trait::RootFilesystem;
 use volume_local::LocalVolumeConfig;
 use workspace_local::{LocalWorkspaceConfig, WorkspaceLimits};
 

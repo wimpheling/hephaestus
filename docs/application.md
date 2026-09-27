@@ -3,6 +3,26 @@
 `hephaestus-app` is the internal production composition root.
 `hephaestusd` is its runnable daemon; it is not a public SDK.
 
+## Context facades and composition leaves
+
+The five context facades are the supported contract seams: [`heph-secret`](../crates/heph-core/secret/), [`heph-runtime`](../crates/heph-core/runtime/), [`heph-run`](../crates/heph-core/run/), [`heph-forge`](../crates/heph-core/forge/), and [`heph-build`](../crates/heph-core/forge/build/). The app directly uses the first four for provider-neutral types; the OCI build adapters use `heph-build` while the app composes their concrete workers. The direct workspace dependencies in [`crates/heph-app/Cargo.toml`](../crates/heph-app/Cargo.toml) below remain because the current facade deliberately does not expose the required implementation, transport, persistence, or subcontext API.
+
+| Direct leaves | Composition reason |
+| --- | --- |
+| `vm-fake`, `vm-libkrun`, `volume-local`, `volume-postgres`, `workspace-local`, `workspace-postgres` | The app selects VM and local filesystem providers and constructs their PostgreSQL metadata adapters; `heph-runtime` exposes only provider-neutral contracts. |
+| `run-orchestrator`, `run-postgres`, `run-runtime-local` | The app installs NATS command handlers/topology, the PostgreSQL run repository, and local run materialization/configuration; `heph-run` intentionally omits those concrete adapters. |
+| `secret-broker`, `secret-runtime`, `secret-postgres`, `secret-application`, `secret-domain`, `secret-store` | The app wires the private broker transport, filesystem mount provider, PostgreSQL services, secret command/domain types, and encrypted key store; `heph-secret` exposes only the mount lifecycle contracts and manager. |
+| `forge-service`, `forge-postgres`, `git-http`, `git-capability-domain`, `pat-domain`, `pat-postgres` | The app needs bare Git storage, forge NATS publication, the smart-HTTP transport, Git capability rules, and PAT services. `heph-forge` intentionally excludes storage, event publishers, transport representations, and PAT material. |
+| `release-service`, `release-artifact-store`, `release-domain`, `release-postgres`, `review-domain`, `review-postgres`, `review-service` | Release and review are forge subcontexts with their own application contracts, immutable artifact storage, PostgreSQL adapters, and durable control services; they are outside the top-level forge facade. |
+| `registry-domain`, `registry-http`, `registry-notification`, `registry-notification-http`, `registry-postgres`, `registry-publisher`, `registry-reconciler`, `registry-token`, `registry-zot` | Registry contracts, notification and token transports, PostgreSQL state, reconciliation, and Zot/publisher integrations are a separate forge subcontext and require direct composition. |
+| `build-orchestrator`, `build-postgres`, `oci-builder-postgres`, `oci-builder-runtime-local`, `oci-builder-worker` | `heph-build` supplies build DTOs and ports; the app must select the concrete build executor, PostgreSQL job stores, local OCI runtime, and worker implementations. |
+| `builder-catalog-application`, `builder-catalog-domain`, `builder-catalog-postgres` | These are image-catalog APIs used by the catalog RPC and root-image setup, outside the build facade. |
+| `runtime-types` | Shared platform identifiers such as `RunId` and `CommandId` are intentionally not re-exported by a context facade. |
+
+Other direct packages in the manifest belong to independent platform, authorization, control-plane, event, gateway, identity, mailbox, RPC, or runtime-authority contexts and therefore are not replaceable by these five facades. `forge-domain`, `run-domain`, `vm-trait`, `workspace-domain`, and `volume-trait` have no remaining app dependency edge; their app callers use the corresponding facade.
+
+The independent direct packages are `agent-config`, `rpc-proto`, `capability-domain`, `authz-domain`, `authz-postgres`, `runtime-authority`, `runtime-authority-postgres`, `runtime-handoff-local`, `runtime-git-authority`, `runtime-git-authority-postgres`, `control-plane-postgres`, `event-application`, `event-postgres`, `gateway-domain`, `gateway-edge`, `gateway-postgres`, `identity-domain`, `identity-application`, `identity-oidc`, `identity-postgres`, `mailbox-domain`, `mailbox-dispatch`, `mailbox-postgres`, and the dev-only `brokered-egress-domain`. They provide their own platform schema, generated transport, authorization, persistence, event, gateway, identity, mailbox, or runtime-authority boundaries.
+
 ## Lifecycle
 
 `HephaestusApp::build` validates static configuration, checks that PostgreSQL

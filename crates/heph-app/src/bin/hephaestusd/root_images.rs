@@ -1,4 +1,5 @@
 use builder_catalog_domain::OciImageReference;
+use heph_runtime::{DiskFormat, RootFilesystem};
 use serde::Deserialize;
 use std::{
     collections::BTreeMap,
@@ -7,7 +8,6 @@ use std::{
     ffi::OsString,
     path::{Path, PathBuf},
 };
-use vm_trait::{DiskFormat, RootFilesystem};
 
 const ROOT_IMAGE_MANIFEST_VERSION: u32 = 1;
 

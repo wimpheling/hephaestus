@@ -1,9 +1,13 @@
 //! Opt-in full Phase 1B persistence test requiring KVM and `PostgreSQL`.
 
 use authz_postgres::PostgresMelangeAuthorizer;
+use heph_run::{Run, RunKind, RunOutcome, RunState, StartRun};
+use heph_runtime::VolumeStore;
+use heph_runtime::{
+    GuestCommand, NetworkMode, RootFilesystem, VmError, VmId, VmProvider, VmResources, VmSpec,
+};
 use release_domain::AgentUpdateId;
 use release_postgres::{ReleaseService, UpdateDecision};
-use run_domain::{Run, RunKind, RunOutcome, RunState, StartRun};
 use run_orchestrator::{RepositoryError, RunOrchestrator, RunRepository, VmSpecFactory};
 use run_postgres::PgRunRepository;
 use runtime_types::{
@@ -20,12 +24,8 @@ use std::{
     time::{Duration, Instant},
 };
 use vm_libkrun::{LibkrunConfig, LibkrunProvider};
-use vm_trait::{
-    GuestCommand, NetworkMode, RootFilesystem, VmError, VmId, VmProvider, VmResources, VmSpec,
-};
 use volume_local::{LocalVolumeConfig, LocalVolumeStore};
 use volume_postgres::PostgresVolumeMetadataRepository;
-use volume_trait::VolumeStore;
 
 const ENABLE_FLAG: &str = "HEPHAESTUS_PHASE1B_INTEGRATION";
 

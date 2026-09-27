@@ -4,7 +4,7 @@ use crate::{
     gateway_service_log_rpc,
 };
 #[cfg(feature = "test-fixtures")]
-use forge_domain::ProjectId;
+use heph_forge::ProjectId;
 #[cfg(feature = "test-fixtures")]
 use identity_domain::{BrowserSessionSid, UserId};
 #[cfg(feature = "test-fixtures")]

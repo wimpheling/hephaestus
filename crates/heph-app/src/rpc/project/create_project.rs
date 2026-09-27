@@ -1,7 +1,7 @@
 use super::{ProjectRpc, map_forge_error, opaque};
 use crate::rpc::{into_connect_error, request};
 use connectrpc::{ConnectError, RequestContext, Response, ServiceRequest, ServiceResult};
-use forge_domain::OrganizationId;
+use heph_forge::OrganizationId;
 use rpc_proto::messages::hephaestus::project::v1::{CreateProjectRequest, CreateProjectResponse};
 use std::future::Future;
 

@@ -1,9 +1,13 @@
 //! Opt-in exact-commit and controlled-result integration coverage.
 
-use forge_domain::{CommitSha, GitRef, OrganizationId, ReceiveId, RefUpdate};
 use forge_postgres::PgForgeRepository;
 use forge_service::{CreateRepository, GitStorage};
-use run_domain::StartRun;
+use heph_forge::{CommitSha, GitRef, OrganizationId, ReceiveId, RefUpdate};
+use heph_run::StartRun;
+use heph_runtime::{
+    ResultRepository, RunWorkspaceManager, RuntimeGitWorkspaceRequest, WorkspaceMetadata,
+    WorkspaceMetadataRepository,
+};
 use run_orchestrator::{RunRepository, RunRuntimeCatalog};
 use run_postgres::PgRunRepository;
 use serial_test::serial;
@@ -15,10 +19,6 @@ use std::{
 };
 use tokio::process::Command;
 use uuid::Uuid;
-use workspace_domain::{
-    ResultRepository, RunWorkspaceManager, RuntimeGitWorkspaceRequest, WorkspaceMetadata,
-    WorkspaceMetadataRepository,
-};
 use workspace_local::{LocalWorkspaceConfig, LocalWorkspaceManager, WorkspaceLimits};
 use workspace_postgres::PgWorkspaceMetadataRepository;
 

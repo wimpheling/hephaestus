@@ -1,8 +1,8 @@
 use super::{RepositoryRpc, map_forge_error, opaque};
 use crate::rpc::{RpcError, into_connect_error, request};
 use connectrpc::{RequestContext, Response, ServiceRequest, ServiceResult};
-use forge_domain::{GitRef, ProjectId};
 use forge_service::CreateRepository;
+use heph_forge::{GitRef, ProjectId};
 use rpc_proto::messages::hephaestus::repository::v1::{
     CreateRepositoryRequest, CreateRepositoryResponse,
 };

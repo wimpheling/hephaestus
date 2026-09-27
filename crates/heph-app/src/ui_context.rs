@@ -193,7 +193,7 @@ mod tests {
     use async_trait::async_trait;
     use axum::{body::to_bytes, extract::ConnectInfo, http::header};
     use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD};
-    use forge_domain::OrganizationId;
+    use heph_forge::OrganizationId;
     use identity_domain::UserId;
     use release_domain::{
         UiInstallationGenerationId, UiInstallationId,
@@ -254,7 +254,7 @@ mod tests {
             Arc::new(Projection {
                 target: UiBrowserTargetContext {
                     context,
-                    repository_id: forge_domain::RepositoryId::new(),
+                    repository_id: heph_forge::RepositoryId::new(),
                 },
             }),
             UiNamespace::parse("ui.example.test").expect("namespace"),

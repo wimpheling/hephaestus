@@ -4,11 +4,11 @@ use crate::ui_browser_content::{UiGatewayDispatchAuthority, UiGatewayDispatcher}
 use async_trait::async_trait;
 use axum::{Router, body::Body, routing::get};
 use bytes::Bytes;
-use forge_domain::OrganizationId;
 use gateway_edge::{
     UiDispatchResult, UiGatewayAdmission, UiGatewayAdmissionError, UiGatewayAdmissionProvider,
     UiGatewayRequest, UiGatewayRequestKind,
 };
+use heph_forge::OrganizationId;
 use http::{HeaderMap, StatusCode};
 use identity_domain::{RequestId, UserId};
 use release_domain::{

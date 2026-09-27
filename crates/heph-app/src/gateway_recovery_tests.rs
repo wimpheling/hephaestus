@@ -24,6 +24,11 @@ use gateway_postgres::{
     PostgresGatewayEdgeAuthority, PostgresGatewayServiceFailureStore,
     PostgresGatewayServiceLogStore, PostgresGatewayServiceOwnership, PostgresGatewayServiceTargets,
 };
+use heph_runtime::{
+    BoxedPrivateServiceConnection, GuestCommand, NetworkMode, PrivateHttpRequest,
+    PrivateHttpResponse, PrivateHttpServiceSpec, RootFilesystem, StopMode, VmError, VmEvent, VmId,
+    VmInstance, VmProvider, VmResources, VmSpec,
+};
 use http::{HeaderMap, StatusCode};
 use serial_test::serial;
 use sqlx::postgres::{PgConnectOptions, PgPoolOptions};
@@ -42,11 +47,6 @@ use time::{Duration, OffsetDateTime};
 use tokio_util::sync::CancellationToken;
 use uuid::Uuid;
 use vm_fake::FakeProvider;
-use vm_trait::{
-    BoxedPrivateServiceConnection, GuestCommand, NetworkMode, PrivateHttpRequest,
-    PrivateHttpResponse, PrivateHttpServiceSpec, RootFilesystem, StopMode, VmError, VmEvent, VmId,
-    VmInstance, VmProvider, VmResources, VmSpec,
-};
 
 /// Provider and fixture test doubles.
 #[path = "gateway_recovery_tests/provider_support.rs"]

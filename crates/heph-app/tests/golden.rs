@@ -1,12 +1,15 @@
 //! Opt-in daemon-level golden path through every production boundary.
 
+extern crate heph_forge as forge_domain;
+
 use authz_postgres::PostgresMelangeAuthorizer;
 use brokered_egress_domain::{
     BrokeredSecretRule, BrokeredSecretRuleId, ExactHttpsOrigin, HeaderName, HttpInjectionLocation,
 };
-use forge_domain::{GitRef, OrganizationId, ProjectId};
 use forge_postgres::PgForgeRepository;
 use forge_service::{CreateRepository, GitStorage};
+use heph_forge::{GitRef, OrganizationId, ProjectId};
+use heph_runtime::RootFilesystem;
 use hephaestus_app::{
     AppConfig, GatewayEdgeConfig, HephaestusApp, OciBuilderWorkerConfig, OidcConfig,
     RegistryConfig, RunEventKind, UiOriginConfig, VmBackendConfig,
@@ -67,7 +70,6 @@ use tokio::{
 };
 use tokio_rustls::TlsAcceptor;
 use url::Url;
-use vm_trait::RootFilesystem;
 use volume_local::LocalVolumeConfig;
 use workspace_local::{LocalWorkspaceConfig, WorkspaceLimits};
 

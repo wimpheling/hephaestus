@@ -215,7 +215,7 @@ pub fn oci_builder_from_environment(
         verification_root,
         scratch_root: path("HEPHAESTUS_OCI_BUILDER_SCRATCH_ROOT")?,
         mkfs_ext4: path_or("HEPHAESTUS_MKFS_EXT4", "/usr/sbin/mkfs.ext4"),
-        vm_resources: vm_trait::VmResources {
+        vm_resources: heph_runtime::VmResources {
             vcpus: optional_u64("HEPHAESTUS_OCI_BUILDER_VM_VCPUS", 1)?.try_into()?,
             memory_mib: optional_u64("HEPHAESTUS_OCI_BUILDER_VM_MEMORY_MIB", 1024)?.try_into()?,
         },

@@ -19,7 +19,7 @@ from typing import Any
 REPOSITORY_ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_BASELINE = (
     REPOSITORY_ROOT
-    / "tasks/in-progress/structural/code_architecture/workspace-package-inventory.before.json"
+    / "docs/workspace-topology-migration/workspace-package-inventory.before.json"
 )
 EXPECTED_FACADES = {
     "heph-secret",
@@ -35,6 +35,12 @@ EXPECTED_FACADE_TEST_TARGETS = {
     ("heph-run", "api"),
     ("heph-runtime", "api"),
     ("heph-secret", "api"),
+}
+# These focused tests were added by the architecture audit after the baseline
+# capture; they are new coverage, rather than relocated baseline targets.
+EXPECTED_ADDITIONAL_TEST_TARGETS = {
+    ("control-plane-postgres", "organization_pagination"),
+    ("hephaestus-app", "artifact_deadline_cancellation"),
 }
 ALLOWED_ARCHITECTURE_METADATA_DELTA = {
     "package": "git-http",
@@ -295,7 +301,10 @@ def reconcile(
             f"removed integration-test target {package}::{target}"
             for package, target in sorted(removed_tests)
         )
-    for target in EXPECTED_FACADE_TEST_TARGETS & added_tests:
+    expected_added_tests = (
+        EXPECTED_FACADE_TEST_TARGETS | EXPECTED_ADDITIONAL_TEST_TARGETS
+    )
+    for target in expected_added_tests & added_tests:
         identity = current_tests[target]
         if identity.get("crate_types") == ["bin"] and identity.get("kind") == ["test"]:
             added_tests.remove(target)

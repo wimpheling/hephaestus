@@ -35,8 +35,8 @@ async fn postgres_authorizer_allows_reads_and_rejects_push_without_write() {
     let owner = UserId::new();
     let member = UserId::new();
     let organization = OrganizationId::new();
-    let project = forge_domain::ProjectId::new();
-    let repository = forge_domain::RepositoryId::new();
+    let project = heph_forge::ProjectId::new();
+    let repository = heph_forge::RepositoryId::new();
     for (user, name) in [(owner, "owner"), (member, "member")] {
         sqlx::query("INSERT INTO users (id, display_name) VALUES ($1, $2)")
             .bind(user.as_uuid())

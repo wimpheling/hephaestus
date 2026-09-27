@@ -2,9 +2,9 @@ use super::{
     AGENT_PATHS, BUILD_PATHS, CommandClass, CommandSummary, DiskSummary, GATEWAY_PATHS,
     MountSummary, NetworkSummary, VmSpecSummary,
 };
+use heph_runtime::{NetworkMode, RootFilesystem, VmError, VmId, VmSpec};
 use sha2::{Digest, Sha256};
 use uuid::Uuid;
-use vm_trait::{NetworkMode, RootFilesystem, VmError, VmId, VmSpec};
 
 pub fn summarize_spec(spec: &VmSpec, patterns: &[Vec<u8>]) -> Result<VmSpecSummary, VmError> {
     let vm_id = safe_vm_id(&spec.id, patterns)?;

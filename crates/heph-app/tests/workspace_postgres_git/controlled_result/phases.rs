@@ -1,6 +1,6 @@
 use super::*;
 
-async fn prepare_initial(ctx: &ControlledFixture) -> workspace_domain::PublishedResult {
+async fn prepare_initial(ctx: &ControlledFixture) -> heph_runtime::PublishedResult {
     let prepared = ctx
         .manager
         .prepare(&ctx.run)
@@ -58,7 +58,7 @@ async fn prepare_initial(ctx: &ControlledFixture) -> workspace_domain::Published
     published
 }
 
-async fn assert_published(ctx: &ControlledFixture, published: &workspace_domain::PublishedResult) {
+async fn assert_published(ctx: &ControlledFixture, published: &heph_runtime::PublishedResult) {
     assert_eq!(
         git_output_bare(&ctx.bare, &["rev-parse", &published.result_ref]).await,
         published.result_commit
@@ -132,10 +132,7 @@ async fn assert_published(ctx: &ControlledFixture, published: &workspace_domain:
 // Recovery and rejection share the same persisted result graph; keeping these
 // phases together preserves the crash-recovery ordering under test.
 #[allow(clippy::too_many_lines)]
-async fn recover_and_reject(
-    ctx: &ControlledFixture,
-    published: &workspace_domain::PublishedResult,
-) {
+async fn recover_and_reject(ctx: &ControlledFixture, published: &heph_runtime::PublishedResult) {
     let duplicate = ctx
         .manager
         .finalize(&ctx.run, "ignored retry message")

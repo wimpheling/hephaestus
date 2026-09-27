@@ -101,6 +101,9 @@ implementations:
 Context facades are the intended entry points for cross-context APIs. Keep
 provider wiring in the concrete adapters beneath them:
 
+The [workspace topology migration record](docs/workspace-topology-migration.md)
+reconciles the original packages with this layout and records its verification.
+
 - [`heph-secret`](crates/heph-core/secret/) groups secret contracts and the
   [`secret-postgres`](crates/heph-core/secret/postgres) adapter; host adapters
   live in [`secret-runtime`](crates/heph-std/secret/runtime) and

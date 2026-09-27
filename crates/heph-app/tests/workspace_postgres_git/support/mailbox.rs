@@ -10,7 +10,7 @@ pub async fn assert_mailbox_target_survives_ref_movement(
     newer: &CommitSha,
     project: Uuid,
     repository: Uuid,
-) -> run_domain::Run {
+) -> heph_run::Run {
     let command = StartRun {
         command_id: runtime_types::CommandId::new(),
         run_id: runtime_types::RunId::new(),
@@ -79,7 +79,7 @@ pub async fn assert_mailbox_target_survives_ref_movement(
 pub async fn assert_mailbox_result_proposal(
     pool: &PgPool,
     manager: &LocalWorkspaceManager,
-    run: &run_domain::Run,
+    run: &heph_run::Run,
     accepted: &CommitSha,
 ) {
     let prepared = manager.prepare(run).await.expect("mailbox exact workspace");

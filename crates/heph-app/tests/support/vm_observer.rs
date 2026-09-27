@@ -6,11 +6,11 @@
 //! never retained in the summaries.
 
 use async_trait::async_trait;
+use heph_runtime::{VmError, VmId, VmInstance, VmProvider, VmSpec};
 use std::{
     collections::HashSet,
     sync::{Arc, Mutex},
 };
-use vm_trait::{VmError, VmId, VmInstance, VmProvider, VmSpec};
 
 const AGENT_PATHS: [&str; 5] = [
     "/release",

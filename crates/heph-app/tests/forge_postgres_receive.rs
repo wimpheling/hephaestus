@@ -1,17 +1,18 @@
 //! Opt-in `PostgreSQL` and `JetStream` receive-processing coverage.
 
 use authz_postgres::PostgresMelangeAuthorizer;
-use forge_domain::{
-    CommitSha, GitRef, OrganizationId, ReceiveId, RefUpdate, Repository, RuntimeReceiveProvenance,
-};
 use forge_postgres::PgForgeRepository;
 use forge_service::{
     BUILD_REQUESTED_SUBJECT, CreateRepository, ForgeNatsOutboxPublisher, GitStorage,
     INSTANCE_RUN_REQUESTED_SUBJECT, RUN_START_SUBJECT, ensure_forge_jetstream_topology,
 };
 use futures_util::StreamExt;
+use heph_forge::{
+    CommitSha, GitRef, OrganizationId, ReceiveId, RefUpdate, Repository, RuntimeReceiveProvenance,
+};
+use heph_run::{CancelRun, Run, RunState, StartRun};
+use heph_runtime::{GuestCommand, NetworkMode, RootFilesystem, VmError, VmId, VmResources, VmSpec};
 use identity_domain::{AuthenticatedIdentity, RequestId, UserId};
-use run_domain::{CancelRun, Run, RunState, StartRun};
 use run_orchestrator::{
     NatsCommandHandler, RunOrchestrator, RunRepository, VmSpecFactory, ensure_jetstream_topology,
 };
@@ -24,7 +25,6 @@ use std::{collections::BTreeMap, path::Path, sync::Arc, time::Duration};
 use tokio::process::Command;
 use uuid::Uuid;
 use vm_fake::FakeProvider;
-use vm_trait::{GuestCommand, NetworkMode, RootFilesystem, VmError, VmId, VmResources, VmSpec};
 use volume_local::{LocalVolumeConfig, LocalVolumeStore};
 use volume_postgres::PostgresVolumeMetadataRepository;
 

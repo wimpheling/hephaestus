@@ -5,8 +5,8 @@ use super::*;
 #[allow(clippy::too_many_lines)]
 pub async fn seed_attached_instance(
     pool: &PgPool,
-    project_id: forge_domain::ProjectId,
-    repository_id: forge_domain::RepositoryId,
+    project_id: heph_forge::ProjectId,
+    repository_id: heph_forge::RepositoryId,
     commit: &str,
 ) {
     let configuration = agent_config(repository_id);

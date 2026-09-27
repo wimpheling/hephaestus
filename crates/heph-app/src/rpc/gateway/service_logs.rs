@@ -9,6 +9,7 @@ use gateway_edge::{
     GatewayServiceLogReadRecord, GatewayServiceLogReadRequest, GatewayServiceLogReadScope,
 };
 use gateway_postgres::GatewayServiceLogReaderError;
+use heph_runtime::LogStream;
 use rpc_proto::messages::hephaestus::{
     common::v1::Cursor,
     gateway::v1::{
@@ -16,7 +17,6 @@ use rpc_proto::messages::hephaestus::{
         GatewayServiceLogStream, ListGatewayServiceLogsRequest, ListGatewayServiceLogsResponse,
     },
 };
-use vm_trait::LogStream;
 
 pub(super) async fn handle(
     rpc: &GatewayRpc,

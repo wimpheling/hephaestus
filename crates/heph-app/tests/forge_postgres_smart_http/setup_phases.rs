@@ -38,9 +38,9 @@ pub(super) async fn seed_repository_graph(
 ) -> (
     UserId,
     AuthenticatedIdentity,
-    forge_domain::Project,
-    forge_domain::Repository,
-    forge_domain::Repository,
+    heph_forge::Project,
+    heph_forge::Repository,
+    heph_forge::Repository,
 ) {
     let organization_id = OrganizationId::new();
     let user_id = UserId::new();
@@ -118,7 +118,7 @@ pub(super) async fn start_http(
     pool: &PgPool,
     storage: &Arc<GitStorage>,
     repository_service: &Arc<PgForgeRepository>,
-    repository: &forge_domain::Repository,
+    repository: &heph_forge::Repository,
     identity: &AuthenticatedIdentity,
 ) -> (
     Arc<RecordingAuthorizer>,
@@ -188,8 +188,8 @@ pub(super) async fn start_http(
 pub(super) async fn seed_git(
     pool: &PgPool,
     temporary: &tempfile::TempDir,
-    project: &forge_domain::Project,
-    repository: &forge_domain::Repository,
+    project: &heph_forge::Project,
+    repository: &heph_forge::Repository,
     user_id: UserId,
     basic_credential: &str,
     remote: &str,

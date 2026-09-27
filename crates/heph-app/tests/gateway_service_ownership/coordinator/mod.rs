@@ -18,6 +18,11 @@ use gateway_postgres::{
     PostgresGatewayServiceFailureStore, PostgresGatewayServiceOwnership,
     PostgresGatewayServiceTargets,
 };
+use heph_runtime::{
+    BoxedPrivateServiceConnection, GuestCommand, NetworkMode, PrivateHttpServiceSpec,
+    RootFilesystem, StopMode, VmError, VmEvent, VmExit, VmId, VmInstance, VmProvider, VmResources,
+    VmSpec,
+};
 use http::{HeaderMap, Method, StatusCode};
 use sqlx::{PgPool, postgres::PgPoolOptions};
 use std::{
@@ -36,11 +41,6 @@ use tokio::{
     time::{Instant, timeout},
 };
 use uuid::Uuid;
-use vm_trait::{
-    BoxedPrivateServiceConnection, GuestCommand, NetworkMode, PrivateHttpServiceSpec,
-    RootFilesystem, StopMode, VmError, VmEvent, VmExit, VmId, VmInstance, VmProvider, VmResources,
-    VmSpec,
-};
 
 fn coordinator_policy(
     instance: ServiceInstancePolicy,

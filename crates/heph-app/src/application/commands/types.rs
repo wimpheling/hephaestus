@@ -1,7 +1,7 @@
 //! Typed internal command vocabulary.
 
 use capability_domain::{CapabilityOperation, CapabilityResource, CapabilitySlotKey};
-use forge_domain::{ProjectId, RepositoryId};
+use heph_forge::{ProjectId, RepositoryId};
 use release_domain::{
     AgentAttachmentId, AgentInstanceId, AgentInstanceRevisionId, AgentUpdateId, InstanceName,
     ParameterName, ParameterValue, RefSelector, ReleaseAgentId, RuntimePolicy, TriggerPolicy,

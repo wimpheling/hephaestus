@@ -2,6 +2,7 @@
 
 //! Disposable application fixture for browser-session transport acceptance.
 
+use heph_runtime::RootFilesystem;
 use hephaestus_app::{AppConfig, OidcConfig, RegistryConfig, RuntimePolicy, VmBackendConfig};
 use jsonwebtoken::Algorithm;
 use registry_domain::RegistryAuthority;
@@ -19,7 +20,6 @@ use std::{
     time::Duration,
 };
 use url::Url;
-use vm_trait::RootFilesystem;
 use volume_local::LocalVolumeConfig;
 use workspace_local::{LocalWorkspaceConfig, WorkspaceLimits};
 

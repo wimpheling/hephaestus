@@ -6,8 +6,8 @@ pub struct ControlledFixture {
     pub root: PathBuf,
     pub _repository_root: PathBuf,
     pub forge: PgForgeRepository,
-    pub _project: forge_domain::Project,
-    pub repository: forge_domain::Repository,
+    pub _project: heph_forge::Project,
+    pub repository: heph_forge::Repository,
     pub _work: PathBuf,
     pub accepted: CommitSha,
     pub newer: CommitSha,
@@ -15,8 +15,8 @@ pub struct ControlledFixture {
     pub runs: PgRunRepository,
     pub _workspace_repository: Arc<PgWorkspaceMetadataRepository>,
     pub manager: LocalWorkspaceManager,
-    pub _mailbox_run: run_domain::Run,
-    pub run: run_domain::Run,
+    pub _mailbox_run: heph_run::Run,
+    pub run: heph_run::Run,
 }
 
 // This fixture keeps the complete PostgreSQL, Git, and workspace graph together

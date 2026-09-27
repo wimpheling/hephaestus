@@ -8,7 +8,7 @@ use super::ReleaseRpc;
 use crate::rpc::auth::{UiHandoffAuditMarker, append_ui_request_audit_bounded};
 use crate::rpc::{RpcError, into_connect_error, mutation_receipt, request};
 use connectrpc::{RequestContext, Response, ServiceRequest, ServiceResult};
-use forge_domain::OrganizationId;
+use heph_forge::OrganizationId;
 use identity_domain::UserId;
 use release_domain::{
     UiInstallationCallerKey, UiInstallationGenerationId, UiInstallationId, UiInstallationState,

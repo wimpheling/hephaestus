@@ -3,13 +3,13 @@ use super::super::{
 };
 use super::summarize_spec;
 use async_trait::async_trait;
-use std::{collections::BTreeMap, path::PathBuf, sync::Arc};
-use tempfile::TempDir;
-use vm_fake::FakeProvider;
-use vm_trait::{
+use heph_runtime::{
     GuestCommand, NetworkMode, RootFilesystem, VmError, VmId, VmInstance, VmProvider, VmResources,
     VmSpec,
 };
+use std::{collections::BTreeMap, path::PathBuf, sync::Arc};
+use tempfile::TempDir;
+use vm_fake::FakeProvider;
 
 fn spec(root: &TempDir) -> VmSpec {
     VmSpec {
@@ -62,7 +62,7 @@ async fn rejects_missing_mount_without_disclosing_path() {
     let observer = VmSpecObserver::new(Arc::new(FakeProvider::new()), vec![b"fixture".to_vec()])
         .expect("patterns");
     let mut invalid = spec(&root);
-    invalid.mounts.push(vm_trait::VmMount {
+    invalid.mounts.push(heph_runtime::VmMount {
         tag: String::from("bad"),
         host_path: root.path().join("missing-host-path"),
         guest_path: PathBuf::from("/unexpected/guest-path"),
@@ -147,7 +147,7 @@ async fn rejects_extra_disk_and_writable_source_from_contract_summary() {
     let observer = VmSpecObserver::new(Arc::new(FakeProvider::new()), vec![b"fixture".to_vec()])
         .expect("patterns");
     let mut invalid = spec(&root);
-    invalid.mounts.push(vm_trait::VmMount {
+    invalid.mounts.push(heph_runtime::VmMount {
         tag: String::from("source"),
         host_path: root.path().to_owned(),
         guest_path: PathBuf::from("/workspace/source"),
@@ -155,10 +155,10 @@ async fn rejects_extra_disk_and_writable_source_from_contract_summary() {
     });
     let disk = root.path().join("extra.raw");
     std::fs::write(&disk, b"disk").expect("disk");
-    invalid.disks.push(vm_trait::VmDisk {
+    invalid.disks.push(heph_runtime::VmDisk {
         id: String::from("foreign-disk"),
         host_path: disk,
-        format: vm_trait::DiskFormat::Raw,
+        format: heph_runtime::DiskFormat::Raw,
         read_only: false,
     });
     observer.provision(invalid).await.expect("record");

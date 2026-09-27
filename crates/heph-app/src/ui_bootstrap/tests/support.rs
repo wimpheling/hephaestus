@@ -64,7 +64,7 @@ impl UiBrowserSessionStore for FakeSessions {
                 session_id: UiBrowserSessionId::from_uuid(Uuid::new_v4()),
                 parent_session_id: identity_domain::BrowserSessionId::from_uuid(Uuid::new_v4()),
                 actor_id: identity_domain::UserId::from_uuid(Uuid::new_v4()),
-                organization_id: forge_domain::OrganizationId::from_uuid(Uuid::new_v4()),
+                organization_id: heph_forge::OrganizationId::from_uuid(Uuid::new_v4()),
                 installation_id: UiInstallationId::from_uuid(Uuid::new_v4()),
                 generation_id: command.expected_generation_id,
                 route: UiBrowserRoute::parse("schema-ui").expect("route"),

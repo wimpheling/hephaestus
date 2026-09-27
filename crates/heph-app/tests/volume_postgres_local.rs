@@ -1,5 +1,6 @@
 //! Opt-in `PostgreSQL` integration coverage for the local volume store.
 
+use heph_runtime::{VolumeError, VolumeState, VolumeStore};
 use runtime_types::{AgentInstanceId, RunId};
 use sqlx::postgres::PgPoolOptions;
 use std::{env, path::PathBuf, sync::Arc, time::Duration};
@@ -7,7 +8,6 @@ use tempfile::TempDir;
 use time::OffsetDateTime;
 use volume_local::{LocalVolumeConfig, LocalVolumeStore};
 use volume_postgres::PostgresVolumeMetadataRepository;
-use volume_trait::{VolumeError, VolumeState, VolumeStore};
 
 #[tokio::test]
 async fn creates_formats_leases_rejects_and_recovers() {

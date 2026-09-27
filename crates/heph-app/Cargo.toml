@@ -39,10 +39,10 @@ bytes.workspace = true
 event-application = { path = "../heph-core/event/application" }
 event-postgres = { path = "../heph-core/event/postgres" }
 forge-service = { path = "../heph-core/forge/service" }
+heph-forge = { path = "../heph-core/forge" }
 heph-runtime = { path = "../heph-core/runtime" }
 heph-secret = { path = "../heph-core/secret" }
 forge-postgres = { path = "../heph-core/forge/postgres" }
-forge-domain = { path = "../heph-core/forge/domain" }
 gateway-edge = { path = "../heph-std/gateway/edge" }
 gateway-domain = { path = "../heph-core/gateway/domain" }
 gateway-postgres = { path = "../heph-core/gateway/postgres" }
@@ -82,7 +82,6 @@ rustix.workspace = true
 review-domain = { path = "../heph-core/forge/review/domain" }
 review-postgres = { path = "../heph-core/forge/review/postgres" }
 review-service = { path = "../heph-core/forge/review/service" }
-run-domain = { path = "../heph-core/run/domain" }
 heph-run = { path = "../heph-core/run" }
 run-orchestrator = { path = "../heph-core/run/orchestrator" }
 run-postgres = { path = "../heph-core/run/postgres" }
@@ -98,7 +97,6 @@ secret-domain = { path = "../heph-core/secret/domain" }
 secret-runtime = { path = "../heph-std/secret/runtime" }
 secret-postgres = { path = "../heph-core/secret/postgres" }
 secret-application = { path = "../heph-core/secret/application" }
-secret-service = { path = "../heph-core/secret/service" }
 secret-store = { path = "../heph-core/secret/store" }
 zeroize.workspace = true
 serde.workspace = true
@@ -113,12 +111,10 @@ tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 uuid.workspace = true
 vm-fake = { path = "../heph-std/runtime/vm/fake" }
 vm-libkrun = { path = "../heph-std/runtime/vm/libkrun" }
-vm-trait.workspace = true
 volume-local = { path = "../heph-std/runtime/volume/local" }
 volume-postgres = { path = "../heph-core/runtime/volume/postgres" }
 workspace-local = { path = "../heph-std/runtime/workspace/local" }
 workspace-postgres = { path = "../heph-core/runtime/workspace/postgres" }
-workspace-domain = { path = "../heph-core/runtime/workspace/domain" }
 
 [dev-dependencies]
 base64.workspace = true
@@ -130,7 +126,6 @@ secret-broker = { path = "../heph-std/secret/broker", features = ["test-fixtures
 sqlx.workspace = true
 serial_test = "3"
 tempfile = "3"
-volume-trait = { path = "../heph-core/runtime/volume/trait" }
 rcgen = "0.13.2"
 rustls = "0.23"
 tokio-rustls = "0.26"

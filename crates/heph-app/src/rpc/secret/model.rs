@@ -5,7 +5,7 @@ use crate::application::secret::{
 };
 use crate::rpc::{into_connect_error, request};
 use connectrpc::RequestContext;
-use forge_domain::{ProjectId, RepositoryId};
+use heph_forge::{ProjectId, RepositoryId};
 use identity_domain::OrganizationId;
 use rpc_proto::messages::hephaestus::{
     common::v1::{OpaqueId, PageRequest, PageResponse},

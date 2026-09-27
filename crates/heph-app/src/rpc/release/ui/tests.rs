@@ -36,7 +36,7 @@ mod handoff_audit_tests {
 #[cfg(test)]
 mod receipt_scope_tests {
     use super::TargetReceiptScope;
-    use forge_domain::{OrganizationId, ProjectId, RepositoryId};
+    use heph_forge::{OrganizationId, ProjectId, RepositoryId};
     use release_domain::UiInstallationTarget;
     use uuid::Uuid;
 
@@ -72,7 +72,7 @@ mod receipt_scope_tests {
 #[cfg(test)]
 mod cursor_tests {
     use super::UiInstallationCursorCodec;
-    use forge_domain::{OrganizationId, ProjectId};
+    use heph_forge::{OrganizationId, ProjectId};
     use identity_domain::UserId;
     use release_domain::{UiInstallationId, UiInstallationTarget};
     use uuid::Uuid;

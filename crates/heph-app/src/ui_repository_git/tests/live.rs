@@ -5,10 +5,10 @@ use super::support::{
 };
 use authz_postgres::PostgresMelangeAuthorizer;
 use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD};
-use forge_domain::RepositoryId;
 use forge_postgres::PgForgeRepository;
 use forge_service::GitStorage;
 use git_http::{GitHttpLimits, GitHttpService, PostgresGitAuthorizer};
+use heph_forge::RepositoryId;
 use release_service::{
     UiGenerationHostResolver, UiNamespace, UiPublicPort,
     ui_browser_host::{UI_CHILD_COOKIE, UiGenerationHost},

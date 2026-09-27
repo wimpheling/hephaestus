@@ -1,9 +1,9 @@
 use super::root_images::{
     legacy_fixture_root_images, load_root_image_manifest, repository_root_images,
 };
+use heph_runtime::{DiskFormat, RootFilesystem};
 use std::{ffi::OsString, fs::File};
 use tempfile::tempdir;
-use vm_trait::{DiskFormat, RootFilesystem};
 
 #[test]
 fn manifest_loads_multiple_materialized_directory_roots() {

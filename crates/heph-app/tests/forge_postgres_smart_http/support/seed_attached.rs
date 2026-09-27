@@ -6,8 +6,8 @@ use super::*;
 pub async fn seed_attached_instance(
     pool: &PgPool,
     user_id: UserId,
-    project_id: forge_domain::ProjectId,
-    repository_id: forge_domain::RepositoryId,
+    project_id: heph_forge::ProjectId,
+    repository_id: heph_forge::RepositoryId,
     commit: &str,
 ) {
     let build_id = Uuid::new_v4();

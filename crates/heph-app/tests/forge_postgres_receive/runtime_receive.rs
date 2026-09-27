@@ -143,7 +143,7 @@ async fn runtime_receive_persists_provenance_suppresses_origin_and_replays() {
     .expect("runtime receive provenance");
     assert_eq!(stored, (Some(runtime_session_id), Some(origin_attachment)));
 
-    let wrong_repository = forge_domain::RepositoryId::new();
+    let wrong_repository = heph_forge::RepositoryId::new();
     let wrong_repository_resolution: Option<(Option<Uuid>,)> =
         sqlx::query_as("SELECT * FROM resolve_runtime_receive_attachment($1, $2)")
             .bind(runtime_session_id)

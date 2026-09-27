@@ -5,7 +5,7 @@ use super::{
     UiInstallationNavigationError, UiInstallationReceiptScope, UiInstallationState,
     UiInstallationTarget, UiPresentation, into_connect_error, mutation_receipt, request,
 };
-use forge_domain::{OrganizationId, ProjectId, RepositoryId};
+use heph_forge::{OrganizationId, ProjectId, RepositoryId};
 use identity_domain::RequestId;
 use release_domain::ReleaseId;
 use release_service::UiBrowserHandoffError;

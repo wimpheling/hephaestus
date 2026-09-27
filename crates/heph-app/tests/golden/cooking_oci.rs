@@ -97,7 +97,7 @@ pub fn cooking_oci_worker_config(
         // trusted system path before the runtime rejects symlinked executables.
         mkfs_ext4: std::fs::canonicalize("/usr/sbin/mkfs.ext4")
             .expect("canonical mkfs.ext4 must be installed"),
-        vm_resources: vm_trait::VmResources {
+        vm_resources: heph_runtime::VmResources {
             vcpus: 2,
             // Buildah plus the libkrun VMM needs the worker's 8 GiB cgroup
             // ceiling for its backing pages; keep the declared guest budget

@@ -5,7 +5,7 @@
 //! one-time bearer through the release service port, and returns only a safe
 //! route. Static files and managed/API forwarding belong to later handlers.
 //!
-//! Intended home: `crates/hephaestus-app/src/ui_bootstrap.rs`, after the host
+//! Intended home: `crates/heph-app/src/ui_bootstrap.rs`, after the host
 //! and read-port candidates are integrated into `release-service`.
 
 mod config;

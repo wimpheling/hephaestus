@@ -6,6 +6,7 @@ pub(crate) mod vm_observer;
 pub(crate) mod vm_observer_assertions;
 
 use async_trait::async_trait;
+use heph_runtime::{StopMode, VmError, VmEvent, VmExit, VmId, VmInstance, VmProvider, VmSpec};
 use hephaestus_app::VmBackendConfig;
 use std::{
     env,
@@ -15,7 +16,6 @@ use std::{
 use tokio::sync::{broadcast, watch};
 use vm_libkrun::LibkrunConfig;
 use vm_observer::VmSpecObserver;
-use vm_trait::{StopMode, VmError, VmEvent, VmExit, VmId, VmInstance, VmProvider, VmSpec};
 
 /// The VM backend and storage paths a daemon integration test needs.
 pub struct BackendFixture {

@@ -72,7 +72,7 @@ async fn production_service_log_writer_persists_vm_events_and_respects_disabled_
     .expect("application VM event subscriber");
     application_sender
         .send(VmEvent::Log {
-            stream: vm_trait::LogStream::Stdout,
+            stream: heph_runtime::LogStream::Stdout,
             bytes: b"application-ready-event".to_vec(),
         })
         .expect("application event subscriber remains active");
@@ -210,7 +210,7 @@ async fn production_service_log_writer_skips_disabled_vm_events() {
     .expect("disabled VM event subscriber");
     disabled_sender
         .send(VmEvent::Log {
-            stream: vm_trait::LogStream::Stdout,
+            stream: heph_runtime::LogStream::Stdout,
             bytes: b"disabled-event".to_vec(),
         })
         .expect("disabled event subscriber remains active");

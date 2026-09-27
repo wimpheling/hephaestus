@@ -182,14 +182,14 @@ impl VmInstance for ServiceTransportVm {
         let result = self.inner.stop(mode).await;
         if let (Ok(()), Some(events)) = (&result, &self.events) {
             let _ = events.send(VmEvent::Log {
-                stream: vm_trait::LogStream::Stderr,
+                stream: heph_runtime::LogStream::Stderr,
                 bytes: b"application-final-event".to_vec(),
             });
         }
         result
     }
 
-    async fn wait(&self) -> Result<vm_trait::VmExit, VmError> {
+    async fn wait(&self) -> Result<heph_runtime::VmExit, VmError> {
         self.inner.wait().await
     }
 

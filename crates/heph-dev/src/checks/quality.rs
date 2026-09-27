@@ -14,6 +14,11 @@ use super::{
 const UI_CHECKS: &str = "mix hephaestus.architecture --family ui && mix test test/mix/tasks/hephaestus_architecture_test.exs test/hephaestus_web_web/components test/hephaestus_web_web/design_system";
 const COOKING_SERVICE_MANIFEST: &str = "examples/cooking/cooking-service/Cargo.toml";
 const RELEASE_UI_KIT_DIRECTORY: &str = "web/assets/release_ui_kit";
+const UI_NODE_TESTS: [&str; 3] = [
+    "web/assets/js/design_system/hooks/installed_ui_navigation_test.mjs",
+    "crates/heph-app/tests/ui_bootstrap_script.mjs",
+    "e2e/playwright/reporter-tests/safe-installed-ui-reporter.test.mjs",
+];
 
 pub(super) fn cooking_service(context: &DevContext) -> Result<()> {
     let root = &context.repository_root;
@@ -83,14 +88,8 @@ fn ui_node_tests(context: &DevContext) -> Result<()> {
     phase("Installed UI navigation and bootstrap Node checks");
     run_process(
         Command::new("node")
-            .args([
-                "--test",
-                "--test-isolation=none",
-                "--test-reporter=tap",
-                "web/assets/js/design_system/hooks/installed_ui_navigation_test.mjs",
-                "crates/hephaestus-app/tests/ui_bootstrap_script.mjs",
-                "e2e/playwright/reporter-tests/safe-installed-ui-reporter.test.mjs",
-            ])
+            .args(["--test", "--test-isolation=none", "--test-reporter=tap"])
+            .args(UI_NODE_TESTS)
             .current_dir(&context.repository_root),
     )
 }
@@ -132,9 +131,20 @@ pub(super) fn full(context: &DevContext) -> Result<()> {
 
 #[cfg(test)]
 mod tests {
-    use super::{UI_CHECKS, web_mix_command};
+    use super::{UI_CHECKS, UI_NODE_TESTS, web_mix_command};
     use crate::context::{DevContext, ELIXIR_IMAGE};
     use std::{ffi::OsStr, path::PathBuf};
+
+    #[test]
+    fn ui_node_test_paths_exist_in_the_repository() {
+        let repository_root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..");
+        for path in UI_NODE_TESTS {
+            assert!(
+                repository_root.join(path).is_file(),
+                "quality UI test path is missing: {path}"
+            );
+        }
+    }
 
     #[test]
     fn web_checks_use_the_pinned_container_without_host_mix() {

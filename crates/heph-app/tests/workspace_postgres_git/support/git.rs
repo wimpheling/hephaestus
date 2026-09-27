@@ -1,10 +1,10 @@
 use super::*;
 
-pub fn image_key(repository_id: forge_domain::RepositoryId, context: &str) -> String {
+pub fn image_key(repository_id: heph_forge::RepositoryId, context: &str) -> String {
     format!("workspace-{context}-{repository_id}")
 }
 
-pub fn agent_config(repository_id: forge_domain::RepositoryId) -> String {
+pub fn agent_config(repository_id: heph_forge::RepositoryId) -> String {
     r#"
 version = 2
 [agent]

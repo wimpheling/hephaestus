@@ -4,8 +4,8 @@ use super::super::{
     MediatorAuthenticator, MutationReceipts, RpcError, into_connect_error, mutation_receipt,
     request,
 };
-use forge_domain::RepositoryId;
 use git_capability_domain::GitOperation;
+use heph_forge::RepositoryId;
 use pat_domain::{
     PersonalAccessTokenId, PersonalAccessTokenMetadata as DomainMetadata,
     PersonalAccessTokenScope as DomainScope,
