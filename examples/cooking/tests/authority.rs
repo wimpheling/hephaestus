@@ -15,6 +15,7 @@ mod rpc;
 #[path = "authority/tests.rs"]
 mod tests;
 
+pub use retirement::retire_cooking_gateway_grant;
 pub use rotation::{assert_inbound_lease_history, configure_rotated_inbound_gateway};
 pub(crate) use rpc::{
     gateway_client, gateway_client_with_token, gateway_id, mutation_context, opaque, outsider_token,

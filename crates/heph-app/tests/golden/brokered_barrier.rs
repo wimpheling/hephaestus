@@ -72,6 +72,18 @@ pub async fn cooking_update_barrier_buffers_release_before_waiter_registration()
 }
 
 impl BrokeredTlsUpstream {
+    pub fn detached() -> Self {
+        Self {
+            adapter: Arc::new(DenyingBrokerAdapter),
+            cooking_registry: None,
+            rule_adapters: Arc::new(std::collections::HashMap::new()),
+            observed: Arc::new(AtomicBool::new(false)),
+            server: tokio::spawn(async {}),
+            update_barrier: None,
+            revocation_barrier: None,
+        }
+    }
+
     pub async fn wait_update_v1_entered(&self) {
         if let Some(barrier) = &self.update_barrier {
             barrier.wait_entered().await;

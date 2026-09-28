@@ -18,6 +18,7 @@ pub async fn run_cooking_cleanup_phase(
     let restarted = prep.running.take().expect("running daemon for cleanup");
     let actual_fixture = &prep.actual_fixture;
     let actual_brokered = &prep.actual_brokered;
+    let brokered_import_id = actual_brokered.import_id;
     let rpc_token = prep.rpc_token.as_ref();
     let identity = &prep.identity;
     let user_id = prep.user_id;
@@ -36,8 +37,38 @@ pub async fn run_cooking_cleanup_phase(
         cooking::INBOUND_SENTINEL
     };
 
-    let retained_run_id: uuid::Uuid = sqlx::query_scalar(
-        "SELECT id
+    if let Some(sequence) = update_sequence.as_ref() {
+        // Revoke the relay source while a real run still holds its lease. The
+        // run must fail at broker admission before any relay request is made.
+        cooking::exercise_active_relay_revocation(
+            pool,
+            actual_fixture,
+            user_id,
+            &actual_brokered.upstream,
+            sequence.migration.relay_rule_id,
+        )
+        .await;
+    }
+    let upstream = std::mem::replace(
+        &mut prep.actual_brokered.upstream,
+        BrokeredTlsUpstream::detached(),
+    );
+    upstream.assert_substituted_request().await;
+    cooking_authority::retire_cooking_gateway_grant(
+        pool,
+        &restarted,
+        actual_fixture,
+        rpc_token,
+        inbound_credential,
+        outsider_id,
+        prep.outsider_browser_session,
+    )
+    .await
+    .expect("retire cooking gateway mailbox grant through RPC");
+
+    if update_sequence.is_some() {
+        let retained_run_id: uuid::Uuid = sqlx::query_scalar(
+            "SELECT id
                FROM runs
               WHERE instance_id = $1
                 AND run_kind = 'normal'
@@ -45,59 +76,60 @@ pub async fn run_cooking_cleanup_phase(
                 AND outcome = 'succeeded'
               ORDER BY updated_at DESC, id DESC
               LIMIT 1",
-    )
-    .bind(actual_instance.instance)
-    .fetch_one(pool)
-    .await
-    .expect("completed cooking run retained for retirement proof");
-    let gateway_id: uuid::Uuid = sqlx::query_scalar(
-        "SELECT gateway_id
+        )
+        .bind(actual_instance.instance)
+        .fetch_one(pool)
+        .await
+        .expect("completed cooking run retained for retirement proof");
+        let gateway_id: uuid::Uuid = sqlx::query_scalar(
+            "SELECT gateway_id
                FROM gateway_mailbox_bindings
               WHERE id = (
                   SELECT binding_id
                     FROM gateway_mailbox_binding_grants
                    WHERE id = $1
               )",
-    )
-    .bind(actual_fixture.grant_id)
-    .fetch_one(pool)
-    .await
-    .expect("cooking gateway identity for retirement proof");
-    let outsider_identity = AuthenticatedIdentity::new(
-        outsider_id,
-        (*browser_oidc_issuer).clone(),
-        "cooking-outsider",
-        serde_json::json!({}),
-        RequestId::new(),
-    );
-    let retirement_public = env::var("HEPHAESTUS_CADDY_TEST_PUBLIC_URL")
-        .expect("joined Caddy public URL for retirement proof");
-    let retry_fixture = retry_fixture
-        .as_ref()
-        .expect("retirement retry forge fixture");
-    cooking_retirement::exercise(&cooking_retirement::RetirementContext {
-        pool,
-        running: &restarted,
-        token_factory: rpc_token,
-        owner: &identity,
-        outsider: &outsider_identity,
-        instance: &actual_instance,
-        retained_run_id,
-        retry_instance: &retry_fixture.instance,
-        retry_source_run_id: retry_fixture.source_run_id,
-        retry_repository_id: retry_fixture.repository_id,
-        gateway_id,
-        project_id: project.id.as_uuid(),
-        mailbox_id: instance.mailbox_id,
-        public_url: &retirement_public,
-        valid_inbound_credential: inbound_credential,
-        import_parameters: cooking_builds::cooking_agent_parameters(),
-    })
-    .await
-    .expect("retire cooking attachment, gateway, and release");
-    // Source revocation follows grant retirement so the valid rotated
-    // inbound credential proves the grant fence itself.
-    cooking::revoke_imported_credential(pool, user_id, actual_brokered.import_id).await;
+        )
+        .bind(actual_fixture.grant_id)
+        .fetch_one(pool)
+        .await
+        .expect("cooking gateway identity for retirement proof");
+        let outsider_identity = AuthenticatedIdentity::new(
+            outsider_id,
+            (*browser_oidc_issuer).clone(),
+            "cooking-outsider",
+            serde_json::json!({}),
+            RequestId::new(),
+        );
+        let retirement_public = env::var("HEPHAESTUS_CADDY_TEST_PUBLIC_URL")
+            .expect("joined Caddy public URL for retirement proof");
+        let retry_fixture = retry_fixture
+            .as_ref()
+            .expect("retirement retry forge fixture");
+        cooking_retirement::exercise(&cooking_retirement::RetirementContext {
+            pool,
+            running: &restarted,
+            token_factory: rpc_token,
+            owner: &identity,
+            outsider: &outsider_identity,
+            instance: &actual_instance,
+            retained_run_id,
+            retry_instance: &retry_fixture.instance,
+            retry_source_run_id: retry_fixture.source_run_id,
+            retry_repository_id: retry_fixture.repository_id,
+            gateway_id,
+            project_id: project.id.as_uuid(),
+            mailbox_id: instance.mailbox_id,
+            public_url: &retirement_public,
+            valid_inbound_credential: inbound_credential,
+            import_parameters: cooking_builds::cooking_agent_parameters(),
+        })
+        .await
+        .expect("retire cooking attachment, gateway, and release");
+        // Source revocation follows grant retirement so the valid rotated
+        // inbound credential proves the grant fence itself.
+        cooking::revoke_imported_credential(pool, user_id, brokered_import_id).await;
+    }
     cooking_confinement::assert_database_has_no_credentials(pool).await;
     restarted.shutdown().await.expect("cooking daemon shutdown");
     let observer = observer.expect("cooking build proof VM observer");
