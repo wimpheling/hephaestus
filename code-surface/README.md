@@ -65,6 +65,6 @@ example.
 
 ## Backlog
 
-- Add outgoing and incoming local workspace dependency sections to every crate
-  guide, derived from Cargo metadata, with links to the corresponding crate
-  guide pages.
+- [x] Add outgoing and incoming local workspace dependency sections to every
+  crate guide. Each section is derived from Cargo metadata, deduplicates crate
+  pairs, and links directly to the corresponding crate guide page.

@@ -2,6 +2,7 @@ import cytoscape from 'cytoscape';
 import './styles.css';
 import { guideLinkHref, parseHash, ROOT_GUIDE_ID } from './navigation.mjs';
 import { defaultGuideExpansion, expansionForGuide, toggleGuideExpansion } from './guide-tree.mjs';
+import { crateGuideDependencies } from './guide-dependencies.mjs';
 import { mermaidBlockMarkup, renderMermaidDiagrams } from './mermaid.mjs';
 
 const app = document.querySelector('#app');
@@ -295,6 +296,15 @@ function renderRustApi(api) {
   return `<section class="guide-api"><div class="guide-api-heading"><p class="eyebrow">PUBLIC RUST API</p><span class="mono">${esc(api.items?.length || 0)} public items</span></div>${groupMarkup || '<p class="muted">No public items recorded.</p>'}</section>`;
 }
 
+function renderCrateGuideDependencies(crateId) {
+  if (!crateId) return '';
+  const relations = crateGuideDependencies(state.crates, state.guides?.guides, crateId);
+  const renderList = (items, emptyMessage) => items.length
+    ? `<ul class="guide-dependency-list">${items.map((item) => `<li><a class="guide-dependency-link" href="${esc(item.href)}"><span>${esc(item.name)}</span>${item.annotation ? `<small>${esc(item.annotation)}</small>` : ''}</a></li>`).join('')}</ul>`
+    : `<p class="muted">${emptyMessage}</p>`;
+  return `<section class="guide-dependencies" aria-labelledby="guide-dependencies-heading"><div class="guide-api-heading"><p class="eyebrow" id="guide-dependencies-heading">LOCAL CRATE DEPENDENCIES</p><span class="mono">${relations.dependsOn.length + relations.usedBy.length} direct links</span></div><div class="guide-dependency-grid"><div><h3>Depends on <span>${relations.dependsOn.length}</span></h3>${renderList(relations.dependsOn, 'No direct workspace crates.')}</div><div><h3>Used by <span>${relations.usedBy.length}</span></h3>${renderList(relations.usedBy, 'No workspace crates depend on this crate.')}</div></div></section>`;
+}
+
 function renderGuidePage() {
   const guides = state.guides?.guides || [];
   const selected = findById(guides, state.guideId) || guides[0];
@@ -306,7 +316,7 @@ function renderGuidePage() {
   const unplacedCount = unplaced.contexts.length + unplaced.services.length;
   const unplacedReport = selected.id === ROOT_GUIDE_ID && unplacedCount ? `<div class="guide-warning"><p><span>!</span>${unplacedCount} generated inventory ${unplacedCount === 1 ? 'entry is' : 'entries are'} deliberately unplaced.</p><ul class="guide-unplaced-list">${unplaced.contexts.map((context) => `<li><span>context</span>${esc(context)}</li>`).join('')}${unplaced.services.map((service) => `<li><span>service</span>${esc(service)}</li>`).join('')}</ul></div>` : '';
   const documentationWarning = selected.missingDocumentation ? `<aside class="guide-doc-warning" role="status"><p><span>!</span><strong>No documentation yet</strong></p><p>This directory has no local README.md. Add one at <code>${esc(selected.path)}</code> to document it here.</p></aside>` : '';
-  return `<section class="guide-layout"><div>${renderGuideTree(guides, selected.id)}</div><article class="guide-article"><header class="guide-heading"><p class="eyebrow">SOURCE GUIDE</p><h1>${esc(selected.title)}</h1><p class="page-lede">${esc(selected.summary || '')}</p><p class="guide-source mono">${esc(selected.path)}${selected.crateId ? ` · crate ${esc(selected.crateId)}` : ''}</p></header><div class="guide-body">${documentationWarning}${selected.content ? renderMarkdown(selected.content, selected.path, state.guides, state.guides?.sourceBase, state.guides?.sourceTreeBase) : ''}${renderRustApi(selected.rustApi)}</div><footer class="guide-references"><div><p class="eyebrow">CODE REFERENCES</p><div class="guide-ref-list">${contextLinks || '<span class="muted">No Cargo contexts declared.</span>'}${serviceLinks || '<span class="muted">No gRPC services declared.</span>'}</div></div>${unplacedReport}</footer></article></section>`;
+  return `<section class="guide-layout"><div>${renderGuideTree(guides, selected.id)}</div><article class="guide-article"><header class="guide-heading"><p class="eyebrow">SOURCE GUIDE</p><h1>${esc(selected.title)}</h1><p class="page-lede">${esc(selected.summary || '')}</p><p class="guide-source mono">${esc(selected.path)}${selected.crateId ? ` · crate ${esc(selected.crateId)}` : ''}</p></header><div class="guide-body">${documentationWarning}${selected.content ? renderMarkdown(selected.content, selected.path, state.guides, state.guides?.sourceBase, state.guides?.sourceTreeBase) : ''}${renderCrateGuideDependencies(selected.crateId)}${renderRustApi(selected.rustApi)}</div><footer class="guide-references"><div><p class="eyebrow">CODE REFERENCES</p><div class="guide-ref-list">${contextLinks || '<span class="muted">No Cargo contexts declared.</span>'}${serviceLinks || '<span class="muted">No gRPC services declared.</span>'}</div></div>${unplacedReport}</footer></article></section>`;
 }
 
 function renderCratesPage() {
