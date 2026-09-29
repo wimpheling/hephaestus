@@ -112,7 +112,11 @@ impl PgForgeRepository {
             .fetch_one(&mut *transaction)
             .await
             .map_err(storage)?;
-        let repository_path = self.storage.validate_existing(repository.id).await?;
+        let repository_path = self
+            .storage
+            .validate_existing(repository.id)
+            .await
+            .map_err(storage)?;
         let inspected = inspect_updates(&repository_path, updates)?;
         for (index, update) in updates.iter().enumerate() {
             let sequence = i32::try_from(index + 1)

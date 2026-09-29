@@ -10,7 +10,7 @@ use crate::{
 use control_plane_postgres::{
     connect as connect_control_plane, connect_app as connect_application,
 };
-use forge_service::GitStorage;
+use forge_storage::GitStorage;
 use gateway_postgres::PostgresGatewayServiceLogStore;
 use heph_run::RunSecretManager;
 use heph_runtime::VmProvider;

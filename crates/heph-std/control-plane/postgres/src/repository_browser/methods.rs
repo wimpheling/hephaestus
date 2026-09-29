@@ -1,5 +1,5 @@
 use forge_domain::RepositoryId;
-use forge_service::GitStorage;
+use forge_storage::GitStorage;
 use identity_domain::AuthenticatedIdentity;
 use sqlx::PgPool;
 use std::sync::Arc;

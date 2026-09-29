@@ -7,7 +7,8 @@ use brokered_egress_domain::{
     BrokeredSecretRule, BrokeredSecretRuleId, ExactHttpsOrigin, HeaderName, HttpInjectionLocation,
 };
 use forge_postgres::PgForgeRepository;
-use forge_service::{CreateRepository, GitStorage};
+use forge_service::CreateRepository;
+use forge_storage::GitStorage;
 use heph_forge::{GitRef, OrganizationId, ProjectId};
 use heph_runtime::RootFilesystem;
 use hephaestus_app::{

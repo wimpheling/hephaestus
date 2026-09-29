@@ -8,7 +8,7 @@ use axum::{
     http::{Request, Response, StatusCode},
 };
 use forge_domain::RepositoryId;
-use forge_service::GitStorage;
+use forge_storage::GitStorage;
 use identity_domain::RequestId;
 use std::sync::Arc;
 use zeroize::Zeroize;

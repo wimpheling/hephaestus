@@ -21,6 +21,7 @@ base64.workspace = true
 bytes.workspace = true
 forge-domain = { path = "../../../heph-core/forge/domain" }
 forge-service = { path = "../../../heph-core/forge/service" }
+forge-storage = { path = "../storage" }
 forge-postgres = { path = "../postgres" }
 futures-util.workspace = true
 git-capability-domain = { path = "../../../heph-core/forge/git-capability" }

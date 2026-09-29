@@ -213,7 +213,7 @@ impl PgForgeRepository {
                 .execute(&self.pool)
                 .await
                 .map_err(storage)?;
-            return Err(error.into());
+            return Err(storage(error));
         }
         row.try_into()
     }
@@ -240,7 +240,7 @@ impl PgForgeRepository {
                 .execute(&self.pool)
                 .await
                 .map_err(storage)?;
-            return Err(error.into());
+            return Err(storage(error));
         }
         row.try_into()
     }

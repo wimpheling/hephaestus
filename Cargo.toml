@@ -46,6 +46,7 @@ members = [
     "crates/heph-std/run/*",
     "crates/heph-std/forge/build/*",
     "crates/heph-std/forge/git-http",
+    "crates/heph-std/forge/storage",
     "crates/heph-std/forge/pat-postgres",
     "crates/heph-std/forge/postgres",
     "crates/heph-std/forge/release/*",

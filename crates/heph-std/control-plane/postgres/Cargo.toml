@@ -16,6 +16,7 @@ sha2.workspace = true
 futures-util.workspace = true
 forge-domain = { path = "../../../heph-core/forge/domain" }
 forge-service = { path = "../../../heph-core/forge/service" }
+forge-storage = { path = "../../forge/storage" }
 release-domain = { path = "../../../heph-core/forge/release/domain" }
 run-domain = { path = "../../../heph-core/runtime/run/domain" }
 run-orchestrator = { path = "../../../heph-core/runtime/run/orchestrator" }
@@ -32,7 +33,7 @@ uuid.workspace = true
 [package.metadata.hephaestus]
 layer = "adapter"
 context = "control-plane"
-allow_cross_context_dependencies = ["authz-postgres", "release-artifact-store"]
+allow_cross_context_dependencies = ["authz-postgres", "forge-storage", "release-artifact-store"]
 postgres_adapter = true
 database_context = "control-plane"
 

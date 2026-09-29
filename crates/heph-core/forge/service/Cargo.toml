@@ -1,6 +1,6 @@
 [package]
 name = "forge-service"
-description = "Provider-neutral forge ports and bare-Git storage"
+description = "Provider-neutral forge ports and errors"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
@@ -12,7 +12,6 @@ context = "forge"
 [dependencies]
 async-trait.workspace = true
 forge-domain = { path = "../domain" }
-gix.workspace = true
 release-domain = { path = "../release/domain" }
 run-domain = { path = "../../runtime/run/domain" }
 runtime-types = { path = "../../platform/runtime-types" }

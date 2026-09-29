@@ -8,7 +8,8 @@ use super::{
 use authz_postgres::PostgresMelangeAuthorizer;
 use control_plane_postgres::build::{BuildApplication, BuildError, RequestBuild};
 use forge_postgres::PgForgeRepository;
-use forge_service::{CreateRepository, GitStorage};
+use forge_service::CreateRepository;
+use forge_storage::GitStorage;
 use heph_forge::{GitRef, OrganizationId, ReceiveId};
 use identity_domain::{AuthenticatedIdentity, RequestId, UserId};
 use serde_json::json;

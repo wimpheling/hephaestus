@@ -17,7 +17,7 @@ use crate::application::repository_browser::{
 };
 use connectrpc::{RequestContext, Router, ServiceRequest, ServiceResult, ServiceStream};
 use control_plane_postgres::ControlPlanePool as PgPool;
-use forge_service::GitStorage;
+use forge_storage::GitStorage;
 use rpc_proto::{
     connect::hephaestus::repository_browser::v1::{
         RepositoryBrowserService, RepositoryBrowserServiceExt,

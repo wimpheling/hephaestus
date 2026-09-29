@@ -1,12 +1,5 @@
 //! Forge persistence.
 
-// Rust 1.85 Clippy misidentifies thiserror's attribute formatting as an
-// unexpanded formatting literal in this module.
-#[allow(clippy::literal_string_with_formatting_args)]
-mod storage;
-
-pub use storage::{GitStorage, GitStorageError};
-
 use async_trait::async_trait;
 use forge_domain::{CommitSha, GitRef, ProjectId, ReceiveId, RepositoryId, RunRequestId};
 use release_domain::BuildRequestId;
@@ -93,9 +86,6 @@ pub enum ForgeRepositoryError {
     /// Authorization provider unavailable.
     #[error("forge authorization provider is unavailable")]
     AuthorizationUnavailable,
-    /// Bare repository storage failed.
-    #[error(transparent)]
-    GitStorage(#[from] GitStorageError),
     /// Git object inspection failed.
     #[error("Git object inspection failed: {0}")]
     GitInspection(String),

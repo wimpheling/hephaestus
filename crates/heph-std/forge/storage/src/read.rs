@@ -85,14 +85,14 @@ impl GitStorage {
     }
 }
 
-pub(super) fn valid_commit(value: &str) -> bool {
+pub fn valid_commit(value: &str) -> bool {
     matches!(value.len(), 40 | 64)
         && value
             .bytes()
             .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
 }
 
-pub(super) fn valid_relative_path(value: &str) -> bool {
+pub fn valid_relative_path(value: &str) -> bool {
     !value.is_empty()
         && !value.starts_with('/')
         && !value.ends_with('/')

@@ -11,7 +11,7 @@ use axum::{
 };
 use forge_domain::RepositoryId;
 use forge_postgres::PgForgeRepository;
-use forge_service::GitStorage;
+use forge_storage::GitStorage;
 use identity_domain::AuthenticatedIdentity;
 use std::{
     collections::HashMap,

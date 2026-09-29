@@ -398,6 +398,7 @@ dependencies = [
  "forge-domain",
  "forge-postgres",
  "forge-service",
+ "forge-storage",
  "identity-domain",
  "registry-domain",
  "registry-postgres",
@@ -859,6 +860,7 @@ dependencies = [
  "authz-postgres",
  "forge-domain",
  "forge-service",
+ "forge-storage",
  "futures-util",
  "identity-domain",
  "release-artifact-store",
@@ -1344,6 +1346,7 @@ dependencies = [
  "capability-domain",
  "forge-domain",
  "forge-service",
+ "forge-storage",
  "futures-util",
  "git-capability-domain",
  "git-http",
@@ -1378,11 +1381,20 @@ version = "0.1.0"
 dependencies = [
  "async-trait",
  "forge-domain",
- "gix",
  "release-domain",
  "run-domain",
  "runtime-types",
  "serde_json",
+ "tempfile",
+ "thiserror 2.0.19",
+ "tokio",
+]
+
+[[package]]
+name = "forge-storage"
+version = "0.1.0"
+dependencies = [
+ "forge-domain",
  "tempfile",
  "thiserror 2.0.19",
  "tokio",
@@ -1670,6 +1682,7 @@ dependencies = [
  "forge-domain",
  "forge-postgres",
  "forge-service",
+ "forge-storage",
  "futures-util",
  "git-capability-domain",
  "http",
@@ -2462,6 +2475,7 @@ dependencies = [
  "forge-nats",
  "forge-postgres",
  "forge-service",
+ "forge-storage",
  "futures-util",
  "gateway-domain",
  "gateway-edge",
@@ -4172,6 +4186,7 @@ dependencies = [
  "control-plane-postgres",
  "forge-domain",
  "forge-service",
+ "forge-storage",
  "identity-domain",
  "release-domain",
  "review-domain",

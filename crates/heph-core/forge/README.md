@@ -8,14 +8,16 @@ includes isolated builds, review controls, and OCI registry publication.
 
 - [`domain/`](domain/) defines project, repository, Git receive, commit, ref,
   and run-request values.
-- [`service/`](service/) owns canonical bare-Git storage, receive processing,
-  and the transactional outbox boundary. A receive is idempotent for its
+- [`service/`](service/) owns receive processing and the transactional outbox
+  boundary. A receive is idempotent for its
   repository, commit, ref, configuration hash, and receive identity.
 - [`git-capability/`](git-capability/) defines bounded Git operations, ref and
   path matching, transfer limits, and mutation policy.
 - [`git-http/`](../../heph-std/forge/git-http/) is the authorized streaming
   smart-HTTP transport;
   it keeps native Git invocation behind a bounded, cleared environment.
+- [`storage/`](../../heph-std/forge/storage/) owns canonical bare-Git
+  filesystem and process storage.
 - [`build/`](build/) and its `build-*` children define exact-source isolated
   build jobs, durable job ports, and immutable artifact import.
 - [`review/`](review/) owns durable review controls and controlled result

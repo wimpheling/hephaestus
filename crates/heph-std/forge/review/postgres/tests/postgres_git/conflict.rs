@@ -1,4 +1,4 @@
-use forge_service::GitStorage;
+use forge_storage::GitStorage;
 use review_domain::ControlKind;
 use review_git::GitReviewPublisher;
 use review_postgres::{GitRepositoryLocator, PostgresReviewRepository};

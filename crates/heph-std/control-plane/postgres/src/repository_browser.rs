@@ -21,7 +21,7 @@ pub enum BrowserError {
     #[error("repository query failed")]
     Persistence(#[source] sqlx::Error),
     #[error("repository storage failed")]
-    Storage(#[source] forge_service::GitStorageError),
+    Storage(#[source] forge_storage::GitStorageError),
     #[error("Git inspection failed")]
     Git,
 }
@@ -118,7 +118,7 @@ pub struct TreeEntry {
 
 pub struct BrowserApplication {
     pool: PgPool,
-    storage: Arc<forge_service::GitStorage>,
+    storage: Arc<forge_storage::GitStorage>,
 }
 
 mod commit;

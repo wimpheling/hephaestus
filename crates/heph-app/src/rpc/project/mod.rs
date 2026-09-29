@@ -145,7 +145,6 @@ fn map_forge_error(error: &ForgeRepositoryError) -> RpcError {
     match error {
         ForgeRepositoryError::AuthorizationDenied => RpcError::PermissionDenied,
         ForgeRepositoryError::AuthorizationUnavailable
-        | ForgeRepositoryError::GitStorage(_)
         | ForgeRepositoryError::GitInspection(_)
         | ForgeRepositoryError::Storage(_) => RpcError::Unavailable,
         ForgeRepositoryError::InvalidMetadata(_) => RpcError::InvalidArgument,

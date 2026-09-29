@@ -6,7 +6,7 @@ use super::support::{
 use authz_postgres::PostgresMelangeAuthorizer;
 use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD};
 use forge_postgres::PgForgeRepository;
-use forge_service::GitStorage;
+use forge_storage::GitStorage;
 use git_http::{GitHttpLimits, GitHttpService, PostgresGitAuthorizer};
 use heph_forge::RepositoryId;
 use release_service::{

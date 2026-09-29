@@ -1,5 +1,5 @@
 use forge_domain::RepositoryId;
-use forge_service::GitStorage;
+use forge_storage::GitStorage;
 use identity_domain::UserId;
 use review_domain::ReviewProposalId;
 use runtime_types::RunId;

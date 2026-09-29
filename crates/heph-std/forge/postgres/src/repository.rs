@@ -25,14 +25,14 @@ pub use helpers::{git, serialization, storage};
 #[derive(Clone)]
 pub struct PgForgeRepository {
     pub(crate) pool: PgPool,
-    pub(crate) storage: Arc<crate::GitStorage>,
+    pub(crate) storage: Arc<forge_storage::GitStorage>,
     pub(crate) authorizer: Option<Arc<PostgresMelangeAuthorizer>>,
 }
 
 impl PgForgeRepository {
     /// Creates a repository service.
     #[must_use]
-    pub const fn new(pool: PgPool, storage: Arc<crate::GitStorage>) -> Self {
+    pub const fn new(pool: PgPool, storage: Arc<forge_storage::GitStorage>) -> Self {
         Self {
             pool,
             storage,

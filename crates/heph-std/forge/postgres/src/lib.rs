@@ -9,7 +9,6 @@ use forge_service::ForgeOutboxStore;
 pub use forge_service::{
     CreateRepository, ForgeRepositoryError, OutboxRecord, ReceiveResult, RunRequest,
 };
-pub use forge_service::{GitStorage, GitStorageError};
 pub use repository::PgForgeRepository;
 use runtime_types::EventId;
 

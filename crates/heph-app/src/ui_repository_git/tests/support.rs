@@ -5,7 +5,7 @@ use authz_domain::{
 };
 use axum::Router;
 use forge_postgres::PgForgeRepository;
-use forge_service::GitStorage;
+use forge_storage::GitStorage;
 use git_http::{
     AuthenticationError, GitAuthenticator, GitHttpLimits, GitHttpService, PostgresGitAuthorizer,
     Principal,

@@ -24,7 +24,7 @@ impl PgForgeRepository {
         .await
         .map_err(storage)?
         .ok_or(ForgeRepositoryError::RepositoryNotFound(id))?;
-        self.storage.validate_existing(id).await?;
+        self.storage.validate_existing(id).await.map_err(storage)?;
         row.try_into()
     }
 
@@ -52,7 +52,7 @@ impl PgForgeRepository {
         .map_err(storage)?
         .ok_or(ForgeRepositoryError::RepositoryNotFound(id))?;
         transaction.commit().await.map_err(storage)?;
-        self.storage.validate_existing(id).await?;
+        self.storage.validate_existing(id).await.map_err(storage)?;
         row.try_into()
     }
 
@@ -107,7 +107,7 @@ impl PgForgeRepository {
             return Err(ForgeRepositoryError::RepositoryNotFound(id));
         }
         transaction.commit().await.map_err(storage)?;
-        self.storage.delete_bare(id).await?;
+        self.storage.delete_bare(id).await.map_err(storage)?;
         Ok(())
     }
 }

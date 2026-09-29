@@ -1,7 +1,7 @@
 use control_plane_postgres::run::{
     ControlKind as AdmissionKind, ControlTarget, RequestControl, RunApplication,
 };
-use forge_service::GitStorage;
+use forge_storage::GitStorage;
 use identity_domain::{AuthenticatedIdentity, RequestId, UserId};
 use runtime_types::RunId;
 use serial_test::serial;

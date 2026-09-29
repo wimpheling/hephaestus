@@ -6,7 +6,8 @@ use forge_nats::{
     RUN_START_SUBJECT, ensure_forge_jetstream_topology,
 };
 use forge_postgres::PgForgeRepository;
-use forge_service::{CreateRepository, GitStorage};
+use forge_service::CreateRepository;
+use forge_storage::GitStorage;
 use futures_util::StreamExt;
 use heph_forge::{
     CommitSha, GitRef, OrganizationId, ReceiveId, RefUpdate, Repository, RuntimeReceiveProvenance,

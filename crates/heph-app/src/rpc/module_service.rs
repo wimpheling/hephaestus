@@ -11,7 +11,7 @@ use connectrpc_reflection::Reflector;
 use control_plane_postgres::ControlPlanePool as PgPool;
 use event_application::MutationReceiptReader;
 use forge_postgres::PgForgeRepository;
-use forge_service::GitStorage;
+use forge_storage::GitStorage;
 use identity_application::{BrowserSessionStore, IdempotentIdentityResolver};
 use release_artifact_store::LocalArtifactStore;
 use rpc_proto::connect::hephaestus::identity::v1::IdentityServiceExt;

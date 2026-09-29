@@ -16,7 +16,7 @@ mod transaction;
 use async_trait::async_trait;
 use authz_postgres::PostgresMelangeAuthorizer;
 use forge_domain::RepositoryId;
-use forge_service::GitStorage;
+use forge_storage::GitStorage;
 use review_service::RepositoryLocator;
 use sqlx::PgPool;
 use std::sync::Arc;

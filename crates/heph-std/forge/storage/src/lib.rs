@@ -1,3 +1,5 @@
+//! Canonical bare-Git filesystem and process storage for forge repositories.
+
 use forge_domain::RepositoryId;
 use std::path::{Path, PathBuf};
 

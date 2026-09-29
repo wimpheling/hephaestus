@@ -139,7 +139,7 @@ use forge_nats::{
     ForgeNatsOutboxPublisher, ensure_build_consumer, ensure_forge_jetstream_topology,
 };
 use forge_postgres::PgForgeRepository;
-use forge_service::GitStorage;
+use forge_storage::GitStorage;
 use gateway_edge::{
     GatewayDispatcher, GatewayInboundSecretResolver, GatewayProvider, GatewayRequestDispatcher,
     GatewayRuntimeLauncher, GatewayRuntimeService, GatewayServiceArtifact,

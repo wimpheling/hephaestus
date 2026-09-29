@@ -12,6 +12,7 @@ authz-domain = { path = "../../../heph-core/auth/authorization/authz-domain" }
 authz-postgres = { path = "../../authorization/authz-postgres" }
 forge-domain = { path = "../../../heph-core/forge/domain" }
 forge-service = { path = "../../../heph-core/forge/service" }
+forge-storage = { path = "../storage" }
 gix.workspace = true
 identity-domain = { path = "../../../heph-core/auth/identity/domain" }
 release-domain = { path = "../../../heph-core/forge/release/domain" }
