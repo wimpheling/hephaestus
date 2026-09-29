@@ -2497,6 +2497,7 @@ dependencies = [
  "review-postgres",
  "review-service",
  "rpc-proto",
+ "run-nats",
  "run-orchestrator",
  "run-postgres",
  "run-runtime-local",
@@ -4228,13 +4229,25 @@ dependencies = [
 ]
 
 [[package]]
-name = "run-orchestrator"
+name = "run-nats"
 version = "0.1.0"
 dependencies = [
  "async-nats",
- "async-trait",
  "futures-util",
  "review-domain",
+ "run-domain",
+ "run-orchestrator",
+ "serde_json",
+ "thiserror 2.0.19",
+ "tokio",
+ "tracing",
+]
+
+[[package]]
+name = "run-orchestrator"
+version = "0.1.0"
+dependencies = [
+ "async-trait",
  "run-domain",
  "runtime-types",
  "serde",

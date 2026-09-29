@@ -10,11 +10,8 @@ layer = "worker"
 context = "run"
 
 [dependencies]
-async-nats.workspace = true
 async-trait.workspace = true
-futures-util.workspace = true
 run-domain = { path = "../domain" }
-review-domain = { path = "../../forge/review/domain" }
 runtime-types = { path = "../../platform/runtime-types" }
 serde.workspace = true
 serde_json.workspace = true

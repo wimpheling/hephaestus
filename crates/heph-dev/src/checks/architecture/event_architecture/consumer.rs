@@ -66,7 +66,7 @@ pub(super) fn is_nats_event_adapter(path: &Path) -> bool {
         || matches!(
             path,
             path if path == Path::new("crates/heph-core/forge/service/src/nats.rs")
-                || path == Path::new("crates/heph-core/run/orchestrator/src/nats.rs")
+                || path == Path::new("crates/heph-std/run/nats/src/lib.rs")
         )
         || path.components().any(|component| {
             matches!(

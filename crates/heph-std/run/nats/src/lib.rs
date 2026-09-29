@@ -1,10 +1,11 @@
+//! NATS `JetStream` transport for durable run commands.
+
 use async_nats::jetstream;
 use futures_util::StreamExt;
 use review_domain::CONTROL_EXECUTE_SUBJECT;
 use run_domain::{CancelRun, StartRun};
+use run_orchestrator::{OrchestratorError, RunOrchestrator};
 use std::sync::Arc;
-
-use crate::{OrchestratorError, RunOrchestrator};
 
 const ACK_PROGRESS_INTERVAL: std::time::Duration = std::time::Duration::from_secs(10);
 const MAX_CONCURRENT_COMMANDS: usize = 64;

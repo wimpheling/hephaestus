@@ -218,7 +218,7 @@ use release_service::{
 };
 use review_postgres::PostgresReviewRepository;
 use review_service::{NatsControlHandler, ReviewControlService, ReviewOutboxPublisher};
-use run_orchestrator::{NatsCommandHandler, ensure_jetstream_topology};
+use run_nats::{NatsCommandHandler, ensure_jetstream_topology};
 use run_postgres::PgRunRepository;
 use run_runtime_local::{
     GatewayServiceIdentity as LocalGatewayServiceIdentity, LocalGatewayReleaseRuntime,

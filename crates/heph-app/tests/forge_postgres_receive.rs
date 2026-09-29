@@ -13,9 +13,8 @@ use heph_forge::{
 use heph_run::{CancelRun, Run, RunState, StartRun};
 use heph_runtime::{GuestCommand, NetworkMode, RootFilesystem, VmError, VmId, VmResources, VmSpec};
 use identity_domain::{AuthenticatedIdentity, RequestId, UserId};
-use run_orchestrator::{
-    NatsCommandHandler, RunOrchestrator, RunRepository, VmSpecFactory, ensure_jetstream_topology,
-};
+use run_nats::{NatsCommandHandler, ensure_jetstream_topology};
+use run_orchestrator::{RunOrchestrator, RunRepository, VmSpecFactory};
 use run_postgres::PgRunRepository;
 use runtime_types::{CommandId, RunId};
 use serde_json::json;

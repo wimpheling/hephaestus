@@ -85,6 +85,7 @@ review-service = { path = "../heph-core/forge/review/service" }
 heph-run = { path = "../heph-core/run" }
 run-orchestrator = { path = "../heph-core/run/orchestrator" }
 run-postgres = { path = "../heph-core/run/postgres" }
+run-nats = { path = "../heph-std/run/nats" }
 run-runtime-local = { path = "../heph-std/run/runtime-local" }
 runtime-types = { path = "../heph-core/platform/runtime-types" }
 runtime-authority = { path = "../heph-core/authorization/runtime-authority" }
