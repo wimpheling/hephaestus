@@ -117,11 +117,11 @@ pub(super) async fn publish_broker_instance(
     )
 }
 
-pub(super) fn new_secret_service(pool: &PgPool) -> SecretService<LocalKeyProvider> {
+pub(super) fn new_secret_service(pool: &PgPool) -> SecretService<TestKeyProvider> {
     SecretService::new(
         pool.clone(),
         EncryptedStore::new(
-            LocalKeyProvider::new("broker-copy/v1", [("broker-copy/v1", [31_u8; 32])])
+            TestKeyProvider::new("broker-copy/v1", [("broker-copy/v1", [31_u8; 32])])
                 .expect("secret key"),
         ),
         Arc::new(PostgresMelangeAuthorizer),
@@ -129,7 +129,7 @@ pub(super) fn new_secret_service(pool: &PgPool) -> SecretService<LocalKeyProvide
 }
 
 pub(super) async fn create_broker_secrets(
-    secret_service: &SecretService<LocalKeyProvider>,
+    secret_service: &SecretService<TestKeyProvider>,
     fixture: &Fixture,
     actor: &AuthenticatedIdentity,
     instance_id: AgentInstanceId,
@@ -213,7 +213,7 @@ pub(super) async fn create_broker_secrets(
 
 pub(super) async fn declare_source_rules(
     pool: &PgPool,
-    secret_service: &SecretService<LocalKeyProvider>,
+    secret_service: &SecretService<TestKeyProvider>,
     actor: &AuthenticatedIdentity,
     imports: &BTreeMap<String, (SecretId, SecretImportId, SecretVersionId, String)>,
     revision: AgentInstanceRevisionId,
@@ -259,7 +259,7 @@ pub(super) async fn declare_source_rules(
 
 pub(super) async fn rotate_source_secrets(
     pool: &PgPool,
-    secret_service: &SecretService<LocalKeyProvider>,
+    secret_service: &SecretService<TestKeyProvider>,
     actor: &AuthenticatedIdentity,
     imports: &BTreeMap<String, (SecretId, SecretImportId, SecretVersionId, String)>,
     revision: AgentInstanceRevisionId,

@@ -1,15 +1,15 @@
 //! Cryptographic envelope and redaction tests.
 
 use super::{
-    EncryptedSecretVersion, EncryptedStore, LocalKeyProvider, SecretStoreError, VersionContext,
+    EncryptedSecretVersion, EncryptedStore, SecretStoreError, TestKeyProvider, VersionContext,
 };
 use forge_domain::ProjectId;
 use secret_domain::{SecretId, SecretOwner, SecretValue, SecretVersionId};
 
 const SENTINEL: &[u8] = b"top-secret-sentinel-cf58e2a4";
 
-fn provider(active: &str) -> LocalKeyProvider {
-    LocalKeyProvider::new(
+fn provider(active: &str) -> TestKeyProvider {
+    TestKeyProvider::new(
         active,
         [
             ("key/v1", [1_u8; 32]),
@@ -31,7 +31,7 @@ fn version_context(version_id: SecretVersionId) -> VersionContext {
 }
 
 fn sealed() -> (
-    EncryptedStore<LocalKeyProvider>,
+    EncryptedStore<TestKeyProvider>,
     VersionContext,
     EncryptedSecretVersion,
 ) {
@@ -105,7 +105,7 @@ fn ciphertext_nonce_and_associated_data_tampering_fail() {
 }
 
 fn mutations_fixture(
-    store: &EncryptedStore<LocalKeyProvider>,
+    store: &EncryptedStore<TestKeyProvider>,
     context: &VersionContext,
 ) -> EncryptedSecretVersion {
     store
@@ -126,7 +126,7 @@ fn wrong_and_unavailable_keys_fail_closed() {
         Err(SecretStoreError::Authentication)
     ));
 
-    let unavailable = LocalKeyProvider::new("key/v2", [("key/v2", [2_u8; 32])])
+    let unavailable = TestKeyProvider::new("key/v2", [("key/v2", [2_u8; 32])])
         .expect("remaining key should validate");
     let unavailable = EncryptedStore::new(unavailable);
     encrypted.key_reference = String::from("key/v1");

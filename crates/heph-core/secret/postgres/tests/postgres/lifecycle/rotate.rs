@@ -3,7 +3,7 @@ use authz_postgres::PostgresMelangeAuthorizer;
 use secret_application::{BrokerRequest, BrokerStatus, RotateSecret, SecretServiceError};
 use secret_domain::{SecretSlotKey, SecretValue, SecretVersionId};
 use secret_postgres::SecretRuntimeService;
-use secret_store::{EncryptedStore, LocalKeyProvider};
+use secret_store::{EncryptedStore, TestKeyProvider};
 use serde_json::json;
 use std::sync::{
     Arc,
@@ -42,7 +42,7 @@ pub(super) async fn rotate_and_revoke(state: &mut LifecycleState) {
         role_pool("hephaestus_app").await,
         role_pool("hephaestus_worker").await,
         EncryptedStore::new(
-            LocalKeyProvider::new("test/v1", [("test/v1", [7_u8; 32])]).expect("app runtime keys"),
+            TestKeyProvider::new("test/v1", [("test/v1", [7_u8; 32])]).expect("app runtime keys"),
         ),
         Arc::new(PostgresMelangeAuthorizer),
     );
@@ -51,7 +51,7 @@ pub(super) async fn rotate_and_revoke(state: &mut LifecycleState) {
         pool.clone(),
         pool.clone(),
         EncryptedStore::new(
-            LocalKeyProvider::new(
+            TestKeyProvider::new(
                 "test/v1",
                 [("test/v1", [7_u8; 32]), ("test/v2", [8_u8; 32])],
             )

@@ -2522,6 +2522,7 @@ dependencies = [
  "secret-application",
  "secret-broker",
  "secret-domain",
+ "secret-key-local",
  "secret-postgres",
  "secret-runtime",
  "secret-store",
@@ -4625,6 +4626,15 @@ dependencies = [
  "thiserror 2.0.19",
  "time",
  "uuid",
+]
+
+[[package]]
+name = "secret-key-local"
+version = "0.1.0"
+dependencies = [
+ "secret-store",
+ "tempfile",
+ "zeroize",
 ]
 
 [[package]]

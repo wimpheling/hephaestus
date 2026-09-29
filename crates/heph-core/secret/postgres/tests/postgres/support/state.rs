@@ -4,6 +4,7 @@ use release_domain::{AgentInstanceId, AgentInstanceRevisionId};
 use runtime_types::RunId;
 use secret_application::RuntimeSecretAuthority;
 use secret_domain::{SecretGrantId, SecretId, SecretImportId, SecretVersionId};
+use secret_store::TestKeyProvider;
 use sqlx::PgPool;
 use std::sync::Arc;
 use uuid::Uuid;
@@ -12,7 +13,7 @@ use uuid::Uuid;
 pub struct LifecycleState {
     pub pool: PgPool,
     pub fixture: Fixture,
-    pub service: Arc<SecretService<super::LocalKeyProvider>>,
+    pub service: Arc<SecretService<TestKeyProvider>>,
     pub owner: AuthenticatedIdentity,
     pub target_manager: AuthenticatedIdentity,
     pub organization_secret_manager: AuthenticatedIdentity,

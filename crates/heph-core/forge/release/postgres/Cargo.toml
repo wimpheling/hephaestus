@@ -39,7 +39,7 @@ mailbox-postgres = { path = "../../../mailbox/postgres" }
 secret-application = { path = "../../../secret/application" }
 secret-domain = { path = "../../../secret/domain" }
 secret-postgres = { path = "../../../secret/postgres" }
-secret-store = { path = "../../../secret/store" }
+secret-store = { path = "../../../secret/store", features = ["test-fixtures"] }
 serial_test = "3"
 tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }
 

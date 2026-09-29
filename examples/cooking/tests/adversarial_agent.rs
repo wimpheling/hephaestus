@@ -19,8 +19,9 @@ use rpc_proto::{
 };
 use secret_application::DeclareBrokeredHttpsRule;
 use secret_domain::{AgentSecretBindingId, SecretCommandKey};
+use secret_key_local::LocalKeyProvider;
 use secret_postgres::SecretService;
-use secret_store::{EncryptedStore, LocalKeyProvider};
+use secret_store::EncryptedStore;
 use sha2::{Digest, Sha256};
 use sqlx::PgPool;
 use std::{error::Error, fmt::Write as _, sync::Arc, time::Duration};

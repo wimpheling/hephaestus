@@ -11,7 +11,7 @@ use secret_domain::{
     SecretRuntimeSessionId, SecretSlotKey, SecretTarget, SecretUsePolicy,
 };
 use secret_postgres::SecretRuntimeService;
-use secret_store::{EncryptedStore, LocalKeyProvider};
+use secret_store::{EncryptedStore, TestKeyProvider};
 use std::sync::Arc;
 use uuid::Uuid;
 
@@ -32,7 +32,7 @@ pub(super) async fn prepare_raw_and_update(state: &mut LifecycleState) {
         pool.clone(),
         pool.clone(),
         EncryptedStore::new(
-            LocalKeyProvider::new("test/v1", [("test/v1", [7_u8; 32])])
+            TestKeyProvider::new("test/v1", [("test/v1", [7_u8; 32])])
                 .expect("runtime fixture keys"),
         ),
         Arc::new(PostgresMelangeAuthorizer),

@@ -41,7 +41,7 @@ mod tests {
     use super::{SecretRuntimeService, SecretService, initialize_manager};
     use authz_postgres::PostgresMelangeAuthorizer;
     use heph_secret::EphemeralSecretConfig;
-    use secret_store::{EncryptedStore, LocalKeyProvider};
+    use secret_store::{EncryptedStore, TestKeyProvider};
     use sqlx::postgres::PgPoolOptions;
     use std::{path::PathBuf, sync::Arc};
 
@@ -52,7 +52,7 @@ mod tests {
             .connect_lazy("postgres://localhost/hephaestus")
             .expect("lazy PostgreSQL pool");
         let keys =
-            LocalKeyProvider::new("test/v1", [("test/v1", [7_u8; 32])]).expect("test key provider");
+            TestKeyProvider::new("test/v1", [("test/v1", [7_u8; 32])]).expect("test key provider");
         let authorizer = Arc::new(PostgresMelangeAuthorizer);
         let dispatch = SecretService::new(
             pool.clone(),

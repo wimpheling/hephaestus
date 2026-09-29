@@ -13,7 +13,7 @@ use secret_domain::{
     SecretValue, SecretVersionId,
 };
 use secret_postgres::SecretService;
-use secret_store::{EncryptedStore, LocalKeyProvider};
+use secret_store::{EncryptedStore, TestKeyProvider};
 use serde_json::json;
 use sqlx::PgPool;
 use std::sync::Arc;
@@ -255,7 +255,7 @@ pub(super) async fn prepare(pool: &PgPool, fixture: &Fixture) -> Prepared {
     let secret_service = SecretService::new(
         pool.clone(),
         EncryptedStore::new(
-            LocalKeyProvider::new("test/v1", [("test/v1", [7_u8; 32])])
+            TestKeyProvider::new("test/v1", [("test/v1", [7_u8; 32])])
                 .expect("fixture key should validate"),
         ),
         Arc::new(PostgresMelangeAuthorizer),

@@ -266,6 +266,7 @@ pub(super) fn is_storage_path(path: &Path) -> bool {
             "crates/heph-std/runtime/volume/local",
             "crates/heph-std/runtime/workspace/local",
             "crates/heph-std/secret/runtime",
+            "crates/heph-std/secret/key-local",
         ]
         .iter()
         .any(|prefix| path.starts_with(prefix))

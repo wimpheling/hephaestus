@@ -16,7 +16,6 @@ use secret_application::{
 };
 use secret_domain::SecretValue;
 use secret_postgres::SecretService;
-use secret_store::LocalKeyProvider;
 use std::sync::{
     Arc, Mutex,
     atomic::{AtomicBool, Ordering},

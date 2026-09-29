@@ -5,7 +5,7 @@ use secret_domain::{
     DeliveryMode, SecretId, SecretName, SecretOwner, SecretValue, SecretVersionId,
 };
 use secret_postgres::SecretService;
-use secret_store::{EncryptedStore, LocalKeyProvider};
+use secret_store::{EncryptedStore, TestKeyProvider};
 use std::sync::Arc;
 
 pub(super) async fn initialize() -> Option<LifecycleState> {
@@ -18,7 +18,7 @@ pub(super) async fn initialize() -> Option<LifecycleState> {
     let service = Arc::new(SecretService::new(
         pool.clone(),
         EncryptedStore::new(
-            LocalKeyProvider::new(
+            TestKeyProvider::new(
                 "test/v1",
                 [("test/v1", [7_u8; 32]), ("test/v2", [8_u8; 32])],
             )

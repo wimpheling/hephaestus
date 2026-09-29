@@ -6,8 +6,8 @@ use registry_domain::RegistryAuthority;
 use registry_notification::CallbackCredential;
 use registry_token::{RegistryTokenIssuer, SigningKey, TokenLifetime};
 use secret_broker::DenyingBrokerAdapter;
+use secret_key_local::LocalKeyProvider;
 use secret_runtime::EphemeralSecretConfig;
-use secret_store::LocalKeyProvider;
 use std::{
     collections::BTreeMap,
     fs,

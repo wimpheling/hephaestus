@@ -15,9 +15,10 @@ use mailbox_dispatch::MailboxOutboxPublisher;
 use oci_builder_worker::OciWorkerError;
 use review_service::ReviewOutboxPublisher;
 use runtime_types::{CommandId, RunId};
+use secret_key_local::LocalKeyProvider;
 use secret_postgres::{SecretRuntimeService, SecretService, initialize_manager};
 use secret_runtime::FilesystemSecretMountProvider;
-use secret_store::{EncryptedStore, LocalKeyProvider};
+use secret_store::EncryptedStore;
 use tokio::{sync::oneshot, task::JoinHandle};
 pub async fn reap_failed_start(tasks: Vec<JoinHandle<Result<(), String>>>) {
     for task in tasks {

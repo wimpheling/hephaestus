@@ -44,7 +44,7 @@ use secret_domain::{
 };
 use secret_postgres::SecretService;
 use secret_runtime::EphemeralSecretConfig;
-use secret_store::{EncryptedStore, LocalKeyProvider};
+use secret_store::EncryptedStore;
 use serial_test::serial;
 use sha2::{Digest, Sha256};
 use sqlx::{Row, postgres::PgPoolOptions};

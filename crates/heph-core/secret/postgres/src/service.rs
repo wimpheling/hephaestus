@@ -202,7 +202,7 @@ mod tests {
         EphemeralSecretConfig, MaterializedSecretMount, RawSecretFile, SecretMountProvider,
         SecretRuntimeError,
     };
-    use secret_store::{EncryptedStore, LocalKeyProvider, SecretStoreError};
+    use secret_store::{EncryptedStore, SecretStoreError, TestKeyProvider};
     use sqlx::postgres::PgPoolOptions;
     use std::{collections::BTreeSet, sync::Arc};
     use uuid::Uuid;
@@ -253,13 +253,13 @@ mod tests {
         }
     }
 
-    fn runtime_service() -> SecretRuntimeService<LocalKeyProvider> {
+    fn runtime_service() -> SecretRuntimeService<TestKeyProvider> {
         let pool = PgPoolOptions::new()
             .max_connections(1)
             .connect_lazy("postgres://localhost/hephaestus")
             .expect("lazy PostgreSQL pool");
         let keys =
-            LocalKeyProvider::new("test/v1", [("test/v1", [7_u8; 32])]).expect("test key provider");
+            TestKeyProvider::new("test/v1", [("test/v1", [7_u8; 32])]).expect("test key provider");
         SecretRuntimeService::new(
             pool.clone(),
             pool,

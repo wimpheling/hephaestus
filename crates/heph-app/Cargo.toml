@@ -95,6 +95,7 @@ runtime-handoff-local = { path = "../heph-std/authorization/runtime-handoff-loca
 runtime-git-authority = { path = "../heph-core/authorization/runtime-git-authority" }
 runtime-git-authority-postgres = { path = "../heph-core/authorization/runtime-git-authority-postgres" }
 secret-broker = { path = "../heph-std/secret/broker" }
+secret-key-local = { path = "../heph-std/secret/key-local" }
 secret-domain = { path = "../heph-core/secret/domain" }
 secret-runtime = { path = "../heph-std/secret/runtime" }
 secret-postgres = { path = "../heph-core/secret/postgres" }

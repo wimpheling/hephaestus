@@ -5,7 +5,7 @@ use release_domain::AgentAttachmentId;
 use secret_application::{BrokerRequest, ResolveRunSecrets, SecretServiceError};
 use secret_domain::{ExecutionPhase, SecretRuntimeSessionId, SecretSlotKey};
 use secret_postgres::SecretRuntimeService;
-use secret_store::{EncryptedStore, LocalKeyProvider};
+use secret_store::{EncryptedStore, TestKeyProvider};
 use std::sync::{Arc, atomic::AtomicBool};
 use uuid::Uuid;
 
@@ -35,7 +35,7 @@ pub(super) async fn finalize_and_purge(state: &LifecycleState) {
         pool.clone(),
         pool.clone(),
         EncryptedStore::new(
-            LocalKeyProvider::new(
+            TestKeyProvider::new(
                 "test/v1",
                 [("test/v1", [7_u8; 32]), ("test/v2", [8_u8; 32])],
             )

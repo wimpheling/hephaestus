@@ -11,9 +11,15 @@ mod model;
 mod store;
 
 pub use error::SecretStoreError;
-pub use keys::{KeyProvider, LocalKeyProvider};
+pub use keys::KeyProvider;
 pub use model::{ALGORITHM, EncryptedSecretVersion, VersionContext};
 pub use store::EncryptedStore;
+
+#[cfg(any(test, feature = "test-fixtures"))]
+pub use test_keys::TestKeyProvider;
+
+#[cfg(any(test, feature = "test-fixtures"))]
+mod test_keys;
 
 #[cfg(test)]
 #[path = "tests/secret_store.rs"]

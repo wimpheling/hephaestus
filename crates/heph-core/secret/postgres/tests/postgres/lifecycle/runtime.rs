@@ -9,7 +9,7 @@ use secret_application::{
 };
 use secret_domain::SecretSlotKey;
 use secret_postgres::SecretRuntimeService;
-use secret_store::{EncryptedStore, LocalKeyProvider};
+use secret_store::{EncryptedStore, TestKeyProvider};
 use serde_json::json;
 use std::sync::{
     Arc, Mutex,
@@ -29,7 +29,7 @@ pub(super) async fn exercise_brokered_runtime(state: &LifecycleState) {
         pool.clone(),
         pool.clone(),
         EncryptedStore::new(
-            LocalKeyProvider::new(
+            TestKeyProvider::new(
                 "test/v1",
                 [("test/v1", [7_u8; 32]), ("test/v2", [8_u8; 32])],
             )

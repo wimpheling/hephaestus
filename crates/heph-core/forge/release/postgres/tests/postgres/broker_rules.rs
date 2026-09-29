@@ -14,7 +14,7 @@ use secret_domain::{
     SecretValue, SecretVersionId,
 };
 use secret_postgres::SecretService;
-use secret_store::{EncryptedStore, LocalKeyProvider};
+use secret_store::{EncryptedStore, TestKeyProvider};
 
 #[path = "broker_rules/fixtures.rs"]
 mod fixtures;
