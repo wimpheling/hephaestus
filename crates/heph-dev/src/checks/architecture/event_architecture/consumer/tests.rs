@@ -17,6 +17,9 @@ fn mailbox_nats_subtree_is_exactly_the_command_adapter_boundary() {
     assert!(is_nats_event_adapter(Path::new(
         "crates/heph-std/run/nats/src/lib.rs"
     )));
+    assert!(is_nats_event_adapter(Path::new(
+        "crates/heph-std/forge/review/nats/src/lib.rs"
+    )));
     assert!(!is_nats_event_adapter(Path::new(
         "crates/heph-core/runtime/run/orchestrator/src/nats.rs"
     )));

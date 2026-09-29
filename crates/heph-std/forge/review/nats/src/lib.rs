@@ -1,13 +1,12 @@
-//! NATS transport for durable review and run commands.
+//! NATS `JetStream` adapters for durable review commands.
 
-use super::{
-    CONTROL_EXECUTE_SUBJECT, ControlCommand, ControlHandlingError, ControlOutcome,
-    ReviewControlService,
-};
 use async_nats::{HeaderMap, jetstream};
-use async_trait::async_trait;
+use review_domain::{CONTROL_EXECUTE_SUBJECT, ControlCommand};
+use review_service::{
+    ControlOutcome, ControlServiceError, ReviewControlService, ReviewOutboxRecord,
+    ReviewOutboxStore, ReviewOutboxStoreError,
+};
 use std::sync::Arc;
-use uuid::Uuid;
 
 const COMMAND_SUBJECTS: [&str; 3] = [
     CONTROL_EXECUTE_SUBJECT,
@@ -43,39 +42,6 @@ impl ReviewOutboxPublisher {
         Ok(count)
     }
 }
-
-/// Provider-neutral durable command publication record.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct ReviewOutboxRecord {
-    /// Durable message identifier used for broker deduplication.
-    pub id: Uuid,
-    /// Broker subject.
-    pub subject: String,
-    /// Serialized command payload.
-    pub payload: serde_json::Value,
-}
-
-/// Persistence boundary for review-owned command outbox records.
-#[async_trait]
-pub trait ReviewOutboxStore: Send + Sync {
-    /// Claims up to `limit` unpublished messages on the selected subjects.
-    async fn claim_pending(
-        &self,
-        subjects: &[&str],
-        limit: i64,
-    ) -> Result<Vec<ReviewOutboxRecord>, ReviewOutboxStoreError>;
-
-    /// Marks a broker-confirmed message as published.
-    async fn mark_published(&self, id: Uuid) -> Result<(), ReviewOutboxStoreError>;
-
-    /// Records a failed publication attempt.
-    async fn mark_failed(&self, id: Uuid, error: &str) -> Result<(), ReviewOutboxStoreError>;
-}
-
-/// Provider-neutral outbox persistence failure.
-#[derive(Debug, thiserror::Error)]
-#[error("review outbox store failed: {0}")]
-pub struct ReviewOutboxStoreError(pub String);
 
 async fn publish_row(
     context: &jetstream::Context,
@@ -155,4 +121,22 @@ impl NatsControlHandler {
             .map_err(|error| ControlHandlingError::Acknowledgement(error.to_string()))?;
         Ok(result)
     }
+}
+
+/// Control delivery failure at the NATS transport boundary.
+#[derive(Debug, thiserror::Error)]
+#[non_exhaustive]
+pub enum ControlHandlingError {
+    /// Delivery used an unsupported subject.
+    #[error("unsupported control subject {0}")]
+    UnknownSubject(String),
+    /// Delivery payload was not a valid command.
+    #[error(transparent)]
+    Serialization(#[from] serde_json::Error),
+    /// Durable processing failed.
+    #[error(transparent)]
+    Service(#[from] ControlServiceError),
+    /// `JetStream` did not confirm acknowledgement.
+    #[error("control acknowledgement failed: {0}")]
+    Acknowledgement(String),
 }

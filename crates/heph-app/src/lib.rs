@@ -217,8 +217,9 @@ use release_postgres::{
 use release_service::{
     UiBrowserRepositoryGitAuthorization, UiBrowserSessionStore, UiGenerationHostResolver,
 };
+use review_nats::{NatsControlHandler, ReviewOutboxPublisher};
 use review_postgres::PostgresReviewRepository;
-use review_service::{NatsControlHandler, ReviewControlService, ReviewOutboxPublisher};
+use review_service::ReviewControlService;
 use run_nats::{NatsCommandHandler, ensure_jetstream_topology};
 use run_postgres::PgRunRepository;
 use run_runtime_local::{

@@ -13,7 +13,7 @@ use heph_secret::EphemeralSecretConfig;
 use mailbox_dispatch::MailboxDispatchStore;
 use mailbox_dispatch::MailboxOutboxPublisher;
 use oci_builder_worker::OciWorkerError;
-use review_service::ReviewOutboxPublisher;
+use review_nats::ReviewOutboxPublisher;
 use runtime_types::{CommandId, RunId};
 use secret_key_local::LocalKeyProvider;
 use secret_postgres::{SecretRuntimeService, SecretService, initialize_manager};

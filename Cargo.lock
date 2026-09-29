@@ -2504,6 +2504,7 @@ dependencies = [
  "release-service",
  "reqwest",
  "review-domain",
+ "review-nats",
  "review-postgres",
  "review-service",
  "rpc-proto",
@@ -4140,6 +4141,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "review-nats"
+version = "0.1.0"
+dependencies = [
+ "async-nats",
+ "review-domain",
+ "review-service",
+ "serde_json",
+ "thiserror 2.0.19",
+]
+
+[[package]]
 name = "review-postgres"
 version = "0.1.0"
 dependencies = [
@@ -4168,7 +4180,6 @@ dependencies = [
 name = "review-service"
 version = "0.1.0"
 dependencies = [
- "async-nats",
  "async-trait",
  "forge-domain",
  "review-domain",

@@ -51,6 +51,7 @@ members = [
     "crates/heph-std/forge/release/*",
     "crates/heph-std/forge/review/*",
     "crates/heph-std/forge/nats",
+    "crates/heph-std/forge/review/nats",
     "crates/heph-std/forge/registry/*",
     "crates/heph-app",
     "crates/heph-app/bootstrap",

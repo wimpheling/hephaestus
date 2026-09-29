@@ -1,0 +1,20 @@
+[package]
+name = "review-nats"
+description = "NATS JetStream adapters for durable review commands"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+
+[package.metadata.hephaestus]
+layer = "adapter"
+context = "review"
+
+[dependencies]
+async-nats.workspace = true
+review-domain = { path = "../../../../heph-core/forge/review/domain" }
+review-service = { path = "../../../../heph-core/forge/review/service" }
+serde_json.workspace = true
+thiserror.workspace = true
+
+[lints]
+workspace = true

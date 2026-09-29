@@ -10,7 +10,6 @@ layer = "application"
 context = "review"
 
 [dependencies]
-async-nats.workspace = true
 async-trait.workspace = true
 forge-domain = { path = "../../domain" }
 review-domain = { path = "../domain" }
