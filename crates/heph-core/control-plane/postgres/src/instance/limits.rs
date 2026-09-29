@@ -1,0 +1,12 @@
+pub const MAX_REVISIONS: usize = 200;
+pub const MAX_ATTACHMENTS: usize = 200;
+pub const MAX_UPDATES: usize = 100;
+pub const MAX_REPOSITORIES: usize = 200;
+pub const MAX_IMPORTS: usize = 200;
+pub const MAX_CANDIDATES: usize = 100;
+pub const MAX_CAPABILITY_REQUIREMENTS: usize = 400;
+pub const MAX_CAPABILITY_RESOURCES: usize = 400;
+pub const MAX_CAPABILITY_BINDINGS: usize = 400;
+pub const MAX_RUNTIME_SESSIONS: usize = 100;
+pub const MAX_CAPABILITY_AUDIT: usize = 200;
+pub const MAX_MAILBOX_DELIVERIES: usize = 100;

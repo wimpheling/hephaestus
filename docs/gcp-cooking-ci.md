@@ -36,6 +36,12 @@ read back as `vars.GCP_RUNNER_IMAGE=hephaestus-runner-528dbd58f75901c5dc3e0844ac
 with rollback `hephaestus-runner-f285fc2b8157f8053383fc98bcaec83d`; no images
 were retired. The paired evidence is recorded below.
 
+The legacy self-hosted `heph-kvm` GitHub Actions path is currently unmaintained
+and disabled. This workflow no longer runs for pull requests or `main` pushes,
+and the retained `cooking` dispatch choice is intentionally skipped. Use the
+manual `gcp-cooking` dispatch from trusted `main` for the supported hosted path;
+it runs the disposable nested-KVM workload from `ubuntu-latest`.
+
 ## Historical full-evidence baseline (2026-09-22)
 
 The earlier successful baseline [35719717491](https://github.com/wimpheling/hephaestus/actions/runs/35719717491)
@@ -375,7 +381,7 @@ settings are:
 | `smoke` | Ubuntu 24.04 `n2-standard-8`, 150 GB `pd-balanced` | nested KVM; auto-delete disk; 45-minute provider `DELETE` lifetime | runtime service account, `storage-rw` scope for private diagnostics/cache |
 | `gcp-cooking` | Ubuntu 24.04 `n2-standard-8`, 150 GB `pd-balanced` | nested KVM; auto-delete disk; 45-minute provider `DELETE` lifetime | runtime service account, `storage-rw` scope |
 | `image-build` | disposable SA-less `n2-standard-8` builder | versioned source disk; image capture after stop; explicit cleanup | no service account and no scopes |
-| `cooking` | prepared self-hosted `heph-kvm` runner | 30-minute job; local fixture timeout is 1,500 seconds | runner environment, outside GCP |
+| `cooking` | disabled legacy self-hosted `heph-kvm` path | no GitHub job; local fixture timeout is 1,500 seconds | runner is currently unmaintained |
 
 Quota output proves quota arithmetic, not zonal capacity. The cloud control
 script is [`scripts/gcp-kvm-smoke.sh`](../scripts/gcp-kvm-smoke.sh). It labels
@@ -718,7 +724,8 @@ not run either script with personal local gcloud credentials.
 
 ## Dispatch and acceptance gate
 
-Dispatch from the immutable `main` workflow reference. Use this sequence:
+Dispatch from the immutable `main` workflow reference. Pull requests and `main`
+pushes do not trigger the legacy self-hosted path. Use this sequence:
 
 1. Run `preflight` and inspect regional quota output.
 2. Run `cache-preflight`; a missing or mismatched object must stop before VM

@@ -1,0 +1,22 @@
+[package]
+name = "identity-application"
+description = "Provider-neutral identity application operations and ports"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+
+[package.metadata.hephaestus]
+layer = "application"
+context = "identity"
+
+[dependencies]
+async-trait.workspace = true
+identity-domain = { path = "../domain" }
+serde_json.workspace = true
+thiserror.workspace = true
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["macros", "rt"] }
+
+[lints]
+workspace = true

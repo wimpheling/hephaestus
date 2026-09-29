@@ -1,0 +1,25 @@
+[package]
+name = "release-service"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+
+[package.metadata.hephaestus]
+layer = "application"
+context = "release"
+
+[dependencies]
+async-trait.workspace = true
+capability-domain = { path = "../../../authorization/capability-domain" }
+gateway-domain = { path = "../../../gateway/domain" }
+forge-domain = { path = "../../domain" }
+git-capability-domain = { path = "../../git-capability" }
+identity-domain = { path = "../../../identity/domain" }
+release-domain = { path = "../domain" }
+runtime-types = { path = "../../../platform/runtime-types" }
+time.workspace = true
+thiserror.workspace = true
+uuid.workspace = true
+
+[lints]
+workspace = true

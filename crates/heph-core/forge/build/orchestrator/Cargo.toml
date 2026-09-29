@@ -1,0 +1,39 @@
+[package]
+name = "build-orchestrator"
+description = "Isolated exact-source build execution and immutable artifact import"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+
+[package.metadata.hephaestus]
+layer = "worker"
+context = "build"
+allow_cross_context_dependencies = ["release-artifact-store", "release-postgres"]
+
+[dependencies]
+async-trait.workspace = true
+agent-config = { path = "../../../platform/agent-config" }
+builder-catalog-application = { path = "../../../image/application" }
+release-artifact-store = { path = "../../release/artifact-store" }
+release-domain = { path = "../../release/domain" }
+release-postgres = { path = "../../release/postgres" }
+release-service = { path = "../../release/service" }
+runtime-types = { path = "../../../platform/runtime-types" }
+serde.workspace = true
+serde_json.workspace = true
+sha2.workspace = true
+thiserror.workspace = true
+tokio = { workspace = true, features = ["fs", "macros", "process", "rt", "sync", "time"] }
+tracing.workspace = true
+uuid.workspace = true
+vm-trait.workspace = true
+
+[dev-dependencies]
+async-trait.workspace = true
+builder-catalog-domain = { path = "../../../image/domain" }
+serial_test = "3"
+tempfile = "3"
+tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }
+
+[lints]
+workspace = true

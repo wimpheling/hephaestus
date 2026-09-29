@@ -1,0 +1,43 @@
+[package]
+name = "control-plane-postgres"
+description = "PostgreSQL adapter for control-plane repository metadata queries"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+async-trait.workspace = true
+authz-domain = { path = "../../authorization/authz-domain" }
+identity-domain = { path = "../../identity/domain" }
+agent-config = { path = "../../platform/agent-config" }
+authz-postgres = { path = "../../authorization/authz-postgres" }
+release-artifact-store = { path = "../../forge/release/artifact-store" }
+sha2.workspace = true
+futures-util.workspace = true
+forge-domain = { path = "../../forge/domain" }
+forge-service = { path = "../../forge/service" }
+release-domain = { path = "../../forge/release/domain" }
+run-domain = { path = "../../run/domain" }
+run-orchestrator = { path = "../../run/orchestrator" }
+secret-domain = { path = "../../secret/domain" }
+tokio = { workspace = true, features = ["fs", "io-util", "macros", "rt", "sync"] }
+serde_json.workspace = true
+serde.workspace = true
+sqlx.workspace = true
+thiserror.workspace = true
+tracing.workspace = true
+time.workspace = true
+uuid.workspace = true
+
+[package.metadata.hephaestus]
+layer = "adapter"
+context = "control-plane"
+allow_cross_context_dependencies = ["authz-postgres", "release-artifact-store"]
+postgres_adapter = true
+database_context = "control-plane"
+
+[lints]
+workspace = true
+
+[dev-dependencies]
+tempfile = "3"

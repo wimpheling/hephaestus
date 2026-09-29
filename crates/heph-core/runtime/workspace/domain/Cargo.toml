@@ -1,0 +1,25 @@
+[package]
+name = "workspace-domain"
+description = "Provider-neutral repository workspace and agent-result contracts"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+
+[package.metadata.hephaestus]
+layer = "domain"
+context = "workspace"
+
+[dependencies]
+async-trait.workspace = true
+git-capability-domain = { path = "../../../forge/git-capability" }
+run-domain = { path = "../../../run/domain" }
+runtime-types = { path = "../../../platform/runtime-types" }
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+time.workspace = true
+uuid.workspace = true
+vm-trait.workspace = true
+
+[lints]
+workspace = true

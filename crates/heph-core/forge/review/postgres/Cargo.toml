@@ -1,0 +1,41 @@
+[package]
+name = "review-postgres"
+description = "PostgreSQL persistence adapter for durable review controls"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+async-trait.workspace = true
+authz-domain = { path = "../../../authorization/authz-domain" }
+authz-postgres = { path = "../../../authorization/authz-postgres" }
+forge-domain = { path = "../../domain" }
+forge-service = { path = "../../service" }
+identity-domain = { path = "../../../identity/domain" }
+release-domain = { path = "../../release/domain" }
+review-domain = { path = "../domain" }
+review-service = { path = "../service" }
+run-domain = { path = "../../../run/domain" }
+runtime-types = { path = "../../../platform/runtime-types" }
+serde_json.workspace = true
+sqlx.workspace = true
+time.workspace = true
+uuid.workspace = true
+
+[dev-dependencies]
+control-plane-postgres = { path = "../../../control-plane/postgres" }
+forge-service = { path = "../../service" }
+identity-domain = { path = "../../../identity/domain" }
+serial_test = "3"
+tempfile = "3"
+tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }
+
+[lints]
+workspace = true
+
+[package.metadata.hephaestus]
+layer = "adapter"
+context = "review"
+allow_cross_context_dependencies = ["authz-postgres"]
+postgres_adapter = true
+database_context = "review"

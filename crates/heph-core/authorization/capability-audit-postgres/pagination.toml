@@ -1,0 +1,12 @@
+# Stable cursor contract for capability inspection history. This uses a
+# timestamp/UUID tuple cursor supplied by CapabilityAuditPage::before.
+
+[[queries]]
+item = "PostgresCapabilityAuditRepository::list_for_run"
+query_index = 3
+order = ["occurred_at DESC", "id DESC"]
+cursor_keys = ["occurred_at", "id"]
+cursor_operator = "<"
+unique_tie_breaker = "id"
+unique_keys = ["id"]
+cursor_mode = "tuple"

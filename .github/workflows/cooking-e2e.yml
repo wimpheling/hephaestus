@@ -7,12 +7,9 @@ run-name: >-
         inputs.cooking_scenario == 'session-chat' && 'session-chat' || 'Cooking',
         inputs.pr_number != '' && format(' (PR #{0})', inputs.pr_number) || '')
       || github.event_name == 'workflow_dispatch' && inputs.cloud_mode == 'cooking'
-      && 'MVP-05 Cooking (self-hosted)'
+      && 'MVP-05 Cooking (self-hosted unavailable)'
       || github.event_name == 'workflow_dispatch'
-      && format('GCP maintenance / {0}', inputs.cloud_mode)
-      || github.event_name == 'pull_request'
-      && format('MVP-05 Cooking (self-hosted PR #{0})', github.event.pull_request.number)
-      || 'MVP-05 Cooking (self-hosted push)' }}
+      && format('GCP maintenance / {0}', inputs.cloud_mode) }}
 
 on:
   workflow_dispatch:
@@ -21,6 +18,8 @@ on:
         description: 'Read quota, build or use the immutable runner image, inspect the Cooking cache, triage a retained private diagnostics bundle, run the diagnostic VM, run the disposable smoke VM, run GCP Cooking, or run legacy Cooking'
         required: true
         type: choice
+        # `cooking` remains for compatibility, but its unmaintained self-hosted
+        # runner job is disabled below. Use `gcp-cooking` for hosted E2E.
         options: [preflight, image-build, image-retire, cache-preflight, diagnostics-triage, diagnostic, smoke, gcp-cooking, provider-metrics, cooking]
         default: preflight
       runner_image:
@@ -101,9 +100,8 @@ on:
         type: choice
         options: [none, setup]
         default: none
-  pull_request:
-  push:
-    branches: [main]
+  # Pull requests and main pushes do not start the unmaintained self-hosted
+  # Cooking runner. Supported E2E runs are manually dispatched from main.
 
 permissions:
   contents: read
@@ -462,7 +460,9 @@ jobs:
           retention-days: 1
 
   cooking:
-    if: ${{ (github.event_name != 'workflow_dispatch' || inputs.cloud_mode == 'cooking') && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository) }}
+    # No maintained heph-kvm runner is registered. Keep this compatibility job
+    # disabled so PRs and pushes cannot remain queued indefinitely.
+    if: ${{ false }}
     runs-on: [self-hosted, Linux, X64, heph-kvm]
     timeout-minutes: 30
     env:

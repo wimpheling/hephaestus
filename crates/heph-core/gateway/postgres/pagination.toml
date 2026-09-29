@@ -1,0 +1,73 @@
+# Stable cursor contracts for gateway management and service projections.
+
+[[queries]]
+item = "PostgresGatewayManagement::list_project"
+query_index = 1
+order = ["id ASC"]
+cursor_keys = ["id"]
+cursor_operator = ">"
+unique_tie_breaker = "id"
+unique_keys = ["id"]
+
+[[queries]]
+item = "PostgresGatewayManagement::ingress"
+query_index = 1
+order = ["id DESC"]
+cursor_keys = ["id"]
+cursor_operator = "<"
+unique_tie_breaker = "id"
+unique_keys = ["id"]
+
+[[queries]]
+item = "PostgresGatewayManagement::mailbox_bindings"
+query_index = 1
+order = ["binding.id ASC"]
+cursor_keys = ["binding.id"]
+cursor_operator = ">"
+unique_tie_breaker = "binding.id"
+unique_keys = ["binding.id"]
+
+[[queries]]
+item = "PostgresGatewayManagement::mailbox_publications"
+query_index = 1
+order = ["publication.id DESC"]
+cursor_keys = ["publication.id"]
+cursor_operator = "<"
+unique_tie_breaker = "publication.id"
+unique_keys = ["publication.id"]
+
+[[queries]]
+item = "PostgresGatewayServiceTargets::list_service_targets"
+query_index = 1
+order = ["gateway.id ASC"]
+cursor_keys = ["gateway.id"]
+cursor_operator = ">"
+unique_tie_breaker = "gateway.id"
+unique_keys = ["gateway.id"]
+
+[[queries]]
+item = "PostgresGatewayServiceTargets::list_service_instances"
+query_index = 1
+order = ["id ASC"]
+cursor_keys = ["id"]
+cursor_operator = ">"
+unique_tie_breaker = "id"
+unique_keys = ["id"]
+
+[[queries]]
+item = "PostgresGatewayServiceLogStore::list_projects"
+query_index = 1
+order = ["project_id ASC"]
+cursor_keys = ["project_id"]
+cursor_operator = ">"
+unique_tie_breaker = "project_id"
+unique_keys = ["project_id"]
+
+[[queries]]
+item = "PostgresGatewayServiceLogReader::get_page"
+query_index = 1
+order = ["sequence ASC"]
+cursor_keys = ["sequence"]
+cursor_operator = ">"
+unique_tie_breaker = "sequence"
+unique_keys = ["sequence"]

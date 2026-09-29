@@ -206,7 +206,7 @@ class GcpCookingScenarioContractTests(unittest.TestCase):
             self.assertEqual(cooking_result.returncode, 0, cooking_result.stderr)
 
     def test_session_phase_profile_matches_real_emitter_boundaries(self) -> None:
-        golden = (ROOT.parent / "crates/hephaestus-app/tests/golden.rs").read_text(
+        golden = (ROOT.parent / "crates/heph-app/tests/golden.rs").read_text(
             encoding="utf-8"
         )
         libkrun = (ROOT / "run-libkrun-integration.sh").read_text(encoding="utf-8")

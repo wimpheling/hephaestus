@@ -1,0 +1,27 @@
+[package]
+name = "review-service"
+description = "Authorized durable controls and controlled Git result approval"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+
+[package.metadata.hephaestus]
+layer = "application"
+context = "review"
+
+[dependencies]
+async-nats.workspace = true
+async-trait.workspace = true
+forge-domain = { path = "../../domain" }
+review-domain = { path = "../domain" }
+runtime-types = { path = "../../../platform/runtime-types" }
+serde_json.workspace = true
+thiserror.workspace = true
+tokio = { workspace = true, features = ["process"] }
+uuid.workspace = true
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }
+
+[lints]
+workspace = true

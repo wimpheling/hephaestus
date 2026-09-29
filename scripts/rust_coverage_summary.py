@@ -5,15 +5,17 @@ from __future__ import annotations
 
 import argparse
 import csv
+import json
 import re
+import subprocess
 import sys
-import tomllib
 from dataclasses import dataclass
 from pathlib import Path
 
 
-EXCLUDED_SOURCE = re.compile(r"(?:^|/)crates/rpc-proto/src/generated/")
-CRATE_SOURCE = re.compile(r"(?:^|/)crates/([^/]+)/")
+EXCLUDED_SOURCE = re.compile(
+    r"(?:^|/)crates/heph-core/platform/rpc-proto/src/generated/"
+)
 
 
 class CoverageError(ValueError):
@@ -50,41 +52,62 @@ def parse_args() -> argparse.Namespace:
     return parser.parse_args()
 
 
-def workspace_crates(repo_root: Path) -> list[str]:
-    """Read package names from every root workspace crate manifest."""
-    crates_root = repo_root / "crates"
-    manifests = sorted(crates_root.glob("*/Cargo.toml"))
-    if not manifests:
-        raise CoverageError(f"no crate manifests found under {crates_root}")
-    packages: list[str] = []
-    for manifest in manifests:
-        try:
-            with manifest.open("rb") as handle:
-                package = tomllib.load(handle).get("package", {})
-        except (OSError, tomllib.TOMLDecodeError) as error:
-            raise CoverageError(f"cannot read {manifest}: {error}") from error
+def workspace_crates(repo_root: Path) -> dict[str, Path]:
+    """Read workspace package names and manifest directories from Cargo metadata."""
+    try:
+        result = subprocess.run(
+            ["cargo", "metadata", "--format-version", "1", "--no-deps"],
+            cwd=repo_root,
+            check=False,
+            capture_output=True,
+            text=True,
+        )
+    except OSError as error:
+        raise CoverageError(f"cannot run cargo metadata: {error}") from error
+    if result.returncode != 0:
+        detail = result.stderr.strip() or result.stdout.strip()
+        raise CoverageError(f"cargo metadata failed: {detail}")
+    try:
+        metadata = json.loads(result.stdout)
+    except json.JSONDecodeError as error:
+        raise CoverageError(f"cargo metadata returned invalid JSON: {error}") from error
+
+    packages: dict[str, Path] = {}
+    for package in metadata.get("packages", []):
         name = package.get("name")
+        manifest = package.get("manifest_path")
         if not isinstance(name, str) or not name:
-            raise CoverageError(f"{manifest} has no package.name")
-        packages.append(name)
-    if len(packages) != len(set(packages)):
-        raise CoverageError("workspace package names are not unique")
-    return packages
+            raise CoverageError("cargo metadata contains a package without a name")
+        if not isinstance(manifest, str) or not manifest:
+            raise CoverageError(f"cargo metadata package {name!r} has no manifest path")
+        if name in packages:
+            raise CoverageError(f"workspace package names are not unique: {name!r}")
+        packages[name] = Path(manifest).resolve().parent
+    if not packages:
+        raise CoverageError("cargo metadata returned no workspace packages")
+    return dict(sorted(packages.items()))
 
 
-def source_crate(source: str, packages: set[str]) -> str:
-    """Map an LCOV source path to its workspace crate package name."""
+def source_crate(source: str, packages: dict[str, Path], repo_root: Path) -> str:
+    """Map an LCOV source path to the deepest matching workspace package."""
     normalized = source.replace("\\", "/")
-    match = CRATE_SOURCE.search(normalized)
-    if match is None:
-        raise CoverageError(f"LCOV source is outside crates/*: {source}")
-    crate = match.group(1)
-    if crate not in packages:
-        raise CoverageError(f"LCOV source names unknown workspace crate {crate!r}: {source}")
-    return crate
+    source_path = Path(normalized)
+    if not source_path.is_absolute():
+        source_path = repo_root / source_path
+    source_path = source_path.resolve()
+    matches = [
+        (package_root, name)
+        for name, package_root in packages.items()
+        if source_path == package_root or package_root in source_path.parents
+    ]
+    if not matches:
+        raise CoverageError(f"LCOV source is outside workspace packages: {source}")
+    return max(matches, key=lambda match: len(match[0].parts))[1]
 
 
-def parse_lcov(path: Path, packages: set[str]) -> dict[str, LineCoverage]:
+def parse_lcov(
+    path: Path, packages: dict[str, Path], repo_root: Path
+) -> dict[str, LineCoverage]:
     """Parse LCOV LF/LH totals and require cargo-llvm-cov filtering."""
     if not path.is_file():
         raise CoverageError(f"LCOV file does not exist: {path}")
@@ -105,7 +128,7 @@ def parse_lcov(path: Path, packages: set[str]) -> dict[str, LineCoverage]:
             )
         if line_total is None or line_hit is None:
             raise CoverageError(f"incomplete LCOV record for {source}")
-        crate = source_crate(source, packages)
+        crate = source_crate(source, packages, repo_root)
         coverage.setdefault(crate, LineCoverage()).add(line_hit, line_total)
         source = None
         line_total = None
@@ -192,9 +215,10 @@ def main() -> int:
     args = parse_args()
     try:
         packages = workspace_crates(args.repo_root.resolve())
-        coverage = parse_lcov(args.lcov.resolve(), set(packages))
-        write_csv(args.csv, packages, coverage)
-        rendered = markdown(packages, coverage)
+        coverage = parse_lcov(args.lcov.resolve(), packages, args.repo_root.resolve())
+        package_names = list(packages)
+        write_csv(args.csv, package_names, coverage)
+        rendered = markdown(package_names, coverage)
         args.markdown.parent.mkdir(parents=True, exist_ok=True)
         args.markdown.write_text(rendered, encoding="utf-8")
     except (CoverageError, OSError) as error:

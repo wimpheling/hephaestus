@@ -1,0 +1,32 @@
+[package]
+name = "run-runtime-local"
+description = "Exact per-run release and host-context filesystem materialization"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+
+[package.metadata.hephaestus]
+layer = "adapter"
+context = "run"
+
+[dependencies]
+async-trait.workspace = true
+release-domain = { path = "../../../heph-core/forge/release/domain" }
+run-domain = { path = "../../../heph-core/run/domain" }
+run-orchestrator = { path = "../../../heph-core/run/orchestrator" }
+runtime-types = { path = "../../../heph-core/platform/runtime-types" }
+serde.workspace = true
+serde_json.workspace = true
+sha2.workspace = true
+time.workspace = true
+tracing.workspace = true
+uuid.workspace = true
+vm-trait.workspace = true
+
+[dev-dependencies]
+release-artifact-store = { path = "../../../heph-core/forge/release/artifact-store" }
+tempfile = "3"
+tokio = { workspace = true, features = ["macros", "rt"] }
+
+[lints]
+workspace = true

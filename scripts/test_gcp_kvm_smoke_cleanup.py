@@ -221,12 +221,12 @@ class GcpKvmSmokeCleanupTests(unittest.TestCase):
                 " code: \"cgroup-place-worker\",",
                 " source: Os { code: 13, kind: PermissionDenied, message: \"Permission denied\" },",
                 "}",
-                "thread 'cooking::smoke' panicked at crates/vm-libkrun/src/provider.rs:1057:9",
+                "thread 'cooking::smoke' panicked at crates/heph-std/runtime/vm/libkrun/src/provider.rs:1057:9",
                 "provision prepared service worker VM: unexpected libkrun provider error "
                 "(runtime-permissions): Permission denied (os error 13)",
-                "thread 'cooking::smoke' panicked at crates/vm-libkrun/src/provider.rs:1184:7",
+                "thread 'cooking::smoke' panicked at crates/heph-std/runtime/vm/libkrun/src/provider.rs:1184:7",
                 "provision prepared service worker VM: Unavailable { resource: \"worker spawn\", reason: \"Permission denied\" }",
-                "thread 'cooking::smoke' panicked at crates/vm-libkrun/src/provider.rs:174:9",
+                "thread 'cooking::smoke' panicked at crates/heph-std/runtime/vm/libkrun/src/provider.rs:174:9",
                 "provision prepared service worker VM: Unavailable { resource: \"private service broker\", reason: \"private service transport I/O failed: path must be shorter than SUN_LEN\" }",
                 "error: Permission denied",
                 "test cooking::smoke ... FAILED",
@@ -320,7 +320,7 @@ class GcpKvmSmokeCleanupTests(unittest.TestCase):
             result.stderr,
         )
         self.assertIn(
-            "HEPH_GCP_TEST test=rust-panic location=crates/vm-libkrun/src/provider.rs:1184:7",
+            "HEPH_GCP_TEST test=rust-panic location=crates/heph-std/runtime/vm/libkrun/src/provider.rs:1184:7",
             result.stderr,
         )
         self.assertIn(
@@ -329,7 +329,7 @@ class GcpKvmSmokeCleanupTests(unittest.TestCase):
             result.stderr,
         )
         self.assertIn(
-            "HEPH_GCP_TEST test=rust-panic location=crates/vm-libkrun/src/provider.rs:174:9",
+            "HEPH_GCP_TEST test=rust-panic location=crates/heph-std/runtime/vm/libkrun/src/provider.rs:174:9",
             result.stderr,
         )
         self.assertIn(

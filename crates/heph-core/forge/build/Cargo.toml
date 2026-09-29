@@ -1,0 +1,22 @@
+[package]
+name = "heph-build"
+description = "Provider-neutral contracts for Hephaestus OCI builds"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+
+[package.metadata.hephaestus]
+layer = "port"
+context = "build"
+
+[dependencies]
+async-trait.workspace = true
+builder-catalog-domain = { path = "../../image/domain" }
+registry-domain = { path = "../registry/domain" }
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+uuid.workspace = true
+
+[lints]
+workspace = true
