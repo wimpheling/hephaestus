@@ -7,15 +7,22 @@ generated files; it does not maintain a second crate or RPC inventory.
 
 ## Run
 
-From `code-surface/`:
+From the repository root:
+
+```sh
+just code-surface
+```
+
+The recipe installs the pinned npm dependencies, regenerates both views, starts
+the local server, and opens the browser. The equivalent commands from
+`code-surface/` are:
 
 ```sh
 npm ci
 npm run dev
 ```
 
-`npm run dev` regenerates both views, starts a local Vite server, and opens the
-browser. The generator needs Cargo and Buf. It uses `buf` from `PATH`, or the
+The generator needs Cargo and Buf. It uses `buf` from `PATH`, or the
 repository's `.local/protobuf/bin/buf` when present. Run `npm run generate`
 again after changing a manifest or `.proto` file while the server is open.
 
