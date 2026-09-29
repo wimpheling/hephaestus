@@ -17,10 +17,7 @@ run-domain = { path = "../../runtime/run/domain" }
 runtime-types = { path = "../../platform/runtime-types" }
 serde_json.workspace = true
 thiserror.workspace = true
-tokio = { workspace = true, features = ["fs", "io-util", "process", "rt", "time"] }
-
-[dev-dependencies]
-tempfile = "3"
+tokio = { workspace = true, features = ["rt", "time"] }
 
 [lints]
 workspace = true
