@@ -1,9 +1,8 @@
-//! Provider-neutral review control orchestration and trusted Git publication.
+//! Provider-neutral review control orchestration and external effect ports.
 
 mod error;
 mod models;
 mod outbox;
-mod publisher;
 mod service;
 
 pub use error::{ControlServiceError, ReviewRepositoryError};
@@ -12,5 +11,4 @@ pub use models::{
     ReviewGit, ReviewRepository,
 };
 pub use outbox::{ReviewOutboxRecord, ReviewOutboxStore, ReviewOutboxStoreError};
-pub use publisher::GitReviewPublisher;
 pub use service::ReviewControlService;

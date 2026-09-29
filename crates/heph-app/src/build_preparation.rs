@@ -14,6 +14,7 @@ use forge_service::GitStorage;
 use gateway_postgres::PostgresGatewayServiceLogStore;
 use heph_run::RunSecretManager;
 use heph_runtime::VmProvider;
+use review_git::GitReviewPublisher;
 use review_postgres::{GitRepositoryLocator, PostgresReviewRepository};
 use review_service::ReviewControlService;
 use run_postgres::PgRunRepository;
@@ -124,9 +125,9 @@ pub async fn prepare(mut config: AppConfig) -> Result<BuildPreparation, AppError
     let mailbox_repository = Arc::new(PostgresMailboxRepository::new(pool.clone()));
     let review_repository = Arc::new(PostgresReviewRepository::new(pool.clone()));
     let review_locator = Arc::new(GitRepositoryLocator::new(Arc::clone(&storage)));
-    let review_control = ReviewControlService::new(
+    let review_control = ReviewControlService::with_git(
         Arc::clone(&review_repository) as Arc<dyn review_service::ReviewRepository>,
-        review_locator,
+        Arc::new(GitReviewPublisher::new(review_locator)),
     );
     let volume_metadata = Arc::new(PostgresVolumeMetadataRepository::new(pool.clone()));
     let volumes = Arc::new(

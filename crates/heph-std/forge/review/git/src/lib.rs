@@ -1,7 +1,9 @@
-use super::{
+//! Git CLI adapter for trusted review result publication.
+
+use forge_domain::{CommitSha, GitRef};
+use review_service::{
     ApprovalDisposition, ApprovalProposal, ControlServiceError, RepositoryLocator, ReviewGit,
 };
-use forge_domain::{CommitSha, GitRef};
 use std::{path::Path, process::Stdio, sync::Arc};
 use tokio::process::Command;
 

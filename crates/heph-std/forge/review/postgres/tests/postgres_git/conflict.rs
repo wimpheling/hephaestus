@@ -1,5 +1,6 @@
 use forge_service::GitStorage;
 use review_domain::ControlKind;
+use review_git::GitReviewPublisher;
 use review_postgres::{GitRepositoryLocator, PostgresReviewRepository};
 use review_service::{ControlOutcome, ReviewControlService};
 use serial_test::serial;
@@ -50,7 +51,10 @@ async fn approval_marks_a_proposal_conflicted_when_the_target_moved() {
     );
     let repository_adapter = Arc::new(PostgresReviewRepository::new(pool.clone()));
     let locator = Arc::new(GitRepositoryLocator::new(Arc::clone(&storage)));
-    let service = ReviewControlService::new(repository_adapter, locator);
+    let service = ReviewControlService::with_git(
+        repository_adapter,
+        Arc::new(GitReviewPublisher::new(locator)),
+    );
     let approval = insert_control(
         &pool,
         &fixture,

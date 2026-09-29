@@ -82,6 +82,7 @@ registry-zot = { path = "../heph-std/forge/registry/zot" }
 rpc-proto = { path = "../heph-core/platform/rpc-proto", default-features = false }
 rustix.workspace = true
 review-domain = { path = "../heph-core/forge/review/domain" }
+review-git = { path = "../heph-std/forge/review/git" }
 review-postgres = { path = "../heph-std/forge/review/postgres" }
 review-service = { path = "../heph-core/forge/review/service" }
 heph-run = { path = "../heph-core/runtime/run" }

@@ -12,18 +12,6 @@ pub struct ReviewControlService {
 }
 
 impl ReviewControlService {
-    /// Creates a service using trusted Git publication over a path locator.
-    #[must_use]
-    pub fn new(
-        repository: Arc<dyn ReviewRepository>,
-        locator: Arc<dyn super::RepositoryLocator>,
-    ) -> Self {
-        Self::with_git(
-            repository,
-            Arc::new(super::GitReviewPublisher::new(locator)),
-        )
-    }
-
     /// Creates a service from explicit persistence and Git boundaries.
     #[must_use]
     pub fn with_git(repository: Arc<dyn ReviewRepository>, git: Arc<dyn ReviewGit>) -> Self {

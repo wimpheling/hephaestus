@@ -16,7 +16,6 @@ review-domain = { path = "../domain" }
 runtime-types = { path = "../../../platform/runtime-types" }
 serde_json.workspace = true
 thiserror.workspace = true
-tokio = { workspace = true, features = ["process"] }
 uuid.workspace = true
 
 [dev-dependencies]

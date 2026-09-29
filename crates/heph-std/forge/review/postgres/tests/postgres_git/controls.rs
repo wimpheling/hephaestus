@@ -1,5 +1,6 @@
 use forge_service::GitStorage;
 use review_domain::ControlKind;
+use review_git::GitReviewPublisher;
 use review_postgres::{GitRepositoryLocator, PostgresReviewRepository};
 use review_service::{ControlOutcome, ReviewControlService};
 use serial_test::serial;
@@ -27,7 +28,10 @@ async fn authorized_controls_publish_a_cas_result_and_durable_run_commands() {
     let fixture = seed(&pool, &storage, &temporary).await;
     let repository_adapter = Arc::new(PostgresReviewRepository::new(pool.clone()));
     let locator = Arc::new(GitRepositoryLocator::new(Arc::clone(&storage)));
-    let service = ReviewControlService::new(repository_adapter, locator);
+    let service = ReviewControlService::with_git(
+        repository_adapter,
+        Arc::new(GitReviewPublisher::new(locator)),
+    );
 
     let approval = insert_control(
         &pool,

@@ -1,5 +1,6 @@
 use forge_service::GitStorage;
 use review_domain::ControlKind;
+use review_git::GitReviewPublisher;
 use review_postgres::{GitRepositoryLocator, PostgresReviewRepository};
 use review_service::{ControlOutcome, ReviewControlService};
 use runtime_types::RunId;
@@ -46,9 +47,11 @@ async fn missing_retry_source_is_terminally_rejected_and_replay_is_idempotent() 
     .execute(&pool)
     .await
     .expect("orphan run");
-    let service = ReviewControlService::new(
+    let service = ReviewControlService::with_git(
         Arc::new(PostgresReviewRepository::new(pool.clone())),
-        Arc::new(GitRepositoryLocator::new(Arc::clone(&storage))),
+        Arc::new(GitReviewPublisher::new(Arc::new(
+            GitRepositoryLocator::new(Arc::clone(&storage)),
+        ))),
     );
     let retry = insert_control(
         &pool,

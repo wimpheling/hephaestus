@@ -230,6 +230,7 @@ pub(super) fn is_configuration_path(path: &Path) -> bool {
 
 pub(super) fn is_integration_path(path: &Path) -> bool {
     path.starts_with("crates/heph-std/runtime/vm/libkrun")
+        || path.starts_with("crates/heph-std/forge/review/git")
         || path.components().any(|component| {
             matches!(
                 component.as_os_str().to_str(),
