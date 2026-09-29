@@ -4,7 +4,7 @@ use super::{
 };
 use uuid::Uuid;
 
-use forge_service::{
+use forge_nats::{
     BUILD_REQUESTED_SUBJECT, BUILD_RETRY_REQUESTED_SUBJECT, BUILD_VERIFY_REQUESTED_SUBJECT,
 };
 use futures_util::StreamExt;

@@ -1,11 +1,12 @@
 //! Opt-in `PostgreSQL` and `JetStream` receive-processing coverage.
 
 use authz_postgres::PostgresMelangeAuthorizer;
-use forge_postgres::PgForgeRepository;
-use forge_service::{
-    BUILD_REQUESTED_SUBJECT, CreateRepository, ForgeNatsOutboxPublisher, GitStorage,
-    INSTANCE_RUN_REQUESTED_SUBJECT, RUN_START_SUBJECT, ensure_forge_jetstream_topology,
+use forge_nats::{
+    BUILD_REQUESTED_SUBJECT, ForgeNatsOutboxPublisher, INSTANCE_RUN_REQUESTED_SUBJECT,
+    RUN_START_SUBJECT, ensure_forge_jetstream_topology,
 };
+use forge_postgres::PgForgeRepository;
+use forge_service::{CreateRepository, GitStorage};
 use futures_util::StreamExt;
 use heph_forge::{
     CommitSha, GitRef, OrganizationId, ReceiveId, RefUpdate, Repository, RuntimeReceiveProvenance,

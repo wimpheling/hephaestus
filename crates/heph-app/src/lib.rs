@@ -135,10 +135,11 @@ use control_plane_postgres::{
     ControlPlanePool, connect as connect_control_plane, connect_worker as connect_oci_worker,
 };
 use event_postgres::{ReleaseOutboxPublisher, ensure_release_jetstream_topology};
-use forge_postgres::PgForgeRepository;
-use forge_service::{
-    ForgeNatsOutboxPublisher, GitStorage, ensure_build_consumer, ensure_forge_jetstream_topology,
+use forge_nats::{
+    ForgeNatsOutboxPublisher, ensure_build_consumer, ensure_forge_jetstream_topology,
 };
+use forge_postgres::PgForgeRepository;
+use forge_service::GitStorage;
 use gateway_edge::{
     GatewayDispatcher, GatewayInboundSecretResolver, GatewayProvider, GatewayRequestDispatcher,
     GatewayRuntimeLauncher, GatewayRuntimeService, GatewayServiceArtifact,

@@ -1321,6 +1321,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "forge-nats"
+version = "0.1.0"
+dependencies = [
+ "async-nats",
+ "forge-service",
+ "serde_json",
+ "thiserror 2.0.19",
+]
+
+[[package]]
 name = "forge-postgres"
 version = "0.1.0"
 dependencies = [
@@ -1366,7 +1376,6 @@ dependencies = [
 name = "forge-service"
 version = "0.1.0"
 dependencies = [
- "async-nats",
  "async-trait",
  "forge-domain",
  "gix",
@@ -2450,6 +2459,7 @@ dependencies = [
  "control-plane-postgres",
  "event-application",
  "event-postgres",
+ "forge-nats",
  "forge-postgres",
  "forge-service",
  "futures-util",

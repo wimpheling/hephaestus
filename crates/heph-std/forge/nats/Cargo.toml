@@ -1,0 +1,19 @@
+[package]
+name = "forge-nats"
+description = "NATS JetStream topology and outbox publication for forge"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+
+[package.metadata.hephaestus]
+layer = "adapter"
+context = "forge"
+
+[dependencies]
+async-nats.workspace = true
+forge-service = { path = "../../../heph-core/forge/service" }
+serde_json.workspace = true
+thiserror.workspace = true
+
+[lints]
+workspace = true

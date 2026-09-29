@@ -43,6 +43,7 @@ heph-forge = { path = "../heph-core/forge" }
 heph-runtime = { path = "../heph-core/runtime" }
 heph-secret = { path = "../heph-core/secret" }
 forge-postgres = { path = "../heph-core/forge/postgres" }
+forge-nats = { path = "../heph-std/forge/nats" }
 gateway-edge = { path = "../heph-std/gateway/edge" }
 gateway-domain = { path = "../heph-core/gateway/domain" }
 gateway-postgres = { path = "../heph-core/gateway/postgres" }

@@ -65,7 +65,7 @@ pub(super) fn is_nats_event_adapter(path: &Path) -> bool {
         || is_mailbox_command_adapter(path)
         || matches!(
             path,
-            path if path == Path::new("crates/heph-core/forge/service/src/nats.rs")
+            path if path == Path::new("crates/heph-std/forge/nats/src/lib.rs")
                 || path == Path::new("crates/heph-std/run/nats/src/lib.rs")
         )
         || path.components().any(|component| {

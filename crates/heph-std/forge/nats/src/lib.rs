@@ -1,6 +1,7 @@
-use async_nats::{HeaderMap, jetstream};
+//! NATS `JetStream` adapters for durable forge commands.
 
-use crate::{ForgeOutboxStore, ForgeRepositoryError};
+use async_nats::{HeaderMap, jetstream};
+use forge_service::{ForgeOutboxStore, ForgeRepositoryError};
 
 /// Durable isolated-build requests for reusable releases.
 pub const BUILD_REQUESTED_SUBJECT: &str = "hephaestus.build.requested.v1";

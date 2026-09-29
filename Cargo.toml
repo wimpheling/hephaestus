@@ -48,6 +48,7 @@ members = [
     "crates/heph-std/runtime/workspace/*",
     "crates/heph-std/run/*",
     "crates/heph-std/forge/build/*",
+    "crates/heph-std/forge/nats",
     "crates/heph-std/forge/registry/*",
     "crates/heph-app",
     "crates/heph-app/bootstrap",
