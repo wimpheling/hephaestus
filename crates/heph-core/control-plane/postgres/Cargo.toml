@@ -8,7 +8,7 @@ rust-version.workspace = true
 [dependencies]
 async-trait.workspace = true
 authz-domain = { path = "../../authorization/authz-domain" }
-identity-domain = { path = "../../identity/domain" }
+identity-domain = { path = "../../auth/identity/domain" }
 agent-config = { path = "../../platform/agent-config" }
 authz-postgres = { path = "../../authorization/authz-postgres" }
 release-artifact-store = { path = "../../forge/release/artifact-store" }

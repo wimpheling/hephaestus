@@ -25,8 +25,8 @@ forge-postgres = { path = "../postgres" }
 futures-util.workspace = true
 git-capability-domain = { path = "../git-capability" }
 http.workspace = true
-identity-domain = { path = "../../identity/domain" }
-identity-application = { path = "../../identity/application" }
+identity-domain = { path = "../../auth/identity/domain" }
+identity-application = { path = "../../auth/identity/application" }
 pat-domain = { path = "../pat" }
 pat-postgres = { path = "../pat-postgres" }
 runtime-git-authority = { path = "../../authorization/runtime-git-authority" }

@@ -14,7 +14,7 @@ The final `[workspace].members` value in `Cargo.toml` is:
     "crates/heph-core/platform/*",
     "crates/heph-core/control-plane/*",
     "crates/heph-core/authorization/*",
-    "crates/heph-core/identity/*",
+    "crates/heph-core/auth/identity/*",
     "crates/heph-core/event/*",
     "crates/heph-core/gateway/*",
     "crates/heph-core/mailbox/*",

@@ -1,13 +1,16 @@
 import cytoscape from 'cytoscape';
 import './styles.css';
+import { guideLinkHref, parseHash, ROOT_GUIDE_ID } from './navigation.mjs';
 
 const app = document.querySelector('#app');
 const baseUrl = (import.meta.env.BASE_URL || '/').replace(/\/$/, '') + '/';
 
 const state = {
-  route: 'crates',
+  route: 'guide',
   crates: null,
   grpc: null,
+  guides: null,
+  guideId: ROOT_GUIDE_ID,
   loading: true,
   error: null,
   crateSearch: '',
@@ -40,18 +43,114 @@ const unique = (values) => [...new Set(values.filter(Boolean))].sort((a, b) => a
 const findById = (items, id) => items?.find((item) => item.id === id);
 const isCrateOverview = () => state.crateContext === 'all' && !state.crateSearch.trim() && state.crateLayer === 'all';
 
-function routeFromHash() {
-  const raw = window.location.hash.slice(1) || '/crates';
-  const [path, query] = raw.split('?');
-  const route = path.replace(/^\//, '').split('/')[0];
-  if (route === 'grpc') {
-    const params = new URLSearchParams(query || '');
-    if (params.get('service')) state.selectedService = params.get('service');
-    if (params.get('method')) state.selectedMethod = params.get('method');
-    if (params.get('message')) state.selectedMessage = params.get('message');
-    return 'grpc';
+function inlineMarkdown(value, sourcePath, guides, sourceBase, sourceTreeBase) {
+  let rendered = esc(value);
+  rendered = rendered.replace(/`([^`]+)`/g, '<code>$1</code>');
+  rendered = rendered.replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>');
+  rendered = rendered.replace(/__([^_]+)__/g, '<strong>$1</strong>');
+  rendered = rendered.replace(/\*([^*]+)\*/g, '<em>$1</em>');
+  rendered = rendered.replace(/_([^_]+)_/g, '<em>$1</em>');
+  return rendered.replace(/\[([^\]]+)\]\(([^\s)]+)\)/g, (_match, label, href) => {
+    const decodedHref = href.replaceAll('&amp;', '&').replaceAll('&quot;', '"').replaceAll('&#039;', "'");
+    const safeHref = guideLinkHref(decodedHref, sourcePath, guides, sourceBase, sourceTreeBase);
+    return `<a href="${esc(safeHref)}">${label}</a>`;
+  });
+}
+
+function renderMarkdown(markdown, sourcePath, guides, sourceBase, sourceTreeBase) {
+  const lines = String(markdown || '').replaceAll('\r\n', '\n').split('\n');
+  const output = [];
+  let paragraph = [];
+  let list = null;
+  let code = null;
+  const flushParagraph = () => {
+    if (paragraph.length) output.push(`<p>${inlineMarkdown(paragraph.join(' '), sourcePath, guides, sourceBase, sourceTreeBase)}</p>`);
+    paragraph = [];
+  };
+  const flushList = () => {
+    if (!list) return;
+    output.push(`<${list.type}>${list.items.map((item) => `<li>${inlineMarkdown(item, sourcePath, guides, sourceBase, sourceTreeBase)}</li>`).join('')}</${list.type}>`);
+    list = null;
+  };
+  const cells = (line) => line.trim().replace(/^\|/, '').replace(/\|$/, '').split('|').map((cell) => cell.trim());
+  const tableSeparator = (line) => /^\s*\|?\s*:?-{2,}:?\s*(?:\|\s*:?-{2,}:?\s*)+\|?\s*$/.test(line);
+  for (let index = 0; index < lines.length; index += 1) {
+    const line = lines[index];
+    if (line.startsWith('```')) {
+      flushParagraph();
+      flushList();
+      if (code === null) code = [];
+      else {
+        output.push(`<pre><code>${esc(code.join('\n'))}</code></pre>`);
+        code = null;
+      }
+      continue;
+    }
+    if (code !== null) {
+      code.push(line);
+      continue;
+    }
+    if (line.includes('|') && tableSeparator(lines[index + 1] || '')) {
+      flushParagraph();
+      flushList();
+      const header = cells(line);
+      const rows = [];
+      index += 2;
+      while (index < lines.length && lines[index].includes('|') && lines[index].trim()) {
+        rows.push(cells(lines[index]));
+        index += 1;
+      }
+      output.push(`<div class="guide-table-wrap"><table class="guide-table"><thead><tr>${header.map((cell) => `<th>${inlineMarkdown(cell, sourcePath, guides, sourceBase, sourceTreeBase)}</th>`).join('')}</tr></thead><tbody>${rows.map((row) => `<tr>${header.map((_cell, cellIndex) => `<td>${inlineMarkdown(row[cellIndex] || '', sourcePath, guides, sourceBase, sourceTreeBase)}</td>`).join('')}</tr>`).join('')}</tbody></table></div>`);
+      index -= 1;
+      continue;
+    }
+    const heading = /^(#{1,6})\s+(.+)$/.exec(line);
+    if (heading) {
+      flushParagraph();
+      flushList();
+      const level = Math.min(heading[1].length + 1, 6);
+      output.push(`<h${level}>${inlineMarkdown(heading[2], sourcePath, guides, sourceBase, sourceTreeBase)}</h${level}>`);
+      continue;
+    }
+    const unordered = /^\s*[-*+]\s+(.+)$/.exec(line);
+    const ordered = /^\s*\d+[.)]\s+(.+)$/.exec(line);
+    if (unordered || ordered) {
+      flushParagraph();
+      const type = unordered ? 'ul' : 'ol';
+      if (!list || list.type !== type) {
+        flushList();
+        list = { type, items: [] };
+      }
+      list.items.push((unordered || ordered)[1]);
+      continue;
+    }
+    if (!line.trim()) {
+      flushParagraph();
+      flushList();
+      continue;
+    }
+    paragraph.push(line.trim());
   }
-  return 'crates';
+  flushParagraph();
+  flushList();
+  if (code !== null) output.push(`<pre><code>${esc(code.join('\n'))}</code></pre>`);
+  return output.join('');
+}
+
+function routeFromHash() {
+  const parsed = parseHash(window.location.hash);
+  if (parsed.route === 'guide') state.guideId = parsed.guideId;
+  if (parsed.route === 'crates') {
+    state.crateContext = parsed.crateContext;
+    state.crateLayer = parsed.crateLayer;
+    state.crateSearch = parsed.crateSearch;
+  }
+  if (parsed.route === 'grpc') {
+    state.selectedService = parsed.selectedService;
+    state.selectedMethod = parsed.selectedMethod;
+    state.selectedMessage = parsed.selectedMessage;
+  }
+  return parsed.route;
 }
 
 function navigate(route) {
@@ -72,18 +171,20 @@ async function loadData() {
   state.error = null;
   render();
   try {
-    const [cratesResponse, grpcResponse] = await Promise.all([
+    const [cratesResponse, grpcResponse, guidesResponse] = await Promise.all([
       fetch(`${baseUrl}generated/crates.json`),
       fetch(`${baseUrl}generated/grpc.json`),
+      fetch(`${baseUrl}generated/guides.json`),
     ]);
-    if (!cratesResponse.ok || !grpcResponse.ok) {
-      const missing = [!cratesResponse.ok && 'crates.json', !grpcResponse.ok && 'grpc.json'].filter(Boolean).join(' and ');
+    if (!cratesResponse.ok || !grpcResponse.ok || !guidesResponse.ok) {
+      const missing = [!cratesResponse.ok && 'crates.json', !grpcResponse.ok && 'grpc.json', !guidesResponse.ok && 'guides.json'].filter(Boolean).join(' and ');
       throw new Error(`Generated ${missing} ${missing.includes(' and ') ? 'are' : 'is'} unavailable.`);
     }
-    const [crates, grpc] = await Promise.all([cratesResponse.json(), grpcResponse.json()]);
-    if (crates.schemaVersion !== 1 || grpc.schemaVersion !== 1) throw new Error('The generated data uses an unsupported schema version.');
+    const [crates, grpc, guides] = await Promise.all([cratesResponse.json(), grpcResponse.json(), guidesResponse.json()]);
+    if (crates.schemaVersion !== 1 || grpc.schemaVersion !== 1 || guides.schemaVersion !== 1) throw new Error('The generated data uses an unsupported schema version.');
     state.crates = crates;
     state.grpc = grpc;
+    state.guides = guides;
     state.loading = false;
     state.route = routeFromHash();
     render();
@@ -112,19 +213,41 @@ function render() {
   app.innerHTML = `
     <div class="app-shell">
       <header class="topbar">
-        <a class="wordmark" href="#/crates" aria-label="Code Surface home"><span class="logo-dot"></span><span>code<span class="wordmark-soft">/</span>surface</span></a>
+        <a class="wordmark" href="#/guide" aria-label="Code Surface home"><span class="logo-dot"></span><span>code<span class="wordmark-soft">/</span>surface</span></a>
         <nav class="main-nav" aria-label="Primary navigation">
-          <a class="nav-link ${state.route === 'crates' ? 'active' : ''}" href="#/crates"><span class="nav-icon">▦</span>Crates</a>
-          <a class="nav-link ${state.route === 'grpc' ? 'active' : ''}" href="#/grpc"><span class="nav-icon">⌘</span>gRPC</a>
+          <a class="nav-link ${state.route === 'guide' ? 'active' : ''}" href="#/guide"><span class="nav-icon">≡</span>Guide</a>
+          <span class="nav-divider" aria-hidden="true"></span>
+          <a class="nav-link nav-secondary ${state.route === 'crates' ? 'active' : ''}" href="#/crates"><span class="nav-icon">▦</span>Crates</a>
+          <a class="nav-link nav-secondary ${state.route === 'grpc' ? 'active' : ''}" href="#/grpc"><span class="nav-icon">⌘</span>gRPC</a>
         </nav>
         <div class="topbar-meta"><span class="live-dot"></span><span>generated view</span><span class="version-badge">v1</span></div>
       </header>
-      <main class="content">${state.route === 'grpc' ? renderGrpcPage() : renderCratesPage()}</main>
+      <main class="content">${state.route === 'guide' ? renderGuidePage() : state.route === 'grpc' ? renderGrpcPage() : renderCratesPage()}</main>
       <footer class="footer"><span>Hephaestus code surface</span><span>Derived from source · schema v1</span></footer>
     </div>`;
   bindPageEvents();
   if (state.route === 'crates') renderCrateGraph();
-  else renderGrpcGraph();
+  else if (state.route === 'grpc') renderGrpcGraph();
+}
+
+function renderGuideTree(guides, selectedId) {
+  const roots = guides.filter((guide) => !guide.parent);
+  const children = (parent) => guides.filter((guide) => guide.parent === parent);
+  const renderItem = (guide) => `<li><a class="guide-tree-link ${guide.id === selectedId ? 'active' : ''}" href="#/guide/${esc(guide.id)}"><span class="guide-tree-icon">${guide.parent ? '└' : '◆'}</span><span>${esc(guide.title)}</span></a>${children(guide.id).length ? `<ul>${children(guide.id).map(renderItem).join('')}</ul>` : ''}</li>`;
+  return `<nav class="guide-tree" aria-label="Guide navigation"><div class="guide-tree-heading"><span class="eyebrow">HEPH GUIDE</span><span class="guide-count">${guides.length} pages</span></div><ul>${roots.map(renderItem).join('')}</ul></nav>`;
+}
+
+function renderGuidePage() {
+  const guides = state.guides?.guides || [];
+  const selected = findById(guides, state.guideId) || guides[0];
+  if (!selected) return `<section class="panel-empty"><h1>No guides generated</h1><p>Run <code>npm run generate</code> after the guide sources are available.</p></section>`;
+  if (state.guideId !== selected.id) state.guideId = selected.id;
+  const contextLinks = (selected.contexts || []).map((context) => `<a class="guide-ref" href="#/crates?context=${encodeURIComponent(context)}"><span>context</span>${esc(context)}</a>`).join('');
+  const serviceLinks = (selected.services || []).map((service) => `<a class="guide-ref" href="#/grpc?service=${encodeURIComponent(service)}"><span>service</span>${esc(shortName(service))}</a>`).join('');
+  const unplaced = state.guides?.unplaced || { contexts: [], services: [] };
+  const unplacedCount = unplaced.contexts.length + unplaced.services.length;
+  const unplacedReport = selected.id === ROOT_GUIDE_ID && unplacedCount ? `<div class="guide-warning"><p><span>!</span>${unplacedCount} generated inventory ${unplacedCount === 1 ? 'entry is' : 'entries are'} deliberately unplaced.</p><ul class="guide-unplaced-list">${unplaced.contexts.map((context) => `<li><span>context</span>${esc(context)}</li>`).join('')}${unplaced.services.map((service) => `<li><span>service</span>${esc(service)}</li>`).join('')}</ul></div>` : '';
+  return `<section class="guide-layout"><div>${renderGuideTree(guides, selected.id)}</div><article class="guide-article"><header class="guide-heading"><p class="eyebrow">SOURCE GUIDE</p><h1>${esc(selected.title)}</h1><p class="page-lede">${esc(selected.summary || '')}</p><p class="guide-source mono">${esc(selected.path)}</p></header><div class="guide-body">${renderMarkdown(selected.content, selected.path, state.guides, state.guides?.sourceBase, state.guides?.sourceTreeBase)}</div><footer class="guide-references"><div><p class="eyebrow">CODE REFERENCES</p><div class="guide-ref-list">${contextLinks || '<span class="muted">No Cargo contexts declared.</span>'}${serviceLinks || '<span class="muted">No gRPC services declared.</span>'}</div></div>${unplacedReport}</footer></article></section>`;
 }
 
 function renderCratesPage() {
@@ -380,7 +503,9 @@ function renderMessageDetail(message) {
 }
 
 function bindPageEvents() {
-  document.querySelectorAll('.nav-link').forEach((link) => link.addEventListener('click', () => { state.route = link.hash.includes('grpc') ? 'grpc' : 'crates'; }));
+  document.querySelectorAll('.nav-link').forEach((link) => link.addEventListener('click', () => {
+    state.route = link.hash.includes('grpc') ? 'grpc' : link.hash.includes('guide') ? 'guide' : 'crates';
+  }));
   document.querySelector('#crate-search')?.addEventListener('input', (event) => { state.crateSearch = event.target.value; rerenderAndRestoreFocus('#crate-search', event.target.selectionStart); });
   document.querySelector('#crate-context')?.addEventListener('change', (event) => { state.crateContext = event.target.value; render(); });
   document.querySelector('#crate-layer')?.addEventListener('change', (event) => { state.crateLayer = event.target.value; render(); });

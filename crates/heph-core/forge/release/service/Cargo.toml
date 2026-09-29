@@ -14,7 +14,7 @@ capability-domain = { path = "../../../authorization/capability-domain" }
 gateway-domain = { path = "../../../gateway/domain" }
 forge-domain = { path = "../../domain" }
 git-capability-domain = { path = "../../git-capability" }
-identity-domain = { path = "../../../identity/domain" }
+identity-domain = { path = "../../../auth/identity/domain" }
 release-domain = { path = "../domain" }
 runtime-types = { path = "../../../platform/runtime-types" }
 time.workspace = true

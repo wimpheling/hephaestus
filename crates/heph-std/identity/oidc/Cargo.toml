@@ -10,7 +10,7 @@ layer = "adapter"
 context = "identity"
 
 [dependencies]
-identity-application = { path = "../../../heph-core/identity/application" }
+identity-application = { path = "../../../heph-core/auth/identity/application" }
 jsonwebtoken.workspace = true
 serde.workspace = true
 serde_json.workspace = true

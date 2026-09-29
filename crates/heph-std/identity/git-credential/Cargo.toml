@@ -10,7 +10,7 @@ layer = "adapter"
 context = "identity"
 
 [dependencies]
-pat-domain = { path = "../../forge/pat" }
+pat-domain = { path = "../../../heph-core/forge/pat" }
 sha2.workspace = true
 thiserror.workspace = true
 zeroize.workspace = true

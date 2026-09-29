@@ -17,7 +17,7 @@ async-trait.workspace = true
 authz-postgres = { path = "../../authorization/authz-postgres" }
 builder-catalog-application = { path = "../application" }
 builder-catalog-domain = { path = "../domain" }
-identity-domain = { path = "../../identity/domain" }
+identity-domain = { path = "../../auth/identity/domain" }
 serde_json.workspace = true
 sqlx.workspace = true
 time.workspace = true

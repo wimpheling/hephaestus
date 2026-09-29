@@ -155,7 +155,7 @@ reconciles the original packages with this layout and records its verification.
 | [`secret-broker`](crates/heph-std/secret/broker) | Host-only semantic broker transport and bounded adapters |
 | [`forge-service`](crates/heph-core/forge/service) | Bare Git storage, PostgreSQL receive processing, and forge outbox |
 | [`git-http`](crates/heph-core/forge/git-http) | Authorized streaming Git smart-HTTP transport |
-| [`identity-domain`](crates/heph-core/identity/domain) | Internal authenticated principal and tenant identifiers |
+| [`identity-domain`](crates/heph-core/auth/identity/domain) | Internal authenticated principal and tenant identifiers |
 | [`identity-oidc`](crates/heph-std/identity/oidc) | OIDC verification and identity mapping |
 | [`authz-domain`](crates/heph-core/authorization/authz-domain) | Typed provider-neutral authorization contract |
 | [`authz-postgres`](crates/heph-core/authorization/authz-postgres) | PostgreSQL/Mélange authorization and command auditing |

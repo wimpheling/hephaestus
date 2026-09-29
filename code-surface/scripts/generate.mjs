@@ -2,6 +2,7 @@ import { execFileSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import { mkdirSync, writeFileSync } from "node:fs";
 import { dirname, relative, resolve } from "node:path";
+import { generateGuides, sourceBaseForRepository, sourceTreeBaseForRepository } from "./guides.mjs";
 
 const scriptDirectory = dirname(fileURLToPath(import.meta.url));
 const surfaceDirectory = resolve(scriptDirectory, "..");
@@ -20,6 +21,32 @@ function run(command, args, description) {
     const detail = error.stderr?.trim() || error.message;
     throw new Error(`Unable to ${description}: ${detail}`);
   }
+}
+
+function readGitValue(args) {
+  try {
+    return execFileSync("git", args, {
+      cwd: repositoryRoot,
+      encoding: "utf8",
+      stdio: ["ignore", "pipe", "ignore"],
+    }).trim();
+  } catch {
+    return "";
+  }
+}
+
+function sourceBase() {
+  const origin = readGitValue(["config", "--get", "remote.origin.url"]);
+  const branch = readGitValue(["symbolic-ref", "--short", "HEAD"]);
+  const revision = readGitValue(["rev-parse", "HEAD"]);
+  return sourceBaseForRepository(origin, branch || revision);
+}
+
+function sourceTreeBase() {
+  const origin = readGitValue(["config", "--get", "remote.origin.url"]);
+  const branch = readGitValue(["symbolic-ref", "--short", "HEAD"]);
+  const revision = readGitValue(["rev-parse", "HEAD"]);
+  return sourceTreeBaseForRepository(origin, branch || revision);
 }
 
 function relativePath(path) {
@@ -235,9 +262,23 @@ function main() {
   const descriptorSet = JSON.parse(descriptorJson);
 
   mkdirSync(generatedDirectory, { recursive: true });
-  writeJson("crates.json", generateCrates(metadata));
-  writeJson("grpc.json", generateGrpc(descriptorSet));
-  console.log(`Generated ${metadata.workspace_members.length} crates and ${descriptorSet.file.length} protobuf files.`);
+  const crates = generateCrates(metadata);
+  const grpc = generateGrpc(descriptorSet);
+  const guides = generateGuides({
+    repositoryRoot,
+    crates,
+    grpc,
+    sourceBase: sourceBase(),
+    sourceTreeBase: sourceTreeBase(),
+  });
+  writeJson("crates.json", crates);
+  writeJson("grpc.json", grpc);
+  writeJson("guides.json", guides);
+  const unplacedCount = guides.unplaced.contexts.length + guides.unplaced.services.length;
+  console.log(`Generated ${metadata.workspace_members.length} crates, ${descriptorSet.file.length} protobuf files, and ${guides.guides.length} guides.`);
+  if (unplacedCount > 0) {
+    console.log(`Unplaced inventory entries: ${unplacedCount} (${guides.unplaced.contexts.length} contexts, ${guides.unplaced.services.length} services).`);
+  }
 }
 
 main();

@@ -10,7 +10,7 @@ readme = "README.md"
 async-trait.workspace = true
 async-nats.workspace = true
 event-application = { path = "../application" }
-identity-domain = { path = "../../identity/domain" }
+identity-domain = { path = "../../auth/identity/domain" }
 serde_json.workspace = true
 sqlx.workspace = true
 time.workspace = true

@@ -11,7 +11,7 @@ context = "event"
 
 [dependencies]
 async-trait.workspace = true
-identity-domain = { path = "../../identity/domain" }
+identity-domain = { path = "../../auth/identity/domain" }
 thiserror.workspace = true
 time.workspace = true
 uuid.workspace = true

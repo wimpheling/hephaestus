@@ -8,16 +8,16 @@ readme = "README.md"
 
 [dependencies]
 async-trait.workspace = true
-identity-application = { path = "../application" }
-identity-domain = { path = "../domain" }
+identity-application = { path = "../../../heph-core/auth/identity/application" }
+identity-domain = { path = "../../../heph-core/auth/identity/domain" }
 serde_json.workspace = true
 sqlx.workspace = true
 uuid.workspace = true
 
 [dev-dependencies]
-event-application = { path = "../../event/application" }
-event-postgres = { path = "../../event/postgres" }
-git-http = { path = "../../forge/git-http" }
+event-application = { path = "../../../heph-core/event/application" }
+event-postgres = { path = "../../../heph-core/event/postgres" }
+git-http = { path = "../../../heph-core/forge/git-http" }
 jsonwebtoken.workspace = true
 serial_test = "3"
 tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }

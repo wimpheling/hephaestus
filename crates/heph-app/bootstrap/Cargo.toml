@@ -14,7 +14,7 @@ authz-postgres = { path = "../../heph-core/authorization/authz-postgres" }
 forge-domain = { path = "../../heph-core/forge/domain" }
 forge-postgres = { path = "../../heph-core/forge/postgres" }
 forge-service = { path = "../../heph-core/forge/service" }
-identity-domain = { path = "../../heph-core/identity/domain" }
+identity-domain = { path = "../../heph-core/auth/identity/domain" }
 release-domain = { path = "../../heph-core/forge/release/domain" }
 release-postgres = { path = "../../heph-core/forge/release/postgres" }
 registry-domain = { path = "../../heph-core/forge/registry/domain" }

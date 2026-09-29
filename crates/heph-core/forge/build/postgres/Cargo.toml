@@ -11,7 +11,7 @@ agent-config = { path = "../../../platform/agent-config" }
 authz-domain = { path = "../../../authorization/authz-domain" }
 authz-postgres = { path = "../../../authorization/authz-postgres" }
 build-orchestrator = { path = "../orchestrator" }
-identity-domain = { path = "../../../identity/domain" }
+identity-domain = { path = "../../../auth/identity/domain" }
 release-domain = { path = "../../release/domain" }
 release-postgres = { path = "../../release/postgres" }
 runtime-types = { path = "../../../platform/runtime-types" }

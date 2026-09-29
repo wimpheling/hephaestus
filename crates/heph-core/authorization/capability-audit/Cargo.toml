@@ -12,7 +12,7 @@ context = "authorization"
 [dependencies]
 async-trait.workspace = true
 capability-domain = { path = "../capability-domain" }
-identity-domain = { path = "../../identity/domain" }
+identity-domain = { path = "../../auth/identity/domain" }
 runtime-types = { path = "../../platform/runtime-types" }
 thiserror.workspace = true
 time.workspace = true

@@ -15,7 +15,7 @@ capability-domain = { path = "../../../authorization/capability-domain" }
 forge-domain = { path = "../../domain" }
 gateway-domain = { path = "../../../gateway/domain" }
 git-capability-domain = { path = "../../git-capability" }
-identity-domain = { path = "../../../identity/domain" }
+identity-domain = { path = "../../../auth/identity/domain" }
 release-domain = { path = "../domain" }
 release-service = { path = "../service" }
 run-domain = { path = "../../../run/domain" }

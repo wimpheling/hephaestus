@@ -24,7 +24,7 @@ pub(super) struct PoolField {
 // treating every PostgreSQL pool as an application-role pool.
 pub(super) const PRODUCTION_BINDINGS: [PoolBinding; 6] = [
     PoolBinding {
-        source: "crates/heph-core/identity/postgres/src/session.rs",
+        source: "crates/heph-std/identity/postgres/src/session.rs",
         owner: "PostgresBrowserSessionStore",
         field: "application_pool",
     },
@@ -57,13 +57,13 @@ pub(super) const PRODUCTION_BINDINGS: [PoolBinding; 6] = [
 
 pub(super) const PRODUCTION_POOL_FIELDS: [PoolField; 8] = [
     PoolField {
-        source: "crates/heph-core/identity/postgres/src/session.rs",
+        source: "crates/heph-std/identity/postgres/src/session.rs",
         owner: "PostgresBrowserSessionStore",
         field: "worker_pool",
         application_role: false,
     },
     PoolField {
-        source: "crates/heph-core/identity/postgres/src/session.rs",
+        source: "crates/heph-std/identity/postgres/src/session.rs",
         owner: "PostgresBrowserSessionStore",
         field: "application_pool",
         application_role: true,
@@ -107,7 +107,7 @@ pub(super) const PRODUCTION_POOL_FIELDS: [PoolField; 8] = [
 ];
 
 pub(super) const PRODUCTION_SOURCES: [&str; 5] = [
-    "crates/heph-core/identity/postgres/src/session.rs",
+    "crates/heph-std/identity/postgres/src/session.rs",
     "crates/heph-core/forge/release/postgres/src/ui_browser.rs",
     "crates/heph-core/forge/release/postgres/src/ui_browser_resources.rs",
     "crates/heph-core/forge/release/postgres/src/ui_installation_navigation.rs",

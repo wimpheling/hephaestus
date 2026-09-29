@@ -255,7 +255,7 @@ pub(super) fn is_storage_path(path: &Path) -> bool {
             "crates/heph-core/forge/build/orchestrator",
             "crates/heph-core/forge/release/artifact-store",
             "crates/heph-core/forge/service",
-            "crates/heph-core/identity/git-credential",
+            "crates/heph-std/identity/git-credential",
             "crates/heph-dev/vm/conformance",
             "crates/heph-std/authorization/runtime-handoff-local",
             "crates/heph-std/forge/build/oci-builder-runtime-local",

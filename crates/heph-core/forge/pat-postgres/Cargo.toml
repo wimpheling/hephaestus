@@ -15,7 +15,7 @@ database_context = "forge"
 forge-domain = { path = "../domain" }
 getrandom = "0.3"
 git-capability-domain = { path = "../git-capability" }
-identity-domain = { path = "../../identity/domain" }
+identity-domain = { path = "../../auth/identity/domain" }
 pat-domain = { path = "../pat" }
 sqlx.workspace = true
 thiserror.workspace = true

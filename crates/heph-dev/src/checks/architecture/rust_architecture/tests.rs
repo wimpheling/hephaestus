@@ -208,7 +208,7 @@ fn moved_topology_paths_keep_exact_boundary_classification() {
         "crates/heph-core/forge/build/orchestrator/src/lib.rs",
         "crates/heph-core/forge/release/artifact-store/src/lib.rs",
         "crates/heph-core/forge/service/src/storage.rs",
-        "crates/heph-core/identity/git-credential/src/main.rs",
+        "crates/heph-std/identity/git-credential/src/main.rs",
         "crates/heph-std/forge/registry/publisher/src/lib.rs",
         "crates/heph-std/run/runtime-local/src/lib.rs",
     ] {

@@ -11,7 +11,7 @@ context = "authorization"
 
 [dependencies]
 async-trait.workspace = true
-identity-domain = { path = "../../identity/domain" }
+identity-domain = { path = "../../auth/identity/domain" }
 runtime-types = { path = "../../platform/runtime-types" }
 serde.workspace = true
 thiserror.workspace = true

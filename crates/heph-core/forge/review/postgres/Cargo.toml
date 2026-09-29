@@ -11,7 +11,7 @@ authz-domain = { path = "../../../authorization/authz-domain" }
 authz-postgres = { path = "../../../authorization/authz-postgres" }
 forge-domain = { path = "../../domain" }
 forge-service = { path = "../../service" }
-identity-domain = { path = "../../../identity/domain" }
+identity-domain = { path = "../../../auth/identity/domain" }
 release-domain = { path = "../../release/domain" }
 review-domain = { path = "../domain" }
 review-service = { path = "../service" }
@@ -25,7 +25,7 @@ uuid.workspace = true
 [dev-dependencies]
 control-plane-postgres = { path = "../../../control-plane/postgres" }
 forge-service = { path = "../../service" }
-identity-domain = { path = "../../../identity/domain" }
+identity-domain = { path = "../../../auth/identity/domain" }
 serial_test = "3"
 tempfile = "3"
 tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }

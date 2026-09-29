@@ -1059,8 +1059,8 @@
     },
     {
       "features": {},
-      "manifest_path": "/home/a/projects/hephaestus/crates/heph-core/identity/git-credential/Cargo.toml",
-      "manifest_path_relative": "crates/heph-core/identity/git-credential/Cargo.toml",
+      "manifest_path": "/home/a/projects/hephaestus/crates/heph-std/identity/git-credential/Cargo.toml",
+      "manifest_path_relative": "crates/heph-std/identity/git-credential/Cargo.toml",
       "metadata_hephaestus": {
         "context": "identity",
         "layer": "adapter"
@@ -1078,7 +1078,7 @@
             "bin"
           ],
           "name": "git-credential-hephaestus",
-          "src_path": "crates/heph-core/identity/git-credential/src/main.rs",
+          "src_path": "crates/heph-std/identity/git-credential/src/main.rs",
           "test": true
         }
       ],
@@ -1615,8 +1615,8 @@
     },
     {
       "features": {},
-      "manifest_path": "/home/a/projects/hephaestus/crates/heph-core/identity/application/Cargo.toml",
-      "manifest_path_relative": "crates/heph-core/identity/application/Cargo.toml",
+      "manifest_path": "/home/a/projects/hephaestus/crates/heph-core/auth/identity/application/Cargo.toml",
+      "manifest_path_relative": "crates/heph-core/auth/identity/application/Cargo.toml",
       "metadata_hephaestus": {
         "context": "identity",
         "layer": "application"
@@ -1634,7 +1634,7 @@
             "lib"
           ],
           "name": "identity_application",
-          "src_path": "crates/heph-core/identity/application/src/lib.rs",
+          "src_path": "crates/heph-core/auth/identity/application/src/lib.rs",
           "test": true
         },
         {
@@ -1648,7 +1648,7 @@
             "test"
           ],
           "name": "identity_application",
-          "src_path": "crates/heph-core/identity/application/tests/identity_application.rs",
+          "src_path": "crates/heph-core/auth/identity/application/tests/identity_application.rs",
           "test": true
         }
       ],
@@ -1656,8 +1656,8 @@
     },
     {
       "features": {},
-      "manifest_path": "/home/a/projects/hephaestus/crates/heph-core/identity/domain/Cargo.toml",
-      "manifest_path_relative": "crates/heph-core/identity/domain/Cargo.toml",
+      "manifest_path": "/home/a/projects/hephaestus/crates/heph-core/auth/identity/domain/Cargo.toml",
+      "manifest_path_relative": "crates/heph-core/auth/identity/domain/Cargo.toml",
       "metadata_hephaestus": {
         "context": "identity",
         "layer": "domain"
@@ -1675,7 +1675,7 @@
             "lib"
           ],
           "name": "identity_domain",
-          "src_path": "crates/heph-core/identity/domain/src/lib.rs",
+          "src_path": "crates/heph-core/auth/identity/domain/src/lib.rs",
           "test": true
         }
       ],
@@ -1710,8 +1710,8 @@
     },
     {
       "features": {},
-      "manifest_path": "/home/a/projects/hephaestus/crates/heph-core/identity/postgres/Cargo.toml",
-      "manifest_path_relative": "crates/heph-core/identity/postgres/Cargo.toml",
+      "manifest_path": "/home/a/projects/hephaestus/crates/heph-std/identity/postgres/Cargo.toml",
+      "manifest_path_relative": "crates/heph-std/identity/postgres/Cargo.toml",
       "metadata_hephaestus": {
         "context": "identity",
         "database_context": "identity",
@@ -1731,7 +1731,7 @@
             "test"
           ],
           "name": "browser_session_authenticate",
-          "src_path": "crates/heph-core/identity/postgres/tests/browser_session_authenticate.rs",
+          "src_path": "crates/heph-std/identity/postgres/tests/browser_session_authenticate.rs",
           "test": true
         },
         {
@@ -1745,7 +1745,7 @@
             "test"
           ],
           "name": "browser_session_create",
-          "src_path": "crates/heph-core/identity/postgres/tests/browser_session_create.rs",
+          "src_path": "crates/heph-std/identity/postgres/tests/browser_session_create.rs",
           "test": true
         },
         {
@@ -1759,7 +1759,7 @@
             "test"
           ],
           "name": "browser_session_revocation_schema",
-          "src_path": "crates/heph-core/identity/postgres/tests/browser_session_revocation_schema.rs",
+          "src_path": "crates/heph-std/identity/postgres/tests/browser_session_revocation_schema.rs",
           "test": true
         },
         {
@@ -1773,7 +1773,7 @@
             "test"
           ],
           "name": "browser_session_revoke",
-          "src_path": "crates/heph-core/identity/postgres/tests/browser_session_revoke.rs",
+          "src_path": "crates/heph-std/identity/postgres/tests/browser_session_revoke.rs",
           "test": true
         },
         {
@@ -1787,7 +1787,7 @@
             "test"
           ],
           "name": "browser_session_schema",
-          "src_path": "crates/heph-core/identity/postgres/tests/browser_session_schema.rs",
+          "src_path": "crates/heph-std/identity/postgres/tests/browser_session_schema.rs",
           "test": true
         },
         {
@@ -1801,7 +1801,7 @@
             "lib"
           ],
           "name": "identity_postgres",
-          "src_path": "crates/heph-core/identity/postgres/src/lib.rs",
+          "src_path": "crates/heph-std/identity/postgres/src/lib.rs",
           "test": true
         },
         {
@@ -1815,7 +1815,7 @@
             "test"
           ],
           "name": "postgres",
-          "src_path": "crates/heph-core/identity/postgres/tests/postgres.rs",
+          "src_path": "crates/heph-std/identity/postgres/tests/postgres.rs",
           "test": true
         }
       ],

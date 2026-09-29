@@ -17,7 +17,7 @@ builder-catalog-domain = { path = "../../../image/domain" }
 authz-domain = { path = "../../../authorization/authz-domain" }
 authz-postgres = { path = "../../../authorization/authz-postgres" }
 forge-domain = { path = "../../domain" }
-identity-domain = { path = "../../../identity/domain" }
+identity-domain = { path = "../../../auth/identity/domain" }
 registry-domain = { path = "../domain" }
 runtime-types = { path = "../../../platform/runtime-types" }
 sqlx.workspace = true
