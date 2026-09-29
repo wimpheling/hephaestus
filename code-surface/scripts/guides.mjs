@@ -1,5 +1,5 @@
 import { existsSync, readFileSync, statSync } from "node:fs";
-import { isAbsolute, relative, resolve } from "node:path";
+import { dirname, isAbsolute, relative, resolve } from "node:path";
 
 // Keep this list small and declarative. A guide is a source README plus the
 // generated inventory entries it explains. The generator checks both sides of
@@ -155,7 +155,7 @@ function sorted(values) {
 }
 
 function assertSafeGuidePath(repositoryRoot, guidePath) {
-  if (isAbsolute(guidePath)) throw new Error(`Guide path must be relative: ${guidePath}`);
+  if (isAbsolute(guidePath) || /^[A-Za-z]:[\\/]/.test(guidePath)) throw new Error(`Guide path must be relative: ${guidePath}`);
   const absolutePath = resolve(repositoryRoot, guidePath);
   const escaped = relative(repositoryRoot, absolutePath).startsWith("..");
   if (escaped) throw new Error(`Guide path escapes the repository: ${guidePath}`);
@@ -163,6 +163,39 @@ function assertSafeGuidePath(repositoryRoot, guidePath) {
     throw new Error(`Guide path must point to a README.md: ${guidePath}`);
   }
   return absolutePath;
+}
+
+function assertSafeRepositoryPath(repositoryRoot, sourcePath, expectedFilename) {
+  if (isAbsolute(sourcePath) || /^[A-Za-z]:[\\/]/.test(sourcePath)) throw new Error(`Source path must be relative: ${sourcePath}`);
+  const absolutePath = resolve(repositoryRoot, sourcePath);
+  const escaped = relative(repositoryRoot, absolutePath).startsWith("..");
+  if (escaped) throw new Error(`Source path escapes the repository: ${sourcePath}`);
+  if (expectedFilename && !sourcePath.endsWith(`/${expectedFilename}`) && sourcePath !== expectedFilename) {
+    throw new Error(`Source path must point to ${expectedFilename}: ${sourcePath}`);
+  }
+  return absolutePath;
+}
+
+function directoryForManifest(manifest) {
+  const directory = dirname(String(manifest).replaceAll("\\", "/")).replaceAll("\\", "/");
+  return directory === "." ? "" : directory;
+}
+
+function directoryId(directory) {
+  if (!directory) return "root";
+  // Hex keeps generated route IDs stable and safe for hash navigation even
+  // when a future directory name contains punctuation or spaces.
+  return `directory-${Buffer.from(directory).toString("hex")}`;
+}
+
+function directoryTitle(directory) {
+  return directory ? directory.split("/").at(-1) : "Hephaestus";
+}
+
+function directoryParent(directory) {
+  if (!directory) return null;
+  const parent = dirname(directory);
+  return parent === "." ? "" : parent;
 }
 
 function assertUnique(values, label) {
@@ -210,47 +243,122 @@ function authoredSourceDirectories(repositoryRoot, guides) {
 }
 
 /**
- * Resolve the static manifest against generated Cargo and Buf inventories.
- * Missing optional guides are omitted; missing required guides fail generation
- * so a renamed source cannot silently disappear from the UI.
+ * Resolve authored conceptual guides and the directory tree implied by Cargo
+ * metadata. Authored entries own titles, summaries, context associations, and
+ * RPC associations; every directory containing a workspace crate is then
+ * added beneath them, including directories without a README.
  */
 export function generateGuides({ repositoryRoot, crates, grpc, sourceBase = null, sourceTreeBase = null }) {
   const contexts = new Set((crates.packages ?? []).map((pkg) => pkg.context).filter(Boolean));
   const services = new Set((grpc.services ?? []).map((service) => service.id));
-  assertUnique(GUIDE_MANIFEST.map((guide) => guide.id), "guide ID");
-  assertUnique(GUIDE_MANIFEST.map((guide) => guide.path), "guide path");
+  const entries = GUIDE_MANIFEST;
+  assertUnique(entries.map((guide) => guide.id), "guide ID");
+  assertUnique(entries.map((guide) => guide.path), "guide path");
 
   const errors = [];
-  const guides = [];
-  for (const entry of GUIDE_MANIFEST) {
+  const authoredByDirectory = new Map();
+  for (const entry of entries) {
     const absolutePath = assertSafeGuidePath(repositoryRoot, entry.path);
+    const directory = directoryForManifest(entry.path);
+    if (authoredByDirectory.has(directory)) {
+      errors.push(`Multiple authored guides reference directory ${directory || "."}`);
+    }
+    authoredByDirectory.set(directory, entry);
     for (const context of entry.contexts ?? []) {
       if (!contexts.has(context)) errors.push(`${entry.id} references unknown Cargo context ${context}`);
     }
     for (const service of entry.services ?? []) {
       if (!services.has(service)) errors.push(`${entry.id} references unknown gRPC service ${service}`);
     }
-    if (!existsSync(absolutePath)) {
-      if (entry.optional) continue;
-      errors.push(`${entry.id} references missing guide source ${entry.path}`);
+    // Missing READMEs are represented as navigable guide nodes with an
+    // explicit warning flag. The path itself is still validated above, so a
+    // typo cannot escape the repository or become a non-README source.
+  }
+
+  const packageByDirectory = new Map();
+  const directories = new Set([""]);
+  for (const pkg of crates.packages ?? []) {
+    const manifest = String(pkg.manifest || "").replaceAll("\\", "/");
+    let absoluteManifest;
+    try {
+      absoluteManifest = assertSafeRepositoryPath(repositoryRoot, manifest, "Cargo.toml");
+    } catch (error) {
+      errors.push(`${pkg.id} has an invalid manifest path: ${error.message}`);
       continue;
     }
-    guides.push({
-      id: entry.id,
-      title: entry.title,
-      summary: entry.summary,
-      path: entry.path,
-      parent: entry.parent ?? null,
-      contexts: sorted(entry.contexts ?? []),
-      services: sorted(entry.services ?? []),
-      content: readFileSync(absolutePath, "utf8"),
-    });
+    if (!existsSync(absoluteManifest)) {
+      errors.push(`${pkg.id} references missing Cargo manifest ${manifest}`);
+      continue;
+    }
+    const directory = directoryForManifest(manifest);
+    if (packageByDirectory.has(directory)) {
+      errors.push(`Multiple Cargo crates share directory ${directory}`);
+    }
+    packageByDirectory.set(directory, pkg);
+    let current = directory;
+    while (true) {
+      directories.add(current);
+      if (!current) break;
+      current = directoryParent(current);
+    }
+  }
+
+  // Authored conceptual entries can cover a directory with no Cargo manifest,
+  // so retain their ancestors in the same navigable tree as crate directories.
+  for (const directory of authoredByDirectory.keys()) {
+    let current = directory;
+    while (true) {
+      directories.add(current);
+      if (!current) break;
+      current = directoryParent(current);
+    }
   }
 
   if (errors.length > 0) throw new Error(`Guide manifest validation failed:\n${errors.map((error) => `- ${error}`).join("\n")}`);
 
-  const placedContexts = new Set(GUIDE_MANIFEST.flatMap((guide) => guide.contexts ?? []));
-  const placedServices = new Set(GUIDE_MANIFEST.flatMap((guide) => guide.services ?? []));
+  const guides = [...directories].map((directory) => {
+    const authored = authoredByDirectory.get(directory);
+    const pkg = packageByDirectory.get(directory);
+    const readmePath = directory ? `${directory}/README.md` : "README.md";
+    const absoluteReadme = assertSafeGuidePath(repositoryRoot, readmePath);
+    const missingDocumentation = !existsSync(absoluteReadme);
+    const content = missingDocumentation ? "" : readFileSync(absoluteReadme, "utf8");
+    const parentDirectory = directoryParent(directory);
+    const parentAuthored = parentDirectory === null ? null : authoredByDirectory.get(parentDirectory);
+    const parent = authored?.parent ?? parentAuthored?.id ?? (parentDirectory === null ? null : directoryId(parentDirectory));
+    return {
+      id: authored?.id ?? directoryId(directory),
+      title: authored?.title ?? pkg?.name ?? directoryTitle(directory),
+      summary: authored?.summary ?? (pkg?.description || (directory ? `Source directory ${directory}.` : "The repository map and the source of truth for this code surface.")),
+      path: readmePath,
+      directory,
+      parent,
+      crateId: pkg?.id ?? null,
+      manifest: pkg?.manifest ?? null,
+      missingDocumentation,
+      contexts: sorted(authored?.contexts ?? []),
+      services: sorted(authored?.services ?? []),
+      content,
+    };
+  }).sort((left, right) => left.path.localeCompare(right.path));
+
+  assertUnique(guides.map((guide) => guide.id), "generated guide ID");
+  assertUnique(guides.map((guide) => guide.path), "generated guide path");
+  const guideById = new Set(guides.map((guide) => guide.id));
+  for (const guide of guides) {
+    if (guide.parent && !guideById.has(guide.parent)) errors.push(`${guide.id} has an unknown parent ${guide.parent}`);
+  }
+  const crateGuideCounts = new Map(guides.filter((guide) => guide.crateId).map((guide) => [guide.crateId, 0]));
+  for (const guide of guides) {
+    if (guide.crateId) crateGuideCounts.set(guide.crateId, (crateGuideCounts.get(guide.crateId) ?? 0) + 1);
+  }
+  for (const pkg of crates.packages ?? []) {
+    if (crateGuideCounts.get(pkg.id) !== 1) errors.push(`${pkg.id} must be represented by exactly one guide directory`);
+  }
+  if (errors.length > 0) throw new Error(`Guide manifest validation failed:\n${errors.map((error) => `- ${error}`).join("\n")}`);
+
+  const placedContexts = new Set(entries.flatMap((guide) => guide.contexts ?? []));
+  const placedServices = new Set(entries.flatMap((guide) => guide.services ?? []));
   const sourceDirectories = authoredSourceDirectories(repositoryRoot, guides);
   return {
     schemaVersion: 1,

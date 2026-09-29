@@ -141,12 +141,26 @@ test("generated code surface is deterministic and referentially complete", () =>
   const guideById = new Map(guides.guides.map((guide) => [guide.id, guide]));
   for (const guide of guides.guides) {
     assert.ok(!isAbsolute(guide.path), `${guide.id} has an absolute source path`);
-    assert.ok(existsSync(resolve(repositoryRoot, guide.path)), `${guide.id} has a missing source`);
-    assert.ok(guide.content.trim().length > 0, `${guide.id} has empty content`);
+    assert.ok(guide.path === "README.md" || guide.path.endsWith("/README.md"), `${guide.id} has an invalid guide source`);
+    const sourceExists = existsSync(resolve(repositoryRoot, guide.path));
+    assert.equal(guide.missingDocumentation, !sourceExists, `${guide.id} has an incorrect documentation flag`);
+    if (sourceExists) assert.ok(guide.content.trim().length > 0, `${guide.id} has empty content`);
+    else assert.equal(guide.content, "", `${guide.id} should not synthesize placeholder content`);
     if (guide.parent) assert.ok(guideById.has(guide.parent), `${guide.id} has an unknown parent ${guide.parent}`);
     for (const context of guide.contexts) assert.ok(contextNames.has(context), `${guide.id} references unknown context ${context}`);
     for (const service of guide.services) assert.ok(serviceIds.has(service), `${guide.id} references unknown service ${service}`);
   }
+  const crateGuides = guides.guides.filter((guide) => guide.crateId);
+  assert.equal(crateGuides.length, crates.packages.length, "every workspace crate needs a guide entry");
+  assert.equal(new Set(crateGuides.map((guide) => guide.crateId)).size, crateGuides.length, "each crate needs exactly one guide entry");
+  const packageById = new Map(crates.packages.map((pkg) => [pkg.id, pkg]));
+  for (const guide of crateGuides) {
+    const pkg = packageById.get(guide.crateId);
+    assert.ok(pkg, `${guide.id} references an unknown crate ${guide.crateId}`);
+    assert.equal(guide.manifest, pkg.manifest);
+    assert.equal(guide.directory, pkg.manifest.slice(0, -"/Cargo.toml".length));
+  }
+  assert.ok(guides.guides.some((guide) => guide.missingDocumentation), "the tree should expose missing documentation");
   assert.equal(guideById.get("root")?.path, "README.md");
   assert.equal(guideById.get("core")?.parent, "root");
   for (const id of ["auth", "forge", "image", "runtime", "platform"]) assert.equal(guideById.get(id)?.parent, "core");
