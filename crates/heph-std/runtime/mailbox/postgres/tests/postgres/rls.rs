@@ -17,7 +17,7 @@ async fn mailbox_rls_isolates_tenants_and_preserves_removed_owner_history() {
         .connect(&database_url)
         .await
         .expect("connect real PostgreSQL");
-    sqlx::migrate!("../../../../migrations")
+    sqlx::migrate!("../../../../../migrations")
         .run(&pool)
         .await
         .expect("apply mailbox migrations");

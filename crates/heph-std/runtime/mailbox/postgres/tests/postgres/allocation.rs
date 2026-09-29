@@ -19,7 +19,7 @@ async fn instance_mailbox_allocation_is_authorized_idempotent_and_receipted() {
         .connect(&database_url)
         .await
         .expect("connect real PostgreSQL");
-    sqlx::migrate!("../../../../migrations")
+    sqlx::migrate!("../../../../../migrations")
         .run(&pool)
         .await
         .expect("apply mailbox allocation migration");

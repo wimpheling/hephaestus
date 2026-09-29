@@ -21,7 +21,7 @@ async fn recovery_does_not_classify_a_run_cleaned_during_its_fallback_statement(
         .connect(&database_url)
         .await
         .expect("connect real PostgreSQL");
-    sqlx::migrate!("../../../../migrations")
+    sqlx::migrate!("../../../../../migrations")
         .run(&pool)
         .await
         .expect("apply mailbox migrations");

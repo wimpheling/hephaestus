@@ -20,7 +20,7 @@ async fn mailbox_payload_retention_purges_only_expired_terminal_body_bytes() {
         .connect(&database_url)
         .await
         .expect("connect real PostgreSQL");
-    sqlx::migrate!("../../../../migrations")
+    sqlx::migrate!("../../../../../migrations")
         .run(&pool)
         .await
         .expect("apply mailbox migrations");

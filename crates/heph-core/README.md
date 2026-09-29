@@ -1,10 +1,10 @@
 # Hephaestus core
 
-`crates/heph-core/` is intended to contain provider-neutral domain, application,
-port, and transport contracts. The current tree is transitional: it still
-contains concrete PostgreSQL and transport adapters alongside those contracts.
-The target boundary moves such adapters to `heph-std`; the core is not a second
-daemon and does not select a host implementation.
+`crates/heph-core/` contains provider-neutral domain, application, port, and
+transport contracts. The core is portable: concrete PostgreSQL, NATS, Git, VM,
+filesystem, and other host adapters live in [`heph-std`](../heph-std/), while
+trusted bootstrap binaries and daemon composition live in [`heph-app`](../heph-app/).
+Core is not a second daemon and does not select a host implementation.
 
 ## Domain map
 
@@ -27,13 +27,11 @@ rules remain authoritative for current dependency boundaries.
 
 ## Composition boundaries
 
-The stable context facades are intended to be [`heph-forge`](forge/),
+The stable context facades are [`heph-forge`](forge/),
 [`heph-runtime`](runtime/), [`heph-run`](runtime/run/), [`heph-secret`](auth/secret/), and
-[`heph-build`](forge/build/). They expose provider-neutral APIs, although some
-concrete adapters and cross-context services still remain in `heph-core` and
-may be direct dependencies of the composition root during the migration.
-[`heph-app`](../heph-app/) selects those implementations and assembles the
-daemon.
+[`heph-build`](forge/build/). They expose provider-neutral APIs. The
+composition root in [`heph-app`](../heph-app/) selects implementations from
+`heph-std`, installs cross-context adapters, and assembles the daemon.
 
 Read the detailed operational contracts in [`docs/application.md`](../../docs/application.md),
 [`docs/git-forge.md`](../../docs/git-forge.md),

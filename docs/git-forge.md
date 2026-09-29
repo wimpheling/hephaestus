@@ -1,18 +1,27 @@
 # Minimal Git forge core
 
-Phase 2 accepts authorized Git smart-HTTP traffic, stores bare repositories,
-records accepted receives, parses the exact received `agent.toml`, and commits
-idempotent run commands through the shared transactional outbox.
+The forge core defines portable receive and outbox contracts. The standard
+adapters accept authorized Git smart-HTTP traffic, store bare repositories,
+record accepted receives, parse the exact received `agent.toml`, and commit
+idempotent run commands through the shared transactional outbox. The app
+composition root selects these adapters for the current distribution.
 
 ## Crates
 
 - `forge-domain`: opaque forge identifiers and validated Git values.
 - `agent-config`: versioned `agent.toml` types, parsing, diagnostics, hashing,
   validation, and trigger matching.
-- `forge-service`: canonical bare storage, PostgreSQL metadata, exact-commit
-  `gix` inspection, receive processing, and JetStream outbox publication.
+- `forge-service`: provider-neutral receive processing and the transactional
+  outbox port; it does not own storage, `gix`, PostgreSQL, or NATS.
+- `forge-storage`: canonical bare-Git filesystem and process storage.
+- `forge-postgres`: PostgreSQL repository metadata and receive persistence,
+  including exact-commit `gix` inspection.
+- `forge-nats`: JetStream topology and publication of committed forge outbox
+  records.
 - `git-http`: Axum routes, authorization, and the bounded streaming
   `git-http-backend` adapter.
+- `review-git`: trusted Git operations for publishing an approved review result
+  ref.
 
 The principal, repository ID, operation, receive ID, and accepted refs are
 included in structured tracing. `GitAuthorizer` is called before every
@@ -33,7 +42,7 @@ and caller-provided paths never enter path construction. Existing paths are
 rejected if the repository entry is a symlink, resolves to a different path,
 or does not contain bare-repository metadata.
 
-## PostgreSQL
+## PostgreSQL receive adapter
 
 Migration `0002_git_forge.sql` adds:
 
@@ -143,21 +152,21 @@ authorization-scoped product-event watches, not informational JSON subjects.
 
 Ordinary tests cover domain validation, configuration parsing, canonical
 storage, CGI response parsing, and ref differencing. The native Git transport
-and PostgreSQL flow is enabled with:
+and PostgreSQL flow are enabled with the app-owned integration tests:
 
 ```sh
 HEPHAESTUS_POSTGRES_TEST_URL=postgres://... \
-cargo test -p git-http --test smart_http
+cargo test -p hephaestus-app --test forge_postgres_smart_http
 
 HEPHAESTUS_POSTGRES_TEST_URL=postgres://... \
 HEPHAESTUS_NATS_TEST_URL=nats://... \
-cargo test -p forge-service --test postgres
+cargo test -p hephaestus-app --test forge_postgres_receive
 ```
 
 The smart-HTTP test performs a real push, clone, and fetch through Axum and
 `git-http-backend`, then verifies authorization calls, exact commit inspection,
 receive/ref audit, the config revision, and one start-command outbox record.
-The forge-service suite additionally verifies invalid diagnostics, receive and
+The receive suite additionally verifies invalid diagnostics, receive and
 JetStream idempotency, durable publication, command consumption, and a
 fake-provider VM reaching the running state.
 

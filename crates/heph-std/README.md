@@ -1,11 +1,11 @@
 # Hephaestus standard implementations
 
-`crates/heph-std/` is the target home for concrete providers and transports for
-the provider-neutral contracts in [`heph-core`](../heph-core/). The current
-adapter set is transitional: several concrete PostgreSQL and transport
-adapters still live in `heph-core`. These crates choose host technology and
-operational policy for the current single-node distribution while keeping the
-core contracts replaceable.
+`crates/heph-std/` is the home for concrete providers and transports for the
+provider-neutral contracts in [`heph-core`](../heph-core/). It supplies the
+PostgreSQL, NATS, Git, VM, filesystem, and other host integrations used by the
+current single-node distribution. Trusted bootstrap binaries and cross-context
+startup composition live in [`heph-app`](../heph-app/); the core contracts stay
+portable.
 
 ## Implementations
 
@@ -13,8 +13,10 @@ core contracts replaceable.
   persistent volumes, and local exact-commit workspaces.
 - [`run/`](run/) materializes immutable releases and host context in per-run
   filesystem roots and performs recovery without SQL.
-- [`forge/`](forge/) provides local OCI preparation workers and the HTTP,
-  notification, publisher, and Zot registry integrations.
+- [`forge/`](forge/) provides canonical bare-Git storage, PostgreSQL metadata
+  and receive processing, NATS outbox publication, local OCI preparation
+  workers, smart HTTP, review Git publication, and the notification, publisher,
+  and Zot registry integrations.
 - [`gateway/`](gateway/) reconciles the private Caddy edge and dispatches
   bounded HTTP requests to released gateway services.
 - [`identity/`](identity/) contains concrete identity adapters:

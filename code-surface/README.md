@@ -39,11 +39,15 @@ generated JSON and built app are local outputs and are not committed.
 
 ## Boundaries
 
-This first surface covers workspace packages and their declared workspace
-dependencies, including optional and target-specific declarations. The gRPC
-view covers protobuf files, services, RPC methods, messages, enums, and their
-type references. It describes declared structure, not the behavior inside
-functions or the runtime state of an instance. The guide manifest lives in
-`scripts/guides.mjs`; its source paths and explicit context/service references
-are checked during generation. Unplaced generated contexts and services are
-reported in `guides.json` and surfaced on guide pages.
+The guide tree starts with authored READMEs and then reaches every workspace
+crate directory from Cargo metadata, including nested crates and directories
+without a README. A directory without a README remains navigable and is marked
+with a warning so missing documentation is visible. The crate view covers
+workspace packages and their declared workspace dependencies, including
+optional and target-specific declarations. The gRPC view covers protobuf files,
+services, RPC methods, messages, enums, and their type references. These views
+describe declared structure, not the behavior inside functions or the runtime
+state of an instance. The guide manifest lives in `scripts/guides.mjs`; its
+source paths and explicit context/service references are checked during
+generation. Unplaced generated contexts and services are reported in
+`guides.json` and surfaced on guide pages.

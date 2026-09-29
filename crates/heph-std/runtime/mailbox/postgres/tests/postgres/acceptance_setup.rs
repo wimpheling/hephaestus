@@ -26,7 +26,7 @@ pub async fn setup(database_url: &str) -> AcceptanceState {
         .connect(database_url)
         .await
         .expect("connect real PostgreSQL");
-    sqlx::migrate!("../../../../migrations")
+    sqlx::migrate!("../../../../../migrations")
         .run(&pool)
         .await
         .expect("apply mailbox migrations");

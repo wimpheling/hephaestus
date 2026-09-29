@@ -28,7 +28,17 @@ EXPECTED_FACADES = {
     "heph-forge",
     "heph-build",
 }
+EXPECTED_STD_ADAPTERS = {
+    "forge-nats",
+    "forge-storage",
+    "review-git",
+    "review-nats",
+    "run-nats",
+    "secret-key-local",
+}
+EXPECTED_ADDITIONAL_PACKAGES = EXPECTED_FACADES | EXPECTED_STD_ADAPTERS
 EXPECTED_BASELINE_PACKAGE_COUNT = 85
+EXPECTED_FINAL_WORKSPACE_MEMBER_COUNT = 96
 EXPECTED_FACADE_TEST_TARGETS = {
     ("heph-build", "contracts"),
     ("heph-forge", "api"),
@@ -42,10 +52,40 @@ EXPECTED_ADDITIONAL_TEST_TARGETS = {
     ("control-plane-postgres", "organization_pagination"),
     ("hephaestus-app", "artifact_deadline_cancellation"),
 }
-ALLOWED_ARCHITECTURE_METADATA_DELTA = {
-    "package": "git-http",
-    "field": "allow_cross_context_dependencies",
-    "baseline_value": ["identity-oidc"],
+# These metadata changes are deliberate consequences of extracting standard
+# adapters after the historical inventory was captured. Keep each expected
+# before/after value explicit so unrelated architecture metadata still fails.
+ALLOWED_ARCHITECTURE_METADATA_DELTAS = (
+    {
+        "package": "git-http",
+        "field": "allow_cross_context_dependencies",
+        "baseline_value": ["identity-oidc"],
+        "current_value": None,
+    },
+    {
+        "package": "control-plane-postgres",
+        "field": "allow_cross_context_dependencies",
+        "baseline_value": ["authz-postgres", "release-artifact-store"],
+        "current_value": [
+            "authz-postgres",
+            "forge-storage",
+            "release-artifact-store",
+        ],
+    },
+    {
+        "package": "review-postgres",
+        "field": "allow_cross_context_dependencies",
+        "baseline_value": ["authz-postgres"],
+        "current_value": ["authz-postgres", "forge-storage"],
+    },
+)
+# ``secret-store`` retains its focused key fixtures behind this feature while
+# the implementation lives in the new ``secret-key-local`` adapter.
+ALLOWED_FEATURE_DELTAS = {
+    "secret-store": {
+        "baseline_value": {},
+        "current_value": {"test-fixtures": []},
+    },
 }
 ALLOWED_INTEGRATION_TEST_RELOCATIONS = (
     {
@@ -136,11 +176,12 @@ def normalize_target(target: dict[str, Any]) -> dict[str, Any]:
 def normalize_package(package: dict[str, Any]) -> dict[str, Any]:
     """Select stable package facts and the current manifest path."""
 
+    manifest_path = relative_path(package["manifest_path"])
     return {
         "name": package["name"],
         "version": package["version"],
-        "manifest_path": package["manifest_path"],
-        "manifest_path_relative": relative_path(package["manifest_path"]),
+        "manifest_path": manifest_path,
+        "manifest_path_relative": manifest_path,
         "features": package.get("features", {}),
         "targets": sorted(
             (normalize_target(target) for target in package.get("targets", [])),
@@ -161,7 +202,7 @@ def inventory_from_metadata(metadata: dict[str, Any]) -> dict[str, Any]:
     workspace_members = metadata.get("workspace_members", [])
     return {
         "schema_version": 1,
-        "workspace_root": metadata.get("workspace_root"),
+        "workspace_root": relative_path(metadata["workspace_root"]),
         "workspace_member_count": len(workspace_members),
         "workspace_member_names": names,
         "package_count": len(packages),
@@ -185,17 +226,35 @@ def target_identity(target: dict[str, Any]) -> dict[str, Any]:
     return {key: value for key, value in target.items() if key != "src_path"}
 
 
+def relocated_target_identity(target: dict[str, Any]) -> dict[str, Any]:
+    """Keep target metadata while ignoring its intended name and source path."""
+
+    return {
+        key: value
+        for key, value in target.items()
+        if key not in {"name", "src_path"}
+    }
+
+
 def package_identity(package: dict[str, Any]) -> dict[str, Any]:
     """Return the package facts that must remain unchanged."""
 
     metadata = package["metadata_hephaestus"]
-    if package["name"] == ALLOWED_ARCHITECTURE_METADATA_DELTA["package"]:
+    if any(
+        delta["package"] == package["name"]
+        for delta in ALLOWED_ARCHITECTURE_METADATA_DELTAS
+    ):
         metadata = dict(metadata)
-        metadata.pop(ALLOWED_ARCHITECTURE_METADATA_DELTA["field"], None)
+        for delta in ALLOWED_ARCHITECTURE_METADATA_DELTAS:
+            if delta["package"] == package["name"]:
+                metadata.pop(delta["field"], None)
+    features = package["features"]
+    if package["name"] in ALLOWED_FEATURE_DELTAS:
+        features = {}
     return {
         "name": package["name"],
         "version": package["version"],
-        "features": package["features"],
+        "features": features,
         # Integration tests can move to the composition root to remove core
         # development dependencies. They are reconciled separately below.
         "targets": [
@@ -212,16 +271,40 @@ def architecture_metadata_delta_is_allowed(
     baseline: dict[str, Any],
     current: dict[str, Any],
 ) -> bool:
-    """Permit only git-http's documented stale allowlist removal."""
+    """Permit only the documented adapter extraction metadata changes."""
 
-    delta = ALLOWED_ARCHITECTURE_METADATA_DELTA
-    if package_name != delta["package"]:
-        return baseline == current
-    if baseline.get(delta["field"]) != delta["baseline_value"]:
+    deltas = [
+        delta
+        for delta in ALLOWED_ARCHITECTURE_METADATA_DELTAS
+        if package_name == delta["package"]
+    ]
+    if not deltas:
         return baseline == current
     expected_current = dict(baseline)
-    expected_current.pop(delta["field"])
+    for delta in deltas:
+        if baseline.get(delta["field"]) != delta["baseline_value"]:
+            return baseline == current
+        if delta["current_value"] is None:
+            expected_current.pop(delta["field"], None)
+        else:
+            expected_current[delta["field"]] = delta["current_value"]
     return current == expected_current
+
+
+def feature_delta_is_allowed(
+    package_name: str,
+    baseline: dict[str, Any],
+    current: dict[str, Any],
+) -> bool:
+    """Permit only the documented secret-store fixture feature addition."""
+
+    delta = ALLOWED_FEATURE_DELTAS.get(package_name)
+    if delta is None:
+        return baseline == current
+    return (
+        baseline == delta["baseline_value"]
+        and current == delta["current_value"]
+    )
 
 
 def test_targets(inventory: dict[str, Any]) -> dict[tuple[str, str], dict[str, Any]]:
@@ -252,7 +335,7 @@ def reconcile(
     missing = sorted(set(baseline_packages) - set(current_packages))
     expected_names = set(baseline_packages)
     if not baseline_only:
-        expected_names |= EXPECTED_FACADES
+        expected_names |= EXPECTED_ADDITIONAL_PACKAGES
     unexpected = sorted(set(current_packages) - expected_names)
     changed: list[str] = []
     for name in sorted(set(baseline_packages) & set(current_packages)):
@@ -262,6 +345,10 @@ def reconcile(
             name,
             baseline_packages[name]["metadata_hephaestus"],
             current_packages[name]["metadata_hephaestus"],
+        ) or not feature_delta_is_allowed(
+            name,
+            baseline_packages[name]["features"],
+            current_packages[name]["features"],
         ):
             changed.append(name)
 
@@ -279,18 +366,10 @@ def reconcile(
         if source in removed_tests and destination in added_tests:
             source_identity = baseline_tests[source]
             destination_identity = current_tests[destination]
-            if not (
-                source_identity.get("crate_types") == ["bin"]
-                and source_identity.get("kind") == ["test"]
-            ):
+            if relocated_target_identity(
+                source_identity
+            ) != relocated_target_identity(destination_identity):
                 changed.append(f"{source[0]}::{source[1]} integration-test identity")
-            if not (
-                destination_identity.get("crate_types") == ["bin"]
-                and destination_identity.get("kind") == ["test"]
-            ):
-                changed.append(
-                    f"{destination[0]}::{destination[1]} integration-test identity"
-                )
             relocations.append(
                 f"{source[0]}::{source[1]} -> {destination[0]}::{destination[1]}"
             )
@@ -314,7 +393,12 @@ def reconcile(
             for package, target in sorted(added_tests)
         )
 
-    expected_count = len(baseline_packages) + (0 if baseline_only else len(EXPECTED_FACADES))
+    expected_count = len(expected_names)
+    if not baseline_only and expected_count != EXPECTED_FINAL_WORKSPACE_MEMBER_COUNT:
+        changed.append(
+            "<configured-package-set> expected "
+            f"{EXPECTED_FINAL_WORKSPACE_MEMBER_COUNT} packages, got {expected_count}"
+        )
     if current.get("package_count") != expected_count:
         changed.append(
             f"<package-count> expected {expected_count}, got {current.get('package_count')}"
@@ -365,28 +449,31 @@ def report(
         for baseline_package in baseline.get("packages", [])
         if baseline_package["name"] in current_names
     )
-    facades = sorted(current_names - baseline_names)
+    additional_packages = sorted(current_names - baseline_names)
 
     print(f"Baseline: {baseline_path}")
     print(f"Current packages: {current.get('package_count')}")
     print(f"Current workspace members: {current.get('workspace_member_count')}")
     print(f"Baseline packages compared: {len(baseline_names)}")
     print(f"Manifest path changes: {path_changes}")
-    print(f"Additional packages: {', '.join(facades) if facades else 'none'}")
+    print(
+        "Additional packages: "
+        f"{', '.join(additional_packages) if additional_packages else 'none'}"
+    )
     if relocations:
         print("Integration-test target relocations:")
         for relocation in relocations:
             print(f"  {relocation}")
 
     if baseline_only:
-        expected_facades = set()
+        expected_additional_packages = set()
     else:
-        expected_facades = EXPECTED_FACADES
-    if set(facades) != expected_facades:
+        expected_additional_packages = EXPECTED_ADDITIONAL_PACKAGES
+    if set(additional_packages) != expected_additional_packages:
         changed.append(
-            "<facades> expected "
-            f"{', '.join(sorted(expected_facades)) or 'none'}, got "
-            f"{', '.join(facades) or 'none'}"
+            "<additional-packages> expected "
+            f"{', '.join(sorted(expected_additional_packages)) or 'none'}, got "
+            f"{', '.join(additional_packages) or 'none'}"
         )
     if missing or unexpected or changed:
         if missing:
@@ -424,7 +511,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--baseline-only",
         action="store_true",
-        help="verify only the 85 baseline packages; permit no facade packages yet",
+        help="verify only the 85 baseline packages; permit no additional packages yet",
     )
     args = parser.parse_args()
     if args.write_baseline and args.baseline_only:

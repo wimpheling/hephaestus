@@ -1,9 +1,9 @@
 {
-  "package_count": 93,
+  "package_count": 96,
   "packages": [
     {
       "features": {},
-      "manifest_path": "/home/a/projects/hephaestus/crates/heph-core/platform/agent-config/Cargo.toml",
+      "manifest_path": "crates/heph-core/platform/agent-config/Cargo.toml",
       "manifest_path_relative": "crates/heph-core/platform/agent-config/Cargo.toml",
       "metadata_hephaestus": {
         "context": "platform",
@@ -100,7 +100,7 @@
     },
     {
       "features": {},
-      "manifest_path": "/home/a/projects/hephaestus/crates/heph-core/auth/authorization/authz-domain/Cargo.toml",
+      "manifest_path": "crates/heph-core/auth/authorization/authz-domain/Cargo.toml",
       "manifest_path_relative": "crates/heph-core/auth/authorization/authz-domain/Cargo.toml",
       "metadata_hephaestus": {
         "context": "authorization",
@@ -127,7 +127,7 @@
     },
     {
       "features": {},
-      "manifest_path": "/home/a/projects/hephaestus/crates/heph-std/authorization/authz-postgres/Cargo.toml",
+      "manifest_path": "crates/heph-std/authorization/authz-postgres/Cargo.toml",
       "manifest_path_relative": "crates/heph-std/authorization/authz-postgres/Cargo.toml",
       "metadata_hephaestus": {
         "context": "authorization",
@@ -170,7 +170,7 @@
     },
     {
       "features": {},
-      "manifest_path": "/home/a/projects/hephaestus/crates/heph-app/bootstrap/Cargo.toml",
+      "manifest_path": "crates/heph-app/bootstrap/Cargo.toml",
       "manifest_path_relative": "crates/heph-app/bootstrap/Cargo.toml",
       "metadata_hephaestus": {
         "context": "bootstrap",
@@ -227,7 +227,7 @@
     },
     {
       "features": {},
-      "manifest_path": "/home/a/projects/hephaestus/crates/heph-core/auth/secret/brokered-egress-client/Cargo.toml",
+      "manifest_path": "crates/heph-core/auth/secret/brokered-egress-client/Cargo.toml",
       "manifest_path_relative": "crates/heph-core/auth/secret/brokered-egress-client/Cargo.toml",
       "metadata_hephaestus": {
         "context": "secret",
@@ -254,7 +254,7 @@
     },
     {
       "features": {},
-      "manifest_path": "/home/a/projects/hephaestus/crates/heph-core/auth/secret/brokered-egress-domain/Cargo.toml",
+      "manifest_path": "crates/heph-core/auth/secret/brokered-egress-domain/Cargo.toml",
       "manifest_path_relative": "crates/heph-core/auth/secret/brokered-egress-domain/Cargo.toml",
       "metadata_hephaestus": {
         "context": "secret",
@@ -281,7 +281,7 @@
     },
     {
       "features": {},
-      "manifest_path": "/home/a/projects/hephaestus/crates/heph-std/forge/build/orchestrator/Cargo.toml",
+      "manifest_path": "crates/heph-std/forge/build/orchestrator/Cargo.toml",
       "manifest_path_relative": "crates/heph-std/forge/build/orchestrator/Cargo.toml",
       "metadata_hephaestus": {
         "allow_cross_context_dependencies": [
@@ -312,7 +312,7 @@
     },
     {
       "features": {},
-      "manifest_path": "/home/a/projects/hephaestus/crates/heph-std/forge/build/postgres/Cargo.toml",
+      "manifest_path": "crates/heph-std/forge/build/postgres/Cargo.toml",
       "manifest_path_relative": "crates/heph-std/forge/build/postgres/Cargo.toml",
       "metadata_hephaestus": {
         "allow_cross_context_dependencies": [
@@ -359,7 +359,7 @@
     },
     {
       "features": {},
-      "manifest_path": "/home/a/projects/hephaestus/crates/heph-core/image/application/Cargo.toml",
+      "manifest_path": "crates/heph-core/image/application/Cargo.toml",
       "manifest_path_relative": "crates/heph-core/image/application/Cargo.toml",
       "metadata_hephaestus": {
         "allow_cross_context_dependencies": [
@@ -389,7 +389,7 @@
     },
     {
       "features": {},
-      "manifest_path": "/home/a/projects/hephaestus/crates/heph-core/image/domain/Cargo.toml",
+      "manifest_path": "crates/heph-core/image/domain/Cargo.toml",
       "manifest_path_relative": "crates/heph-core/image/domain/Cargo.toml",
       "metadata_hephaestus": {
         "context": "image",
@@ -416,7 +416,7 @@
     },
     {
       "features": {},
-      "manifest_path": "/home/a/projects/hephaestus/crates/heph-std/image/postgres/Cargo.toml",
+      "manifest_path": "crates/heph-std/image/postgres/Cargo.toml",
       "manifest_path_relative": "crates/heph-std/image/postgres/Cargo.toml",
       "metadata_hephaestus": {
         "allow_cross_context_dependencies": [
@@ -449,7 +449,7 @@
     },
     {
       "features": {},
-      "manifest_path": "/home/a/projects/hephaestus/crates/heph-core/auth/authorization/capability-audit/Cargo.toml",
+      "manifest_path": "crates/heph-core/auth/authorization/capability-audit/Cargo.toml",
       "manifest_path_relative": "crates/heph-core/auth/authorization/capability-audit/Cargo.toml",
       "metadata_hephaestus": {
         "context": "authorization",
@@ -476,7 +476,7 @@
     },
     {
       "features": {},
-      "manifest_path": "/home/a/projects/hephaestus/crates/heph-std/authorization/capability-audit-postgres/Cargo.toml",
+      "manifest_path": "crates/heph-std/authorization/capability-audit-postgres/Cargo.toml",
       "manifest_path_relative": "crates/heph-std/authorization/capability-audit-postgres/Cargo.toml",
       "metadata_hephaestus": {
         "context": "authorization",
@@ -519,7 +519,7 @@
     },
     {
       "features": {},
-      "manifest_path": "/home/a/projects/hephaestus/crates/heph-core/auth/authorization/capability-domain/Cargo.toml",
+      "manifest_path": "crates/heph-core/auth/authorization/capability-domain/Cargo.toml",
       "manifest_path_relative": "crates/heph-core/auth/authorization/capability-domain/Cargo.toml",
       "metadata_hephaestus": {
         "context": "authorization",
@@ -546,11 +546,12 @@
     },
     {
       "features": {},
-      "manifest_path": "/home/a/projects/hephaestus/crates/heph-std/control-plane/postgres/Cargo.toml",
+      "manifest_path": "crates/heph-std/control-plane/postgres/Cargo.toml",
       "manifest_path_relative": "crates/heph-std/control-plane/postgres/Cargo.toml",
       "metadata_hephaestus": {
         "allow_cross_context_dependencies": [
           "authz-postgres",
+          "forge-storage",
           "release-artifact-store"
         ],
         "context": "control-plane",
@@ -649,7 +650,7 @@
     },
     {
       "features": {},
-      "manifest_path": "/home/a/projects/hephaestus/crates/heph-core/platform/event/application/Cargo.toml",
+      "manifest_path": "crates/heph-core/platform/event/application/Cargo.toml",
       "manifest_path_relative": "crates/heph-core/platform/event/application/Cargo.toml",
       "metadata_hephaestus": {
         "context": "event",
@@ -690,7 +691,7 @@
     },
     {
       "features": {},
-      "manifest_path": "/home/a/projects/hephaestus/crates/heph-std/event/postgres/Cargo.toml",
+      "manifest_path": "crates/heph-std/event/postgres/Cargo.toml",
       "manifest_path_relative": "crates/heph-std/event/postgres/Cargo.toml",
       "metadata_hephaestus": {
         "context": "event",
@@ -733,7 +734,7 @@
     },
     {
       "features": {},
-      "manifest_path": "/home/a/projects/hephaestus/crates/heph-core/forge/domain/Cargo.toml",
+      "manifest_path": "crates/heph-core/forge/domain/Cargo.toml",
       "manifest_path_relative": "crates/heph-core/forge/domain/Cargo.toml",
       "metadata_hephaestus": {
         "context": "forge",
@@ -760,7 +761,7 @@
     },
     {
       "features": {},
-      "manifest_path": "/home/a/projects/hephaestus/crates/heph-std/forge/nats/Cargo.toml",
+      "manifest_path": "crates/heph-std/forge/nats/Cargo.toml",
       "manifest_path_relative": "crates/heph-std/forge/nats/Cargo.toml",
       "metadata_hephaestus": {
         "context": "forge",
@@ -787,7 +788,7 @@
     },
     {
       "features": {},
-      "manifest_path": "/home/a/projects/hephaestus/crates/heph-std/forge/postgres/Cargo.toml",
+      "manifest_path": "crates/heph-std/forge/postgres/Cargo.toml",
       "manifest_path_relative": "crates/heph-std/forge/postgres/Cargo.toml",
       "metadata_hephaestus": {
         "allow_cross_context_dependencies": [
@@ -833,7 +834,7 @@
     },
     {
       "features": {},
-      "manifest_path": "/home/a/projects/hephaestus/crates/heph-core/forge/service/Cargo.toml",
+      "manifest_path": "crates/heph-core/forge/service/Cargo.toml",
       "manifest_path_relative": "crates/heph-core/forge/service/Cargo.toml",
       "metadata_hephaestus": {
         "context": "forge",
@@ -860,7 +861,34 @@
     },
     {
       "features": {},
-      "manifest_path": "/home/a/projects/hephaestus/crates/heph-core/platform/gateway/domain/Cargo.toml",
+      "manifest_path": "crates/heph-std/forge/storage/Cargo.toml",
+      "manifest_path_relative": "crates/heph-std/forge/storage/Cargo.toml",
+      "metadata_hephaestus": {
+        "context": "forge",
+        "layer": "adapter"
+      },
+      "name": "forge-storage",
+      "targets": [
+        {
+          "crate_types": [
+            "lib"
+          ],
+          "doc": true,
+          "doctest": true,
+          "edition": "2024",
+          "kind": [
+            "lib"
+          ],
+          "name": "forge_storage",
+          "src_path": "crates/heph-std/forge/storage/src/lib.rs",
+          "test": true
+        }
+      ],
+      "version": "0.1.0"
+    },
+    {
+      "features": {},
+      "manifest_path": "crates/heph-core/platform/gateway/domain/Cargo.toml",
       "manifest_path_relative": "crates/heph-core/platform/gateway/domain/Cargo.toml",
       "metadata_hephaestus": {
         "context": "gateway",
@@ -887,7 +915,7 @@
     },
     {
       "features": {},
-      "manifest_path": "/home/a/projects/hephaestus/crates/heph-std/gateway/edge/Cargo.toml",
+      "manifest_path": "crates/heph-std/gateway/edge/Cargo.toml",
       "manifest_path_relative": "crates/heph-std/gateway/edge/Cargo.toml",
       "metadata_hephaestus": {
         "context": "gateway",
@@ -928,7 +956,7 @@
     },
     {
       "features": {},
-      "manifest_path": "/home/a/projects/hephaestus/crates/heph-std/gateway/postgres/Cargo.toml",
+      "manifest_path": "crates/heph-std/gateway/postgres/Cargo.toml",
       "manifest_path_relative": "crates/heph-std/gateway/postgres/Cargo.toml",
       "metadata_hephaestus": {
         "allow_cross_context_dependencies": [
@@ -1059,7 +1087,7 @@
     },
     {
       "features": {},
-      "manifest_path": "/home/a/projects/hephaestus/crates/heph-core/forge/git-capability/Cargo.toml",
+      "manifest_path": "crates/heph-core/forge/git-capability/Cargo.toml",
       "manifest_path_relative": "crates/heph-core/forge/git-capability/Cargo.toml",
       "metadata_hephaestus": {
         "context": "forge",
@@ -1086,7 +1114,7 @@
     },
     {
       "features": {},
-      "manifest_path": "/home/a/projects/hephaestus/crates/heph-std/identity/git-credential/Cargo.toml",
+      "manifest_path": "crates/heph-std/identity/git-credential/Cargo.toml",
       "manifest_path_relative": "crates/heph-std/identity/git-credential/Cargo.toml",
       "metadata_hephaestus": {
         "context": "identity",
@@ -1113,7 +1141,7 @@
     },
     {
       "features": {},
-      "manifest_path": "/home/a/projects/hephaestus/crates/heph-std/forge/git-http/Cargo.toml",
+      "manifest_path": "crates/heph-std/forge/git-http/Cargo.toml",
       "manifest_path_relative": "crates/heph-std/forge/git-http/Cargo.toml",
       "metadata_hephaestus": {
         "context": "forge",
@@ -1182,7 +1210,7 @@
     },
     {
       "features": {},
-      "manifest_path": "/home/a/projects/hephaestus/crates/heph-core/forge/build/Cargo.toml",
+      "manifest_path": "crates/heph-core/forge/build/Cargo.toml",
       "manifest_path_relative": "crates/heph-core/forge/build/Cargo.toml",
       "metadata_hephaestus": {
         "context": "build",
@@ -1223,7 +1251,7 @@
     },
     {
       "features": {},
-      "manifest_path": "/home/a/projects/hephaestus/crates/heph-core/forge/Cargo.toml",
+      "manifest_path": "crates/heph-core/forge/Cargo.toml",
       "manifest_path_relative": "crates/heph-core/forge/Cargo.toml",
       "metadata_hephaestus": {
         "context": "forge",
@@ -1264,7 +1292,7 @@
     },
     {
       "features": {},
-      "manifest_path": "/home/a/projects/hephaestus/crates/heph-core/runtime/run/Cargo.toml",
+      "manifest_path": "crates/heph-core/runtime/run/Cargo.toml",
       "manifest_path_relative": "crates/heph-core/runtime/run/Cargo.toml",
       "metadata_hephaestus": {
         "context": "run",
@@ -1305,7 +1333,7 @@
     },
     {
       "features": {},
-      "manifest_path": "/home/a/projects/hephaestus/crates/heph-core/runtime/Cargo.toml",
+      "manifest_path": "crates/heph-core/runtime/Cargo.toml",
       "manifest_path_relative": "crates/heph-core/runtime/Cargo.toml",
       "metadata_hephaestus": {
         "context": "runtime",
@@ -1346,7 +1374,7 @@
     },
     {
       "features": {},
-      "manifest_path": "/home/a/projects/hephaestus/crates/heph-core/auth/secret/Cargo.toml",
+      "manifest_path": "crates/heph-core/auth/secret/Cargo.toml",
       "manifest_path_relative": "crates/heph-core/auth/secret/Cargo.toml",
       "metadata_hephaestus": {
         "context": "secret",
@@ -1390,7 +1418,7 @@
         "default": [],
         "test-fixtures": []
       },
-      "manifest_path": "/home/a/projects/hephaestus/crates/heph-app/Cargo.toml",
+      "manifest_path": "crates/heph-app/Cargo.toml",
       "manifest_path_relative": "crates/heph-app/Cargo.toml",
       "metadata_hephaestus": {
         "context": "platform",
@@ -1614,7 +1642,7 @@
     },
     {
       "features": {},
-      "manifest_path": "/home/a/projects/hephaestus/crates/heph-dev/Cargo.toml",
+      "manifest_path": "crates/heph-dev/Cargo.toml",
       "manifest_path_relative": "crates/heph-dev/Cargo.toml",
       "metadata_hephaestus": {
         "context": "platform",
@@ -1642,7 +1670,7 @@
     },
     {
       "features": {},
-      "manifest_path": "/home/a/projects/hephaestus/crates/heph-core/auth/identity/application/Cargo.toml",
+      "manifest_path": "crates/heph-core/auth/identity/application/Cargo.toml",
       "manifest_path_relative": "crates/heph-core/auth/identity/application/Cargo.toml",
       "metadata_hephaestus": {
         "context": "identity",
@@ -1683,7 +1711,7 @@
     },
     {
       "features": {},
-      "manifest_path": "/home/a/projects/hephaestus/crates/heph-core/auth/identity/domain/Cargo.toml",
+      "manifest_path": "crates/heph-core/auth/identity/domain/Cargo.toml",
       "manifest_path_relative": "crates/heph-core/auth/identity/domain/Cargo.toml",
       "metadata_hephaestus": {
         "context": "identity",
@@ -1710,7 +1738,7 @@
     },
     {
       "features": {},
-      "manifest_path": "/home/a/projects/hephaestus/crates/heph-std/identity/oidc/Cargo.toml",
+      "manifest_path": "crates/heph-std/identity/oidc/Cargo.toml",
       "manifest_path_relative": "crates/heph-std/identity/oidc/Cargo.toml",
       "metadata_hephaestus": {
         "context": "identity",
@@ -1737,7 +1765,7 @@
     },
     {
       "features": {},
-      "manifest_path": "/home/a/projects/hephaestus/crates/heph-std/identity/postgres/Cargo.toml",
+      "manifest_path": "crates/heph-std/identity/postgres/Cargo.toml",
       "manifest_path_relative": "crates/heph-std/identity/postgres/Cargo.toml",
       "metadata_hephaestus": {
         "context": "identity",
@@ -1850,7 +1878,7 @@
     },
     {
       "features": {},
-      "manifest_path": "/home/a/projects/hephaestus/crates/heph-std/runtime/mailbox/dispatch/Cargo.toml",
+      "manifest_path": "crates/heph-std/runtime/mailbox/dispatch/Cargo.toml",
       "manifest_path_relative": "crates/heph-std/runtime/mailbox/dispatch/Cargo.toml",
       "metadata_hephaestus": {
         "context": "mailbox",
@@ -1877,7 +1905,7 @@
     },
     {
       "features": {},
-      "manifest_path": "/home/a/projects/hephaestus/crates/heph-core/runtime/mailbox/domain/Cargo.toml",
+      "manifest_path": "crates/heph-core/runtime/mailbox/domain/Cargo.toml",
       "manifest_path_relative": "crates/heph-core/runtime/mailbox/domain/Cargo.toml",
       "metadata_hephaestus": {
         "context": "mailbox",
@@ -1904,7 +1932,7 @@
     },
     {
       "features": {},
-      "manifest_path": "/home/a/projects/hephaestus/crates/heph-std/runtime/mailbox/postgres/Cargo.toml",
+      "manifest_path": "crates/heph-std/runtime/mailbox/postgres/Cargo.toml",
       "manifest_path_relative": "crates/heph-std/runtime/mailbox/postgres/Cargo.toml",
       "metadata_hephaestus": {
         "allow_cross_context_dependencies": [
@@ -1950,7 +1978,7 @@
     },
     {
       "features": {},
-      "manifest_path": "/home/a/projects/hephaestus/crates/heph-std/forge/build/oci-builder-postgres/Cargo.toml",
+      "manifest_path": "crates/heph-std/forge/build/oci-builder-postgres/Cargo.toml",
       "manifest_path_relative": "crates/heph-std/forge/build/oci-builder-postgres/Cargo.toml",
       "metadata_hephaestus": {
         "allow_cross_context_dependencies": [
@@ -1996,7 +2024,7 @@
     },
     {
       "features": {},
-      "manifest_path": "/home/a/projects/hephaestus/crates/heph-std/forge/build/oci-builder-runtime-local/Cargo.toml",
+      "manifest_path": "crates/heph-std/forge/build/oci-builder-runtime-local/Cargo.toml",
       "manifest_path_relative": "crates/heph-std/forge/build/oci-builder-runtime-local/Cargo.toml",
       "metadata_hephaestus": {
         "allow_cross_context_dependencies": [
@@ -2026,7 +2054,7 @@
     },
     {
       "features": {},
-      "manifest_path": "/home/a/projects/hephaestus/crates/heph-std/forge/build/oci-builder-worker/Cargo.toml",
+      "manifest_path": "crates/heph-std/forge/build/oci-builder-worker/Cargo.toml",
       "manifest_path_relative": "crates/heph-std/forge/build/oci-builder-worker/Cargo.toml",
       "metadata_hephaestus": {
         "context": "build",
@@ -2053,7 +2081,7 @@
     },
     {
       "features": {},
-      "manifest_path": "/home/a/projects/hephaestus/crates/heph-core/forge/pat/Cargo.toml",
+      "manifest_path": "crates/heph-core/forge/pat/Cargo.toml",
       "manifest_path_relative": "crates/heph-core/forge/pat/Cargo.toml",
       "metadata_hephaestus": {
         "context": "forge",
@@ -2080,7 +2108,7 @@
     },
     {
       "features": {},
-      "manifest_path": "/home/a/projects/hephaestus/crates/heph-std/forge/pat-postgres/Cargo.toml",
+      "manifest_path": "crates/heph-std/forge/pat-postgres/Cargo.toml",
       "manifest_path_relative": "crates/heph-std/forge/pat-postgres/Cargo.toml",
       "metadata_hephaestus": {
         "context": "forge",
@@ -2123,7 +2151,7 @@
     },
     {
       "features": {},
-      "manifest_path": "/home/a/projects/hephaestus/crates/heph-core/forge/registry/domain/Cargo.toml",
+      "manifest_path": "crates/heph-core/forge/registry/domain/Cargo.toml",
       "manifest_path_relative": "crates/heph-core/forge/registry/domain/Cargo.toml",
       "metadata_hephaestus": {
         "context": "registry",
@@ -2150,7 +2178,7 @@
     },
     {
       "features": {},
-      "manifest_path": "/home/a/projects/hephaestus/crates/heph-std/forge/registry/http/Cargo.toml",
+      "manifest_path": "crates/heph-std/forge/registry/http/Cargo.toml",
       "manifest_path_relative": "crates/heph-std/forge/registry/http/Cargo.toml",
       "metadata_hephaestus": {
         "context": "registry",
@@ -2177,7 +2205,7 @@
     },
     {
       "features": {},
-      "manifest_path": "/home/a/projects/hephaestus/crates/heph-core/forge/registry/notification/Cargo.toml",
+      "manifest_path": "crates/heph-core/forge/registry/notification/Cargo.toml",
       "manifest_path_relative": "crates/heph-core/forge/registry/notification/Cargo.toml",
       "metadata_hephaestus": {
         "context": "registry",
@@ -2204,7 +2232,7 @@
     },
     {
       "features": {},
-      "manifest_path": "/home/a/projects/hephaestus/crates/heph-std/forge/registry/notification-http/Cargo.toml",
+      "manifest_path": "crates/heph-std/forge/registry/notification-http/Cargo.toml",
       "manifest_path_relative": "crates/heph-std/forge/registry/notification-http/Cargo.toml",
       "metadata_hephaestus": {
         "context": "registry",
@@ -2231,7 +2259,7 @@
     },
     {
       "features": {},
-      "manifest_path": "/home/a/projects/hephaestus/crates/heph-std/forge/registry/postgres/Cargo.toml",
+      "manifest_path": "crates/heph-std/forge/registry/postgres/Cargo.toml",
       "manifest_path_relative": "crates/heph-std/forge/registry/postgres/Cargo.toml",
       "metadata_hephaestus": {
         "allow_cross_context_dependencies": [
@@ -2277,7 +2305,7 @@
     },
     {
       "features": {},
-      "manifest_path": "/home/a/projects/hephaestus/crates/heph-std/forge/registry/publisher/Cargo.toml",
+      "manifest_path": "crates/heph-std/forge/registry/publisher/Cargo.toml",
       "manifest_path_relative": "crates/heph-std/forge/registry/publisher/Cargo.toml",
       "metadata_hephaestus": {
         "context": "registry",
@@ -2304,7 +2332,7 @@
     },
     {
       "features": {},
-      "manifest_path": "/home/a/projects/hephaestus/crates/heph-core/forge/registry/reconciler/Cargo.toml",
+      "manifest_path": "crates/heph-core/forge/registry/reconciler/Cargo.toml",
       "manifest_path_relative": "crates/heph-core/forge/registry/reconciler/Cargo.toml",
       "metadata_hephaestus": {
         "context": "registry",
@@ -2331,7 +2359,7 @@
     },
     {
       "features": {},
-      "manifest_path": "/home/a/projects/hephaestus/crates/heph-app/registry/release/Cargo.toml",
+      "manifest_path": "crates/heph-app/registry/release/Cargo.toml",
       "manifest_path_relative": "crates/heph-app/registry/release/Cargo.toml",
       "metadata_hephaestus": {
         "context": "registry",
@@ -2358,7 +2386,7 @@
     },
     {
       "features": {},
-      "manifest_path": "/home/a/projects/hephaestus/crates/heph-core/forge/registry/token/Cargo.toml",
+      "manifest_path": "crates/heph-core/forge/registry/token/Cargo.toml",
       "manifest_path_relative": "crates/heph-core/forge/registry/token/Cargo.toml",
       "metadata_hephaestus": {
         "context": "registry",
@@ -2385,7 +2413,7 @@
     },
     {
       "features": {},
-      "manifest_path": "/home/a/projects/hephaestus/crates/heph-std/forge/registry/zot/Cargo.toml",
+      "manifest_path": "crates/heph-std/forge/registry/zot/Cargo.toml",
       "manifest_path_relative": "crates/heph-std/forge/registry/zot/Cargo.toml",
       "metadata_hephaestus": {
         "context": "registry",
@@ -2412,7 +2440,7 @@
     },
     {
       "features": {},
-      "manifest_path": "/home/a/projects/hephaestus/crates/heph-std/forge/release/artifact-store/Cargo.toml",
+      "manifest_path": "crates/heph-std/forge/release/artifact-store/Cargo.toml",
       "manifest_path_relative": "crates/heph-std/forge/release/artifact-store/Cargo.toml",
       "metadata_hephaestus": {
         "context": "release",
@@ -2439,7 +2467,7 @@
     },
     {
       "features": {},
-      "manifest_path": "/home/a/projects/hephaestus/crates/heph-core/forge/release/domain/Cargo.toml",
+      "manifest_path": "crates/heph-core/forge/release/domain/Cargo.toml",
       "manifest_path_relative": "crates/heph-core/forge/release/domain/Cargo.toml",
       "metadata_hephaestus": {
         "context": "release",
@@ -2466,7 +2494,7 @@
     },
     {
       "features": {},
-      "manifest_path": "/home/a/projects/hephaestus/crates/heph-std/forge/release/postgres/Cargo.toml",
+      "manifest_path": "crates/heph-std/forge/release/postgres/Cargo.toml",
       "manifest_path_relative": "crates/heph-std/forge/release/postgres/Cargo.toml",
       "metadata_hephaestus": {
         "allow_cross_context_dependencies": [
@@ -2582,7 +2610,7 @@
     },
     {
       "features": {},
-      "manifest_path": "/home/a/projects/hephaestus/crates/heph-core/forge/release/service/Cargo.toml",
+      "manifest_path": "crates/heph-core/forge/release/service/Cargo.toml",
       "manifest_path_relative": "crates/heph-core/forge/release/service/Cargo.toml",
       "metadata_hephaestus": {
         "context": "release",
@@ -2609,7 +2637,7 @@
     },
     {
       "features": {},
-      "manifest_path": "/home/a/projects/hephaestus/crates/heph-core/forge/review/domain/Cargo.toml",
+      "manifest_path": "crates/heph-core/forge/review/domain/Cargo.toml",
       "manifest_path_relative": "crates/heph-core/forge/review/domain/Cargo.toml",
       "metadata_hephaestus": {
         "context": "review",
@@ -2636,11 +2664,66 @@
     },
     {
       "features": {},
-      "manifest_path": "/home/a/projects/hephaestus/crates/heph-std/forge/review/postgres/Cargo.toml",
+      "manifest_path": "crates/heph-std/forge/review/git/Cargo.toml",
+      "manifest_path_relative": "crates/heph-std/forge/review/git/Cargo.toml",
+      "metadata_hephaestus": {
+        "context": "review",
+        "layer": "adapter"
+      },
+      "name": "review-git",
+      "targets": [
+        {
+          "crate_types": [
+            "lib"
+          ],
+          "doc": true,
+          "doctest": true,
+          "edition": "2024",
+          "kind": [
+            "lib"
+          ],
+          "name": "review_git",
+          "src_path": "crates/heph-std/forge/review/git/src/lib.rs",
+          "test": true
+        }
+      ],
+      "version": "0.1.0"
+    },
+    {
+      "features": {},
+      "manifest_path": "crates/heph-std/forge/review/nats/Cargo.toml",
+      "manifest_path_relative": "crates/heph-std/forge/review/nats/Cargo.toml",
+      "metadata_hephaestus": {
+        "context": "review",
+        "layer": "adapter"
+      },
+      "name": "review-nats",
+      "targets": [
+        {
+          "crate_types": [
+            "lib"
+          ],
+          "doc": true,
+          "doctest": true,
+          "edition": "2024",
+          "kind": [
+            "lib"
+          ],
+          "name": "review_nats",
+          "src_path": "crates/heph-std/forge/review/nats/src/lib.rs",
+          "test": true
+        }
+      ],
+      "version": "0.1.0"
+    },
+    {
+      "features": {},
+      "manifest_path": "crates/heph-std/forge/review/postgres/Cargo.toml",
       "manifest_path_relative": "crates/heph-std/forge/review/postgres/Cargo.toml",
       "metadata_hephaestus": {
         "allow_cross_context_dependencies": [
-          "authz-postgres"
+          "authz-postgres",
+          "forge-storage"
         ],
         "context": "review",
         "database_context": "review",
@@ -2682,7 +2765,7 @@
     },
     {
       "features": {},
-      "manifest_path": "/home/a/projects/hephaestus/crates/heph-core/forge/review/service/Cargo.toml",
+      "manifest_path": "crates/heph-core/forge/review/service/Cargo.toml",
       "manifest_path_relative": "crates/heph-core/forge/review/service/Cargo.toml",
       "metadata_hephaestus": {
         "context": "review",
@@ -2716,7 +2799,7 @@
           "client"
         ]
       },
-      "manifest_path": "/home/a/projects/hephaestus/crates/heph-core/platform/rpc-proto/Cargo.toml",
+      "manifest_path": "crates/heph-core/platform/rpc-proto/Cargo.toml",
       "manifest_path_relative": "crates/heph-core/platform/rpc-proto/Cargo.toml",
       "metadata_hephaestus": {
         "context": "platform",
@@ -2771,7 +2854,7 @@
     },
     {
       "features": {},
-      "manifest_path": "/home/a/projects/hephaestus/crates/heph-core/runtime/run/domain/Cargo.toml",
+      "manifest_path": "crates/heph-core/runtime/run/domain/Cargo.toml",
       "manifest_path_relative": "crates/heph-core/runtime/run/domain/Cargo.toml",
       "metadata_hephaestus": {
         "context": "run",
@@ -2798,7 +2881,7 @@
     },
     {
       "features": {},
-      "manifest_path": "/home/a/projects/hephaestus/crates/heph-std/run/nats/Cargo.toml",
+      "manifest_path": "crates/heph-std/run/nats/Cargo.toml",
       "manifest_path_relative": "crates/heph-std/run/nats/Cargo.toml",
       "metadata_hephaestus": {
         "context": "run",
@@ -2825,7 +2908,7 @@
     },
     {
       "features": {},
-      "manifest_path": "/home/a/projects/hephaestus/crates/heph-core/runtime/run/orchestrator/Cargo.toml",
+      "manifest_path": "crates/heph-core/runtime/run/orchestrator/Cargo.toml",
       "manifest_path_relative": "crates/heph-core/runtime/run/orchestrator/Cargo.toml",
       "metadata_hephaestus": {
         "context": "run",
@@ -2866,7 +2949,7 @@
     },
     {
       "features": {},
-      "manifest_path": "/home/a/projects/hephaestus/crates/heph-std/run/postgres/Cargo.toml",
+      "manifest_path": "crates/heph-std/run/postgres/Cargo.toml",
       "manifest_path_relative": "crates/heph-std/run/postgres/Cargo.toml",
       "metadata_hephaestus": {
         "allow_cross_context_dependencies": [
@@ -2912,7 +2995,7 @@
     },
     {
       "features": {},
-      "manifest_path": "/home/a/projects/hephaestus/crates/heph-std/run/runtime-local/Cargo.toml",
+      "manifest_path": "crates/heph-std/run/runtime-local/Cargo.toml",
       "manifest_path_relative": "crates/heph-std/run/runtime-local/Cargo.toml",
       "metadata_hephaestus": {
         "context": "run",
@@ -2939,7 +3022,7 @@
     },
     {
       "features": {},
-      "manifest_path": "/home/a/projects/hephaestus/crates/heph-core/auth/authorization/runtime-authority/Cargo.toml",
+      "manifest_path": "crates/heph-core/auth/authorization/runtime-authority/Cargo.toml",
       "manifest_path_relative": "crates/heph-core/auth/authorization/runtime-authority/Cargo.toml",
       "metadata_hephaestus": {
         "context": "authorization",
@@ -2966,7 +3049,7 @@
     },
     {
       "features": {},
-      "manifest_path": "/home/a/projects/hephaestus/crates/heph-std/authorization/runtime-authority-postgres/Cargo.toml",
+      "manifest_path": "crates/heph-std/authorization/runtime-authority-postgres/Cargo.toml",
       "manifest_path_relative": "crates/heph-std/authorization/runtime-authority-postgres/Cargo.toml",
       "metadata_hephaestus": {
         "context": "authorization",
@@ -3023,7 +3106,7 @@
     },
     {
       "features": {},
-      "manifest_path": "/home/a/projects/hephaestus/crates/heph-core/auth/authorization/runtime-git-authority/Cargo.toml",
+      "manifest_path": "crates/heph-core/auth/authorization/runtime-git-authority/Cargo.toml",
       "manifest_path_relative": "crates/heph-core/auth/authorization/runtime-git-authority/Cargo.toml",
       "metadata_hephaestus": {
         "context": "authorization",
@@ -3050,7 +3133,7 @@
     },
     {
       "features": {},
-      "manifest_path": "/home/a/projects/hephaestus/crates/heph-std/authorization/runtime-git-authority-postgres/Cargo.toml",
+      "manifest_path": "crates/heph-std/authorization/runtime-git-authority-postgres/Cargo.toml",
       "manifest_path_relative": "crates/heph-std/authorization/runtime-git-authority-postgres/Cargo.toml",
       "metadata_hephaestus": {
         "context": "authorization",
@@ -3079,7 +3162,7 @@
     },
     {
       "features": {},
-      "manifest_path": "/home/a/projects/hephaestus/crates/heph-std/authorization/runtime-handoff-local/Cargo.toml",
+      "manifest_path": "crates/heph-std/authorization/runtime-handoff-local/Cargo.toml",
       "manifest_path_relative": "crates/heph-std/authorization/runtime-handoff-local/Cargo.toml",
       "metadata_hephaestus": {
         "context": "authorization",
@@ -3106,7 +3189,7 @@
     },
     {
       "features": {},
-      "manifest_path": "/home/a/projects/hephaestus/crates/heph-core/platform/runtime-types/Cargo.toml",
+      "manifest_path": "crates/heph-core/platform/runtime-types/Cargo.toml",
       "manifest_path_relative": "crates/heph-core/platform/runtime-types/Cargo.toml",
       "metadata_hephaestus": {
         "context": "platform",
@@ -3133,7 +3216,7 @@
     },
     {
       "features": {},
-      "manifest_path": "/home/a/projects/hephaestus/crates/heph-core/auth/secret/application/Cargo.toml",
+      "manifest_path": "crates/heph-core/auth/secret/application/Cargo.toml",
       "manifest_path_relative": "crates/heph-core/auth/secret/application/Cargo.toml",
       "metadata_hephaestus": {
         "context": "secret",
@@ -3162,7 +3245,7 @@
       "features": {
         "test-fixtures": []
       },
-      "manifest_path": "/home/a/projects/hephaestus/crates/heph-std/secret/broker/Cargo.toml",
+      "manifest_path": "crates/heph-std/secret/broker/Cargo.toml",
       "manifest_path_relative": "crates/heph-std/secret/broker/Cargo.toml",
       "metadata_hephaestus": {
         "context": "secret",
@@ -3189,7 +3272,7 @@
     },
     {
       "features": {},
-      "manifest_path": "/home/a/projects/hephaestus/crates/heph-core/auth/secret/domain/Cargo.toml",
+      "manifest_path": "crates/heph-core/auth/secret/domain/Cargo.toml",
       "manifest_path_relative": "crates/heph-core/auth/secret/domain/Cargo.toml",
       "metadata_hephaestus": {
         "context": "secret",
@@ -3216,7 +3299,7 @@
     },
     {
       "features": {},
-      "manifest_path": "/home/a/projects/hephaestus/crates/heph-std/secret/key-local/Cargo.toml",
+      "manifest_path": "crates/heph-std/secret/key-local/Cargo.toml",
       "manifest_path_relative": "crates/heph-std/secret/key-local/Cargo.toml",
       "metadata_hephaestus": {
         "context": "secret",
@@ -3243,7 +3326,7 @@
     },
     {
       "features": {},
-      "manifest_path": "/home/a/projects/hephaestus/crates/heph-std/secret/postgres/Cargo.toml",
+      "manifest_path": "crates/heph-std/secret/postgres/Cargo.toml",
       "manifest_path_relative": "crates/heph-std/secret/postgres/Cargo.toml",
       "metadata_hephaestus": {
         "allow_cross_context_dependencies": [
@@ -3291,7 +3374,7 @@
     },
     {
       "features": {},
-      "manifest_path": "/home/a/projects/hephaestus/crates/heph-std/secret/runtime/Cargo.toml",
+      "manifest_path": "crates/heph-std/secret/runtime/Cargo.toml",
       "manifest_path_relative": "crates/heph-std/secret/runtime/Cargo.toml",
       "metadata_hephaestus": {
         "context": "secret",
@@ -3318,7 +3401,7 @@
     },
     {
       "features": {},
-      "manifest_path": "/home/a/projects/hephaestus/crates/heph-core/auth/secret/service/Cargo.toml",
+      "manifest_path": "crates/heph-core/auth/secret/service/Cargo.toml",
       "manifest_path_relative": "crates/heph-core/auth/secret/service/Cargo.toml",
       "metadata_hephaestus": {
         "context": "secret",
@@ -3347,7 +3430,7 @@
       "features": {
         "test-fixtures": []
       },
-      "manifest_path": "/home/a/projects/hephaestus/crates/heph-core/auth/secret/store/Cargo.toml",
+      "manifest_path": "crates/heph-core/auth/secret/store/Cargo.toml",
       "manifest_path_relative": "crates/heph-core/auth/secret/store/Cargo.toml",
       "metadata_hephaestus": {
         "context": "secret",
@@ -3374,7 +3457,7 @@
     },
     {
       "features": {},
-      "manifest_path": "/home/a/projects/hephaestus/crates/heph-dev/vm/conformance/Cargo.toml",
+      "manifest_path": "crates/heph-dev/vm/conformance/Cargo.toml",
       "manifest_path_relative": "crates/heph-dev/vm/conformance/Cargo.toml",
       "metadata_hephaestus": {
         "context": "vm",
@@ -3401,7 +3484,7 @@
     },
     {
       "features": {},
-      "manifest_path": "/home/a/projects/hephaestus/crates/heph-std/runtime/vm/fake/Cargo.toml",
+      "manifest_path": "crates/heph-std/runtime/vm/fake/Cargo.toml",
       "manifest_path_relative": "crates/heph-std/runtime/vm/fake/Cargo.toml",
       "metadata_hephaestus": {
         "context": "vm",
@@ -3430,7 +3513,7 @@
       "features": {
         "integration-guest": []
       },
-      "manifest_path": "/home/a/projects/hephaestus/crates/heph-std/runtime/vm/libkrun/Cargo.toml",
+      "manifest_path": "crates/heph-std/runtime/vm/libkrun/Cargo.toml",
       "manifest_path_relative": "crates/heph-std/runtime/vm/libkrun/Cargo.toml",
       "metadata_hephaestus": {
         "context": "vm",
@@ -3544,7 +3627,7 @@
     },
     {
       "features": {},
-      "manifest_path": "/home/a/projects/hephaestus/crates/heph-core/runtime/vm/trait/Cargo.toml",
+      "manifest_path": "crates/heph-core/runtime/vm/trait/Cargo.toml",
       "manifest_path_relative": "crates/heph-core/runtime/vm/trait/Cargo.toml",
       "metadata_hephaestus": {
         "context": "vm",
@@ -3571,7 +3654,7 @@
     },
     {
       "features": {},
-      "manifest_path": "/home/a/projects/hephaestus/crates/heph-std/runtime/volume/local/Cargo.toml",
+      "manifest_path": "crates/heph-std/runtime/volume/local/Cargo.toml",
       "manifest_path_relative": "crates/heph-std/runtime/volume/local/Cargo.toml",
       "metadata_hephaestus": {
         "context": "volume",
@@ -3598,7 +3681,7 @@
     },
     {
       "features": {},
-      "manifest_path": "/home/a/projects/hephaestus/crates/heph-std/runtime/volume/postgres/Cargo.toml",
+      "manifest_path": "crates/heph-std/runtime/volume/postgres/Cargo.toml",
       "manifest_path_relative": "crates/heph-std/runtime/volume/postgres/Cargo.toml",
       "metadata_hephaestus": {
         "context": "volume",
@@ -3627,7 +3710,7 @@
     },
     {
       "features": {},
-      "manifest_path": "/home/a/projects/hephaestus/crates/heph-core/runtime/volume/trait/Cargo.toml",
+      "manifest_path": "crates/heph-core/runtime/volume/trait/Cargo.toml",
       "manifest_path_relative": "crates/heph-core/runtime/volume/trait/Cargo.toml",
       "metadata_hephaestus": {
         "context": "volume",
@@ -3654,7 +3737,7 @@
     },
     {
       "features": {},
-      "manifest_path": "/home/a/projects/hephaestus/crates/heph-core/runtime/workspace/domain/Cargo.toml",
+      "manifest_path": "crates/heph-core/runtime/workspace/domain/Cargo.toml",
       "manifest_path_relative": "crates/heph-core/runtime/workspace/domain/Cargo.toml",
       "metadata_hephaestus": {
         "context": "workspace",
@@ -3681,7 +3764,7 @@
     },
     {
       "features": {},
-      "manifest_path": "/home/a/projects/hephaestus/crates/heph-std/runtime/workspace/local/Cargo.toml",
+      "manifest_path": "crates/heph-std/runtime/workspace/local/Cargo.toml",
       "manifest_path_relative": "crates/heph-std/runtime/workspace/local/Cargo.toml",
       "metadata_hephaestus": {
         "context": "workspace",
@@ -3708,7 +3791,7 @@
     },
     {
       "features": {},
-      "manifest_path": "/home/a/projects/hephaestus/crates/heph-std/runtime/workspace/postgres/Cargo.toml",
+      "manifest_path": "crates/heph-std/runtime/workspace/postgres/Cargo.toml",
       "manifest_path_relative": "crates/heph-std/runtime/workspace/postgres/Cargo.toml",
       "metadata_hephaestus": {
         "context": "workspace",
@@ -3737,7 +3820,7 @@
     }
   ],
   "schema_version": 1,
-  "workspace_member_count": 93,
+  "workspace_member_count": 96,
   "workspace_member_names": [
     "agent-config",
     "authz-domain",
@@ -3760,6 +3843,7 @@
     "forge-nats",
     "forge-postgres",
     "forge-service",
+    "forge-storage",
     "gateway-domain",
     "gateway-edge",
     "gateway-postgres",
@@ -3800,6 +3884,8 @@
     "release-postgres",
     "release-service",
     "review-domain",
+    "review-git",
+    "review-nats",
     "review-postgres",
     "review-service",
     "rpc-proto",
@@ -3833,5 +3919,5 @@
     "workspace-local",
     "workspace-postgres"
   ],
-  "workspace_root": "/home/a/projects/hephaestus"
+  "workspace_root": "."
 }

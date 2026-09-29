@@ -93,8 +93,9 @@ again if its file is absent.
 
 ## Workspace
 
-The runtime starts with a provider-neutral VM interface and provider-specific
-implementations:
+The workspace keeps provider-neutral contracts in `heph-core`, concrete
+PostgreSQL, NATS, Git, VM, filesystem, and other host providers in `heph-std`,
+and trusted bootstrap and daemon composition in `heph-app`:
 
 ### Context navigation
 
@@ -117,9 +118,12 @@ reconciles the original packages with this layout and records its verification.
 - [`heph-run`](crates/heph-core/runtime/run/) groups run APIs; persistence is in
   [`run-postgres`](crates/heph-std/run/postgres) and local execution is in
   [`run-runtime-local`](crates/heph-std/run/runtime-local).
-- [`heph-forge`](crates/heph-core/forge/) groups forge APIs and infrastructure;
+- [`heph-forge`](crates/heph-core/forge/) groups provider-neutral forge APIs;
+  [`forge-storage`](crates/heph-std/forge/storage),
   [`forge-postgres`](crates/heph-std/forge/postgres),
+  [`forge-nats`](crates/heph-std/forge/nats),
   [`git-http`](crates/heph-std/forge/git-http),
+  [`review-git`](crates/heph-std/forge/review/git),
   [`registry-publisher`](crates/heph-std/forge/registry/publisher), and
   [`registry-zot`](crates/heph-std/forge/registry/zot) provide concrete
   integrations.
@@ -153,8 +157,12 @@ reconciles the original packages with this layout and records its verification.
 | [`secret-service`](crates/heph-core/auth/secret/service) | Grants, imports, bindings, exact dispatch resolution, rotation, revocation, and purge |
 | [`secret-runtime`](crates/heph-std/secret/runtime) | Ephemeral raw mounts and exact runtime secret authority |
 | [`secret-broker`](crates/heph-std/secret/broker) | Host-only semantic broker transport and bounded adapters |
-| [`forge-service`](crates/heph-core/forge/service) | Bare Git storage, PostgreSQL receive processing, and forge outbox |
+| [`forge-service`](crates/heph-core/forge/service) | Provider-neutral receive processing and forge outbox ports |
+| [`forge-storage`](crates/heph-std/forge/storage) | Canonical bare-Git filesystem and process storage |
+| [`forge-postgres`](crates/heph-std/forge/postgres) | PostgreSQL repository metadata and receive adapter with exact-commit Git inspection |
+| [`forge-nats`](crates/heph-std/forge/nats) | JetStream topology and committed forge outbox publication |
 | [`git-http`](crates/heph-std/forge/git-http) | Authorized streaming Git smart-HTTP transport |
+| [`review-git`](crates/heph-std/forge/review/git) | Trusted Git adapter for approved review result publication |
 | [`identity-domain`](crates/heph-core/auth/identity/domain) | Internal authenticated principal and tenant identifiers |
 | [`identity-oidc`](crates/heph-std/identity/oidc) | OIDC verification and identity mapping |
 | [`authz-domain`](crates/heph-core/auth/authorization/authz-domain) | Typed provider-neutral authorization contract |

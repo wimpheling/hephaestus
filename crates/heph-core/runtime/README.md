@@ -35,9 +35,10 @@ only the trusted importer may publish a result.
 
 Core runtime has no libkrun, raw-volume path, local Git process, SQL query, or
 NATS topology. Implementations are in [`heph-std/runtime/`](../../heph-std/runtime/),
-[`heph-std/run/`](../../heph-std/run/), and the local workspace adapters. The
-application composition root selects providers, installs consumers, and owns
-startup and shutdown sequencing.
+[`heph-std/run/`](../../heph-std/run/), and the local workspace adapters; the
+PostgreSQL and NATS adapters are selected there as well. The application
+composition root selects providers, installs consumers, and owns startup and
+shutdown sequencing.
 
 See [`docs/vm-runtime.md`](../../../docs/vm-runtime.md),
 [`docs/run-orchestration.md`](../../../docs/run-orchestration.md),

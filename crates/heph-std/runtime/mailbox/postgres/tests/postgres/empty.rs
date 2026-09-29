@@ -17,7 +17,7 @@ async fn empty_opaque_body_is_accepted_with_exact_zero_length_evidence() {
         .connect(&database_url)
         .await
         .expect("connect real PostgreSQL");
-    sqlx::migrate!("../../../../migrations")
+    sqlx::migrate!("../../../../../migrations")
         .run(&pool)
         .await
         .expect("apply mailbox migrations");
