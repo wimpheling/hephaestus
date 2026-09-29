@@ -1,16 +1,25 @@
-# Identity PostgreSQL adapter
+# Purpose
 
-This crate moved from `crates/heph-core/identity/postgres` to
-`crates/heph-std/identity/postgres` because it is a concrete database adapter.
-The provider-neutral contracts remain in
-[`identity-domain`](../../../heph-core/auth/identity/domain) and
-[`identity-application`](../../../heph-core/auth/identity/application).
+`identity-postgres` persists the mapping from a verified external issuer and
+subject to an active Heph user, and implements the browser-session application
+ports. It gives the authentication boundary durable idempotency and session
+state while keeping provider-neutral identity values in the core crates.
 
-This crate owns PostgreSQL access for verified identity mapping, profile
-refresh, and idempotent identity bootstrap. Its schema dependencies are the
-root-owned `users`, `external_identities`, and `user_profiles` tables from
-`migrations/0001_domain.sql`, plus the identity-profile events and occurrence
-lookup defined by `migrations/0010_durable_application_events.sql`.
+# Responsibilities
 
-The adapter does not own schema changes. All schema DDL remains under the root
-`migrations/` directory.
+`PostgresIdentityStore` resolves active mappings in a transaction, derives the
+actor-bound idempotency identity, refreshes validated profile data, and records
+the identity event used for replay. Its bootstrap operation creates trusted
+user and external-identity mappings. `PostgresBrowserSessionStore` writes
+sessions through a worker pool, verifies them through a separate application
+pool and security-definer function, and stores only SID and identity-binding
+digests.
+
+# When
+
+Construct `PostgresIdentityStore` with the identity pool and use it as both the
+verified mapper and idempotent resolver. Construct
+`PostgresBrowserSessionStore` with separate worker and application pools, then
+call its create, authenticate, and revoke operations at the browser-session
+boundary. The adapter expects the root migrations to have created its tables
+and database functions.

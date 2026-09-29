@@ -4,7 +4,8 @@
 transport contracts. The core is portable: concrete PostgreSQL, NATS, Git, VM,
 filesystem, and other host adapters live in [`heph-std`](../heph-std/), while
 trusted bootstrap binaries and daemon composition live in [`heph-app`](../heph-app/).
-Core is not a second daemon and does not select a host implementation.
+The daemon reaches those contracts through the composition root, which selects
+the host implementations at startup.
 
 ## Domain map
 
@@ -18,12 +19,10 @@ The current logical ownership map is:
 | Platform | Gateway, routes, invocation, transport, and cross-domain mechanics | [`platform/`](platform/) |
 | Auth | Identity, authorization, and secret contracts and policies | [`auth/`](auth/) |
 
-The map describes contract ownership. Run orchestration and mailbox contracts
-are under [`runtime/`](runtime/), gateway contracts are under
-[`platform/gateway/`](platform/gateway/), identity and authorization contracts
-are under [`auth/`](auth/), and secret contracts are under
-[`auth/secret/`](auth/secret/). Their package metadata and the architecture
-rules remain authoritative for current dependency boundaries.
+Applications use these contracts through the context facades below. The
+composition root in [`heph-app`](../heph-app/) selects concrete providers from
+[`heph-std`](../heph-std/) and wires them to the daemon; package metadata and
+architecture rules remain authoritative for dependency boundaries.
 
 ## Composition boundaries
 

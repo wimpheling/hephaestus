@@ -1,41 +1,28 @@
-# Hephaestus application
+# Purpose
 
-`hephaestus-app` is the internal composition root and daemon lifecycle crate.
-The `hephaestusd` binary is the runnable distribution entry point; this crate
-is not a public SDK or a replacement for the core domain contracts.
+`hephaestus-app` is the production composition root and daemon lifecycle for
+the Hephaestus distribution. It turns validated configuration into a running
+installation with concrete database, NATS, Git, VM, gateway, identity,
+secret, image, Forge, and runtime providers.
 
-## Responsibilities
+# Responsibilities
 
-- [`src/application/`](src/application/) builds validated configuration and
-  resolves the database, NATS, storage, VM, gateway, identity, secret, image,
-  forge, and run dependencies.
-- [`src/composition/`](src/composition/) installs the concrete workers,
-  consumers, routes, and cross-domain services selected for the local
-  distribution.
-- [`src/lib.rs`](src/lib.rs) owns the lifecycle: `build` validates and prepares
-  dependencies, `start` binds listeners and starts supervised work, and
-  `shutdown` stops admission, drains work, and closes resources.
-- [`bootstrap/`](bootstrap/) contains deliberately trusted operator and test
-  bootstrap boundaries. It seeds deterministic fixtures; it is not a second
-  application API.
+`HephaestusApp` builds the dependency graph, validates startup configuration,
+installs RPC routes and background workers, starts supervised listeners and
+consumers, and shuts them down in an orderly sequence. The composition layer
+converts generated transport values into core contracts, rechecks live
+authority at launch boundaries, and starts reconciliation for outboxes, builds,
+runs, secrets, and gateway services.
 
-The application translates validated release and runtime data into provider
-neutral contracts before handing work to workers. It rechecks live authority
-at the launch boundary, starts durable outbox and command consumers, and
-coordinates restart reconciliation for builds, runs, secrets, and gateway
-services.
+The `hephaestusd` binary is the distribution entry point. Trusted bootstrap
+utilities live under `bootstrap/`; they seed operator or end-to-end fixtures
+through explicit boundaries. Product meaning remains in `heph-core`, while
+host behavior is selected from `heph-std` during composition.
 
-The direct dependency list is intentionally wider than the top-level facades:
-the app must select concrete providers, persistence adapters, transports,
-workers, and subcontext services. [`docs/application.md`](../../docs/application.md)
-records that composition map and lifecycle evidence.
+# When
 
-## Boundary
-
-Domain meaning belongs in [`heph-core`](../heph-core/); concrete host behavior
-belongs in [`heph-std`](../heph-std/). The app owns wiring, process lifecycle,
-configuration, and trusted operational boundaries. It does not make guest code,
-generated RPC types, or provider internals into shared domain contracts.
-
-For the product direction and the remaining distribution work, see the
-[roadmap](../../tasks/roadmap.md) and the [own-the-loop product definition](../../tasks/todo/distribution/define-own-the-loop-agent-platform.md).
+Use this crate when assembling or running the local Hephaestus distribution.
+Call `HephaestusApp::build` with `AppConfig` during startup, then call
+`start` to bind listeners and begin supervised work; call `shutdown` when the
+process receives its termination signal. The normal binary is
+`hephaestusd`.

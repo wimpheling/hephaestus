@@ -1,46 +1,51 @@
-# Runtime core
+# Purpose
 
-Runtime owns the provider-neutral mechanics needed to execute isolated work:
-durable runs, VM lifecycle contracts, persistent volumes, exact per-run
-workspaces, and mailbox delivery mechanics. The contracts preserve run
-provenance and make cleanup explicit after crashes.
+Runtime turns an accepted release and revision into one bounded guest
+execution. It coordinates the run state machine, VM lifecycle, optional
+instance state, exact source workspaces, result publication, and mailbox
+delivery. The core contracts let the application compose these steps while
+keeping host storage, VM providers, and brokers behind their own adapters.
 
-## Contracts and decisions
+# Responsibilities
 
-- [`src/`](src/) (`heph-runtime`) re-exports the supported VM, volume, and
-  workspace seams without exposing a provider configuration or persistence
-  implementation.
-- [`vm/trait/`](vm/trait/) defines one-shot VM lifecycle, guest bootstrap,
-  bounded events, private service invocation, and `cleanup_orphan` recovery.
-  Providers boot the approved `heph-init`; they do not execute an arbitrary
-  guest command directly.
-- [`volume/trait/`](volume/trait/) defines persistent instance-state volumes,
-  exclusive writable leases, fencing generations, host ownership, and
-  supervised recovery. Lease expiry is evidence for recovery, not permission
-  for immediate reuse.
-- [`workspace/domain/`](workspace/domain/) defines exact-commit read-only
-  source mounts, separate writable result workspaces, and the host-controlled
-  result publication boundary.
-- The durable run contracts are in [`run/`](run/), and mailbox envelopes,
-  state transitions, and dispatch contracts are in [`mailbox/`](mailbox/).
-  They are part of the runtime mechanics.
+The run starts with immutable release and repository provenance. The
+orchestrator validates live authority, acquires an exclusive volume lease when
+state is required, prepares the exact source and release mounts, and builds a
+VM specification. After the VM reports readiness, bounded events and logs are
+persisted while the guest runs. Completion records the outcome, imports only
+the approved result, and releases the VM and lease. Recovery fences stale
+leases and cleans abandoned resources before they can be reused.
 
-An accepted run is tied to its exact release, revision, attachment, repository,
-ref, commit, and attempt. The host rechecks live authority before materializing
-the runtime and before provisioning the VM. A guest receives an immutable
-release tree, an exact source snapshot, and a separate writable result area;
-only the trusted importer may publish a result.
+```mermaid
+flowchart LR
+  A[Queued run] --> B[Authorize and bind provenance]
+  B --> C[Lease state volume]
+  C --> D[Prepare source, release, and secrets]
+  D --> E[Provision and start VM]
+  E --> F[Run guest and persist events]
+  F --> G[Import result and clean up]
+  G --> H[Retained outcome]
+```
 
-## Boundaries and implementations
+The main seams are [`run/`](run/) for durable commands and orchestration,
+[`vm/trait/`](vm/trait/) for guest lifecycle, [`volume/trait/`](volume/trait/)
+for exclusive persistent state, [`workspace/domain/`](workspace/domain/) for
+source and result lifecycles, and [`mailbox/`](mailbox/) for bounded event
+delivery. [`src/`](src/) re-exports the stable VM, volume, and workspace
+contracts used by composition code.
 
-Core runtime has no libkrun, raw-volume path, local Git process, SQL query, or
-NATS topology. Implementations are in [`heph-std/runtime/`](../../heph-std/runtime/),
-[`heph-std/run/`](../../heph-std/run/), and the local workspace adapters; the
-PostgreSQL and NATS adapters are selected there as well. The application
-composition root selects providers, installs consumers, and owns startup and
-shutdown sequencing.
+Each guest receives an immutable release tree and exact source input. Writable
+state and result paths are separate, and host-side authority checks happen
+before materialization and again before provisioning. Mailbox bodies remain
+opaque to the control plane and enter a guest only through an accepted,
+bounded dispatch record.
 
-See [`docs/vm-runtime.md`](../../../docs/vm-runtime.md),
-[`docs/run-orchestration.md`](../../../docs/run-orchestration.md),
-[`docs/releases-and-instances.md`](../../../docs/releases-and-instances.md), and
-[`docs/application.md`](../../../docs/application.md).
+# When
+
+Use the runtime contracts from application composition after the exact release,
+revision, and launch authority have been resolved. Concrete adapters and
+composition live in [`heph-std/runtime/`](../../heph-std/runtime/),
+[`heph-std/run/`](../../heph-std/run/), and [`heph-app`](../../heph-app/). See
+[`docs/vm-runtime.md`](../../../docs/vm-runtime.md),
+[`docs/run-orchestration.md`](../../../docs/run-orchestration.md), and
+[`docs/application.md`](../../../docs/application.md) for operational detail.

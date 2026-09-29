@@ -1,9 +1,21 @@
-# Event PostgreSQL adapter
+# Purpose
 
-This crate owns PostgreSQL access for the durable application-event context.
-Its schema dependencies are the root-owned `application_events` table created
-by `migrations/0010_durable_application_events.sql`, including the columns and
-indexes used to identify the event committed for an idempotent mutation.
+`event-postgres` persists the database side of durable application events. It
+lets transports load the committed result of an idempotent mutation and lets a
+worker publish product events only after their source transaction is durable.
 
-The adapter does not own schema changes. All schema DDL remains under the root
-`migrations/` directory.
+# Responsibilities
+
+`PostgresMutationReceiptReader` matches an occurrence to its actor, aggregate,
+and primary scope before returning the event cursor and aggregate version.
+`PostgresProductEventOutbox` reads unpublished release-owned records, publishes
+them with a stable `Nats-Msg-Id`, and marks success, retryable failure, or dead
+letter state in PostgreSQL. The topology helper creates the bounded release
+event stream and its supported subjects.
+
+# When
+
+Construct the receipt reader with the event database pool for request replay.
+Run `ReleaseOutboxPublisher::publish_pending` from a worker after calling
+`ensure_release_jetstream_topology`; a successful JetStream acknowledgement is
+the point at which the corresponding outbox row is marked published.

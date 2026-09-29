@@ -1,10 +1,11 @@
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
-import { existsSync, readFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { test } from "node:test";
 import { fileURLToPath } from "node:url";
 import { dirname, isAbsolute, relative, resolve } from "node:path";
-import { sourceBaseForRepository, sourceTreeBaseForRepository } from "../scripts/guides.mjs";
+import { GUIDE_MANIFEST, generateGuides, sourceBaseForRepository, sourceTreeBaseForRepository } from "../scripts/guides.mjs";
 
 const packageDirectory = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const repositoryRoot = resolve(packageDirectory, "..");
@@ -160,22 +161,31 @@ test("generated code surface is deterministic and referentially complete", () =>
     assert.equal(guide.manifest, pkg.manifest);
     assert.equal(guide.directory, pkg.manifest.slice(0, -"/Cargo.toml".length));
   }
-  assert.ok(guides.guides.some((guide) => guide.missingDocumentation), "the tree should expose missing documentation");
+  assert.equal(
+    guides.guides.filter((guide) => guide.missingDocumentation).length,
+    0,
+    "every generated guide node should have documentation",
+  );
   assert.equal(guideById.get("root")?.path, "README.md");
   assert.deepEqual(
-    guides.guides.filter((guide) => guide.parent === "root").map((guide) => guide.id).sort(),
-    ["app", "core", "dev", "std"],
-    "the repository root should expose conceptual top-level branches",
+    guides.guides.filter((guide) => !guide.parent).slice(0, 5).map((guide) => guide.id),
+    ["root", "core", "app", "std", "dev"],
+    "the guide should preserve the authored top-level order",
   );
   assert.equal(guideById.has("directory-637261746573"), false, "the crates source wrapper must not become a guide node");
   assert.equal(guideById.get("dev")?.path, "crates/heph-dev/README.md");
-  assert.equal(guideById.get("dev")?.parent, "root");
+  assert.equal(guideById.get("dev")?.parent, null);
   assert.equal(guideById.get("dev")?.crateId, "hephaestus-dev");
-  assert.equal(guideById.get("dev")?.missingDocumentation, true, "development branch should call out its missing README");
-  assert.equal(guideById.get("dev")?.content, "", "missing documentation must not synthesize README content");
-  assert.equal(guideById.get("core")?.parent, "root");
+  assert.equal(guideById.get("dev")?.missingDocumentation, false, "development branch should have documentation");
+  assert.ok(guideById.get("dev")?.content.trim().length > 0, "development guide should render its README");
+  assert.equal(guideById.get("core")?.parent, null);
   for (const id of ["auth", "forge", "image", "runtime", "platform"]) assert.equal(guideById.get(id)?.parent, "core");
   assert.equal(guideById.get("auth-identity")?.parent, "auth");
+  assert.equal(guideById.get("std-control-plane")?.parent, "std");
+  assert.deepEqual(guideById.get("std-control-plane")?.contexts, ["control-plane"]);
+  assert.deepEqual(guideById.get("std-control-plane")?.services, ["hephaestus.organization.v1.OrganizationService"]);
+  assert.equal(guides.unplaced.contexts.includes("control-plane"), false);
+  assert.equal(guides.unplaced.services.includes("hephaestus.organization.v1.OrganizationService"), false);
   for (const context of guides.unplaced.contexts) assert.ok(contextNames.has(context), `unplaced context ${context} is unknown`);
   for (const service of guides.unplaced.services) assert.ok(serviceIds.has(service), `unplaced service ${service} is unknown`);
   assertSorted(guides.unplaced.contexts, "unplaced contexts");
@@ -183,4 +193,54 @@ test("generated code surface is deterministic and referentially complete", () =>
 
   const serialized = `${JSON.stringify({ crates, grpc, guides })}`;
   assert.ok(!serialized.includes(repositoryRoot), "generated data contains an absolute repository path");
+});
+
+test("a missing README remains an explicit empty guide in a fixture repository", () => {
+  const fixtureRoot = mkdtempSync(resolve(tmpdir(), "code-surface-missing-guide-"));
+  try {
+    const contextNames = new Set(GUIDE_MANIFEST.flatMap((guide) => guide.contexts ?? []));
+    const packages = [...contextNames].map((context, index) => {
+      const manifest = `crates/fixture/context-${index}/Cargo.toml`;
+      const absoluteManifest = resolve(fixtureRoot, manifest);
+      mkdirSync(dirname(absoluteManifest), { recursive: true });
+      writeFileSync(absoluteManifest, "[package]\nname = \"fixture-context\"\nversion = \"0.0.0\"\n");
+      return {
+        id: `fixture-context-${index}`,
+        name: `fixture-context-${index}`,
+        description: null,
+        manifest,
+        context,
+        layer: null,
+        targets: [],
+        features: [],
+      };
+    });
+    const missingManifest = "crates/fixture/missing/Cargo.toml";
+    const absoluteMissingManifest = resolve(fixtureRoot, missingManifest);
+    mkdirSync(dirname(absoluteMissingManifest), { recursive: true });
+    writeFileSync(absoluteMissingManifest, "[package]\nname = \"fixture-missing\"\nversion = \"0.0.0\"\n");
+    packages.push({
+      id: "fixture-missing",
+      name: "fixture-missing",
+      description: null,
+      manifest: missingManifest,
+      context: null,
+      layer: null,
+      targets: [],
+      features: [],
+    });
+
+    const generated = generateGuides({
+      repositoryRoot: fixtureRoot,
+      crates: { packages },
+      grpc: { services: [...new Set(GUIDE_MANIFEST.flatMap((guide) => guide.services ?? []))].map((id) => ({ id })) },
+    });
+    const guide = generated.guides.find((candidate) => candidate.path === "crates/fixture/missing/README.md");
+    assert.ok(guide, "the fixture crate should have a generated guide");
+    assert.equal(guide.missingDocumentation, true);
+    assert.equal(guide.content, "");
+    assert.equal(guide.path, "crates/fixture/missing/README.md");
+  } finally {
+    rmSync(fixtureRoot, { recursive: true, force: true });
+  }
 });

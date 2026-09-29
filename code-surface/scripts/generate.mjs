@@ -3,6 +3,7 @@ import { fileURLToPath } from "node:url";
 import { mkdirSync, writeFileSync } from "node:fs";
 import { dirname, relative, resolve } from "node:path";
 import { generateGuides, sourceBaseForRepository, sourceTreeBaseForRepository } from "./guides.mjs";
+import { generateRustApi } from "./rustdoc.mjs";
 
 const scriptDirectory = dirname(fileURLToPath(import.meta.url));
 const surfaceDirectory = resolve(scriptDirectory, "..");
@@ -150,6 +151,21 @@ function generateCrates(metadata) {
   return { schemaVersion: 1, packages, dependencies };
 }
 
+function generateRustApis(workspacePackages) {
+  let docsReady = true;
+  try {
+    run("cargo", ["doc", "--workspace", "--all-features", "--no-deps"], "generate the Rust public API documentation");
+  } catch (error) {
+    docsReady = false;
+    console.warn(`${error.message}. Rust API inventory will show unavailable status.`);
+  }
+  const apis = generateRustApi(workspacePackages, {
+    docRoot: resolve(repositoryRoot, "target/doc"),
+    docsReady,
+  });
+  return new Map(workspacePackages.map((packageRecord, index) => [packageRecord.name, apis[index]]));
+}
+
 function fqn(packageName, name) {
   return packageName ? `${packageName}.${name}` : name;
 }
@@ -262,12 +278,16 @@ function main() {
   const descriptorSet = JSON.parse(descriptorJson);
 
   mkdirSync(generatedDirectory, { recursive: true });
+  const workspaceIds = new Set(metadata.workspace_members);
+  const workspacePackages = metadata.packages.filter((packageRecord) => workspaceIds.has(packageRecord.id));
   const crates = generateCrates(metadata);
+  const rustApis = generateRustApis(workspacePackages);
   const grpc = generateGrpc(descriptorSet);
   const guides = generateGuides({
     repositoryRoot,
     crates,
     grpc,
+    rustApis,
     sourceBase: sourceBase(),
     sourceTreeBase: sourceTreeBase(),
   });

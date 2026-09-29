@@ -51,3 +51,20 @@ state of an instance. The guide manifest lives in `scripts/guides.mjs`; its
 source paths and explicit context/service references are checked during
 generation. Unplaced generated contexts and services are reported in
 `guides.json` and surfaced on guide pages.
+
+Each crate guide also includes the public Rust API extracted from rustdoc's
+generated HTML. `npm run generate` refreshes it with `cargo doc --workspace
+--all-features --no-deps`; crates without a library target and unavailable
+documentation are shown with an explicit status.
+
+For new or refreshed crate documentation, start with the reusable
+[crate README template](templates/crate-README.md). Keep its three headings
+and replace the placeholder guidance with code-grounded purpose,
+responsibilities (including security duties), and a concrete invocation
+example.
+
+## Backlog
+
+- Add outgoing and incoming local workspace dependency sections to every crate
+  guide, derived from Cargo metadata, with links to the corresponding crate
+  guide pages.

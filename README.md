@@ -28,10 +28,11 @@ is built.
 - [Product roadmap](tasks/roadmap.md)
 - [Own-the-loop product definition](tasks/todo/distribution/define-own-the-loop-agent-platform.md)
 
-Hephaestus is a secure, developer-focused Git forge and autonomous agent
-runtime. It runs agents in isolated microVMs, manages repositories and pull
-requests, enforces relationship-based access control, and streams real-time
-execution telemetry to a live dashboard.
+Hephaestus is a developer-focused Git forge and agent runtime. It runs agents
+in isolated microVMs, manages repositories and review proposals, enforces
+relationship-based access control, and streams execution events and telemetry
+to the live control plane. Pull-request workflows remain part of the product
+roadmap.
 
 The current proof of concept is powered by Rust, PostgreSQL/Mélange,
 libkrun/libkrunfw, and NATS JetStream.
@@ -143,7 +144,7 @@ reconciles the original packages with this layout and records its verification.
 | [`volume-trait`](crates/heph-core/runtime/volume/trait) | Provider-neutral persistent-volume and lease contracts |
 | [`volume-local`](crates/heph-std/runtime/volume/local) | Single-host raw volumes with PostgreSQL metadata |
 | [`run-domain`](crates/heph-core/runtime/run/domain) | Durable run states and commands |
-| [`run-orchestrator`](crates/heph-core/runtime/run/orchestrator) | Provider-neutral VM, volume, repository, runtime-catalog, and JetStream coordination |
+| [`run-orchestrator`](crates/heph-core/runtime/run/orchestrator) | Provider-neutral VM, volume, repository, and runtime-catalog coordination |
 | [`run-postgres`](crates/heph-std/run/postgres) | PostgreSQL run persistence and exact-runtime catalog adapter |
 | [`run-runtime-local`](crates/heph-std/run/runtime-local) | SQL-free local runtime artifact materialization and recovery |
 | [`forge-domain`](crates/heph-core/forge/domain) | Project, repository, receive, and run-request domain values |

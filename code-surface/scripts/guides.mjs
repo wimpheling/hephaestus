@@ -16,7 +16,6 @@ export const GUIDE_MANIFEST = [
   },
   {
     id: "core",
-    parent: "root",
     title: "Heph core",
     summary: "The portable contexts and contracts that make up Heph.",
     path: "crates/heph-core/README.md",
@@ -95,7 +94,15 @@ export const GUIDE_MANIFEST = [
     ],
   },
   {
-    parent: "root",
+    id: "app",
+    title: "Heph app",
+    summary: "The composition root and distribution entry point.",
+    path: "crates/heph-app/README.md",
+    optional: true,
+    contexts: ["bootstrap"],
+    services: [],
+  },
+  {
     id: "std",
     title: "Heph standard providers",
     summary: "Opinionated provider implementations for the portable core.",
@@ -104,22 +111,20 @@ export const GUIDE_MANIFEST = [
     services: [],
   },
   {
-    parent: "root",
+    parent: "std",
+    id: "std-control-plane",
+    title: "Control-plane PostgreSQL provider",
+    summary: "Authenticated organization and control-plane metadata queries.",
+    path: "crates/heph-std/control-plane/README.md",
+    contexts: ["control-plane"],
+    services: ["hephaestus.organization.v1.OrganizationService"],
+  },
+  {
     id: "dev",
     title: "Heph development",
     summary: "Development-only tools and provider conformance suites.",
     path: "crates/heph-dev/README.md",
     contexts: [],
-    services: [],
-  },
-  {
-    parent: "root",
-    id: "app",
-    title: "Heph app",
-    summary: "The composition root and distribution entry point.",
-    path: "crates/heph-app/README.md",
-    optional: true,
-    contexts: ["bootstrap"],
     services: [],
   },
 ];
@@ -257,7 +262,7 @@ function authoredSourceDirectories(repositoryRoot, guides) {
  * RPC associations; every directory containing a workspace crate is then
  * added beneath them, including directories without a README.
  */
-export function generateGuides({ repositoryRoot, crates, grpc, sourceBase = null, sourceTreeBase = null }) {
+export function generateGuides({ repositoryRoot, crates, grpc, rustApis = new Map(), sourceBase = null, sourceTreeBase = null }) {
   const contexts = new Set((crates.packages ?? []).map((pkg) => pkg.context).filter(Boolean));
   const services = new Set((grpc.services ?? []).map((service) => service.id));
   const entries = GUIDE_MANIFEST;
@@ -338,7 +343,7 @@ export function generateGuides({ repositoryRoot, crates, grpc, sourceBase = null
     const content = missingDocumentation ? "" : readFileSync(absoluteReadme, "utf8");
     const parentDirectory = directoryParent(directory);
     const parentAuthored = parentDirectory === null ? null : authoredByDirectory.get(parentDirectory);
-    const parent = authored?.parent ?? parentAuthored?.id ?? (parentDirectory === null ? null : directoryId(parentDirectory));
+    const parent = authored?.parent ?? parentAuthored?.id ?? (parentDirectory === null || parentDirectory === "crates" ? null : directoryId(parentDirectory));
     return {
       id: authored?.id ?? directoryId(directory),
       title: authored?.title ?? pkg?.name ?? directoryTitle(directory),
@@ -348,21 +353,51 @@ export function generateGuides({ repositoryRoot, crates, grpc, sourceBase = null
       parent,
       crateId: pkg?.id ?? null,
       manifest: pkg?.manifest ?? null,
+      rustApi: pkg ? rustApis.get(pkg.id) ?? { status: "unavailable", items: [] } : null,
       missingDocumentation,
       contexts: sorted(authored?.contexts ?? []),
       services: sorted(authored?.services ?? []),
       content,
     };
-  }).sort((left, right) => left.path.localeCompare(right.path));
+  });
 
-  assertUnique(guides.map((guide) => guide.id), "generated guide ID");
-  assertUnique(guides.map((guide) => guide.path), "generated guide path");
-  const guideById = new Set(guides.map((guide) => guide.id));
+  // Keep the authored manifest order visible in the navigation tree. Generated
+  // crate directories follow their authored parent and sort by path within a
+  // sibling group, so adding a crate cannot reorder the conceptual branches.
+  const authoredOrder = new Map(entries.map((entry, index) => [entry.id, index]));
+  const byParent = new Map();
   for (const guide of guides) {
-    if (guide.parent && !guideById.has(guide.parent)) errors.push(`${guide.id} has an unknown parent ${guide.parent}`);
+    const siblings = byParent.get(guide.parent ?? null) || [];
+    siblings.push(guide);
+    byParent.set(guide.parent ?? null, siblings);
   }
-  const crateGuideCounts = new Map(guides.filter((guide) => guide.crateId).map((guide) => [guide.crateId, 0]));
+  const compareSiblings = (left, right) => {
+    const leftOrder = authoredOrder.get(left.id);
+    const rightOrder = authoredOrder.get(right.id);
+    if (leftOrder !== undefined && rightOrder !== undefined) return leftOrder - rightOrder;
+    if (leftOrder !== undefined) return -1;
+    if (rightOrder !== undefined) return 1;
+    return left.path.localeCompare(right.path);
+  };
+  const orderedGuides = [];
+  const appendChildren = (parent) => {
+    const siblings = (byParent.get(parent) || []).sort(compareSiblings);
+    for (const guide of siblings) {
+      orderedGuides.push(guide);
+      appendChildren(guide.id);
+    }
+  };
+  appendChildren(null);
+
+  const allGuideIds = new Set(guides.map((guide) => guide.id));
   for (const guide of guides) {
+    if (guide.parent && !allGuideIds.has(guide.parent)) errors.push(`${guide.id} has an unknown parent ${guide.parent}`);
+  }
+  if (orderedGuides.length !== guides.length) errors.push("guide hierarchy contains an unreachable node");
+  assertUnique(orderedGuides.map((guide) => guide.id), "generated guide ID");
+  assertUnique(orderedGuides.map((guide) => guide.path), "generated guide path");
+  const crateGuideCounts = new Map(orderedGuides.filter((guide) => guide.crateId).map((guide) => [guide.crateId, 0]));
+  for (const guide of orderedGuides) {
     if (guide.crateId) crateGuideCounts.set(guide.crateId, (crateGuideCounts.get(guide.crateId) ?? 0) + 1);
   }
   for (const pkg of crates.packages ?? []) {
@@ -378,7 +413,7 @@ export function generateGuides({ repositoryRoot, crates, grpc, sourceBase = null
     sourceBase,
     sourceTreeBase,
     sourceDirectories,
-    guides,
+    guides: orderedGuides,
     unplaced: {
       contexts: sorted([...contexts].filter((context) => !placedContexts.has(context))),
       services: sorted([...services].filter((service) => !placedServices.has(service))),

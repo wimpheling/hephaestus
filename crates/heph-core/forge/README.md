@@ -1,55 +1,41 @@
-# Forge core
+# Purpose
 
-Forge owns the project and repository lifecycle and the durable path from an
-exact source commit to a reviewed, immutable release. Its logical scope also
-includes isolated builds, review controls, and OCI registry publication.
+Forge carries source from an accepted Git receive to a reviewed, immutable
+release that a runtime can execute. It gives the rest of Hephaestus durable
+project and repository meaning, exact receive provenance, isolated build
+contracts, review controls, and OCI publication records.
 
-## Contracts and decisions
+# Responsibilities
 
-- [`domain/`](domain/) defines project, repository, Git receive, commit, ref,
-  and run-request values.
-- [`service/`](service/) defines provider-neutral receive processing and the
-  transactional outbox boundary. A receive is idempotent for its repository,
-  commit, ref, configuration hash, and receive identity.
-- [`git-capability/`](git-capability/) defines bounded Git operations, ref and
-  path matching, transfer limits, and mutation policy.
-- [`git-http/`](../../heph-std/forge/git-http/) is the authorized streaming
-  smart-HTTP transport;
-  it keeps native Git invocation behind a bounded, cleared environment.
-- [`storage/`](../../heph-std/forge/storage/) owns canonical bare-Git
-  filesystem and process storage.
-- [`postgres/`](../../heph-std/forge/postgres/) owns PostgreSQL repository
-  metadata and receive persistence, including exact-commit `gix` inspection.
-- [`nats/`](../../heph-std/forge/nats/) publishes committed forge outbox
-  records through JetStream.
-- [`build/`](build/) and its `build-*` children define exact-source isolated
-  build jobs, durable job ports, and immutable artifact import.
-- [`review/`](review/) owns durable review controls and controlled result
-  approval.
-- [`review-git`](../../heph-std/forge/review/git/) is the trusted Git adapter
-  that publishes an approved result ref.
-- [`release/`](release/) owns immutable releases, project instances, revisions,
-  attachments, updates, and artifact storage.
-- [`registry/`](registry/) owns registry publication records, evidence,
-  notification contracts, reconciliation, and token scope.
-- [`pat/`](pat/) and [`pat-postgres/`](../../heph-std/forge/pat-postgres/) own
-  developer token contracts and their hash-only persistence.
+The normal workflow starts with a validated repository update. Forge records
+the receive, derives idempotent build and run requests, builds from the exact
+commit, and records the artifacts and supply-chain evidence needed to publish
+an immutable release. Review controls can then approve a result with a
+compare-and-swap Git update, while release and registry records preserve the
+source, configuration, artifact, and policy provenance used by a later run.
 
-Build and release decisions are explicit. A normal run consumes an immutable
-published release; it does not build implicitly. Source, configuration hash,
-artifact manifest, release identity, revision, and policy provenance remain
-available for inspection. Registry publication is controlled by Forge-owned
-records and evidence rather than by an arbitrary guest.
+The core crates define these decisions and ports. Git capability rules bound
+refs, changed paths, transfer sizes, and mutation policy; registry records
+bind namespaces to owners and require verified immutable publications; PAT and
+review flows keep bearer or control authority scoped and auditable. Concrete
+Git, PostgreSQL, NATS, OCI, and process adapters implement the ports in the
+standard workspace.
 
-## Boundaries and implementations
+# When
 
-Forge core defines ports and durable meaning, but it does not own PostgreSQL,
-NATS, bare-Git storage, `gix`, a host process, or a registry daemon. Those
-concrete adapters are in [`heph-std/forge/`](../../heph-std/forge/) and use the
-root migrations where needed. The composition and worker lifecycle are owned
-by [`heph-app`](../../heph-app/).
+Use Forge when an accepted repository update should become durable work and,
+later, when a project selects a published release. The high-level path is:
 
-See [`docs/git-forge.md`](../../../docs/git-forge.md),
-[`docs/repository-image-builds.md`](../../../docs/repository-image-builds.md),
-[`docs/live-review.md`](../../../docs/live-review.md), and
-[`docs/releases-and-instances.md`](../../../docs/releases-and-instances.md).
+```mermaid
+flowchart LR
+  A[Git receive] --> B[Exact commit and provenance]
+  B --> C[Isolated build]
+  C --> D[Evidence and OCI publication]
+  D --> E[Review or approval]
+  E --> F[Immutable release]
+  F --> G[Runtime selection]
+```
+
+Start with `forge-domain` values and `forge-service` receive ports; use the
+build, registry, review, and release crates at the corresponding workflow
+stage.

@@ -1,6 +1,8 @@
 import cytoscape from 'cytoscape';
 import './styles.css';
 import { guideLinkHref, parseHash, ROOT_GUIDE_ID } from './navigation.mjs';
+import { defaultGuideExpansion, expansionForGuide, toggleGuideExpansion } from './guide-tree.mjs';
+import { mermaidBlockMarkup, renderMermaidDiagrams } from './mermaid.mjs';
 
 const app = document.querySelector('#app');
 const baseUrl = (import.meta.env.BASE_URL || '/').replace(/\/$/, '') + '/';
@@ -24,6 +26,8 @@ const state = {
   selectedMessage: null,
   graph: null,
   grpcGraph: null,
+  guideExpanded: null,
+  guideExpansionSelection: null,
 };
 
 const esc = (value) => String(value ?? '')
@@ -76,18 +80,22 @@ function renderMarkdown(markdown, sourcePath, guides, sourceBase, sourceTreeBase
   const tableSeparator = (line) => /^\s*\|?\s*:?-{2,}:?\s*(?:\|\s*:?-{2,}:?\s*)+\|?\s*$/.test(line);
   for (let index = 0; index < lines.length; index += 1) {
     const line = lines[index];
-    if (line.startsWith('```')) {
+    const fence = /^```([A-Za-z0-9_-]*)\s*$/.exec(line);
+    if (fence) {
       flushParagraph();
       flushList();
-      if (code === null) code = [];
+      if (code === null) code = { language: fence[1].toLowerCase(), lines: [] };
       else {
-        output.push(`<pre><code>${esc(code.join('\n'))}</code></pre>`);
+        const source = code.lines.join('\n');
+        output.push(code.language === 'mermaid'
+          ? mermaidBlockMarkup(source)
+          : `<pre><code${code.language ? ` class="language-${esc(code.language)}"` : ''}>${esc(source)}</code></pre>`);
         code = null;
       }
       continue;
     }
     if (code !== null) {
-      code.push(line);
+      code.lines.push(line);
       continue;
     }
     if (line.includes('|') && tableSeparator(lines[index + 1] || '')) {
@@ -133,13 +141,23 @@ function renderMarkdown(markdown, sourcePath, guides, sourceBase, sourceTreeBase
   }
   flushParagraph();
   flushList();
-  if (code !== null) output.push(`<pre><code>${esc(code.join('\n'))}</code></pre>`);
+  if (code !== null) {
+    const source = code.lines.join('\n');
+    output.push(code.language === 'mermaid'
+      ? mermaidBlockMarkup(source)
+      : `<pre><code${code.language ? ` class="language-${esc(code.language)}"` : ''}>${esc(source)}</code></pre>`);
+  }
   return output.join('');
 }
 
 function routeFromHash() {
   const parsed = parseHash(window.location.hash);
-  if (parsed.route === 'guide') state.guideId = parsed.guideId;
+  if (parsed.route === 'guide') {
+    if (state.route !== 'guide' || state.guideId !== parsed.guideId) state.guideExpansionSelection = null;
+    state.guideId = parsed.guideId;
+  } else {
+    state.guideExpansionSelection = null;
+  }
   if (parsed.route === 'crates') {
     state.crateContext = parsed.crateContext;
     state.crateLayer = parsed.crateLayer;
@@ -226,15 +244,55 @@ function render() {
       <footer class="footer"><span>Hephaestus code surface</span><span>Derived from source · schema v1</span></footer>
     </div>`;
   bindPageEvents();
+  if (state.route === 'guide') void renderMermaidDiagrams(app);
   if (state.route === 'crates') renderCrateGraph();
   else if (state.route === 'grpc') renderGrpcGraph();
 }
 
 function renderGuideTree(guides, selectedId) {
   const roots = guides.filter((guide) => !guide.parent);
-  const children = (parent) => guides.filter((guide) => guide.parent === parent);
-  const renderItem = (guide) => `<li><a class="guide-tree-link ${guide.id === selectedId ? 'active' : ''}" href="#/guide/${encodeURIComponent(guide.id)}"${guide.missingDocumentation ? ' aria-label="No documentation yet"' : ''}><span class="guide-tree-icon">${guide.parent ? '└' : '◆'}</span><span>${esc(guide.title)}</span>${guide.missingDocumentation ? '<span class="guide-tree-missing" title="No documentation yet">!</span>' : ''}</a>${children(guide.id).length ? `<ul>${children(guide.id).map(renderItem).join('')}</ul>` : ''}</li>`;
+  const childrenByParent = new Map();
+  for (const guide of guides) {
+    if (!guide.parent) continue;
+    const children = childrenByParent.get(guide.parent) || [];
+    children.push(guide);
+    childrenByParent.set(guide.parent, children);
+  }
+  const openingPage = state.guideExpansionSelection !== selectedId;
+  state.guideExpanded = expansionForGuide(guides, selectedId, state.guideExpanded || defaultGuideExpansion(guides), openingPage);
+  state.guideExpansionSelection = selectedId;
+  const renderItem = (guide) => {
+    const children = childrenByParent.get(guide.id) || [];
+    const hasChildren = children.length > 0;
+    const expanded = state.guideExpanded.has(guide.id);
+    const childListId = `guide-children-${guide.id}`;
+    const toggle = hasChildren
+      ? `<button class="guide-tree-toggle" type="button" data-guide-toggle="${esc(guide.id)}" aria-expanded="${expanded}" aria-controls="${esc(childListId)}" aria-label="${expanded ? 'Collapse' : 'Expand'} ${esc(guide.title)}"><span class="guide-tree-chevron" aria-hidden="true"></span></button>`
+      : '<span class="guide-tree-toggle-spacer" aria-hidden="true"></span>';
+    const documentationLabel = guide.missingDocumentation ? ` aria-label="${esc(`${guide.title}: No documentation yet`)}"` : '';
+    const active = guide.id === selectedId;
+    return `<li><div class="guide-tree-row">${toggle}<a class="guide-tree-link ${active ? 'active' : ''}" href="#/guide/${encodeURIComponent(guide.id)}"${active ? ' aria-current="page"' : ''}${documentationLabel}><span class="guide-tree-icon">${guide.parent ? '└' : '◆'}</span><span>${esc(guide.title)}</span>${guide.missingDocumentation ? '<span class="guide-tree-missing" title="No documentation yet" aria-hidden="true">!</span>' : ''}</a></div>${hasChildren ? `<ul id="${esc(childListId)}"${expanded ? '' : ' hidden'}>${expanded ? children.map(renderItem).join('') : ''}</ul>` : ''}</li>`;
+  };
   return `<nav class="guide-tree" aria-label="Guide navigation"><div class="guide-tree-heading"><span class="eyebrow">HEPH GUIDE</span><span class="guide-count">${guides.length} pages</span></div><ul>${roots.map(renderItem).join('')}</ul></nav>`;
+}
+
+function renderRustApi(api) {
+  if (!api) return '';
+  if (api.status === 'no-library-target') {
+    return '<section class="guide-api"><p class="eyebrow">PUBLIC RUST API</p><p class="muted">This crate has no library target to document.</p></section>';
+  }
+  if (api.status !== 'available') {
+    return '<section class="guide-api"><p class="eyebrow">PUBLIC RUST API</p><p class="muted">Rustdoc is unavailable. Run <code>npm run generate</code> with Cargo available to refresh it.</p></section>';
+  }
+  const groups = new Map();
+  for (const item of api.items || []) {
+    const items = groups.get(item.kind) || [];
+    items.push(item);
+    groups.set(item.kind, items);
+  }
+  const labels = { module: 'Modules', struct: 'Structs', enum: 'Enums', trait: 'Traits', function: 'Functions', type: 'Type aliases', constant: 'Constants', static: 'Statics', macro: 'Macros', union: 'Unions', keyword: 'Keywords' };
+  const groupMarkup = [...groups.entries()].map(([kind, items]) => `<div class="guide-api-group"><h3>${esc(labels[kind] || kind)} <span>${items.length}</span></h3><ul>${items.map((item) => `<li><span class="guide-api-item">${esc(item.name)}</span></li>`).join('')}</ul></div>`).join('');
+  return `<section class="guide-api"><div class="guide-api-heading"><p class="eyebrow">PUBLIC RUST API</p><span class="mono">${esc(api.items?.length || 0)} public items</span></div>${groupMarkup || '<p class="muted">No public items recorded.</p>'}</section>`;
 }
 
 function renderGuidePage() {
@@ -248,7 +306,7 @@ function renderGuidePage() {
   const unplacedCount = unplaced.contexts.length + unplaced.services.length;
   const unplacedReport = selected.id === ROOT_GUIDE_ID && unplacedCount ? `<div class="guide-warning"><p><span>!</span>${unplacedCount} generated inventory ${unplacedCount === 1 ? 'entry is' : 'entries are'} deliberately unplaced.</p><ul class="guide-unplaced-list">${unplaced.contexts.map((context) => `<li><span>context</span>${esc(context)}</li>`).join('')}${unplaced.services.map((service) => `<li><span>service</span>${esc(service)}</li>`).join('')}</ul></div>` : '';
   const documentationWarning = selected.missingDocumentation ? `<aside class="guide-doc-warning" role="status"><p><span>!</span><strong>No documentation yet</strong></p><p>This directory has no local README.md. Add one at <code>${esc(selected.path)}</code> to document it here.</p></aside>` : '';
-  return `<section class="guide-layout"><div>${renderGuideTree(guides, selected.id)}</div><article class="guide-article"><header class="guide-heading"><p class="eyebrow">SOURCE GUIDE</p><h1>${esc(selected.title)}</h1><p class="page-lede">${esc(selected.summary || '')}</p><p class="guide-source mono">${esc(selected.path)}${selected.crateId ? ` · crate ${esc(selected.crateId)}` : ''}</p></header><div class="guide-body">${documentationWarning}${selected.content ? renderMarkdown(selected.content, selected.path, state.guides, state.guides?.sourceBase, state.guides?.sourceTreeBase) : ''}</div><footer class="guide-references"><div><p class="eyebrow">CODE REFERENCES</p><div class="guide-ref-list">${contextLinks || '<span class="muted">No Cargo contexts declared.</span>'}${serviceLinks || '<span class="muted">No gRPC services declared.</span>'}</div></div>${unplacedReport}</footer></article></section>`;
+  return `<section class="guide-layout"><div>${renderGuideTree(guides, selected.id)}</div><article class="guide-article"><header class="guide-heading"><p class="eyebrow">SOURCE GUIDE</p><h1>${esc(selected.title)}</h1><p class="page-lede">${esc(selected.summary || '')}</p><p class="guide-source mono">${esc(selected.path)}${selected.crateId ? ` · crate ${esc(selected.crateId)}` : ''}</p></header><div class="guide-body">${documentationWarning}${selected.content ? renderMarkdown(selected.content, selected.path, state.guides, state.guides?.sourceBase, state.guides?.sourceTreeBase) : ''}${renderRustApi(selected.rustApi)}</div><footer class="guide-references"><div><p class="eyebrow">CODE REFERENCES</p><div class="guide-ref-list">${contextLinks || '<span class="muted">No Cargo contexts declared.</span>'}${serviceLinks || '<span class="muted">No gRPC services declared.</span>'}</div></div>${unplacedReport}</footer></article></section>`;
 }
 
 function renderCratesPage() {
@@ -514,6 +572,14 @@ function bindPageEvents() {
   document.querySelector('#graph-zoom-in')?.addEventListener('click', () => state.graph?.zoom({ level: Math.min(state.graph.zoom() * 1.25, 2.5), renderedPosition: { x: state.graph.width() / 2, y: state.graph.height() / 2 } }));
   document.querySelector('#graph-zoom-out')?.addEventListener('click', () => state.graph?.zoom({ level: Math.max(state.graph.zoom() / 1.25, 0.25), renderedPosition: { x: state.graph.width() / 2, y: state.graph.height() / 2 } }));
   document.querySelector('#graph-overview')?.addEventListener('click', () => { state.crateContext = 'all'; state.crateLayer = 'all'; state.crateSearch = ''; state.selectedCrate = null; render(); });
+  document.querySelectorAll('[data-guide-toggle]').forEach((button) => button.addEventListener('click', () => {
+    const guideId = button.dataset.guideToggle;
+    state.guideExpanded = toggleGuideExpansion(state.guideExpanded, guideId);
+    render();
+    document.querySelectorAll('[data-guide-toggle]').forEach((nextButton) => {
+      if (nextButton.dataset.guideToggle === guideId) nextButton.focus();
+    });
+  }));
   bindDetailLinks();
   document.querySelector('#grpc-search')?.addEventListener('input', (event) => { state.grpcSearch = event.target.value; rerenderAndRestoreFocus('#grpc-search', event.target.selectionStart); });
   document.querySelector('#grpc-package')?.addEventListener('change', (event) => { state.grpcPackage = event.target.value; render(); });
