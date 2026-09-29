@@ -4,9 +4,9 @@ import { test } from 'node:test';
 import { crateGuideDependencies, crateGuideHref } from '../src/guide-dependencies.mjs';
 
 const guides = [
-  { id: 'guide-a', crateId: 'crate-a' },
-  { id: 'guide-b', crateId: 'crate-b' },
-  { id: 'guide-c', crateId: 'crate-c' },
+  { id: 'guide-a', path: 'crates/a/README.md', crateId: 'crate-a' },
+  { id: 'guide-b', path: 'crates/b/README.md', crateId: 'crate-b' },
+  { id: 'guide-c', path: 'crates/c/README.md', crateId: 'crate-c' },
 ];
 
 const crates = {
@@ -34,10 +34,10 @@ test('crate guide dependencies deduplicate mixed required and conditional edges 
   const [{ annotation, href }] = crateGuideDependencies(crates, guides, 'crate-a').dependsOn;
 
   assert.equal(annotation, 'dev, normal');
-  assert.equal(href, '#/guide/guide-b');
+  assert.equal(href, '#/guide/b');
 });
 
 test('crate guide hrefs link only crates with generated guide entries', () => {
-  assert.equal(crateGuideHref('crate-b', guides), '#/guide/guide-b');
+  assert.equal(crateGuideHref('crate-b', guides), '#/guide/b');
   assert.equal(crateGuideHref('missing', guides), null);
 });

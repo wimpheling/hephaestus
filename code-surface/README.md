@@ -29,7 +29,10 @@ repository's `.local/protobuf/bin/buf` when present. Run `npm run generate`
 again after changing a manifest or `.proto` file while the server is open.
 
 Open `#/guide` for the guide tree, `#/crates` for the workspace graph, or
-`#/grpc` for the protobuf interface. The frontend uses vanilla JavaScript,
+`#/grpc` for the protobuf interface. Guide links use readable source routes:
+the repository README is `#/guide`, and `crates/heph-core/auth/README.md` is
+`#/guide/heph-core/auth`. Older guide ID links continue to resolve and are
+replaced with their canonical source route. The frontend uses vanilla JavaScript,
 Cytoscape.js, and Vite. A short Node script is the only backend: it invokes the
 existing code tools, validates the guide manifest against their inventories, and
 writes JSON for the browser. There is no database or long-running API service.

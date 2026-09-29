@@ -1,10 +1,12 @@
+import { guideHref } from './navigation.mjs';
+
 /**
  * Return the guide route for a workspace crate. Guides without a crateId are
  * intentionally ignored so conceptual pages never become dependency targets.
  */
 export function crateGuideHref(crateId, guides) {
   const guide = (guides || []).find((candidate) => candidate.crateId === crateId);
-  return guide ? `#/guide/${encodeURIComponent(guide.id)}` : null;
+  return guide ? guideHref(guide) : null;
 }
 
 function dependencyAnnotation(records) {

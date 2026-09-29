@@ -8,15 +8,60 @@ function decodeSegment(value) {
   }
 }
 
+/**
+ * Return the readable route key for a guide's source README. The repository
+ * root stays at `/guide`; crate paths omit the `crates/` layout wrapper so a
+ * guide remains understandable when opened directly or copied from the UI.
+ */
+export function guideRouteKey(guide) {
+  const path = String(guide?.path || '').replaceAll('\\', '/');
+  if (path === 'README.md') return '';
+  const directory = path.endsWith('/README.md') ? path.slice(0, -'/README.md'.length) : path;
+  return directory.startsWith('crates/') ? directory.slice('crates/'.length) : directory;
+}
+
+function encodeRouteKey(routeKey) {
+  return String(routeKey || '').split('/').filter(Boolean).map((segment) => encodeURIComponent(segment)).join('/');
+}
+
+/** Build the canonical browser route for a generated guide. */
+export function guideHref(guide, suffix = '') {
+  const routeKey = encodeRouteKey(guideRouteKey(guide));
+  return `#/guide${routeKey ? `/${routeKey}` : ''}${suffix}`;
+}
+
+/** Resolve a canonical route key or legacy generated/authored guide ID. */
+export function resolveGuide(guides, routeKey) {
+  const entries = Array.isArray(guides) ? guides : guides?.guides || [];
+  const value = String(routeKey || '');
+  return entries.find((guide) => guideRouteKey(guide) === value) || entries.find((guide) => guide.id === value);
+}
+
+/** Resolve a route and use the repository guide as the safe unknown-route fallback. */
+export function resolveGuideOrRoot(guides, routeKey) {
+  return resolveGuide(guides, routeKey) || resolveGuide(guides, ROOT_GUIDE_ID);
+}
+
 /** Parse the hash routes used by the code surface without touching browser state. */
 export function parseHash(hash) {
   const raw = String(hash || '').replace(/^#/, '') || '/guide';
-  const marker = raw.indexOf('?');
-  const path = marker < 0 ? raw : raw.slice(0, marker);
-  const query = marker < 0 ? '' : raw.slice(marker + 1);
+  const anchorMarker = raw.indexOf('#');
+  const routeAndQuery = anchorMarker < 0 ? raw : raw.slice(0, anchorMarker);
+  const anchor = anchorMarker < 0 ? '' : raw.slice(anchorMarker);
+  const marker = routeAndQuery.indexOf('?');
+  const path = marker < 0 ? routeAndQuery : routeAndQuery.slice(0, marker);
+  const query = marker < 0 ? '' : routeAndQuery.slice(marker + 1);
   const segments = path.replace(/^\//, '').split('/');
   const route = segments[0];
-  if (route === 'guide') return { route, guideId: segments[1] ? decodeSegment(segments[1]) : ROOT_GUIDE_ID };
+  if (route === 'guide') {
+    const guideSegments = segments.slice(1).filter(Boolean);
+    const parsed = {
+      route,
+      guideId: guideSegments.length ? guideSegments.map(decodeSegment).join('/') : ROOT_GUIDE_ID,
+    };
+    if (anchor) parsed.guideAnchor = anchor;
+    return parsed;
+  }
   if (route === 'crates') {
     const params = new URLSearchParams(query);
     return {
@@ -120,7 +165,7 @@ export function guideLinkHref(
   const normalized = normalizeRepositoryPath(path, sourcePath);
   if (!normalized) return '#';
   const guide = guideForPath(normalized, guides);
-  if (guide) return `#/guide/${encodeURIComponent(guide.id)}${suffix}`;
+  if (guide) return guideHref(guide, suffix);
   const authoredDirectory = (guides?.sourceDirectories || []).includes(normalized);
   const directory = path.endsWith('/') || authoredDirectory;
   const directoryBase = sourceTreeBase || String(sourceBase || '').replace('/blob/', '/tree/');

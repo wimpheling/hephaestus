@@ -1,6 +1,6 @@
 import cytoscape from 'cytoscape';
 import './styles.css';
-import { guideLinkHref, parseHash, ROOT_GUIDE_ID } from './navigation.mjs';
+import { guideHref, guideLinkHref, parseHash, resolveGuideOrRoot, ROOT_GUIDE_ID } from './navigation.mjs';
 import { defaultGuideExpansion, expansionForGuide, toggleGuideExpansion } from './guide-tree.mjs';
 import { crateGuideDependencies } from './guide-dependencies.mjs';
 import { mermaidBlockMarkup, renderMermaidDiagrams } from './mermaid.mjs';
@@ -154,8 +154,14 @@ function renderMarkdown(markdown, sourcePath, guides, sourceBase, sourceTreeBase
 function routeFromHash() {
   const parsed = parseHash(window.location.hash);
   if (parsed.route === 'guide') {
-    if (state.route !== 'guide' || state.guideId !== parsed.guideId) state.guideExpansionSelection = null;
-    state.guideId = parsed.guideId;
+    const selected = state.guides ? resolveGuideOrRoot(state.guides.guides, parsed.guideId) : null;
+    const selectedId = selected?.id || (parsed.guideId === ROOT_GUIDE_ID ? ROOT_GUIDE_ID : parsed.guideId);
+    if (state.route !== 'guide' || state.guideId !== selectedId) state.guideExpansionSelection = null;
+    state.guideId = selectedId;
+    if (selected && state.guides) {
+      const canonicalHash = guideHref(selected, parsed.guideAnchor || '');
+      if (window.location.hash !== canonicalHash) window.history.replaceState(null, '', canonicalHash);
+    }
   } else {
     state.guideExpansionSelection = null;
   }
@@ -272,7 +278,7 @@ function renderGuideTree(guides, selectedId) {
       : '<span class="guide-tree-toggle-spacer" aria-hidden="true"></span>';
     const documentationLabel = guide.missingDocumentation ? ` aria-label="${esc(`${guide.title}: No documentation yet`)}"` : '';
     const active = guide.id === selectedId;
-    return `<li><div class="guide-tree-row">${toggle}<a class="guide-tree-link ${active ? 'active' : ''}" href="#/guide/${encodeURIComponent(guide.id)}"${active ? ' aria-current="page"' : ''}${documentationLabel}><span class="guide-tree-icon">${guide.parent ? '└' : '◆'}</span><span>${esc(guide.title)}</span>${guide.missingDocumentation ? '<span class="guide-tree-missing" title="No documentation yet" aria-hidden="true">!</span>' : ''}</a></div>${hasChildren ? `<ul id="${esc(childListId)}"${expanded ? '' : ' hidden'}>${expanded ? children.map(renderItem).join('') : ''}</ul>` : ''}</li>`;
+    return `<li><div class="guide-tree-row">${toggle}<a class="guide-tree-link ${active ? 'active' : ''}" href="${esc(guideHref(guide))}"${active ? ' aria-current="page"' : ''}${documentationLabel}><span class="guide-tree-icon">${guide.parent ? '└' : '◆'}</span><span>${esc(guide.title)}</span>${guide.missingDocumentation ? '<span class="guide-tree-missing" title="No documentation yet" aria-hidden="true">!</span>' : ''}</a></div>${hasChildren ? `<ul id="${esc(childListId)}"${expanded ? '' : ' hidden'}>${expanded ? children.map(renderItem).join('') : ''}</ul>` : ''}</li>`;
   };
   return `<nav class="guide-tree" aria-label="Guide navigation"><div class="guide-tree-heading"><span class="eyebrow">HEPH GUIDE</span><span class="guide-count">${guides.length} pages</span></div><ul>${roots.map(renderItem).join('')}</ul></nav>`;
 }
