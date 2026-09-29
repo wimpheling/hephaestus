@@ -11,9 +11,9 @@ from Forge's build and registry publication workflows.
 - [`application/`](application/) defines the `ImageCatalog` and
   `RegistryPublicationCatalog` ports and validates selections before they enter
   build or runtime configuration.
-- [`postgres/`](postgres/) is the PostgreSQL catalog adapter. It stores catalog
-  metadata and resolves publication evidence through the declared database
-  boundary.
+- [`postgres/`](../../heph-std/image/postgres/) is the PostgreSQL catalog
+  adapter. It stores catalog metadata and resolves publication evidence through
+  the declared database boundary.
 
 Selections carry an immutable reference and digest. Availability, role,
   provenance, signatures, SBOM, scan evidence, and platform policy version are

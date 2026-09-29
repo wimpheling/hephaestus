@@ -14,7 +14,7 @@ async-trait.workspace = true
 forge-domain = { path = "../domain" }
 gix.workspace = true
 release-domain = { path = "../release/domain" }
-run-domain = { path = "../../run/domain" }
+run-domain = { path = "../../runtime/run/domain" }
 runtime-types = { path = "../../platform/runtime-types" }
 serde_json.workspace = true
 thiserror.workspace = true

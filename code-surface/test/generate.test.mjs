@@ -56,7 +56,7 @@ test("generated code surface is deterministic and referentially complete", () =>
   assert.match(guides.sourceBase, /^https:\/\/github\.com\/[^/]+\/[^/]+\/blob\/.+\/$/);
   assert.equal(typeof guides.sourceTreeBase, "string");
   assert.match(guides.sourceTreeBase, /^https:\/\/github\.com\/[^/]+\/[^/]+\/tree\/.+\/$/);
-  assert.ok(guides.sourceDirectories.includes("crates/heph-core/secret"));
+  assert.ok(guides.sourceDirectories.includes("crates/heph-core/auth/secret"));
   assert.ok(guides.sourceDirectories.includes("crates/heph-std/runtime/vm/libkrun"));
 
   const workspace = JSON.parse(
@@ -162,6 +162,17 @@ test("generated code surface is deterministic and referentially complete", () =>
   }
   assert.ok(guides.guides.some((guide) => guide.missingDocumentation), "the tree should expose missing documentation");
   assert.equal(guideById.get("root")?.path, "README.md");
+  assert.deepEqual(
+    guides.guides.filter((guide) => guide.parent === "root").map((guide) => guide.id).sort(),
+    ["app", "core", "dev", "std"],
+    "the repository root should expose conceptual top-level branches",
+  );
+  assert.equal(guideById.has("directory-637261746573"), false, "the crates source wrapper must not become a guide node");
+  assert.equal(guideById.get("dev")?.path, "crates/heph-dev/README.md");
+  assert.equal(guideById.get("dev")?.parent, "root");
+  assert.equal(guideById.get("dev")?.crateId, "hephaestus-dev");
+  assert.equal(guideById.get("dev")?.missingDocumentation, true, "development branch should call out its missing README");
+  assert.equal(guideById.get("dev")?.content, "", "missing documentation must not synthesize README content");
   assert.equal(guideById.get("core")?.parent, "root");
   for (const id of ["auth", "forge", "image", "runtime", "platform"]) assert.equal(guideById.get(id)?.parent, "core");
   assert.equal(guideById.get("auth-identity")?.parent, "auth");

@@ -105,6 +105,15 @@ export const GUIDE_MANIFEST = [
   },
   {
     parent: "root",
+    id: "dev",
+    title: "Heph development",
+    summary: "Development-only tools and provider conformance suites.",
+    path: "crates/heph-dev/README.md",
+    contexts: [],
+    services: [],
+  },
+  {
+    parent: "root",
     id: "app",
     title: "Heph app",
     summary: "The composition root and distribution entry point.",
@@ -316,7 +325,11 @@ export function generateGuides({ repositoryRoot, crates, grpc, sourceBase = null
 
   if (errors.length > 0) throw new Error(`Guide manifest validation failed:\n${errors.map((error) => `- ${error}`).join("\n")}`);
 
-  const guides = [...directories].map((directory) => {
+  // `crates/` is the repository's source layout wrapper, rather than a
+  // conceptual branch. Keep every directory beneath it while attaching those
+  // directories directly to their authored top-level guide.
+  const guideDirectories = [...directories].filter((directory) => directory !== "crates" || authoredByDirectory.has(directory));
+  const guides = guideDirectories.map((directory) => {
     const authored = authoredByDirectory.get(directory);
     const pkg = packageByDirectory.get(directory);
     const readmePath = directory ? `${directory}/README.md` : "README.md";

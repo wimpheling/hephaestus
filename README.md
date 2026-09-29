@@ -104,8 +104,8 @@ provider wiring in the concrete adapters beneath them:
 The [workspace topology migration record](docs/workspace-topology-migration.md)
 reconciles the original packages with this layout and records its verification.
 
-- [`heph-secret`](crates/heph-core/secret/) groups secret contracts and the
-  [`secret-postgres`](crates/heph-core/secret/postgres) adapter; host adapters
+- [`heph-secret`](crates/heph-core/auth/secret/) groups secret contracts and the
+  [`secret-postgres`](crates/heph-std/secret/postgres) adapter; host adapters
   live in [`secret-runtime`](crates/heph-std/secret/runtime) and
   [`secret-broker`](crates/heph-std/secret/broker).
 - [`heph-runtime`](crates/heph-core/runtime/) groups runtime contracts;
@@ -114,17 +114,17 @@ reconciles the original packages with this layout and records its verification.
   [`volume-local`](crates/heph-std/runtime/volume/local), and
   [`workspace-local`](crates/heph-std/runtime/workspace/local) are concrete
   adapters.
-- [`heph-run`](crates/heph-core/run/) groups run APIs; persistence is in
-  [`run-postgres`](crates/heph-core/run/postgres) and local execution is in
+- [`heph-run`](crates/heph-core/runtime/run/) groups run APIs; persistence is in
+  [`run-postgres`](crates/heph-std/run/postgres) and local execution is in
   [`run-runtime-local`](crates/heph-std/run/runtime-local).
 - [`heph-forge`](crates/heph-core/forge/) groups forge APIs and infrastructure;
-  [`forge-postgres`](crates/heph-core/forge/postgres),
-  [`git-http`](crates/heph-core/forge/git-http),
+  [`forge-postgres`](crates/heph-std/forge/postgres),
+  [`git-http`](crates/heph-std/forge/git-http),
   [`registry-publisher`](crates/heph-std/forge/registry/publisher), and
   [`registry-zot`](crates/heph-std/forge/registry/zot) provide concrete
   integrations.
 - [`heph-build`](crates/heph-core/forge/build/) groups build APIs;
-  [`oci-builder-postgres`](crates/heph-core/forge/build/oci-builder-postgres),
+  [`oci-builder-postgres`](crates/heph-std/forge/build/oci-builder-postgres),
   [`oci-builder-runtime-local`](crates/heph-std/forge/build/oci-builder-runtime-local),
   and [`oci-builder-worker`](crates/heph-std/forge/build/oci-builder-worker)
   provide concrete build adapters.
@@ -138,27 +138,27 @@ reconciles the original packages with this layout and records its verification.
 | [`runtime-types`](crates/heph-core/platform/runtime-types) | Stable identifiers shared by runtime domains |
 | [`volume-trait`](crates/heph-core/runtime/volume/trait) | Provider-neutral persistent-volume and lease contracts |
 | [`volume-local`](crates/heph-std/runtime/volume/local) | Single-host raw volumes with PostgreSQL metadata |
-| [`run-domain`](crates/heph-core/run/domain) | Durable run states and commands |
-| [`run-orchestrator`](crates/heph-core/run/orchestrator) | Provider-neutral VM, volume, repository, runtime-catalog, and JetStream coordination |
-| [`run-postgres`](crates/heph-core/run/postgres) | PostgreSQL run persistence and exact-runtime catalog adapter |
+| [`run-domain`](crates/heph-core/runtime/run/domain) | Durable run states and commands |
+| [`run-orchestrator`](crates/heph-core/runtime/run/orchestrator) | Provider-neutral VM, volume, repository, runtime-catalog, and JetStream coordination |
+| [`run-postgres`](crates/heph-std/run/postgres) | PostgreSQL run persistence and exact-runtime catalog adapter |
 | [`run-runtime-local`](crates/heph-std/run/runtime-local) | SQL-free local runtime artifact materialization and recovery |
 | [`forge-domain`](crates/heph-core/forge/domain) | Project, repository, receive, and run-request domain values |
 | [`agent-config`](crates/heph-core/platform/agent-config) | Versioned `agent.toml` parsing and validation |
 | [`release-domain`](crates/heph-core/forge/release/domain) | Immutable releases, project instances, revisions, attachments, updates, and typed policy |
-| [`release-artifact-store`](crates/heph-core/forge/release/artifact-store) | One-way safe import into opaque immutable artifact storage |
+| [`release-artifact-store`](crates/heph-std/forge/release/artifact-store) | One-way safe import into opaque immutable artifact storage |
 | [`release-service`](crates/heph-core/forge/release/service) | Release publication, instance management, attachments, updates, and deferred triggers |
-| [`build-orchestrator`](crates/heph-core/forge/build/orchestrator) | Exact-commit isolated builds and crash-safe draft release finalization |
-| [`secret-domain`](crates/heph-core/secret/domain) | Redacted secret ownership, delegation, binding, and lease contracts |
-| [`secret-store`](crates/heph-core/secret/store) | Authenticated encrypted immutable secret-version storage |
-| [`secret-service`](crates/heph-core/secret/service) | Grants, imports, bindings, exact dispatch resolution, rotation, revocation, and purge |
+| [`build-orchestrator`](crates/heph-std/forge/build/orchestrator) | Exact-commit isolated builds and crash-safe draft release finalization |
+| [`secret-domain`](crates/heph-core/auth/secret/domain) | Redacted secret ownership, delegation, binding, and lease contracts |
+| [`secret-store`](crates/heph-core/auth/secret/store) | Authenticated encrypted immutable secret-version storage |
+| [`secret-service`](crates/heph-core/auth/secret/service) | Grants, imports, bindings, exact dispatch resolution, rotation, revocation, and purge |
 | [`secret-runtime`](crates/heph-std/secret/runtime) | Ephemeral raw mounts and exact runtime secret authority |
 | [`secret-broker`](crates/heph-std/secret/broker) | Host-only semantic broker transport and bounded adapters |
 | [`forge-service`](crates/heph-core/forge/service) | Bare Git storage, PostgreSQL receive processing, and forge outbox |
-| [`git-http`](crates/heph-core/forge/git-http) | Authorized streaming Git smart-HTTP transport |
+| [`git-http`](crates/heph-std/forge/git-http) | Authorized streaming Git smart-HTTP transport |
 | [`identity-domain`](crates/heph-core/auth/identity/domain) | Internal authenticated principal and tenant identifiers |
 | [`identity-oidc`](crates/heph-std/identity/oidc) | OIDC verification and identity mapping |
-| [`authz-domain`](crates/heph-core/authorization/authz-domain) | Typed provider-neutral authorization contract |
-| [`authz-postgres`](crates/heph-core/authorization/authz-postgres) | PostgreSQL/Mélange authorization and command auditing |
+| [`authz-domain`](crates/heph-core/auth/authorization/authz-domain) | Typed provider-neutral authorization contract |
+| [`authz-postgres`](crates/heph-std/authorization/authz-postgres) | PostgreSQL/Mélange authorization and command auditing |
 | [`workspace-domain`](crates/heph-core/runtime/workspace/domain) | Provider-neutral exact-commit workspace and result contracts |
 | [`workspace-local`](crates/heph-std/runtime/workspace/local) | Safe local materialization, sealing, artifacts, and controlled Git result publication |
 | [`review-domain`](crates/heph-core/forge/review/domain) | Durable review proposal and human-control commands |

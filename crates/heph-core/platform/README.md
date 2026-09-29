@@ -17,12 +17,11 @@ shared mechanics that connect Forge, Image, Runtime, and the control plane.
 - [`runtime-types/`](runtime-types/) provides stable IDs shared across runtime
   domains.
 
-The gateway contracts are still in their dedicated physical root:
-[`gateway/`](../gateway/) and its PostgreSQL or transport adapters. They are
-documented here as part of the platform ownership boundary without implying
-that those crates have moved. Identity, authorization, and secret contracts
-belong to the [`Auth`](../auth/) boundary. Events, control-plane persistence,
-and mailbox storage similarly retain their declared package contexts.
+The gateway contracts are under [`gateway/`](gateway/); PostgreSQL and edge
+implementations live in `heph-std`. Identity, authorization, and secret
+contracts belong to the [`Auth`](../auth/) boundary. Events and control-plane
+persistence similarly retain their platform ownership while their concrete
+adapters live in `heph-std`.
 
 Platform routes are distinct from repository-declared gateway routes. A gateway
 receives only a bounded request after exact route and revision resolution,

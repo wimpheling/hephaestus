@@ -10,8 +10,8 @@ context = "release"
 
 [dependencies]
 async-trait.workspace = true
-capability-domain = { path = "../../../authorization/capability-domain" }
-gateway-domain = { path = "../../../gateway/domain" }
+capability-domain = { path = "../../../auth/authorization/capability-domain" }
+gateway-domain = { path = "../../../platform/gateway/domain" }
 forge-domain = { path = "../../domain" }
 git-capability-domain = { path = "../../git-capability" }
 identity-domain = { path = "../../../auth/identity/domain" }

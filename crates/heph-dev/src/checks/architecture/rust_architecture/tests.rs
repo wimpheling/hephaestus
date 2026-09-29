@@ -178,7 +178,7 @@ fn migration_fingerprint_exception_is_exactly_scoped_to_its_build_script() {
 
     let mut build_script_diagnostics = Vec::new();
     validate_source(
-        Path::new("crates/heph-core/authorization/runtime-authority-postgres/build.rs"),
+        Path::new("crates/heph-std/authorization/runtime-authority-postgres/build.rs"),
         source,
         &active,
         &mut build_script_diagnostics,
@@ -205,8 +205,8 @@ fn moved_topology_paths_keep_exact_boundary_classification() {
         "crates/heph-std/runtime/vm/libkrun/src/worker.rs"
     )));
     for path in [
-        "crates/heph-core/forge/build/orchestrator/src/lib.rs",
-        "crates/heph-core/forge/release/artifact-store/src/lib.rs",
+        "crates/heph-std/forge/build/orchestrator/src/lib.rs",
+        "crates/heph-std/forge/release/artifact-store/src/lib.rs",
         "crates/heph-core/forge/service/src/storage.rs",
         "crates/heph-std/identity/git-credential/src/main.rs",
         "crates/heph-std/forge/registry/publisher/src/lib.rs",

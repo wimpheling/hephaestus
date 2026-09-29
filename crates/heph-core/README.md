@@ -18,19 +18,17 @@ The current logical ownership map is:
 | Platform | Gateway, routes, invocation, transport, and cross-domain mechanics | [`platform/`](platform/) |
 | Auth | Identity, authorization, and secret contracts and policies | [`auth/`](auth/) |
 
-The map describes contract ownership. Some packages still live in their
-historical context roots while the topology evolves: run orchestration is in
-[`run/`](run/), mailbox contracts are in [`mailbox/`](mailbox/), gateway
-contracts are in [`gateway/`](gateway/), identity contracts are in
-[`auth/identity/`](auth/identity/), authorization contracts remain physically
-in [`authorization/`](authorization/), and secret contracts remain physically
-in [`secret/`](secret/). Their package metadata and the architecture rules
-remain authoritative for current dependency boundaries.
+The map describes contract ownership. Run orchestration and mailbox contracts
+are under [`runtime/`](runtime/), gateway contracts are under
+[`platform/gateway/`](platform/gateway/), identity and authorization contracts
+are under [`auth/`](auth/), and secret contracts are under
+[`auth/secret/`](auth/secret/). Their package metadata and the architecture
+rules remain authoritative for current dependency boundaries.
 
 ## Composition boundaries
 
 The stable context facades are intended to be [`heph-forge`](forge/),
-[`heph-runtime`](runtime/), [`heph-run`](run/), [`heph-secret`](secret/), and
+[`heph-runtime`](runtime/), [`heph-run`](runtime/run/), [`heph-secret`](auth/secret/), and
 [`heph-build`](forge/build/). They expose provider-neutral APIs, although some
 concrete adapters and cross-context services still remain in `heph-core` and
 may be direct dependencies of the composition root during the migration.

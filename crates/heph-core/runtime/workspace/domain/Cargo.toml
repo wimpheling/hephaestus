@@ -12,7 +12,7 @@ context = "workspace"
 [dependencies]
 async-trait.workspace = true
 git-capability-domain = { path = "../../../forge/git-capability" }
-run-domain = { path = "../../../run/domain" }
+run-domain = { path = "../../run/domain" }
 runtime-types = { path = "../../../platform/runtime-types" }
 serde.workspace = true
 serde_json.workspace = true

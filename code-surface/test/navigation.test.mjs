@@ -10,7 +10,7 @@ const guides = [
 ];
 const sourceBase = 'https://github.com/wimpheling/hephaestus/blob/feat/code-surface/';
 const sourceTreeBase = 'https://github.com/wimpheling/hephaestus/tree/feat/code-surface/';
-guides.sourceDirectories = ['crates/heph-core/secret', 'crates/heph-std/runtime/vm/libkrun'];
+guides.sourceDirectories = ['crates/heph-core/auth/secret', 'crates/heph-std/runtime/vm/libkrun'];
 
 test('guide hash routes select the root and preserve crate context filters', () => {
   assert.deepEqual(parseHash('#/guide'), { route: 'guide', guideId: ROOT_GUIDE_ID });
@@ -28,8 +28,8 @@ test('README links resolve to guide routes or validated source links', () => {
   assert.equal(guideLinkHref('../heph-core/#overview', 'crates/heph-app/README.md', guides), '#/guide/core#overview');
   assert.equal(guideLinkHref('../runtime/', 'crates/heph-core/auth/README.md', guides), '#/guide/runtime');
   assert.equal(
-    guideLinkHref('crates/heph-core/secret/', 'README.md', guides, sourceBase, sourceTreeBase),
-    `${sourceTreeBase}crates/heph-core/secret`,
+    guideLinkHref('crates/heph-core/auth/secret/', 'README.md', guides, sourceBase, sourceTreeBase),
+    `${sourceTreeBase}crates/heph-core/auth/secret`,
   );
   assert.equal(
     guideLinkHref('crates/heph-std/runtime/vm/libkrun', 'README.md', guides, sourceBase, sourceTreeBase),

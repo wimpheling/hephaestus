@@ -15,9 +15,9 @@ sqlx.workspace = true
 uuid.workspace = true
 
 [dev-dependencies]
-event-application = { path = "../../../heph-core/event/application" }
-event-postgres = { path = "../../../heph-core/event/postgres" }
-git-http = { path = "../../../heph-core/forge/git-http" }
+event-application = { path = "../../../heph-core/platform/event/application" }
+event-postgres = { path = "../../event/postgres" }
+git-http = { path = "../../forge/git-http" }
 jsonwebtoken.workspace = true
 serial_test = "3"
 tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }

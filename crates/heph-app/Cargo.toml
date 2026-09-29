@@ -21,59 +21,59 @@ agent-config = { path = "../heph-core/platform/agent-config" }
 base64.workspace = true
 builder-catalog-application = { path = "../heph-core/image/application" }
 builder-catalog-domain = { path = "../heph-core/image/domain" }
-builder-catalog-postgres = { path = "../heph-core/image/postgres" }
-capability-domain = { path = "../heph-core/authorization/capability-domain" }
+builder-catalog-postgres = { path = "../heph-std/image/postgres" }
+capability-domain = { path = "../heph-core/auth/authorization/capability-domain" }
 async-nats.workspace = true
 async-trait.workspace = true
-authz-domain = { path = "../heph-core/authorization/authz-domain" }
-authz-postgres = { path = "../heph-core/authorization/authz-postgres" }
+authz-domain = { path = "../heph-core/auth/authorization/authz-domain" }
+authz-postgres = { path = "../heph-std/authorization/authz-postgres" }
 axum.workspace = true
 connectrpc = { workspace = true, features = ["axum"] }
 connectrpc-reflection.workspace = true
-control-plane-postgres = { path = "../heph-core/control-plane/postgres" }
-build-orchestrator = { path = "../heph-core/forge/build/orchestrator" }
-build-postgres = { path = "../heph-core/forge/build/postgres" }
+control-plane-postgres = { path = "../heph-std/control-plane/postgres" }
+build-orchestrator = { path = "../heph-std/forge/build/orchestrator" }
+build-postgres = { path = "../heph-std/forge/build/postgres" }
 buffa.workspace = true
 buffa-types.workspace = true
 bytes.workspace = true
-event-application = { path = "../heph-core/event/application" }
-event-postgres = { path = "../heph-core/event/postgres" }
+event-application = { path = "../heph-core/platform/event/application" }
+event-postgres = { path = "../heph-std/event/postgres" }
 forge-service = { path = "../heph-core/forge/service" }
 heph-forge = { path = "../heph-core/forge" }
 heph-runtime = { path = "../heph-core/runtime" }
-heph-secret = { path = "../heph-core/secret" }
-forge-postgres = { path = "../heph-core/forge/postgres" }
+heph-secret = { path = "../heph-core/auth/secret" }
+forge-postgres = { path = "../heph-std/forge/postgres" }
 forge-nats = { path = "../heph-std/forge/nats" }
 gateway-edge = { path = "../heph-std/gateway/edge" }
-gateway-domain = { path = "../heph-core/gateway/domain" }
-gateway-postgres = { path = "../heph-core/gateway/postgres" }
+gateway-domain = { path = "../heph-core/platform/gateway/domain" }
+gateway-postgres = { path = "../heph-std/gateway/postgres" }
 futures-util.workspace = true
-git-http = { path = "../heph-core/forge/git-http" }
+git-http = { path = "../heph-std/forge/git-http" }
 git-capability-domain = { path = "../heph-core/forge/git-capability" }
 identity-oidc = { path = "../heph-std/identity/oidc" }
 identity-domain = { path = "../heph-core/auth/identity/domain" }
 identity-application = { path = "../heph-core/auth/identity/application" }
 identity-postgres = { path = "../heph-std/identity/postgres" }
-mailbox-dispatch = { path = "../heph-core/mailbox/dispatch" }
-mailbox-domain = { path = "../heph-core/mailbox/domain" }
-mailbox-postgres = { path = "../heph-core/mailbox/postgres" }
+mailbox-dispatch = { path = "../heph-std/runtime/mailbox/dispatch" }
+mailbox-domain = { path = "../heph-core/runtime/mailbox/domain" }
+mailbox-postgres = { path = "../heph-std/runtime/mailbox/postgres" }
 http.workspace = true
 hmac.workspace = true
 jsonwebtoken.workspace = true
-oci-builder-postgres = { path = "../heph-core/forge/build/oci-builder-postgres" }
+oci-builder-postgres = { path = "../heph-std/forge/build/oci-builder-postgres" }
 oci-builder-runtime-local = { path = "../heph-std/forge/build/oci-builder-runtime-local" }
 oci-builder-worker = { path = "../heph-std/forge/build/oci-builder-worker" }
-pat-postgres = { path = "../heph-core/forge/pat-postgres" }
+pat-postgres = { path = "../heph-std/forge/pat-postgres" }
 pat-domain = { path = "../heph-core/forge/pat" }
 release-service = { path = "../heph-core/forge/release/service" }
-release-artifact-store = { path = "../heph-core/forge/release/artifact-store" }
+release-artifact-store = { path = "../heph-std/forge/release/artifact-store" }
 release-domain = { path = "../heph-core/forge/release/domain" }
-release-postgres = { path = "../heph-core/forge/release/postgres" }
+release-postgres = { path = "../heph-std/forge/release/postgres" }
 registry-http = { path = "../heph-std/forge/registry/http" }
 registry-domain = { path = "../heph-core/forge/registry/domain" }
 registry-notification = { path = "../heph-core/forge/registry/notification" }
 registry-notification-http = { path = "../heph-std/forge/registry/notification-http" }
-registry-postgres = { path = "../heph-core/forge/registry/postgres" }
+registry-postgres = { path = "../heph-std/forge/registry/postgres" }
 registry-publisher = { path = "../heph-std/forge/registry/publisher" }
 registry-reconciler = { path = "../heph-core/forge/registry/reconciler" }
 registry-token = { path = "../heph-core/forge/registry/token" }
@@ -81,26 +81,26 @@ registry-zot = { path = "../heph-std/forge/registry/zot" }
 rpc-proto = { path = "../heph-core/platform/rpc-proto", default-features = false }
 rustix.workspace = true
 review-domain = { path = "../heph-core/forge/review/domain" }
-review-postgres = { path = "../heph-core/forge/review/postgres" }
+review-postgres = { path = "../heph-std/forge/review/postgres" }
 review-service = { path = "../heph-core/forge/review/service" }
-heph-run = { path = "../heph-core/run" }
-run-orchestrator = { path = "../heph-core/run/orchestrator" }
-run-postgres = { path = "../heph-core/run/postgres" }
+heph-run = { path = "../heph-core/runtime/run" }
+run-orchestrator = { path = "../heph-core/runtime/run/orchestrator" }
+run-postgres = { path = "../heph-std/run/postgres" }
 run-nats = { path = "../heph-std/run/nats" }
 run-runtime-local = { path = "../heph-std/run/runtime-local" }
 runtime-types = { path = "../heph-core/platform/runtime-types" }
-runtime-authority = { path = "../heph-core/authorization/runtime-authority" }
-runtime-authority-postgres = { path = "../heph-core/authorization/runtime-authority-postgres" }
+runtime-authority = { path = "../heph-core/auth/authorization/runtime-authority" }
+runtime-authority-postgres = { path = "../heph-std/authorization/runtime-authority-postgres" }
 runtime-handoff-local = { path = "../heph-std/authorization/runtime-handoff-local" }
-runtime-git-authority = { path = "../heph-core/authorization/runtime-git-authority" }
-runtime-git-authority-postgres = { path = "../heph-core/authorization/runtime-git-authority-postgres" }
+runtime-git-authority = { path = "../heph-core/auth/authorization/runtime-git-authority" }
+runtime-git-authority-postgres = { path = "../heph-std/authorization/runtime-git-authority-postgres" }
 secret-broker = { path = "../heph-std/secret/broker" }
 secret-key-local = { path = "../heph-std/secret/key-local" }
-secret-domain = { path = "../heph-core/secret/domain" }
+secret-domain = { path = "../heph-core/auth/secret/domain" }
 secret-runtime = { path = "../heph-std/secret/runtime" }
-secret-postgres = { path = "../heph-core/secret/postgres" }
-secret-application = { path = "../heph-core/secret/application" }
-secret-store = { path = "../heph-core/secret/store" }
+secret-postgres = { path = "../heph-std/secret/postgres" }
+secret-application = { path = "../heph-core/auth/secret/application" }
+secret-store = { path = "../heph-core/auth/secret/store" }
 zeroize.workspace = true
 serde.workspace = true
 serde_json.workspace = true
@@ -115,16 +115,16 @@ uuid.workspace = true
 vm-fake = { path = "../heph-std/runtime/vm/fake" }
 vm-libkrun = { path = "../heph-std/runtime/vm/libkrun" }
 volume-local = { path = "../heph-std/runtime/volume/local" }
-volume-postgres = { path = "../heph-core/runtime/volume/postgres" }
+volume-postgres = { path = "../heph-std/runtime/volume/postgres" }
 workspace-local = { path = "../heph-std/runtime/workspace/local" }
-workspace-postgres = { path = "../heph-core/runtime/workspace/postgres" }
+workspace-postgres = { path = "../heph-std/runtime/workspace/postgres" }
 
 [dev-dependencies]
 base64.workspace = true
 h2 = "0.4.15"
 registry-token = { path = "../heph-core/forge/registry/token" }
 rpc-proto = { path = "../heph-core/platform/rpc-proto", features = ["client"] }
-brokered-egress-domain = { path = "../heph-core/secret/brokered-egress-domain" }
+brokered-egress-domain = { path = "../heph-core/auth/secret/brokered-egress-domain" }
 secret-broker = { path = "../heph-std/secret/broker", features = ["test-fixtures"] }
 sqlx.workspace = true
 serial_test = "3"

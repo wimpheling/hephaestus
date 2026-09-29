@@ -5,7 +5,7 @@
 
 ## Context facades and composition leaves
 
-The five context facades are the supported contract seams: [`heph-secret`](../crates/heph-core/secret/), [`heph-runtime`](../crates/heph-core/runtime/), [`heph-run`](../crates/heph-core/run/), [`heph-forge`](../crates/heph-core/forge/), and [`heph-build`](../crates/heph-core/forge/build/). The app directly uses the first four for provider-neutral types; the OCI build adapters use `heph-build` while the app composes their concrete workers. The direct workspace dependencies in [`crates/heph-app/Cargo.toml`](../crates/heph-app/Cargo.toml) below remain because the current facade deliberately does not expose the required implementation, transport, persistence, or subcontext API.
+The five context facades are the supported contract seams: [`heph-secret`](../crates/heph-core/auth/secret/), [`heph-runtime`](../crates/heph-core/runtime/), [`heph-run`](../crates/heph-core/runtime/run/), [`heph-forge`](../crates/heph-core/forge/), and [`heph-build`](../crates/heph-core/forge/build/). The app directly uses the first four for provider-neutral types; the OCI build adapters use `heph-build` while the app composes their concrete workers. The direct workspace dependencies in [`crates/heph-app/Cargo.toml`](../crates/heph-app/Cargo.toml) below remain because the current facade deliberately does not expose the required implementation, transport, persistence, or subcontext API.
 
 | Direct leaves | Composition reason |
 | --- | --- |

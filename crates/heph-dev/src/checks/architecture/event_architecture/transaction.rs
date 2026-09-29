@@ -164,7 +164,7 @@ pub(super) fn contains_direct_event_table_write(path: &Path, source: &str) -> bo
     // failed. It never creates event rows; creation remains behind the
     // migration trigger or append_application_event.
     normalized.contains("update product_event_outbox")
-        && !path.ends_with(Path::new("crates/heph-core/event/postgres/src/lib.rs"))
+        && !path.ends_with(Path::new("crates/heph-std/event/postgres/src/lib.rs"))
 }
 
 pub(super) fn contains_transactional_append_call(source: &str) -> bool {

@@ -252,8 +252,8 @@ pub(super) fn is_storage_path(path: &Path) -> bool {
     is_integration_path(path)
         || [
             "crates/heph-app",
-            "crates/heph-core/forge/build/orchestrator",
-            "crates/heph-core/forge/release/artifact-store",
+            "crates/heph-std/forge/build/orchestrator",
+            "crates/heph-std/forge/release/artifact-store",
             "crates/heph-core/forge/service",
             "crates/heph-std/identity/git-credential",
             "crates/heph-dev/vm/conformance",
@@ -279,5 +279,5 @@ pub(super) fn is_storage_path(path: &Path) -> bool {
 }
 
 pub(super) fn is_migration_fingerprint_build_script(path: &Path) -> bool {
-    path == Path::new("crates/heph-core/authorization/runtime-authority-postgres/build.rs")
+    path == Path::new("crates/heph-std/authorization/runtime-authority-postgres/build.rs")
 }

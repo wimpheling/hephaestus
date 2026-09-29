@@ -21,10 +21,9 @@ provenance and make cleanup explicit after crashes.
 - [`workspace/domain/`](workspace/domain/) defines exact-commit read-only
   source mounts, separate writable result workspaces, and the host-controlled
   result publication boundary.
-- The durable run contracts are in [`../run/`](../run/), and mailbox envelopes,
-  state transitions, and dispatch contracts are in [`../mailbox/`](../mailbox/).
-  They are part of the runtime mechanics even though those packages retain
-  their current physical roots.
+- The durable run contracts are in [`run/`](run/), and mailbox envelopes,
+  state transitions, and dispatch contracts are in [`mailbox/`](mailbox/).
+  They are part of the runtime mechanics.
 
 An accepted run is tied to its exact release, revision, attachment, repository,
 ref, commit, and attempt. The host rechecks live authority before materializing

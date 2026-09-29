@@ -13,7 +13,8 @@ includes isolated builds, review controls, and OCI registry publication.
   repository, commit, ref, configuration hash, and receive identity.
 - [`git-capability/`](git-capability/) defines bounded Git operations, ref and
   path matching, transfer limits, and mutation policy.
-- [`git-http/`](git-http/) is the authorized streaming smart-HTTP transport;
+- [`git-http/`](../../heph-std/forge/git-http/) is the authorized streaming
+  smart-HTTP transport;
   it keeps native Git invocation behind a bounded, cleared environment.
 - [`build/`](build/) and its `build-*` children define exact-source isolated
   build jobs, durable job ports, and immutable artifact import.
@@ -23,8 +24,8 @@ includes isolated builds, review controls, and OCI registry publication.
   attachments, updates, and artifact storage.
 - [`registry/`](registry/) owns registry publication records, evidence,
   notification contracts, reconciliation, and token scope.
-- [`pat/`](pat/) and [`pat-postgres/`](pat-postgres/) own developer token
-  contracts and their hash-only persistence.
+- [`pat/`](pat/) and [`pat-postgres/`](../../heph-std/forge/pat-postgres/) own
+  developer token contracts and their hash-only persistence.
 
 Build and release decisions are explicit. A normal run consumes an immutable
 published release; it does not build implicitly. Source, configuration hash,
