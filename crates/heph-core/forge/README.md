@@ -27,7 +27,7 @@ Use Forge when an accepted repository update should become durable work and,
 later, when a project selects a published release. The high-level path is:
 
 ```mermaid
-flowchart LR
+flowchart TD
   A[Git receive] --> B[Exact commit and provenance]
   B --> C[Isolated build]
   C --> D[Evidence and OCI publication]

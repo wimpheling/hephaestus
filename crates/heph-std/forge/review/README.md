@@ -7,7 +7,7 @@ run cancellation, retry, result rejection, and compare-and-swap approval
 workflows.
 
 ```mermaid
-flowchart LR
+flowchart TD
   A[Review control request] --> B[PostgreSQL authorization and state]
   B --> C[Committed command outbox]
   C --> D[JetStream delivery]

@@ -9,7 +9,7 @@ revision, capability bindings, attachments, updates, UI installation state, and
 command events that make an exact run possible.
 
 ```mermaid
-flowchart LR
+flowchart TD
   A[Validated release inputs] --> B[Safe artifact import]
   B --> C[PostgreSQL release and revision]
   C --> D[Capability and attachment selection]

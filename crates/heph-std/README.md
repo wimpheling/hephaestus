@@ -9,7 +9,7 @@ the composition root can supervise.
 ## Provider workflow
 
 ```mermaid
-flowchart LR
+flowchart TD
   A[heph-core contracts] --> B[heph-std adapters]
   B --> C[PostgreSQL and NATS]
   B --> D[Git, filesystem, OCI, and VM tools]

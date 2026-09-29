@@ -15,7 +15,7 @@ bearer tokens after live authorization.
 The registry path is:
 
 ```mermaid
-flowchart LR
+flowchart TD
   A[Build output] --> B[Publication intent]
   B --> C[Zot publish]
   C --> D[Digest read-back]

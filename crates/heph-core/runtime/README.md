@@ -17,7 +17,7 @@ the approved result, and releases the VM and lease. Recovery fences stale
 leases and cleans abandoned resources before they can be reused.
 
 ```mermaid
-flowchart LR
+flowchart TD
   A[Queued run] --> B[Authorize and bind provenance]
   B --> C[Lease state volume]
   C --> D[Prepare source, release, and secrets]

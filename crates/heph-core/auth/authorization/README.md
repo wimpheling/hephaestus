@@ -16,7 +16,7 @@ so operators can explain what was allowed and what happened.
 The flow is:
 
 ```mermaid
-flowchart LR
+flowchart TD
   A[Authenticated actor] --> B[Resource and permission check]
   B --> C[Capability requirement]
   C --> D[Exact resource binding]

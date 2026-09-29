@@ -6,7 +6,7 @@ run orchestrator: PostgreSQL records durable ownership and lifecycle, local
 adapters materialize files or disks, and transport workers deliver commands.
 
 ```mermaid
-flowchart LR
+flowchart TD
   A[Run command] --> B[PostgreSQL state]
   B --> C[Local workspace and runtime trees]
   C --> D[VM provider]

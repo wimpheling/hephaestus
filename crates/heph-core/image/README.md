@@ -15,7 +15,7 @@ to `ResolvedImage`. Registry publication state is projected separately so
 operators can see pending, verified, approved, missing, and retired evidence.
 
 ```mermaid
-flowchart LR
+flowchart TD
   A[Catalog record] --> B[Validate metadata]
   B --> C[Check availability and role]
   C --> D[Resolve immutable image provenance]

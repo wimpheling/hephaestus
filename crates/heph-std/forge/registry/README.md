@@ -8,7 +8,7 @@ enter a durable inbox, and reconciliation records whether the exact digest and
 required supply-chain evidence are available.
 
 ```mermaid
-flowchart LR
+flowchart TD
   A[Publication intent] --> B[PostgreSQL ownership and state]
   B --> C[Controlled OCI publisher]
   C --> D[Zot digest and evidence inspection]

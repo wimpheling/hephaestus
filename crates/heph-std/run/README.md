@@ -7,7 +7,7 @@ start and cancellation commands through JetStream. [`runtime-local/`](runtime-lo
 builds the sealed `/release` and `/run/hephaestus` trees consumed by a VM.
 
 ```mermaid
-flowchart LR
+flowchart TD
   A[Start or cancel command] --> B[JetStream handler]
   B --> C[PostgreSQL run state]
   C --> D[Exact local runtime tree]

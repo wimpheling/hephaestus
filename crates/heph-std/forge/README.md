@@ -7,7 +7,7 @@ to canonical bare Git, PostgreSQL, NATS, local build tools, OCI registries, and
 trusted Git publication.
 
 ```mermaid
-flowchart LR
+flowchart TD
   A[Authenticated Git receive] --> B[Canonical storage and Forge PostgreSQL]
   B --> C[Committed outbox]
   C --> D[Build providers]

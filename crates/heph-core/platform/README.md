@@ -20,7 +20,7 @@ service contracts. [`runtime-types/`](runtime-types/) keeps IDs stable across
 these workflows.
 
 ```mermaid
-flowchart LR
+flowchart TD
   A[Repository manifests] --> B[Parse and normalize]
   B --> C[Release and route resolution]
   C --> D[Fresh identity and capability checks]
