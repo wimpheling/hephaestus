@@ -178,6 +178,9 @@ reconciles the original packages with this layout and records its verification.
 
 ## Documentation
 
+- [Experimental Code Surface](code-surface/README.md): local Guide, Crates, and
+  gRPC views of repository structure; start it from the repository root with
+  `just code-surface`.
 - [VM runtime contract](docs/vm-runtime.md): lifecycle, guest bootstrap,
   parent/worker IPC, networking, image, disk, and mount contracts.
 - [Persistent gateway services](docs/persistent-gateway-services.md): the
