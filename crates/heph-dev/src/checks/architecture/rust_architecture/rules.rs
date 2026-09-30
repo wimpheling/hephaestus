@@ -230,6 +230,7 @@ pub(super) fn is_configuration_path(path: &Path) -> bool {
 
 pub(super) fn is_integration_path(path: &Path) -> bool {
     path.starts_with("crates/heph-std/runtime/vm/libkrun")
+        || path.starts_with("crates/heph-std/forge/review/git")
         || path.components().any(|component| {
             matches!(
                 component.as_os_str().to_str(),
@@ -252,10 +253,10 @@ pub(super) fn is_storage_path(path: &Path) -> bool {
     is_integration_path(path)
         || [
             "crates/heph-app",
-            "crates/heph-core/forge/build/orchestrator",
-            "crates/heph-core/forge/release/artifact-store",
-            "crates/heph-core/forge/service",
-            "crates/heph-core/identity/git-credential",
+            "crates/heph-std/forge/build/orchestrator",
+            "crates/heph-std/forge/release/artifact-store",
+            "crates/heph-std/forge/storage",
+            "crates/heph-std/identity/git-credential",
             "crates/heph-dev/vm/conformance",
             "crates/heph-std/authorization/runtime-handoff-local",
             "crates/heph-std/forge/build/oci-builder-runtime-local",
@@ -266,6 +267,7 @@ pub(super) fn is_storage_path(path: &Path) -> bool {
             "crates/heph-std/runtime/volume/local",
             "crates/heph-std/runtime/workspace/local",
             "crates/heph-std/secret/runtime",
+            "crates/heph-std/secret/key-local",
         ]
         .iter()
         .any(|prefix| path.starts_with(prefix))
@@ -278,5 +280,5 @@ pub(super) fn is_storage_path(path: &Path) -> bool {
 }
 
 pub(super) fn is_migration_fingerprint_build_script(path: &Path) -> bool {
-    path == Path::new("crates/heph-core/authorization/runtime-authority-postgres/build.rs")
+    path == Path::new("crates/heph-std/authorization/runtime-authority-postgres/build.rs")
 }

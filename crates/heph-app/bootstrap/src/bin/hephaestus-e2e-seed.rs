@@ -19,7 +19,7 @@ use roles::seed_secret_roles;
 
 use forge_domain::OrganizationId;
 use forge_postgres::PgForgeRepository;
-use forge_service::GitStorage;
+use forge_storage::GitStorage;
 use identity_domain::UserId;
 use sqlx::postgres::PgPoolOptions;
 use std::{env, error::Error, path::PathBuf, sync::Arc};

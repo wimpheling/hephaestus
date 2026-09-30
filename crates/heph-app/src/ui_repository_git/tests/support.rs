@@ -5,7 +5,7 @@ use authz_domain::{
 };
 use axum::Router;
 use forge_postgres::PgForgeRepository;
-use forge_service::GitStorage;
+use forge_storage::GitStorage;
 use git_http::{
     AuthenticationError, GitAuthenticator, GitHttpLimits, GitHttpService, PostgresGitAuthorizer,
     Principal,
@@ -27,7 +27,7 @@ use std::{path::PathBuf, process::Output, sync::Arc};
 pub(super) mod resource_fixture {
     include!(concat!(
         env!("CARGO_MANIFEST_DIR"),
-        "/../heph-core/forge/release/postgres/tests/support/ui_browser_resource_fixture.rs"
+        "/../heph-std/forge/release/postgres/tests/support/ui_browser_resource_fixture.rs"
     ));
 }
 

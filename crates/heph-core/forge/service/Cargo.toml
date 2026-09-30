@@ -1,6 +1,6 @@
 [package]
 name = "forge-service"
-description = "Provider-neutral forge ports and bare-Git storage"
+description = "Provider-neutral forge ports and errors"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
@@ -10,19 +10,14 @@ layer = "application"
 context = "forge"
 
 [dependencies]
-async-nats.workspace = true
 async-trait.workspace = true
 forge-domain = { path = "../domain" }
-gix.workspace = true
 release-domain = { path = "../release/domain" }
-run-domain = { path = "../../run/domain" }
+run-domain = { path = "../../runtime/run/domain" }
 runtime-types = { path = "../../platform/runtime-types" }
 serde_json.workspace = true
 thiserror.workspace = true
-tokio = { workspace = true, features = ["fs", "io-util", "process", "rt", "time"] }
-
-[dev-dependencies]
-tempfile = "3"
+tokio = { workspace = true, features = ["rt", "time"] }
 
 [lints]
 workspace = true

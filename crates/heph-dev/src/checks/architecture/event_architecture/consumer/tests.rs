@@ -6,13 +6,22 @@ use std::path::Path;
 #[test]
 fn mailbox_nats_subtree_is_exactly_the_command_adapter_boundary() {
     assert!(is_nats_event_adapter(Path::new(
-        "crates/heph-core/mailbox/dispatch/src/nats/handler.rs"
+        "crates/heph-std/runtime/mailbox/dispatch/src/nats/handler.rs"
     )));
     assert!(is_legacy_command_outbox(Path::new(
-        "crates/heph-core/mailbox/dispatch/src/nats/publisher.rs"
+        "crates/heph-std/runtime/mailbox/dispatch/src/nats/publisher.rs"
     )));
     assert!(is_nats_event_adapter(Path::new(
-        "crates/heph-core/forge/service/src/nats.rs"
+        "crates/heph-std/forge/nats/src/lib.rs"
+    )));
+    assert!(is_nats_event_adapter(Path::new(
+        "crates/heph-std/run/nats/src/lib.rs"
+    )));
+    assert!(is_nats_event_adapter(Path::new(
+        "crates/heph-std/forge/review/nats/src/lib.rs"
+    )));
+    assert!(!is_nats_event_adapter(Path::new(
+        "crates/heph-core/runtime/run/orchestrator/src/nats.rs"
     )));
     assert!(!is_nats_event_adapter(Path::new(
         "crates/example/src/nats.rs"
@@ -50,15 +59,15 @@ const VALID_MAILBOX_TOPOLOGY: &str = r#"
 fn split_mailbox_nats_modules_are_valid_transport_adapters() {
     for (path, source) in [
         (
-            "crates/heph-core/mailbox/dispatch/src/nats/handler.rs",
+            "crates/heph-std/runtime/mailbox/dispatch/src/nats/handler.rs",
             VALID_MAILBOX_HANDLER,
         ),
         (
-            "crates/heph-core/mailbox/dispatch/src/nats/publisher.rs",
+            "crates/heph-std/runtime/mailbox/dispatch/src/nats/publisher.rs",
             VALID_MAILBOX_PUBLISHER,
         ),
         (
-            "crates/heph-core/mailbox/dispatch/src/nats/topology.rs",
+            "crates/heph-std/runtime/mailbox/dispatch/src/nats/topology.rs",
             VALID_MAILBOX_TOPOLOGY,
         ),
     ] {
@@ -106,7 +115,7 @@ fn mailbox_adapter_cannot_publish_product_events_directly() {
     "#;
     let mut diagnostics = Vec::<Diagnostic>::new();
     validate_source(
-        Path::new("crates/heph-core/mailbox/dispatch/src/nats/publisher.rs"),
+        Path::new("crates/heph-std/runtime/mailbox/dispatch/src/nats/publisher.rs"),
         source,
         &RULES,
         &mut diagnostics,

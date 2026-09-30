@@ -135,10 +135,11 @@ use control_plane_postgres::{
     ControlPlanePool, connect as connect_control_plane, connect_worker as connect_oci_worker,
 };
 use event_postgres::{ReleaseOutboxPublisher, ensure_release_jetstream_topology};
-use forge_postgres::PgForgeRepository;
-use forge_service::{
-    ForgeNatsOutboxPublisher, GitStorage, ensure_build_consumer, ensure_forge_jetstream_topology,
+use forge_nats::{
+    ForgeNatsOutboxPublisher, ensure_build_consumer, ensure_forge_jetstream_topology,
 };
+use forge_postgres::PgForgeRepository;
+use forge_storage::GitStorage;
 use gateway_edge::{
     GatewayDispatcher, GatewayInboundSecretResolver, GatewayProvider, GatewayRequestDispatcher,
     GatewayRuntimeLauncher, GatewayRuntimeService, GatewayServiceArtifact,
@@ -216,9 +217,10 @@ use release_postgres::{
 use release_service::{
     UiBrowserRepositoryGitAuthorization, UiBrowserSessionStore, UiGenerationHostResolver,
 };
+use review_nats::{NatsControlHandler, ReviewOutboxPublisher};
 use review_postgres::PostgresReviewRepository;
-use review_service::{NatsControlHandler, ReviewControlService, ReviewOutboxPublisher};
-use run_orchestrator::{NatsCommandHandler, ensure_jetstream_topology};
+use review_service::ReviewControlService;
+use run_nats::{NatsCommandHandler, ensure_jetstream_topology};
 use run_postgres::PgRunRepository;
 use run_runtime_local::{
     GatewayServiceIdentity as LocalGatewayServiceIdentity, LocalGatewayReleaseRuntime,
@@ -230,8 +232,8 @@ use runtime_handoff_local::EncryptedFileHandoffStore;
 use runtime_types::{CommandId, RunId};
 use secret_application::BrokerAdapter;
 use secret_broker::{BrokerExecutor, BrokerServer};
+use secret_key_local::LocalKeyProvider;
 use secret_postgres::SecretService;
-use secret_store::LocalKeyProvider;
 use serde::Deserialize;
 use service_log_maintenance::GatewayServiceLogMaintenanceScheduler;
 type PgPool = ControlPlanePool;

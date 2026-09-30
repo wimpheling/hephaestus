@@ -19,8 +19,9 @@ use rpc_proto::{
 };
 use secret_application::RotateSecret;
 use secret_domain::{SecretCommandKey, SecretId, SecretValue, SecretVersionId};
+use secret_key_local::LocalKeyProvider;
 use secret_postgres::SecretService;
-use secret_store::{EncryptedStore, LocalKeyProvider};
+use secret_store::EncryptedStore;
 use sqlx::PgPool;
 use std::{path::Path, time::Duration};
 use tokio::time::{Instant, sleep, timeout};

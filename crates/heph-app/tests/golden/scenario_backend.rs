@@ -232,8 +232,11 @@ pub async fn configure_golden_backend(
             root: secret_mount_root,
             require_memory_filesystem: false,
         },
-        secret_keys: LocalKeyProvider::new("golden/v1", [("golden/v1", [17_u8; 32])])
-            .expect("secret key"),
+        secret_keys: secret_key_local::LocalKeyProvider::new(
+            "golden/v1",
+            [("golden/v1", [17_u8; 32])],
+        )
+        .expect("secret key"),
         secret_broker_socket,
         secret_broker_adapter: session_chat_fixture.as_ref().map_or_else(
             || {

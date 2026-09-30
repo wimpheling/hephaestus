@@ -1,6 +1,6 @@
 //! Transport-independent gateway installation use cases.
 
-use forge_service::GitStorage;
+use forge_storage::GitStorage;
 use gateway_postgres::{GatewayInstallError, InstallGatewayManifest, PostgresGatewayInstaller};
 use identity_domain::AuthenticatedIdentity;
 use release_domain::ReleaseId;

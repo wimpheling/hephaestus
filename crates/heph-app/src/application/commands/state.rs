@@ -2,8 +2,8 @@
 
 use release_domain::RuntimePolicy;
 use release_postgres::ReleaseService;
+use secret_key_local::LocalKeyProvider;
 use secret_postgres::SecretService;
-use secret_store::LocalKeyProvider;
 use std::sync::Arc;
 
 #[derive(Clone)]

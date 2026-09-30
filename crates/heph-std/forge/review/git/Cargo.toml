@@ -1,0 +1,19 @@
+[package]
+name = "review-git"
+description = "Git CLI adapter for trusted review result publication"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+
+[package.metadata.hephaestus]
+layer = "adapter"
+context = "review"
+
+[dependencies]
+async-trait.workspace = true
+forge-domain = { path = "../../../../heph-core/forge/domain" }
+review-service = { path = "../../../../heph-core/forge/review/service" }
+tokio = { workspace = true, features = ["process"] }
+
+[lints]
+workspace = true

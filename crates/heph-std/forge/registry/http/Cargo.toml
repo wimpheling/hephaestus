@@ -12,7 +12,7 @@ context = "registry"
 [dependencies]
 async-trait.workspace = true
 axum.workspace = true
-identity-domain = { path = "../../../../heph-core/identity/domain" }
+identity-domain = { path = "../../../../heph-core/auth/identity/domain" }
 registry-token = { path = "../../../../heph-core/forge/registry/token" }
 serde.workspace = true
 thiserror.workspace = true

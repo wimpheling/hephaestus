@@ -12,7 +12,7 @@ context = "gateway"
 [dependencies]
 async-trait.workspace = true
 bytes.workspace = true
-gateway-domain = { path = "../../../heph-core/gateway/domain" }
+gateway-domain = { path = "../../../heph-core/platform/gateway/domain" }
 http-body-util.workspace = true
 http.workspace = true
 hyper.workspace = true

@@ -65,8 +65,9 @@ pub(super) fn is_nats_event_adapter(path: &Path) -> bool {
         || is_mailbox_command_adapter(path)
         || matches!(
             path,
-            path if path == Path::new("crates/heph-core/forge/service/src/nats.rs")
-                || path == Path::new("crates/heph-core/run/orchestrator/src/nats.rs")
+            path if path == Path::new("crates/heph-std/forge/nats/src/lib.rs")
+                || path == Path::new("crates/heph-std/run/nats/src/lib.rs")
+                || path == Path::new("crates/heph-std/forge/review/nats/src/lib.rs")
         )
         || path.components().any(|component| {
             matches!(
@@ -105,13 +106,15 @@ pub(super) fn is_legacy_command_outbox(path: &Path) -> bool {
         Some("command_transport" | "outbox")
     ) || matches!(
         path,
-        path if path == Path::new("crates/heph-core/mailbox/dispatch/src/nats/publisher.rs")
+        path if path == Path::new("crates/heph-std/runtime/mailbox/dispatch/src/nats/publisher.rs")
     )
 }
 
 fn is_mailbox_command_adapter(path: &Path) -> bool {
-    path == Path::new("crates/heph-core/mailbox/dispatch/src/nats.rs")
-        || path.starts_with(Path::new("crates/heph-core/mailbox/dispatch/src/nats"))
+    path == Path::new("crates/heph-std/runtime/mailbox/dispatch/src/nats.rs")
+        || path.starts_with(Path::new(
+            "crates/heph-std/runtime/mailbox/dispatch/src/nats",
+        ))
 }
 
 #[cfg(test)]

@@ -51,21 +51,3 @@ pub enum ControlServiceError {
     #[error("Git operation failed: {0}")]
     Git(String),
 }
-
-/// Control delivery failure.
-#[derive(Debug, thiserror::Error)]
-#[non_exhaustive]
-pub enum ControlHandlingError {
-    /// Delivery used an unsupported subject.
-    #[error("unsupported control subject {0}")]
-    UnknownSubject(String),
-    /// Delivery payload was not a valid command.
-    #[error(transparent)]
-    Serialization(#[from] serde_json::Error),
-    /// Durable processing failed.
-    #[error(transparent)]
-    Service(#[from] ControlServiceError),
-    /// `JetStream` did not confirm acknowledgement.
-    #[error("control acknowledgement failed: {0}")]
-    Acknowledgement(String),
-}

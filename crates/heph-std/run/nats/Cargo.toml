@@ -1,0 +1,24 @@
+[package]
+name = "run-nats"
+description = "NATS JetStream transport for durable Hephaestus runs"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+
+[package.metadata.hephaestus]
+layer = "adapter"
+context = "run"
+
+[dependencies]
+async-nats.workspace = true
+futures-util.workspace = true
+review-domain = { path = "../../../heph-core/forge/review/domain" }
+run-domain = { path = "../../../heph-core/runtime/run/domain" }
+run-orchestrator = { path = "../../../heph-core/runtime/run/orchestrator" }
+serde_json.workspace = true
+thiserror.workspace = true
+tokio = { workspace = true, features = ["rt", "sync", "time"] }
+tracing.workspace = true
+
+[lints]
+workspace = true

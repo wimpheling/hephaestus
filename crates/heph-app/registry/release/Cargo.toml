@@ -8,7 +8,7 @@ rust-version.workspace = true
 [dependencies]
 clap.workspace = true
 registry-domain = { path = "../../../heph-core/forge/registry/domain" }
-registry-postgres = { path = "../../../heph-core/forge/registry/postgres" }
+registry-postgres = { path = "../../../heph-std/forge/registry/postgres" }
 registry-publisher = { path = "../../../heph-std/forge/registry/publisher" }
 registry-token = { path = "../../../heph-core/forge/registry/token" }
 serde.workspace = true

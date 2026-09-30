@@ -118,7 +118,7 @@ recognize and the evidence still required for behavior they cannot infer.
   occurrence settings. Only six exact migration-backed security-definer
   resolver forms are allowlisted. Dynamic SQL, opaque helper internals, and
   unlisted pool fields are outside the proof. The real database context reuse
-  evidence is `crates/heph-core/control-plane/postgres/tests/app_pool.rs`.
+  evidence is `crates/heph-std/control-plane/postgres/tests/app_pool.rs`.
 - **Pagination:** `DB-PAGINATION-STABLE-ORDER` reads package-local
   `pagination.toml` contracts. Each entry has a 1-based query index, exact
   `order` and `cursor_keys`, a uniform cursor operator, an explicit unique
@@ -128,9 +128,9 @@ recognize and the evidence still required for behavior they cannot infer.
   predicates and reports stale declarations. Representative concurrent-write
   coverage passed for UUID pages, snapshot pages, and the organization
   composite-key insertion path in
-  `crates/heph-core/gateway/postgres/tests/service_targets/uuid_pages.rs`,
-  `crates/heph-core/gateway/postgres/tests/service_log_reader/snapshot.rs`,
-  and `crates/heph-core/control-plane/postgres/tests/organization_pagination.rs`.
+  `crates/heph-std/gateway/postgres/tests/service_targets/uuid_pages.rs`,
+  `crates/heph-std/gateway/postgres/tests/service_log_reader/snapshot.rs`,
+  and `crates/heph-std/control-plane/postgres/tests/organization_pagination.rs`.
   Other implementations still rely on the static contract until their runtime
   paths are exercised; each path does not require a duplicate test merely for
   the rule to remain enforceable.

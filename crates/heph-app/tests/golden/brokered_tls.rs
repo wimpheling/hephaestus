@@ -1,4 +1,5 @@
 use super::*;
+use secret_key_local::LocalKeyProvider;
 
 /// Creates the complete durable secret authority that the daemon resolves at
 /// mailbox dispatch. The only plaintext in this test is passed directly into

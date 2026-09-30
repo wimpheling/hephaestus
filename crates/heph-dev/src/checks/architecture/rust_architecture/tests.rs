@@ -2,7 +2,7 @@
 
 use super::{
     RULES,
-    rules::{is_configuration_path, is_storage_path},
+    rules::{is_configuration_path, is_integration_path, is_storage_path},
     source_scan::{scan_sentinel_source, should_skip_sentinel_directory, validate_source},
 };
 use std::path::Path;
@@ -178,7 +178,7 @@ fn migration_fingerprint_exception_is_exactly_scoped_to_its_build_script() {
 
     let mut build_script_diagnostics = Vec::new();
     validate_source(
-        Path::new("crates/heph-core/authorization/runtime-authority-postgres/build.rs"),
+        Path::new("crates/heph-std/authorization/runtime-authority-postgres/build.rs"),
         source,
         &active,
         &mut build_script_diagnostics,
@@ -205,18 +205,55 @@ fn moved_topology_paths_keep_exact_boundary_classification() {
         "crates/heph-std/runtime/vm/libkrun/src/worker.rs"
     )));
     for path in [
-        "crates/heph-core/forge/build/orchestrator/src/lib.rs",
-        "crates/heph-core/forge/release/artifact-store/src/lib.rs",
-        "crates/heph-core/forge/service/src/storage.rs",
-        "crates/heph-core/identity/git-credential/src/main.rs",
+        "crates/heph-std/forge/build/orchestrator/src/lib.rs",
+        "crates/heph-std/forge/release/artifact-store/src/lib.rs",
+        "crates/heph-std/forge/storage/src/lib.rs",
+        "crates/heph-std/identity/git-credential/src/main.rs",
         "crates/heph-std/forge/registry/publisher/src/lib.rs",
         "crates/heph-std/run/runtime-local/src/lib.rs",
     ] {
         assert!(is_storage_path(Path::new(path)), "{path}");
     }
+    assert!(is_storage_path(Path::new(
+        "crates/heph-std/forge/review/git/src/lib.rs"
+    )));
+    assert!(is_integration_path(Path::new(
+        "crates/heph-std/forge/review/git/src/lib.rs"
+    )));
+    assert!(!is_storage_path(Path::new(
+        "crates/heph-core/forge/service/src/lib.rs"
+    )));
     assert!(!is_storage_path(Path::new(
         "crates/heph-core/forge/build/unrelated/src/lib.rs"
     )));
+}
+
+#[test]
+fn forge_service_has_no_host_capability_exemptions() {
+    let active = all_rules();
+    let source = r#"
+        fn host_capabilities() {
+            let _ = std::fs::read("repository");
+            let _ = std::process::Command::new("git");
+        }
+    "#;
+    let mut diagnostics = Vec::new();
+    validate_source(
+        Path::new("crates/heph-core/forge/service/src/lib.rs"),
+        source,
+        &active,
+        &mut diagnostics,
+    );
+    assert!(
+        diagnostics
+            .iter()
+            .any(|diagnostic| diagnostic.rule_id == "ARCH-FILESYSTEM-ONLY-IN-ADAPTERS")
+    );
+    assert!(
+        diagnostics
+            .iter()
+            .any(|diagnostic| diagnostic.rule_id == "ARCH-PROCESS-ONLY-IN-ADAPTERS")
+    );
 }
 
 #[test]

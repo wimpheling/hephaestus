@@ -398,6 +398,7 @@ dependencies = [
  "forge-domain",
  "forge-postgres",
  "forge-service",
+ "forge-storage",
  "identity-domain",
  "registry-domain",
  "registry-postgres",
@@ -859,6 +860,7 @@ dependencies = [
  "authz-postgres",
  "forge-domain",
  "forge-service",
+ "forge-storage",
  "futures-util",
  "identity-domain",
  "release-artifact-store",
@@ -1321,6 +1323,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "forge-nats"
+version = "0.1.0"
+dependencies = [
+ "async-nats",
+ "forge-service",
+ "serde_json",
+ "thiserror 2.0.19",
+]
+
+[[package]]
 name = "forge-postgres"
 version = "0.1.0"
 dependencies = [
@@ -1334,6 +1346,7 @@ dependencies = [
  "capability-domain",
  "forge-domain",
  "forge-service",
+ "forge-storage",
  "futures-util",
  "git-capability-domain",
  "git-http",
@@ -1366,14 +1379,21 @@ dependencies = [
 name = "forge-service"
 version = "0.1.0"
 dependencies = [
- "async-nats",
  "async-trait",
  "forge-domain",
- "gix",
  "release-domain",
  "run-domain",
  "runtime-types",
  "serde_json",
+ "thiserror 2.0.19",
+ "tokio",
+]
+
+[[package]]
+name = "forge-storage"
+version = "0.1.0"
+dependencies = [
+ "forge-domain",
  "tempfile",
  "thiserror 2.0.19",
  "tokio",
@@ -1661,6 +1681,7 @@ dependencies = [
  "forge-domain",
  "forge-postgres",
  "forge-service",
+ "forge-storage",
  "futures-util",
  "git-capability-domain",
  "http",
@@ -2450,8 +2471,10 @@ dependencies = [
  "control-plane-postgres",
  "event-application",
  "event-postgres",
+ "forge-nats",
  "forge-postgres",
  "forge-service",
+ "forge-storage",
  "futures-util",
  "gateway-domain",
  "gateway-edge",
@@ -2494,9 +2517,12 @@ dependencies = [
  "release-service",
  "reqwest",
  "review-domain",
+ "review-git",
+ "review-nats",
  "review-postgres",
  "review-service",
  "rpc-proto",
+ "run-nats",
  "run-orchestrator",
  "run-postgres",
  "run-runtime-local",
@@ -2511,6 +2537,7 @@ dependencies = [
  "secret-application",
  "secret-broker",
  "secret-domain",
+ "secret-key-local",
  "secret-postgres",
  "secret-runtime",
  "secret-store",
@@ -4128,6 +4155,27 @@ dependencies = [
 ]
 
 [[package]]
+name = "review-git"
+version = "0.1.0"
+dependencies = [
+ "async-trait",
+ "forge-domain",
+ "review-service",
+ "tokio",
+]
+
+[[package]]
+name = "review-nats"
+version = "0.1.0"
+dependencies = [
+ "async-nats",
+ "review-domain",
+ "review-service",
+ "serde_json",
+ "thiserror 2.0.19",
+]
+
+[[package]]
 name = "review-postgres"
 version = "0.1.0"
 dependencies = [
@@ -4137,9 +4185,11 @@ dependencies = [
  "control-plane-postgres",
  "forge-domain",
  "forge-service",
+ "forge-storage",
  "identity-domain",
  "release-domain",
  "review-domain",
+ "review-git",
  "review-service",
  "run-domain",
  "runtime-types",
@@ -4156,7 +4206,6 @@ dependencies = [
 name = "review-service"
 version = "0.1.0"
 dependencies = [
- "async-nats",
  "async-trait",
  "forge-domain",
  "review-domain",
@@ -4228,13 +4277,25 @@ dependencies = [
 ]
 
 [[package]]
-name = "run-orchestrator"
+name = "run-nats"
 version = "0.1.0"
 dependencies = [
  "async-nats",
- "async-trait",
  "futures-util",
  "review-domain",
+ "run-domain",
+ "run-orchestrator",
+ "serde_json",
+ "thiserror 2.0.19",
+ "tokio",
+ "tracing",
+]
+
+[[package]]
+name = "run-orchestrator"
+version = "0.1.0"
+dependencies = [
+ "async-trait",
  "run-domain",
  "runtime-types",
  "serde",
@@ -4602,6 +4663,15 @@ dependencies = [
  "thiserror 2.0.19",
  "time",
  "uuid",
+]
+
+[[package]]
+name = "secret-key-local"
+version = "0.1.0"
+dependencies = [
+ "secret-store",
+ "tempfile",
+ "zeroize",
 ]
 
 [[package]]

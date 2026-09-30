@@ -255,8 +255,10 @@ SHA-256: 02430eca0a4e94ba129c4fdad969233f51486ee1dccdf1ee85e31f580f4d386d
 A missing or unreadable object, or a checksum mismatch, stops before VM
 creation. Diagnostics upload to the private bucket under
 `cooking/runs/{run_id}/{attempt}/{sha}.tar.gz`. The safe status artifact is
-retained for one day; the cache lifecycle is seven days. The private archive
-must be downloaded and scanned only through the validated helper.
+retained for one day. After the retention update is applied and verified, the
+cache archive has no automatic expiry; until then, the current bucket retains
+its legacy seven-day rule. The private archive must be downloaded and scanned
+only through the validated helper.
 
 Cleanup is independent of the provider lifetime. The workflow deletes the VM,
 describes the exact owned resource after a delete response, verifies absence,

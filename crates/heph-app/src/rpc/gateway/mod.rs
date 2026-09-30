@@ -46,7 +46,7 @@ impl GatewayRpc {
     fn new(
         pool: &PgPool,
         application_pool: &PgPool,
-        storage: Arc<forge_service::GitStorage>,
+        storage: Arc<forge_storage::GitStorage>,
         authenticator: MediatorAuthenticator,
         receipts: MutationReceipts,
         cursor_key: [u8; 32],
@@ -72,7 +72,7 @@ pub fn register(
     router: Router,
     pool: &PgPool,
     application_pool: &PgPool,
-    storage: Arc<forge_service::GitStorage>,
+    storage: Arc<forge_storage::GitStorage>,
     authenticator: MediatorAuthenticator,
     receipts: MutationReceipts,
     cursor_key: [u8; 32],

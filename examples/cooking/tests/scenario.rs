@@ -18,8 +18,9 @@ use secret_domain::{
     SecretImportId, SecretName, SecretOwner, SecretSlotKey, SecretTarget, SecretUsePolicy,
     SecretValue, SecretVersionId,
 };
+use secret_key_local::LocalKeyProvider;
 use secret_postgres::SecretService;
-use secret_store::{EncryptedStore, LocalKeyProvider};
+use secret_store::EncryptedStore;
 use std::{
     env, fs,
     io::Write as _,

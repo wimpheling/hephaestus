@@ -9,16 +9,17 @@ autobins = false
 
 [dependencies]
 agent-config = { path = "../../heph-core/platform/agent-config" }
-authz-domain = { path = "../../heph-core/authorization/authz-domain" }
-authz-postgres = { path = "../../heph-core/authorization/authz-postgres" }
+authz-domain = { path = "../../heph-core/auth/authorization/authz-domain" }
+authz-postgres = { path = "../../heph-std/authorization/authz-postgres" }
 forge-domain = { path = "../../heph-core/forge/domain" }
-forge-postgres = { path = "../../heph-core/forge/postgres" }
+forge-postgres = { path = "../../heph-std/forge/postgres" }
 forge-service = { path = "../../heph-core/forge/service" }
-identity-domain = { path = "../../heph-core/identity/domain" }
+forge-storage = { path = "../../heph-std/forge/storage" }
+identity-domain = { path = "../../heph-core/auth/identity/domain" }
 release-domain = { path = "../../heph-core/forge/release/domain" }
-release-postgres = { path = "../../heph-core/forge/release/postgres" }
+release-postgres = { path = "../../heph-std/forge/release/postgres" }
 registry-domain = { path = "../../heph-core/forge/registry/domain" }
-registry-postgres = { path = "../../heph-core/forge/registry/postgres" }
+registry-postgres = { path = "../../heph-std/forge/registry/postgres" }
 serde_json.workspace = true
 sha2.workspace = true
 sqlx.workspace = true

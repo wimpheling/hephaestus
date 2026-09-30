@@ -89,7 +89,7 @@ fn validate_stream_reauthorization(
     let application_path = root.join("crates/heph-app/src/application/event.rs");
     let facade = fs::read_to_string(&application_path).unwrap_or_default();
     let application = if facade.contains("control_plane_postgres::event") {
-        fs::read_to_string(root.join("crates/heph-core/control-plane/postgres/src/event.rs"))
+        fs::read_to_string(root.join("crates/heph-std/control-plane/postgres/src/event.rs"))
             .unwrap_or(facade)
     } else {
         facade

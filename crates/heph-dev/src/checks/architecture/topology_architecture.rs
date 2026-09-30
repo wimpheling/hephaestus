@@ -150,7 +150,7 @@ mod tests {
         let core_consumer = package(
             "core-consumer-id",
             "core-consumer",
-            "crates/heph-core/identity/domain",
+            "crates/heph-core/auth/identity/domain",
             vec![dependency(
                 "std-looking-name",
                 "crates/heph-core/platform",

@@ -7,7 +7,8 @@ use brokered_egress_domain::{
     BrokeredSecretRule, BrokeredSecretRuleId, ExactHttpsOrigin, HeaderName, HttpInjectionLocation,
 };
 use forge_postgres::PgForgeRepository;
-use forge_service::{CreateRepository, GitStorage};
+use forge_service::CreateRepository;
+use forge_storage::GitStorage;
 use heph_forge::{GitRef, OrganizationId, ProjectId};
 use heph_runtime::RootFilesystem;
 use hephaestus_app::{
@@ -44,7 +45,7 @@ use secret_domain::{
 };
 use secret_postgres::SecretService;
 use secret_runtime::EphemeralSecretConfig;
-use secret_store::{EncryptedStore, LocalKeyProvider};
+use secret_store::EncryptedStore;
 use serial_test::serial;
 use sha2::{Digest, Sha256};
 use sqlx::{Row, postgres::PgPoolOptions};

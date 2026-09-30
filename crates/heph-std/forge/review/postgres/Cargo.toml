@@ -1,0 +1,44 @@
+[package]
+name = "review-postgres"
+description = "PostgreSQL persistence adapter for durable review controls"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+async-trait.workspace = true
+authz-domain = { path = "../../../../heph-core/auth/authorization/authz-domain" }
+authz-postgres = { path = "../../../authorization/authz-postgres" }
+forge-domain = { path = "../../../../heph-core/forge/domain" }
+forge-service = { path = "../../../../heph-core/forge/service" }
+forge-storage = { path = "../../../forge/storage" }
+identity-domain = { path = "../../../../heph-core/auth/identity/domain" }
+release-domain = { path = "../../../../heph-core/forge/release/domain" }
+review-domain = { path = "../../../../heph-core/forge/review/domain" }
+review-git = { path = "../git" }
+review-service = { path = "../../../../heph-core/forge/review/service" }
+run-domain = { path = "../../../../heph-core/runtime/run/domain" }
+runtime-types = { path = "../../../../heph-core/platform/runtime-types" }
+serde_json.workspace = true
+sqlx.workspace = true
+time.workspace = true
+uuid.workspace = true
+
+[dev-dependencies]
+control-plane-postgres = { path = "../../../control-plane/postgres" }
+forge-service = { path = "../../../../heph-core/forge/service" }
+forge-storage = { path = "../../../forge/storage" }
+identity-domain = { path = "../../../../heph-core/auth/identity/domain" }
+serial_test = "3"
+tempfile = "3"
+tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }
+
+[lints]
+workspace = true
+
+[package.metadata.hephaestus]
+layer = "adapter"
+context = "review"
+allow_cross_context_dependencies = ["authz-postgres", "forge-storage"]
+postgres_adapter = true
+database_context = "review"

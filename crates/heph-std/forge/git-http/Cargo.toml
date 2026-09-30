@@ -1,0 +1,51 @@
+[package]
+name = "git-http"
+description = "Authorized streaming Git smart-HTTP transport for Hephaestus"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+
+[package.metadata.hephaestus]
+layer = "transport"
+context = "forge"
+
+[[bin]]
+name = "pre-receive"
+path = "src/bin/hephaestus-git-pre-receive.rs"
+
+[dependencies]
+async-trait.workspace = true
+authz-domain = { path = "../../../heph-core/auth/authorization/authz-domain" }
+axum.workspace = true
+base64.workspace = true
+bytes.workspace = true
+forge-domain = { path = "../../../heph-core/forge/domain" }
+forge-service = { path = "../../../heph-core/forge/service" }
+forge-storage = { path = "../storage" }
+forge-postgres = { path = "../postgres" }
+futures-util.workspace = true
+git-capability-domain = { path = "../../../heph-core/forge/git-capability" }
+http.workspace = true
+identity-domain = { path = "../../../heph-core/auth/identity/domain" }
+identity-application = { path = "../../../heph-core/auth/identity/application" }
+pat-domain = { path = "../../../heph-core/forge/pat" }
+pat-postgres = { path = "../pat-postgres" }
+runtime-git-authority = { path = "../../../heph-core/auth/authorization/runtime-git-authority" }
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+tempfile = "3"
+tokio = { workspace = true, features = ["io-util", "net", "process", "rt", "sync", "time"] }
+tokio-stream.workspace = true
+tracing.workspace = true
+time.workspace = true
+zeroize.workspace = true
+
+[dev-dependencies]
+serial_test = "3"
+tempfile = "3"
+tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }
+uuid.workspace = true
+
+[lints]
+workspace = true

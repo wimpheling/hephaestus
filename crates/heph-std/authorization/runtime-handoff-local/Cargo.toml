@@ -11,9 +11,9 @@ context = "authorization"
 
 [dependencies]
 aes-gcm.workspace = true
-capability-domain = { path = "../../../heph-core/authorization/capability-domain" }
-runtime-authority = { path = "../../../heph-core/authorization/runtime-authority" }
-runtime-git-authority = { path = "../../../heph-core/authorization/runtime-git-authority" }
+capability-domain = { path = "../../../heph-core/auth/authorization/capability-domain" }
+runtime-authority = { path = "../../../heph-core/auth/authorization/runtime-authority" }
+runtime-git-authority = { path = "../../../heph-core/auth/authorization/runtime-git-authority" }
 serde.workspace = true
 serde_json.workspace = true
 time.workspace = true

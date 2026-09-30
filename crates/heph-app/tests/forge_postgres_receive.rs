@@ -1,11 +1,13 @@
 //! Opt-in `PostgreSQL` and `JetStream` receive-processing coverage.
 
 use authz_postgres::PostgresMelangeAuthorizer;
-use forge_postgres::PgForgeRepository;
-use forge_service::{
-    BUILD_REQUESTED_SUBJECT, CreateRepository, ForgeNatsOutboxPublisher, GitStorage,
-    INSTANCE_RUN_REQUESTED_SUBJECT, RUN_START_SUBJECT, ensure_forge_jetstream_topology,
+use forge_nats::{
+    BUILD_REQUESTED_SUBJECT, ForgeNatsOutboxPublisher, INSTANCE_RUN_REQUESTED_SUBJECT,
+    RUN_START_SUBJECT, ensure_forge_jetstream_topology,
 };
+use forge_postgres::PgForgeRepository;
+use forge_service::CreateRepository;
+use forge_storage::GitStorage;
 use futures_util::StreamExt;
 use heph_forge::{
     CommitSha, GitRef, OrganizationId, ReceiveId, RefUpdate, Repository, RuntimeReceiveProvenance,
@@ -13,9 +15,8 @@ use heph_forge::{
 use heph_run::{CancelRun, Run, RunState, StartRun};
 use heph_runtime::{GuestCommand, NetworkMode, RootFilesystem, VmError, VmId, VmResources, VmSpec};
 use identity_domain::{AuthenticatedIdentity, RequestId, UserId};
-use run_orchestrator::{
-    NatsCommandHandler, RunOrchestrator, RunRepository, VmSpecFactory, ensure_jetstream_topology,
-};
+use run_nats::{NatsCommandHandler, ensure_jetstream_topology};
+use run_orchestrator::{RunOrchestrator, RunRepository, VmSpecFactory};
 use run_postgres::PgRunRepository;
 use runtime_types::{CommandId, RunId};
 use serde_json::json;

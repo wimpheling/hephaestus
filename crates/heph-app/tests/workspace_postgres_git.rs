@@ -1,7 +1,8 @@
 //! Opt-in exact-commit and controlled-result integration coverage.
 
 use forge_postgres::PgForgeRepository;
-use forge_service::{CreateRepository, GitStorage};
+use forge_service::CreateRepository;
+use forge_storage::GitStorage;
 use heph_forge::{CommitSha, GitRef, OrganizationId, ReceiveId, RefUpdate};
 use heph_run::StartRun;
 use heph_runtime::{

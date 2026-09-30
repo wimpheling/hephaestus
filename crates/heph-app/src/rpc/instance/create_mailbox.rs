@@ -72,8 +72,9 @@ mod tests {
             instance::v1::{CreateMailboxRequest, CreateMailboxResponse},
         },
     };
+    use secret_key_local::LocalKeyProvider;
     use secret_postgres::SecretService;
-    use secret_store::{EncryptedStore, LocalKeyProvider};
+    use secret_store::EncryptedStore;
     use serial_test::serial;
     use sqlx::postgres::PgPoolOptions;
     use std::{env, sync::Arc};

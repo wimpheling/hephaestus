@@ -5,15 +5,19 @@
 
 ## Context facades and composition leaves
 
-The five context facades are the supported contract seams: [`heph-secret`](../crates/heph-core/secret/), [`heph-runtime`](../crates/heph-core/runtime/), [`heph-run`](../crates/heph-core/run/), [`heph-forge`](../crates/heph-core/forge/), and [`heph-build`](../crates/heph-core/forge/build/). The app directly uses the first four for provider-neutral types; the OCI build adapters use `heph-build` while the app composes their concrete workers. The direct workspace dependencies in [`crates/heph-app/Cargo.toml`](../crates/heph-app/Cargo.toml) below remain because the current facade deliberately does not expose the required implementation, transport, persistence, or subcontext API.
+The five context facades are the supported contract seams: [`heph-secret`](../crates/heph-core/auth/secret/), [`heph-runtime`](../crates/heph-core/runtime/), [`heph-run`](../crates/heph-core/runtime/run/), [`heph-forge`](../crates/heph-core/forge/), and [`heph-build`](../crates/heph-core/forge/build/). The app directly uses the first four for provider-neutral types; the OCI build adapters use `heph-build` while the app composes their concrete workers. The direct workspace dependencies in [`crates/heph-app/Cargo.toml`](../crates/heph-app/Cargo.toml) below select concrete providers from `heph-std` and cross-context adapters that the facades intentionally do not expose.
+
+Trusted fixture and local-smoke bootstrap binaries live under
+[`crates/heph-app/bootstrap/`](../crates/heph-app/bootstrap/). They are part of
+the app distribution and use the same provider contracts as the daemon.
 
 | Direct leaves | Composition reason |
 | --- | --- |
 | `vm-fake`, `vm-libkrun`, `volume-local`, `volume-postgres`, `workspace-local`, `workspace-postgres` | The app selects VM and local filesystem providers and constructs their PostgreSQL metadata adapters; `heph-runtime` exposes only provider-neutral contracts. |
-| `run-orchestrator`, `run-postgres`, `run-runtime-local` | The app installs NATS command handlers/topology, the PostgreSQL run repository, and local run materialization/configuration; `heph-run` intentionally omits those concrete adapters. |
-| `secret-broker`, `secret-runtime`, `secret-postgres`, `secret-application`, `secret-domain`, `secret-store` | The app wires the private broker transport, filesystem mount provider, PostgreSQL services, secret command/domain types, and encrypted key store; `heph-secret` exposes only the mount lifecycle contracts and manager. |
-| `forge-service`, `forge-postgres`, `git-http`, `git-capability-domain`, `pat-domain`, `pat-postgres` | The app needs bare Git storage, forge NATS publication, the smart-HTTP transport, Git capability rules, and PAT services. `heph-forge` intentionally excludes storage, event publishers, transport representations, and PAT material. |
-| `release-service`, `release-artifact-store`, `release-domain`, `release-postgres`, `review-domain`, `review-postgres`, `review-service` | Release and review are forge subcontexts with their own application contracts, immutable artifact storage, PostgreSQL adapters, and durable control services; they are outside the top-level forge facade. |
+| `run-orchestrator`, `run-postgres`, `run-nats`, `run-runtime-local` | The app installs NATS command handlers/topology, the PostgreSQL run repository, and local run materialization/configuration; `heph-run` intentionally omits those concrete adapters. |
+| `secret-broker`, `secret-runtime`, `secret-postgres`, `secret-key-local`, `secret-application`, `secret-domain`, `secret-store` | The app wires the private broker transport, filesystem mount provider, PostgreSQL services, local encryption key provider, secret command/domain types, and encrypted key store; `heph-secret` exposes only the mount lifecycle contracts and manager. |
+| `forge-service`, `forge-storage`, `forge-nats`, `forge-postgres`, `git-http`, `git-capability-domain`, `pat-domain`, `pat-postgres` | `forge-service` supplies provider-neutral receive and outbox contracts; standard adapters provide bare-Git storage, PostgreSQL metadata and `gix` receive inspection, NATS publication, smart HTTP, Git capability rules, and PAT services. `heph-forge` intentionally excludes those concrete adapters and transport representations. |
+| `release-service`, `release-artifact-store`, `release-domain`, `release-postgres`, `review-domain`, `review-git`, `review-postgres`, `review-nats`, `review-service` | Release and review are forge subcontexts with their own application contracts, immutable artifact storage, trusted Git publication, NATS publication, PostgreSQL adapters, and durable control services; they are outside the top-level forge facade. |
 | `registry-domain`, `registry-http`, `registry-notification`, `registry-notification-http`, `registry-postgres`, `registry-publisher`, `registry-reconciler`, `registry-token`, `registry-zot` | Registry contracts, notification and token transports, PostgreSQL state, reconciliation, and Zot/publisher integrations are a separate forge subcontext and require direct composition. |
 | `build-orchestrator`, `build-postgres`, `oci-builder-postgres`, `oci-builder-runtime-local`, `oci-builder-worker` | `heph-build` supplies build DTOs and ports; the app must select the concrete build executor, PostgreSQL job stores, local OCI runtime, and worker implementations. |
 | `builder-catalog-application`, `builder-catalog-domain`, `builder-catalog-postgres` | These are image-catalog APIs used by the catalog RPC and root-image setup, outside the build facade. |
@@ -26,7 +30,8 @@ The independent direct packages are `agent-config`, `rpc-proto`, `capability-dom
 ## Lifecycle
 
 `HephaestusApp::build` validates static configuration, checks that PostgreSQL
-has migration version 8 and the Mélange dispatcher, resolves storage and VM
+has exactly migration version 100 applied and the Mélange dispatcher, resolves
+storage and VM
 dependencies, and connects PostgreSQL and NATS. It does not bind listeners or
 spawn background tasks.
 

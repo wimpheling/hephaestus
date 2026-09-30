@@ -13,7 +13,7 @@ allow_cross_context_dependencies = ["identity-domain"]
 [dependencies]
 async-trait.workspace = true
 builder-catalog-domain = { path = "../domain" }
-identity-domain = { path = "../../identity/domain" }
+identity-domain = { path = "../../auth/identity/domain" }
 thiserror.workspace = true
 uuid.workspace = true
 
