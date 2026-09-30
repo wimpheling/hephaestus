@@ -38,6 +38,35 @@ and NATS delivery behavior remains the compatibility reference.
   are part of the durability and authorization contract, not policy to move
   into the domain crate.
 
+## Related patterns elsewhere
+
+The same policy-placement question appears in several other lifecycle areas:
+
+- Release lifecycle: core defines transitions in
+  [`lifecycle.rs`](../../../crates/heph-core/forge/release/domain/src/lifecycle.rs),
+  including `Draft -> Revoked`, while the PostgreSQL revoke operation updates
+  only `Published` releases in
+  [`release_publication.rs`](../../../crates/heph-std/forge/release/postgres/src/release_publication.rs).
+- Secret status: core defines the status transition helper in
+  [`policy.rs`](../../../crates/heph-core/auth/secret/domain/src/policy.rs),
+  but production PostgreSQL revoke and purge paths make the decisions in SQL
+  in [`lifecycle_commands.rs`](../../../crates/heph-std/secret/postgres/src/service/lifecycle_commands.rs).
+  The core secret manager remains substantive runtime orchestration, so this is
+  a targeted policy-ownership follow-up rather than a claim that the whole
+  secret subsystem belongs in the adapter.
+- Gateway service ownership: core owns the state model and provider-neutral
+  port in [`service_ownership.rs`](../../../crates/heph-core/platform/gateway/domain/src/service_ownership.rs),
+  while PostgreSQL owns transition and promotion decisions in
+  [`transitions.rs`](../../../crates/heph-std/gateway/postgres/src/service_ownership/transitions.rs).
+
+There are useful counterexamples to preserve: the run PostgreSQL adapter calls
+the core transition rule under its row lock in
+[`operations.rs`](../../../crates/heph-std/run/postgres/src/run_postgres/operations.rs),
+UI installation lifecycle code does the same in
+[`lifecycle.rs`](../../../crates/heph-std/forge/release/postgres/src/ui_installation/lifecycle.rs),
+and image selection validation is already meaningful core policy in
+[`validation_images.rs`](../../../crates/heph-core/platform/agent-config/src/validation_images.rs).
+
 ## Scope and design constraints
 
 Keep this as an incremental policy extraction, not a broad mailbox rewrite.
@@ -75,6 +104,10 @@ making decisions explicit and testable without PostgreSQL.
       settlement, retry, cap, and backoff matrices; PostgreSQL acceptance,
       recovery, operator, RLS, locking, outbox, and run-creation tests; and
       NATS command idempotency and acknowledgement behavior.
+- [ ] During follow-up review, compare the mailbox boundary with the related
+      release, secret, and gateway patterns above, using the run, UI
+      installation, and image-policy cases as references; track any
+      cross-domain drift separately from this mailbox extraction.
 
 ## Acceptance criteria
 
