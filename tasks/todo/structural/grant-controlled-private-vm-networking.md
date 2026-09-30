@@ -81,6 +81,12 @@ connect operation. A kernel backend might enforce them at a controlled packet
 boundary. Either needs an account of every remaining path and every identity
 translation.
 
+Private Ethernet switching between guests can use each guest's existing
+TCP/UDP stack. It does not inherently require a new host user-mode TCP/IP stack;
+socket translation for guest-to-host connectivity is a different topology.
+Either topology still needs trusted attachment identity, mandatory grant
+filtering, authenticated cross-host transport, and explicit revocation.
+
 ## Candidate software already under consideration
 
 These candidates cover different portions of the path. None is presumed to
@@ -110,11 +116,54 @@ must be demonstrated.
 
 ### Additional candidates
 
-- [x] Screen additional software using primary documentation after the initial
-  draft exists, recording roles and privilege/integration gaps.
+- [x] Screen additional software, including userspace virtual switches, using
+  primary documentation after the initial draft exists, recording roles and
+  privilege/integration gaps.
   Evidence: primary documentation and source links below reviewed on 2026-09-30.
   This screening establishes possible building blocks, not a validated Heph
   topology, maintenance guarantee, or selected backend.
+
+#### Userspace virtual switches
+
+| Candidate | Documented role | Privileges and remaining integration |
+| --- | --- | --- |
+| [Open vSwitch userspace/netdev](https://docs.openvswitch.org/en/latest/intro/install/userspace/) | Userspace Ethernet datapath with ingress-port and TCP/UDP field matching, drop actions, and connection tracking. A candidate for mandatory filtering at trusted VM switch ports. | The standard Linux instructions require `/dev/net/tun` and create a local/internal TAP; non-DPDK mode is described as experimental. A completely unprivileged attachment remains unverified. Physical-NIC traffic can also reach the host stack, requiring bypass analysis. |
+| [OVN architecture](https://www.ovn.org/support/dist-docs/ovn-architecture.7.html) and [controller](https://www.ovn.org/support/dist-docs/ovn-controller.8.html) | Controller layer providing logical switches/routers, ACLs, DHCP, and DNS over OVS; `ovn-bridge-datapath-type` supports netdev. | OVN and OVS are services and a datapath, rather than a small embedded library. Northbound/Southbound databases and controllers add integration cost. Heph still owns workload identity and translation of bounded endpoint grants into policy. |
+| [VDE / vde_switch](https://github.com/virtualsquare/vde-2) | Socket-only userspace Ethernet switch; upstream explicitly demonstrates operation without root. Socket permissions, user/group admission, VLANs, and port closure provide attachment controls. | Host TAP and routing are separate privileged paths. Those attachment controls do not establish endpoint TCP/UDP grants, reply state, or lease/revocation semantics. Heph needs trusted ingress-port mapping and mandatory grant filtering; guest IP/MAC claims remain untrusted. |
+| [GNS3 uBridge](https://github.com/GNS3/ubridge) | Userspace bridging across UDP, Unix datagram, TAP, pcap, and raw links, with runtime packet drop filters. | Standard installation grants `CAP_NET_ADMIN` and `CAP_NET_RAW`; raw/TAP modes require privileges. Ordinary UDP ports and accessible Unix sockets suggest a rootless socket-link path from source inspection, not a verified Heph deployment. Socket reachability alone does not authenticate a VM sender. |
+
+OVS's [`--user` option](https://www.openvswitch.org/support/dist-docs/ovs-vswitchd.8.html)
+can retain network administration/raw capabilities. The
+[DPDK deployment](https://docs.openvswitch.org/en/latest/intro/install/dpdk/)
+has separate provisioning requirements. Its
+[vhost-user attachment](https://docs.openvswitch.org/en/latest/topics/dpdk/vhost-user/)
+uses a negotiated Unix protocol, not libkrun's present passt frame stream.
+The [field](https://www.openvswitch.org/support/dist-docs/ovs-fields.7.html) and
+[action](https://www.openvswitch.org/support/dist-docs/ovs-actions.7.html) references
+document policy primitives; safe grant updates and connection-state flushing
+still require a design and acceptance evidence.
+
+The [OVN northbound schema](https://www.ovn.org/support/dist-docs/ovn-nb.5.html)
+makes security defaults consequential: empty `port_security` permits addresses,
+unmatched ACL traffic is allowed by default, and `persist-established` affects
+established-flow handling. A Heph integration needs explicit default denial,
+anti-spoofing, and validated revocation of existing flows.
+
+[libvdeplug source](https://github.com/virtualsquare/vde-2/blob/master/src/lib/libvdeplug.c)
+uses a Unix stream control channel and Unix datagrams for frame data.
+uBridge's [Unix](https://github.com/GNS3/ubridge/blob/master/src/nio_unix.c) and
+[UDP](https://github.com/GNS3/ubridge/blob/master/src/nio_udp.c) links likewise need
+an adapter for the current VM frame stream. uBridge's TCP control channel is
+management, not VM frame transport; same-UID Unix management credentials do not
+identify an individual VM.
+
+uBridge's [packet filters](https://github.com/GNS3/ubridge/blob/master/doc/packet_filter.md)
+are userspace BPF drop filters available for all backing link types. Each bridge
+shares one filter chain between both directions. This runs separately from
+privileged kernel eBPF. No stateful grant/UDP
+reply engine was established. Policy compilation, authenticated attachments and
+tunnels, default denial, filter updates, and revocation remain Heph integration
+questions.
 
 #### VM and user-mode stacks
 
@@ -171,6 +220,12 @@ authority. Choosing Rust APIs does not make these enforcement paths rootless.
     network capability.
 
 - [ ] **Prove the enforcement boundary for candidate topologies.**
+  - [ ] Compare private Ethernet forwarding using guest TCP/UDP stacks with
+    socket-translated guest-to-host forwarding; identify mandatory grant filters
+    and any host-stack dependencies in each topology.
+  - [ ] Verify adapters between the current VM Unix frame stream, switch Unix
+    datagrams, and negotiated vhost-user attachments, including trusted source
+    binding and fail-closed behavior.
   - [ ] Draw rootless user-mode and provisioned privileged alternatives with
     every guest, host, namespace, forwarder, resolver, and cross-host path.
   - [ ] Demonstrate how each attachment authenticates the exact VM/session and
@@ -269,9 +324,10 @@ complete them.
 
 ## Completion evidence
 
-Additional-candidate primary-documentation screening was completed on
-2026-09-30; the linked findings above distinguish documented software interfaces
-from proposed integration and source-based inference. No prototype, deployment
-validation, networking implementation, or implementation gate has been run.
+Additional-candidate primary-documentation screening, expanded to userspace
+virtual switches and OVN's controller role, was completed on 2026-09-30. The
+linked findings above distinguish documented software interfaces from proposed
+integration and source-based inference. No prototype, deployment validation,
+networking implementation, or implementation gate has been run.
 Backend selection, topology and privilege validation, lifecycle guarantees, and
 acceptance evidence remain unchecked work above.
