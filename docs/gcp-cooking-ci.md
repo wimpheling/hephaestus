@@ -612,8 +612,12 @@ diagnostics object. The scope is used only with those bucket-scoped roles.
 
 | Bucket | Configuration | Runtime grant | CI grant |
 | --- | --- | --- | --- |
-| `gs://hephaestus-508000-cooking-cache` | `europe-west1`, STANDARD, uniform bucket-level access, public access prevention enforced, versioning disabled, soft delete `0`, Delete lifecycle at object age 7 days | `storage.objectViewer` | `storage.objectViewer` |
+| `gs://hephaestus-508000-cooking-cache` | `europe-west1`, STANDARD, uniform bucket-level access, public access prevention enforced, versioning disabled, soft delete `0`, no lifecycle deletion rule | `storage.objectViewer` | `storage.objectViewer` |
 | `gs://hephaestus-508000-cooking-diagnostics` | `europe-west1`, STANDARD, uniform bucket-level access, public access prevention enforced, versioning disabled, soft delete `0`, Delete lifecycle at object age 1 day | `storage.objectCreator` only | `storage.objectViewer` |
+
+The cache row describes the intended post-apply configuration. The current
+bucket remains on its legacy 7-day rule until authenticated apply and a
+follow-up bucket read verify the change.
 
 The cache object is
 `gs://hephaestus-508000-cooking-cache/cooking/replacements/02430eca0a4e94ba129c4fdad969233f51486ee1dccdf1ee85e31f580f4d386d/heph-gcp-cooking-cache.tar.zst`.
@@ -623,7 +627,10 @@ The reviewed immutable archive size is `1813939981` bytes and its base64 MD5 is
 The diagnostics object key is
 `cooking/runs/{github_run_id}/{github_run_attempt}/{github_sha}.tar.gz`.
 The runtime uses a unique key and cannot read or delete previous bundles.
-Lifecycle deletion is retention control, not an immediate deletion guarantee.
+After apply, the cache has no automatic expiry. Remove or replace its pinned
+object only through an explicit reviewed operation; the cache bootstrap clears
+the legacy 7-day lifecycle rule and refuses any other conflicting lifecycle
+policy.
 
 The replacement provenance record is preserved in
 [`docs/experiments/gcp-cache-replacement-20260922/README.md`](experiments/gcp-cache-replacement-20260922/README.md).
@@ -654,7 +661,7 @@ Shell. Their reviewed SHA-256 values are:
 
 ```text
 49025ada6d6303ccfbc69da414919734c512cae9cc34c6ebcc4af1b51582a8e2  cloud-shell-bootstrap.sh
-31cd9d6733e5b59c15b9b23ae754d69875de7c1bb3026e375cb6f10d24cdfb08  cloud-shell-cache-bootstrap.sh
+d3f305c780851f3d5e585be9611b1517b4c975d0378d5ea2566da8bbe41a332f  cloud-shell-cache-bootstrap.sh
 360ef30fb30eb8b871c1064f27eedc7735f93233794e6704bf6f294d2e2808bb  cloud-shell-diagnostics-bootstrap.sh
 ```
 
@@ -674,9 +681,11 @@ bash cloud-shell-diagnostics-bootstrap.sh apply
 ```
 
 The cache script enables `storage.googleapis.com`, verifies the project and
-bucket configuration, creates or verifies the runtime identity, applies only
-the bucket and exact service-account bindings above, and prints the human
-upload prefix `gs://hephaestus-508000-cooking-cache/cooking/`. Upload the
+bucket configuration, clears the legacy 7-day cache lifecycle rule (while
+refusing any other conflicting lifecycle policy), creates or verifies the
+runtime identity, applies only the bucket and exact service-account bindings
+above, and prints the human upload prefix
+`gs://hephaestus-508000-cooking-cache/cooking/`. Upload the
 selected immutable OCI archive under the reviewed replacement object path
 above through the Cloud Console, then verify its SHA-256 before dispatching
 `cache-preflight`.
@@ -1204,8 +1213,8 @@ downloaded and validated private bundle, the same projection can be generated
 locally with `python3 -B scripts/summarize-cooking-diagnostics.py /path/to/cooking-diagnostics`;
 the helper rejects an unpassed credential scan
 and projects a denial only when its UUID correlates with a retained attempt
-run. Refresh the one-day diagnostics bucket and seven-day cache lifecycle
-configuration if retention policy changes.
+run. Refresh the one-day diagnostics bucket and cache bucket configuration if
+retention policy changes.
 
 Typed broker denials contain static `denial_stage` and `denial_class` fields,
 plus bounded run/slot identifiers. Correlate `run_id` with the lineage
