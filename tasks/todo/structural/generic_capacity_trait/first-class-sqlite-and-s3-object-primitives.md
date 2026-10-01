@@ -1,263 +1,268 @@
-# First-class private volumes, SQLite, and S3-compatible object primitives
+# Resource recipes for private volumes, SQLite, PostgreSQL, and S3
 
 Owner: unassigned
 
 ## Outcome
 
-Provide bounded private volumes, SQLite databases, and S3-compatible object
-buckets as distinct first-class Hephaestus resources, with declared
-requirements, exact capability bindings, auditable use, lifecycle controls,
-and provider-neutral implementations.
+Let users install, inspect, and remove versioned resource recipes that compose
+Heph infrastructure into useful application services. Bundle SQLite,
+PostgreSQL, and S3 conveniences in the distribution, with UI and defaults,
+using reusable infrastructure contracts and replaceable standard providers.
+This TODO specifies intended work; it does not claim these recipes exist.
 
-Private volumes provide bounded filesystem storage only through an explicit
-volume binding and controlled attachment. SQLite provides durable structured
-application state with database-specific operations and lifecycle. S3-compatible
-objects provide blobs, immutable content bundles, uploads, attachments, and
-static web assets. These are separate product primitives, not generic host
-filesystem access or ambient cloud credentials.
+Core contracts cover instances, bounded private volumes, service endpoints,
+secrets, resource requirements, authorization, and exact bindings. Standard
+providers implement those contracts. The distribution supplies convenience
+recipes. Adding a recipe does not automatically introduce a core resource kind
+or require a universal storage trait. Decide parser and execution placement
+across core, standard providers, and applications before implementation.
 
-```text
-release requirements → exact private-volume, SQLite-database, or
-                       object-bucket/prefix bindings
-                    → immutable workload revision
-                    → short-lived runtime authority
-                    → controlled volume attachment or typed SQLite/S3 operation
-```
+## Recipe contract
+
+A recipe is a bounded declaration of a static resource graph. Its minimum
+contract includes:
+
+- Immutable recipe identity and version, plus explicit compatibility with a
+  versioned recipe contract and infrastructure APIs.
+- Typed, validated inputs with bounded defaults, and uniquely named resources
+  using known resource kinds and legal operation combinations.
+- Explicit dependencies, resource bindings, and bindings to declared release
+  slots. Required slots resolve exactly once; optional slots may be unbound.
+- Declared outputs conveying exact resource references or controlled resolved
+  configuration. Outputs grant no ambient authority.
+- Per-resource removal policies distinguishing retain from delete. Retaining
+  durable data is the default; deletion requires explicit policy and authority.
+
+References are bounded literals, typed inputs, and named resource references.
+Reject loops, recursion, general expressions, and conditional workflows. Pin
+software releases immutably. Initialization and application migrations execute
+inside packaged workloads with authority over their own data. A recipe cannot
+execute host hooks or migrate Heph's internal database.
+
+Install, inspect, and remove are the initial lifecycle. Upgrade compatibility,
+data migration, and rollback need a separate deferred contract. Reinstall or
+upgrade must never silently replace an existing deployment or migrate its data.
+
+## Conceptual compositions
+
+These graphs illustrate bindings, not a proposed serialization schema.
+
+| Convenience | Resource graph and consumer authority |
+| --- | --- |
+| SQLite | Application release → named private-volume slot → bounded volume mounted at a controlled guest path. SQLite is embedded application software. Read-only/read-write attachment authorizes file bytes; it does not enforce per-query or per-table policy. |
+| PostgreSQL | Pinned server release → instance + volume + secret credentials + private TCP endpoint. The consumer independently needs an authorized network connection and database credentials. Database permissions are enforced by the server. |
+| S3 | Authorized service endpoint + bucket/prefix scope + explicit operations + scoped credentials or broker. The distribution may provision a released server or bind a configured external provider. |
+
+SQLite needs no new SQL provider or database resource kind by default. Exclusive
+writable volume attachment protects an attachment, not a blanket SQLite
+single-connection rule; application software owns SQLite concurrency and
+durability. Backups require an application-consistent snapshot or application
+quiescence/SQLite-aware preparation where needed, without adding SQL operations
+to core's volume API.
+
+S3 provisioning and security may require an explicit typed provider/resource
+contract. Record that decision from actual requirements before implementing
+it; recipes cannot invent dynamic plugin resource types. Specify the supported
+S3 operations, bucket/prefix normalization, consistency/versioning, multipart
+behavior, byte/key/page limits, and credential mechanism at that boundary.
 
 ## Locked decisions
 
 | Area | Decision |
 | --- | --- |
-| Product model | Private volumes, SQLite databases, and object buckets are distinct first-class Hephaestus resource kinds, comparable to repositories. Each kind has a provider-neutral contract and a type-specific provider boundary; do not force volume, SQL, and object operations into one universal provider interface. Provider choices are implementation details, not the user-facing contract. |
-| Resource ownership | Every private volume, SQLite database, and object bucket has exactly one owning project. Legacy instance-state volumes inherit the project of their owning instance during migration. A resource binding requires explicit authority for that exact resource and operation; project membership alone grants no use or lifecycle authority. Cross-project binding is denied unless a separately authorized sharing contract is added. |
-| Typed resource slots | A release may declare zero or more uniquely named slots for each resource kind. Each immutable instance revision binds every required slot to exactly one authorized same-project resource and may leave an optional slot unbound; undeclared slots and multiple assignments to one slot are rejected. Slot declarations and bindings are part of the immutable revision. There is no implicit instance-wide volume fallback. |
-| Private volumes | A private volume is an explicitly declared, capacity-bounded storage resource. Volume-slot attachment and guest mount paths are explicit and bounded. |
-| Volume access and lifecycle | The declared access mode distinguishes read-only from read-write use. A volume has at most one writable attachment at a time. A new writable attachment is denied until the previous writer is proven detached or fenced by the runtime/provider; lease expiry alone is not proof. If detach or fencing cannot be confirmed, retain the lease/recovery state and fail closed. Volumes have explicit provision, inspect, attach/detach, backup, restore, retention, and delete lifecycle records. |
-| Volume providers | Extend the existing instance-state `VolumeStore` and related metadata contracts; this is not a new contract from zero. Public resource, release, authorization-snapshot, and runtime-facing contracts expose stable typed IDs and bounded claims, never `host_id`, `host_path`, filesystem paths, provider credentials, or provider-specific configuration. A provider adapter may retain local paths and opaque provider handles internally. Preserve a local provider as the initial implementation. |
-| SQLite ownership | A SQLite database belongs to one project and has explicit lifecycle, backup, restore, migration, and retention records. It is not an arbitrary host path. |
-| SQLite provider and access | SQLite has a database-specific provider contract and exact database binding with narrowly scoped operations. Its storage may use a private volume internally, but the database identity, authorization, migrations, backup, and lifecycle remain distinct from that volume. Workloads never receive a general host filesystem capability. The provider API and read-only access mechanism are implementation decisions recorded before implementation. |
-| SQLite concurrency | A writable SQLite binding has one authoritative writer lane at a time. The platform must use a fenced lease or equivalent serialization before granting writable access, and must prove prior writer detach/fencing before granting a new writer. Do not assume read-only concurrency or snapshot semantics until they are specified. |
-| Object model | An object bucket has stable identity. Capabilities bind an exact bucket, optional normalized prefix, and explicit `get`, `put`, `list`, `delete`, and publish/read-manifest operations. Bucket or project membership grants no ambient object authority. |
-| Object provider and protocol | Object storage has its own provider contract. The first provider implements a documented, bounded S3-compatible operation subset behind short-lived scoped credentials or a broker. Raw provider credentials and unrestricted bucket access are forbidden. Select the credential mechanism, consistency/versioning contract, multipart behavior, and numeric limits before implementation. |
-| Content publication | Static sites and other public content are published as immutable object manifests. A separate edge/CDN provider may serve a published manifest; publication does not make arbitrary bucket objects public. |
-| Gateway use | A synchronous HTTP gateway may use an explicitly bound SQLite database or object bucket. SQLite writes must obey the database writer lane; object operations remain capability checked. |
-| Durable objects | Durable-object-style keyed actors are a later composition of released HTTP handlers, key routing, serialized execution, and per-key SQLite state. This task provides prerequisites but does not implement that runtime. |
+| Ownership | Each resource has one stable owning project. Legacy state volumes inherit their instance's project. Project membership alone grants no use or lifecycle authority. |
+| Authorization | Authorize the caller for every lifecycle action and each exact resource/operation. Grant consumers only their exact bindings. Same-project binding is required; sharing needs a separate explicit contract. |
+| Release slots | Zero through multiple uniquely named slots declare bounded requirements and read-only/read-write modes. Immutable revisions bind required slots exactly once; reject undeclared and duplicate assignments. No implicit instance-wide volume fallback. |
+| Existing volume contracts | Extend `VolumeStore`, `VolumeMetadataRepository`, and `LocalVolumeStore`. The PostgreSQL metadata adapter is not a storage provider. Preserve the local provider initially. |
+| Attachment safety | At most one writable attachment per volume. Prove the old writer detached or was fenced before granting another; lease expiry alone is insufficient. Uncertainty retains lease/recovery state and fails closed. |
+| Configuration boundary | Stable typed resource IDs, bounded claims, controlled guest mount paths, and service endpoint URLs may appear in resolved workload configuration. Host IDs/paths, raw provider admin credentials, and general host filesystem authority remain internal. |
+| Authority ceilings | Recipe declarations and deployment snapshots bound authority but do not confer it. Recheck live authorization on resume and before new effects; historical records never grant indefinite rights. |
+| External resources | Record resources created and owned by the deployment separately from explicitly external/adopted resources. Recipe removal never deletes external/adopted resources. |
+| Extensions | Third-party recipes use the same validator and permissions. Extensions/apps own their data migrations and consume versioned APIs; they cannot define arbitrary resource kinds or bypass provider boundaries. |
+| Runtime revocation | Specify bounded revocation for mounts, established network flows, and credential expiry at each provider. Do not assume per-operation authorization checks on already mounted files. |
 
-## Dependencies
+## Execution and durable recovery
 
-- [`mvp-01-agent-principals-capabilities-and-runtime-authority.md`](../../../done/mvp-01-agent-principals-capabilities-and-runtime-authority.md)
-- [`mvp-02-durable-agent-mailboxes-and-stateful-dispatch.md`](../../../done/mvp-02-durable-agent-mailboxes-and-stateful-dispatch.md)
-- [`mvp-03-event-ingress-and-caddy-routing.md`](../../../done/mvp-03-event-ingress-and-caddy-routing.md)
-- [`define-own-the-loop-agent-platform.md`](../../distribution/define-own-the-loop-agent-platform.md)
-- Coordinate package placement and architecture metadata with the completed [workspace topology migration](https://github.com/wimpheling/hephaestus/pull/57). Its 85 original packages plus five facades form the 90-package workspace baseline; account for new packages from this task separately.
+Validate the dependency graph separately from authorization: reject cycles,
+duplicate names, missing/unknown references, incompatible bindings, and illegal
+operation combinations before effects. Never infer access from graph reachability.
 
-## Non-goals
+Persist a durable deployment record with recipe identity/version, validated
+configuration, secret references without plaintext secrets, immutable resolved
+graph, resource IDs, release-slot bindings, authority ceilings, progress, and
+ownership/removal provenance. Provider handles remain internal. Historical
+records support audit and recovery without becoming reusable grants.
 
-This task does not expose arbitrary host files, unbounded filesystem access,
-NFS or POSIX network shares, general SQL access to platform PostgreSQL,
-multi-writer SQLite files, arbitrary S3 provider credentials, a public bucket by
-default, CDN configuration, distributed database replication, or
-durable-object/actor scheduling.
+An explicit deployment/request identity makes install retries idempotent:
+resume the same deployment without duplicate resources or consumer grants.
+Multiple providers cannot promise an atomic install. Persist partial progress,
+reconcile ambiguous provider outcomes, and expose dependency status and failures
+through inspect. When the provider cannot prove whether creation succeeded,
+retain recovery state and require reconciliation before retrying that creation.
+Cancellation and process crashes leave recoverable records.
 
-Private volumes are explicit, bounded resources with exact capability bindings;
-they do not provide a generic host-filesystem abstraction. An object bucket is
-not a filesystem volume or repository, and none of these resources substitutes
-for capability bindings.
+Removal drains consumers, detaches mounts, and proves fencing where needed
+before deletion. It cleans up deployment credentials and connections, respects
+retain/delete policy, and resumes safely after failure. Retained resources stay
+discoverable with stable ownership and provenance for authorized recovery or
+reuse; they must not become orphaned records or hidden data.
+
+## Dependencies and sequencing
+
+- [Agent principals and runtime authority](../../../done/mvp-01-agent-principals-capabilities-and-runtime-authority.md).
+- [Durable mailboxes and stateful dispatch](../../../done/mvp-02-durable-agent-mailboxes-and-stateful-dispatch.md).
+- [Event ingress and routing](../../../done/mvp-03-event-ingress-and-caddy-routing.md).
+- [Distribution platform](../../distribution/define-own-the-loop-agent-platform.md).
+- [Grant-controlled private VM networking](../grant-controlled-private-vm-networking.md)
+  is required for PostgreSQL and self-hosted S3 service recipes. The local
+  volume/SQLite phase can ship first with its own acceptance evidence.
+- Coordinate package placement and architecture metadata with the completed
+  [workspace topology migration](https://github.com/wimpheling/hephaestus/pull/57).
+
+## Scope and follow-ups
+
+This task delivers reusable volume infrastructure and bounded recipe lifecycle,
+then service compositions as their dependencies become available. General host
+filesystem access, network filesystem shares, distributed database replication,
+and unrestricted cloud credentials are outside its contract.
+
+Immutable content manifests, public publication and CDN delivery, durable
+actors, and a managed SQL query API with database/table permissions remain
+explicit follow-ups. They are not implemented by mounting SQLite files or
+installing a service recipe. Gateway consumers use declared mounts/endpoints
+and exact grants under the same infrastructure contracts.
 
 ## Implementation checklist
 
-- [ ] **1. Define typed resource contracts and release requirements**
-  - [ ] Add validated private-volume, volume-slot, SQLite database, object
-    bucket, object prefix, manifest, backup, and provider identifiers with
-    deterministic normalized forms.
-  - [ ] Extend release configuration with zero-or-more named private-volume
-    slots and typed SQLite/object capability slots; reject host paths, raw S3
-    URLs, provider credentials, and tenant resource IDs in release source.
-  - [ ] Define the SQLite operation vocabulary, including inspect, authorized
-    data access, backup, restore, and migrate; define legal operation
-    compatibility and deny unsupported combinations. Decide whether data access
-    uses a database protocol, a controlled mount, or another provider API, and
-    specify read-only consistency/concurrency semantics before choosing one.
-  - [ ] Define object `get`, `put`, `list`, `delete`, manifest publish, and
-    published-manifest read operations, including exact prefix normalization,
-    object size limits, content metadata, and conditional-write semantics.
-  - [ ] Add parsing, normalization, serialization, duplicate-rejection, and
-    illegal-operation tests.
+- [ ] **1. Decide boundaries and define the recipe contract**
+  - [ ] Record engine/parser placement, API/contract versions, supported kinds,
+    immutable recipe/release identity, input validation, and output semantics.
+  - [ ] Define bounded references, graph validation, resource requirements,
+    release-slot bindings, and retain/delete policy; reject unsupported syntax.
+  - [ ] Validate guest mount paths and endpoint URLs as controlled configuration;
+    reject host paths and provider admin credentials in public contracts.
+  - [ ] Specify create/bind/use/inspect/remove authorization independently,
+    including exact consumer grants and explicitly external resource bindings.
 
-- [ ] **2. Generalize private-volume lifecycle and providers**
-  - [ ] Define a provider-neutral private-volume lifecycle for provision,
-    inspect, attach/detach, backup, restore, retention, and deletion, including
-    capacity limits, lifecycle state, opaque provider handles, and audit
-    provenance.
-  - [ ] Define a type-specific volume-provider boundary for bounded private
-    volumes. Reconcile it with the existing `VolumeStore`,
-    `VolumeMetadataRepository`, and `LocalVolumeStore`; do not mistake the
-    PostgreSQL metadata adapter for a storage provider.
-  - [ ] Replace the implicit zero-or-one per-instance state-volume assumption
-    with zero-or-more declared slots and exact revision bindings, including
-    optional slots and explicit read-only/read-write attachment modes.
-  - [ ] Require an authoritative fenced writer lease for each writable volume
-    attachment. Before granting another writer, prove that the old VM/runtime
-    detached or was fenced; lease expiry alone is insufficient. If the provider
-    cannot prove this, retain recovery state and deny the new attachment. Decide
-    read-only concurrency and attachment cleanup semantics before selecting the
-    provider API.
-  - [ ] Preserve a local raw-file provider as the initial implementation while
-    keeping host paths and provider credentials invisible to callers and
-    workloads.
-  - [ ] Inventory and migrate every legacy reference, including
-    `agent_instances.state_volume_id`, `agent_instance_state_volumes`, and
-    `agent_instance_volume_leases`; `mailbox_delivery_attempts` volume/lease/
-    fencing evidence and its foreign-key, check, and trigger constraints; the
-    gateway capability resource-project lookup for `state_volume`;
-    `release-domain`'s optional `AgentInstance.state_volume_id`; and related
-    operator/admin projections, forced-RLS policies, durable event triggers,
-    authorization mappings, and SQL test fixtures. Preserve volume identity,
-    data, active leases, ownership, audit/event provenance, and rollback or
-    recovery behavior for ambiguous/incomplete rows; stateless instances retain
-    zero bindings.
-  - [ ] Add real-PostgreSQL and local-provider tests for multi-slot binding,
-    exact mount scope, read-only and writable leases, fencing, backup, restore,
-    retention, deletion, migration, and failure recovery.
+- [ ] **2. Generalize private volumes without losing existing state**
+  - [ ] Extend existing volume contracts for bounded provision, inspect,
+    attach/detach, backup, restore, retention, and delete lifecycle records,
+    including capacity, stable IDs, internal handles, and audit provenance.
+  - [ ] Replace implicit zero-or-one state volume with zero-or-more named
+    release slots, exact immutable revision bindings, and explicit RO/RW modes.
+  - [ ] Specify read-only sharing/snapshot consistency and cleanup. Enforce
+    exclusive writable attachments with proven prior detach/fencing; preserve
+    recovery state when the provider cannot prove safety.
+  - [ ] Inventory and migrate `agent_instances.state_volume_id`,
+    `agent_instance_state_volumes`, and `agent_instance_volume_leases`;
+    `mailbox_delivery_attempts` volume/lease/fencing evidence and its foreign-key,
+    check, and trigger constraints; gateway resource-project lookup for
+    `state_volume`; and `release-domain`'s optional `AgentInstance.state_volume_id`.
+  - [ ] Migrate operator/admin projections, forced RLS, durable event triggers,
+    authorization mappings, and SQL fixtures. Preserve bytes, identity, owner,
+    active leases/fencing, event provenance, and recovery for ambiguous rows;
+    stateless instances retain zero bindings.
+  - [ ] Verify local-provider behavior and real-PostgreSQL metadata migration,
+    including multi-slot scope, backup/restore, fencing, and retained data.
 
-- [ ] **3. Persist and authorize exact resources**
-  - [ ] Add authoritative PostgreSQL records for project-owned SQLite databases,
-    object buckets, prefixes, manifests, and their lifecycle state, tombstones,
-    provider handles, and audit provenance; persist explicit volume slots and
-    bindings under the volume lifecycle defined above.
-  - [ ] Apply forced RLS and explicit inspect, create, configure, bind, backup,
-    restore, publish, and delete permissions.
-  - [ ] Enforce project ownership and independent authority to create,
-    configure, attach, back up, restore, and delete each private volume, and to
-    grant each database or bucket operation to a workload revision. Resolve
-    every binding to one exact resource, reject required unbound slots, reject
-    undeclared bindings, and deny cross-project bindings unless a specific
-    authorized sharing contract exists.
-  - [ ] Add OpenFGA/Mélange relations and real-PostgreSQL tests for tenant
-    isolation, revocation, lifecycle CAS, concurrent changes, and historical
-    provenance.
+- [ ] **3. Persist and reconcile deployments**
+  - [ ] Add authoritative deployment/progress records and exact resource/slot
+    bindings, secret references, ownership provenance, policy, and tombstones.
+    Keep provider handles internal and plaintext secrets out of deployment records.
+  - [ ] Enforce forced RLS and exact authorization, retaining historical
+    evidence while rechecking live authority on resumed/new effects.
+  - [ ] Implement idempotent install with explicit identity, durable progress,
+    ambiguous-result reconciliation, and inspectable dependencies/failures.
+  - [ ] Recover cancellation/crashes and partial multi-provider failures without
+    duplicate resources, widened grants, or unsupported atomicity claims.
+  - [ ] Implement resumable remove with drain/detach/fencing, credential and
+    connection cleanup, safe retain/delete, and external resource protection.
 
-- [ ] **4. Implement SQLite lifecycle and writer safety**
-  - [ ] Define provision, pause, backup, restore, migrate, delete, and
-    recovery transitions, including backup consistency and restore provenance.
-  - [ ] Use an authoritative fenced writer lease or equivalent serialized lane
-    before writable access. Prove prior writer detach/fencing before granting a
-    new writer; lease expiry alone is insufficient, and uncertainty must deny
-    access while retaining recovery state.
-  - [ ] Define WAL mode, checkpoint, fsync, crash, corruption, database-size,
-    and migration failure behavior. Never claim multi-writer safety.
-  - [ ] Provide an initial SQLite provider that exposes a database only after
-    authorization and writer-lane acquisition. It may use the private-volume
-    provider internally; keep volume paths invisible to workloads and callers.
-  - [ ] Add real-SQLite and real-PostgreSQL failure-injection tests for
-    concurrent writers, worker crash, lease expiry, checkpoint failure, backup,
-    restore, and stale mount denial.
+- [ ] **4. Bundle and exercise the local SQLite composition**
+  - [ ] Package a pinned application release using a declared volume slot;
+    expose controlled guest configuration and exact attachment authority.
+  - [ ] Run initialization/migrations in the workload over its own data. Specify
+    SQLite/WAL/crash behavior and consistent backup preparation in the package.
+  - [ ] Exercise install/inspect/remove, RO/RW mounts, multiple application
+    connections where supported, backup/restore, and retained-data recovery.
 
-- [ ] **5. Implement S3-compatible object access**
-  - [ ] Define an `ObjectStoreProvider` boundary and implement one S3-compatible
-    provider with bucket/prefix scoping, bounded operation requests, and
-    provider error normalization.
-  - [ ] Issue short-lived scoped credentials or broker each operation; never
-    expose unrestricted provider credentials to workloads or queues.
-  - [ ] Enforce object key, prefix, byte, content-type, checksum, list-page,
-    multipart-upload, and conditional-write limits before provider calls.
-  - [ ] Record immutable object-operation audit records without logging object
-    bodies or credential material.
-  - [ ] Add provider conformance, scope-escape, overwrite race, idempotency,
-    credential-expiry, and failure-recovery tests.
+- [ ] **5. Add service recipes after networking is available**
+  - [ ] Compose PostgreSQL from a pinned server instance, volume, secrets, and
+    private TCP endpoint; require independent consumer connection and database
+    credentials. Keep server data migrations inside its packaged workload.
+  - [ ] Record whether S3 needs a typed provisioning/security contract, then
+    support a hosted released server and/or a configured external provider.
+  - [ ] Scope S3 to endpoint, bucket/prefix, and supported operations using
+    short-lived credentials or a broker; implement documented limits and errors.
+  - [ ] Verify credential delivery/expiry, prefix confinement, connection
+    revocation, partial provisioning recovery, and external-provider removal.
 
-- [ ] **6. Publish immutable content bundles**
-  - [ ] Define an immutable manifest containing normalized object keys, content
-    hashes, metadata, entry point, and source bucket/prefix provenance.
-  - [ ] Require an explicit publish operation to make a manifest eligible for
-    static-site or other edge delivery; publishing must not broaden bucket
-    access or expose unlisted objects.
-  - [ ] Define a future content-edge/CDN provider contract, cache identity, and
-    invalidation semantics without implementing CDN configuration in this task.
-  - [ ] Add tests proving manifest immutability, hash verification, rollback,
-    and no public access before publication.
-
-- [ ] **7. Integrate runtime authority and gateway use**
-  - [ ] Include exact SQLite/object bindings, operation ceilings, leases, and
-    provider scope in immutable authorization snapshots and runtime sessions;
-    include exact private-volume slot bindings and attachment leases.
-  - [ ] Give a gateway only the selected database/object operations; deny
-    ambient repository, private-volume, mailbox, object-bucket, and Caddy
-    authority.
-  - [ ] Define how synchronous gateway invocation acquires and releases a
-    SQLite writer lane, including timeout and client-cancellation behavior.
-  - [ ] Add end-to-end scenarios for a gateway reading/writing authorized
-    SQLite state and serving or publishing an authorized immutable object
-    manifest.
-
-- [ ] **8. Verify and document**
-  - [ ] Document the distinct volume, SQLite, and object resource models,
-    provider boundaries, authority and mount limits, writer-lane and fencing
-    contracts, migration from implicit state volumes, S3-compatible protocol,
-    content-publication semantics, backup/recovery, and deliberate
-    durable-object/CDN deferrals.
+- [ ] **6. Integrate distribution UI and complete verification**
+  - [ ] Bundle versioned recipes/defaults and expose authorized install,
+    inspect/status, retained resources, failures, and removal policy in the UI.
+  - [ ] Document provider boundaries, application migration ownership, bounded
+    revocation, legacy migration, recovery, and deferred upgrade/SQL/CDN/actor work.
   - [ ] Run `cargo fmt --all -- --check`.
   - [ ] Run `cargo clippy --workspace --all-targets --all-features`.
   - [ ] Run `cargo test --workspace --all-features`.
   - [ ] Run `cargo doc --workspace --all-features --no-deps`.
-  - [ ] Run `cargo dev check architecture` and resolve new package, SQLx, RLS,
-    and dependency-boundary diagnostics without broad exceptions.
-  - [ ] Run real-PostgreSQL, real-SQLite, and S3-provider integration and
-    failure-injection scenarios.
-  - [ ] Run `git diff --check` and `cargo dev quality` for handoff.
+  - [ ] Run `cargo dev check architecture` and resolve diagnostics under existing
+    SQLx, RLS, transport, committed-outbox, and sensitive-field boundaries.
+  - [ ] Run focused real-provider integration/failure checks, `git diff --check`,
+    and repository handoff gate `cargo dev quality` with strict rules enabled.
 
-## Decisions before implementation
+## Open implementation decisions
 
-- [ ] Decide whether read-only volume use is a shared mount, snapshot, or brokered
-  operation, and define its consistency and revocation behavior. Keep the
-  required distinction between declared read-only and read-write authority, but
-  do not prescribe a provider API before this decision.
-- [ ] Decide whether one resource may satisfy more than one slot in the same
-  revision. If allowed, prove that the combined access does not widen the
-  authority granted by either slot.
-- [ ] Decide whether SQLite access is exposed through a database protocol,
-  controlled mount, or another narrow API; specify read-only consistency,
-  cancellation, migration ownership, and writer-lane timeout behavior.
-- [ ] Select the supported S3 operation subset, consistency/versioning contract,
-  multipart rules, credential mechanism, and concrete key/byte/page limits.
-- [ ] Agree with the topology task on names, paths, layer/context metadata, and
-  which new packages are core contracts/PostgreSQL adapters versus replaceable
-  standard providers. Do not change that task's current package-count baseline
-  in this task.
+- [ ] Place recipe parsing, orchestration, persistence, and distribution bundles
+  within the architecture; choose packages and metadata before implementation.
+- [ ] Decide whether one resource may satisfy multiple slots; if allowed, prove
+  combined use stays within each grant and attachment constraints.
+- [ ] Select read-only volume consistency, backup preparation, and provider
+  mechanisms that bound mount revocation and prove writer detach/fencing.
+- [ ] Specify endpoint/established-flow revocation and workload secret delivery,
+  rotation, expiry, and cleanup without exposing provider admin credentials.
+- [ ] Select S3 contract necessity, supported operations and numeric limits,
+  external-provider binding, scoped credential/broker mechanism, and recovery.
+- [ ] Define idempotency identity lifetime and ambiguous provider reconciliation,
+  including retry after revocation and authorized reuse of retained resources.
 
 ## Acceptance criteria
 
-- [ ] Releases can declare zero through multiple named slots. A revision resolves
-  each required slot to one authorized same-project resource, permits an
-  optional slot to remain unbound, and rejects missing, multiply assigned,
-  undeclared, or cross-project bindings unless explicit sharing authority
-  applies.
-- [ ] Public contracts, release configuration, runtime sessions, and
-  authorization snapshots expose no host path, host identity, provider
-  credential, or provider-specific configuration; provider adapters can retain
-  the local details they require.
-- [ ] No second writable volume or SQLite attachment is granted until tests
-  prove that the old writer detached or was fenced. Expiry without that proof
-  keeps recovery state and denies access.
-- [ ] Migration preserves legacy volume bytes, identity, ownership, active lease
-  fencing, mailbox execution evidence, authorization lookup behavior, RLS, and
-  event provenance; real-PostgreSQL fixtures cover each inventoried reference
-  and recovery from ambiguous legacy rows.
-- [ ] Cross-project access and each lifecycle/binding permission are checked
-  against the exact resource and actor; revocation prevents new operations and
-  preserves immutable historical provenance.
-- [ ] SQLite failure scenarios prove the selected durability, backup/restore,
-  migration, and writer-lane semantics. Object-provider fixtures prove exact
-  bucket/prefix confinement, operation limits, credential expiry, immutable
-  manifest publication, and no public access before publication.
-- [ ] `cargo dev check architecture` and `cargo dev quality` pass with the
-  repository's existing strict lint and architecture rules enabled.
+- [ ] Recipe validation rejects cycles, duplicate/missing/unknown references,
+  unsupported syntax/kinds, incompatible operations, and invalid slot bindings
+  before effects. Immutable recipe/release pins and API compatibility are checked.
+- [ ] Zero-to-multiple slots bind exact same-project resources with explicit
+  authority. Required/optional slots, caller lifecycle rights, and consumer
+  mount/network/credential rights are independently tested; membership is insufficient.
+- [ ] Public configuration allows controlled guest paths/endpoints and contains
+  no host paths, host identity, raw provider admin credentials, or plaintext
+  durable secrets. Third-party recipes cannot exceed the same validator/grants.
+- [ ] A second writable attachment requires proven old-writer detach/fencing.
+  Expiry alone denies access and preserves recovery evidence; SQLite tests do
+  not impose a blanket single-connection restriction or claim SQL-level policy.
+- [ ] Legacy migration fixtures cover every inventoried reference and preserve
+  bytes, identity, ownership, active fencing, mailbox evidence, RLS, authorization
+  lookup, and event provenance, including recovery from ambiguous rows.
+- [ ] Retrying install after failure/cancellation/crash resumes one deployment
+  without duplicates. Partial provider outcomes are visible and reconcilable;
+  revoked callers cannot use historical snapshots to continue new effects.
+- [ ] Removal safely drains/detaches/fences, cleans credentials/connections,
+  retains discoverable data by default, and never deletes external/adopted
+  resources. Failed removal resumes safely under current authorization.
+- [ ] Provider evidence establishes consistent backup/restore, bounded mount and
+  network revocation, S3 bucket/prefix/operation scope, and credential expiry.
+  Consumers cannot obtain database access from network authority alone.
+- [ ] Install never blindly upgrades/reinstalls an existing deployment. Extension
+  migrations affect only owned application data; follow-ups remain explicit.
+- [ ] Architecture checks and `cargo dev quality` pass for implemented phases
+  with strict Rust/Clippy/rustdoc rules enabled; phase status records dependencies.
 
 ## Completion evidence
 
-Record schema and provider versions, legacy-volume migration evidence, exact
-slot and mount-scope fixtures, volume lease/fencing/backup/restore/retention/
-deletion evidence, capability and RLS fixtures, SQLite writer-lease/crash and
-backup/restore evidence, object-scope and credential-expiry evidence,
-immutable-manifest publication evidence, end-to-end gateway fixtures, test
-counts, and deliberate follow-up tasks for CDN delivery and durable objects.
+Record implemented phases, contract/schema/provider and pinned recipe/release
+versions, boundary decisions, legacy migration fixtures, exact slot/authority
+tests, fencing and bounded revocation evidence, backup/restore and retained-data
+recovery, idempotent retry/crash/cancellation and partial-failure scenarios,
+external-resource protection, scoped S3 credentials, UI lifecycle evidence, and
+quality-gate results. Link deferred upgrade/migration, managed SQL permissions,
+content publication/CDN, and durable-actor tasks without claiming completion.
