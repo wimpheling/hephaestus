@@ -8,6 +8,7 @@ mod errors;
 mod grants;
 mod legacy;
 mod owned_backing;
+mod partial_retention;
 mod path;
 mod selection;
 mod selection_identity;
@@ -24,6 +25,10 @@ pub use legacy::{
     LEGACY_STATE_VOLUME_GUEST_PATH, LEGACY_STATE_VOLUME_SLOT, effective_volume_slots,
 };
 pub use owned_backing::{OwnedBackingPhase, VolumeRootNamespaceId};
+pub use partial_retention::{
+    OwnedPartialBirthObservation, OwnedPartialBirthObservationWire, OwnedPartialBirthPhase,
+    OwnedPartialRetentionReceiptId, PartialRetentionContractError,
+};
 pub use path::GuestMountPath;
 pub use selection::{RunVolumeSelection, RunVolumeSelections, VolumeSelectionOrigin};
 pub use selection_identity::RunVolumeIdentity;

@@ -2,6 +2,7 @@
 
 mod execution;
 mod filesystem;
+pub mod partial_retention;
 #[cfg(test)]
 mod tests;
 

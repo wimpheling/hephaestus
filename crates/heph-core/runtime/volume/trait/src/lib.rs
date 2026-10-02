@@ -11,6 +11,7 @@ mod creation;
 mod leases;
 mod mount_grants;
 mod owned_provisioning;
+mod partial_retention;
 mod resources;
 mod run_volumes;
 pub use creation::{
@@ -26,12 +27,20 @@ pub use owned_provisioning::{
     OwnedBackingPhase, OwnedBackingPurpose, OwnedFilesystemBirth, OwnedProvisioningClaim,
     OwnedProvisioningContext, VolumeOwnedProvisioningRepository, VolumeRootNamespaceId,
 };
+pub use partial_retention::{
+    OwnedPartialRetentionContext, OwnedPartialRetentionReceipt, PartialRetentionObservationHead,
+    VolumePartialRetentionRepository,
+};
 pub use resources::{
     MAX_REGISTERED_VOLUME_CAPACITY_BYTES, MIN_LOCAL_VOLUME_CAPACITY_BYTES, ProvisioningClaim,
     VolumeInspection, VolumeProvisioningState, VolumeRegistration, VolumeResourceRepository,
 };
 pub use run_volumes::{
     RunVolumeAttachment, RunVolumeLease, RunVolumeMetadataRepository, RunVolumeStore,
+};
+pub use volume_domain::{
+    OwnedPartialBirthObservation, OwnedPartialBirthObservationWire, OwnedPartialBirthPhase,
+    OwnedPartialRetentionReceiptId, PartialRetentionContractError,
 };
 
 /// Stable block-device identifier used for the agent state disk.

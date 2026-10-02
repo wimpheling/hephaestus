@@ -3,6 +3,7 @@
 mod cancellation;
 mod legacy;
 mod metadata;
+mod partial_retention;
 mod recovery;
 mod safety;
 mod support;

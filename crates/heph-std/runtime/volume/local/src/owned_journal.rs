@@ -8,6 +8,7 @@ pub mod filesystem;
 mod journal;
 mod namespace;
 mod observation;
+pub mod partial_retention;
 mod phases;
 mod pinned;
 mod purpose;
