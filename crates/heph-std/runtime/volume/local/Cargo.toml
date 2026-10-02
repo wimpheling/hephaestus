@@ -10,9 +10,11 @@ layer = "adapter"
 context = "volume"
 
 [dependencies]
+identity-domain = { path = "../../../../heph-core/auth/identity/domain" }
 async-trait.workspace = true
 runtime-types = { path = "../../../../heph-core/platform/runtime-types" }
 rustix.workspace = true
+sha2.workspace = true
 time.workspace = true
 tokio = { workspace = true, features = ["fs", "process", "time"] }
 tracing.workspace = true

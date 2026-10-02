@@ -5982,8 +5982,10 @@ name = "volume-local"
 version = "0.1.0"
 dependencies = [
  "async-trait",
+ "identity-domain",
  "runtime-types",
  "rustix",
+ "sha2",
  "tempfile",
  "time",
  "tokio",
@@ -6021,6 +6023,7 @@ dependencies = [
  "identity-domain",
  "runtime-types",
  "serde",
+ "sha2",
  "thiserror 2.0.19",
  "time",
  "uuid",

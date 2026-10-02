@@ -7,12 +7,25 @@ use std::path::PathBuf;
 use time::OffsetDateTime;
 use uuid::Uuid;
 
+mod creation;
 mod leases;
 mod mount_grants;
+mod owned_provisioning;
 mod resources;
 mod run_volumes;
+pub use creation::{
+    OwnedVolumeRegistration, OwnedVolumeRegistrationReceipt, VolumeCreationIdentity,
+    VolumeCreationIdentityError, VolumeCreationIdentityWire, VolumeCreationLineage,
+    VolumeCreationOperationId, VolumeCreationSealId, VolumeOwnedRegistrationRepository,
+    VolumeOwnershipScopeId,
+};
 pub use leases::{VolumeAttachment, VolumeLease};
 pub use mount_grants::{VolumeMountGrant, VolumeMountGrantRepository, VolumeMountRevocation};
+pub use owned_provisioning::{
+    BeginOwnedProvisioning, OwnedBackingObservation, OwnedBackingObservationWire,
+    OwnedBackingPhase, OwnedBackingPurpose, OwnedFilesystemBirth, OwnedProvisioningClaim,
+    OwnedProvisioningContext, VolumeOwnedProvisioningRepository, VolumeRootNamespaceId,
+};
 pub use resources::{
     MAX_REGISTERED_VOLUME_CAPACITY_BYTES, MIN_LOCAL_VOLUME_CAPACITY_BYTES, ProvisioningClaim,
     VolumeInspection, VolumeProvisioningState, VolumeRegistration, VolumeResourceRepository,

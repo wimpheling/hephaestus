@@ -11,6 +11,11 @@ use std::{
 use time::OffsetDateTime;
 use tokio::fs;
 
+mod owned_journal;
+mod owned_provisioning;
+mod root_owner;
+pub use owned_provisioning::OwnedVolumeMetadata;
+pub use root_owner::VolumeRootOwner;
 mod provisioning;
 mod run_volumes;
 use volume_trait::{
@@ -41,6 +46,7 @@ pub struct LocalVolumeStore {
     metadata: Arc<dyn VolumeMetadataRepository>,
     run_metadata: Option<Arc<dyn volume_trait::RunVolumeMetadataRepository>>,
     config: LocalVolumeConfig,
+    owned_metadata: Option<OwnedVolumeMetadata>,
 }
 
 impl LocalVolumeStore {
@@ -74,6 +80,7 @@ impl LocalVolumeStore {
         Ok(Self {
             metadata,
             run_metadata: None,
+            owned_metadata: None,
             config,
         })
     }
