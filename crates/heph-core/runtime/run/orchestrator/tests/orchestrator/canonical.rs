@@ -22,6 +22,9 @@ mod recovery;
 #[path = "canonical/replay.rs"]
 mod replay;
 
+#[path = "canonical/plural.rs"]
+mod plural;
+
 use fixture::Fixture;
 use run_domain::{RunCleanupHostId, RunState};
 use run_orchestrator::RunCleanupRepository;

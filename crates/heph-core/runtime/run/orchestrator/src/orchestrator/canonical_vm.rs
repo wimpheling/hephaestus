@@ -37,7 +37,18 @@ impl RunOrchestrator {
             .canonical_cleanup
             .as_ref()
             .ok_or_else(|| invalid("canonical cleanup is not configured"))?;
-        let target = cleanup.repository.begin_cleanup(run_id).await?;
+        let target = if self.plural_volumes {
+            // An unavailable closure/snapshot must not prevent the independent
+            // physical-first failure path from revoking the live guest.
+            tokio::time::timeout(
+                std::time::Duration::from_secs(2),
+                cleanup.repository.begin_cleanup(run_id),
+            )
+            .await
+            .map_err(|_| VmError::InvalidState("cleanup snapshot deadline elapsed"))??
+        } else {
+            cleanup.repository.begin_cleanup(run_id).await?
+        };
         tokio::time::timeout(self.cleanup_timeout, async {
             let operation = self.lock_run_operation(run_id).await?;
             let result = self.confirm_quiescent_target(target, instance).await;

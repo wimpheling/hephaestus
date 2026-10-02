@@ -10,12 +10,21 @@ impl RunOrchestrator {
     /// Returns an error when durable state, volume, or VM operations fail.
     /// Cleanup failures deliberately retain the volume lease for recovery.
     pub async fn start_run(&self, command: &StartRun) -> Result<Run, OrchestratorError> {
+        if self.plural_volumes && self.canonical_cleanup.is_none() {
+            return Err(volume_trait::VolumeError::InvalidState(
+                "complete-set preparation requires canonical cleanup",
+            )
+            .into());
+        }
         let claim = if self.canonical_cleanup.is_some() {
             Some(self.operation_guards.claim_start(command.run_id)?)
         } else {
             None
         };
-        let result = self.start_claimed_run(command).await;
+        // Keep the public future small while the internal complete-set pipeline
+        // carries bounded attachment and monitor evidence. Cancellation still
+        // drops that exact pipeline before releasing the live-start claim.
+        let result = Box::pin(self.start_claimed_run(command)).await;
         // The admission token spans the whole future, including cleanup; the
         // independent physical operation mutex never spans guest execution.
         drop(claim);
@@ -87,10 +96,23 @@ impl RunOrchestrator {
             prepare::PrepareStart::Finished(run) => return Ok(*run),
             prepare::PrepareStart::Continue(prepared) => *prepared,
         };
-        let started = match provision::provision_and_start(self, command.run_id, prepared).await? {
+        if self.plural_volumes {
+            return self.execute_monitored_run(command.run_id, prepared).await;
+        }
+        self.execute_prepared_run(command.run_id, prepared, None)
+            .await
+    }
+
+    pub(super) async fn execute_prepared_run(
+        &self,
+        run_id: runtime_types::RunId,
+        prepared: prepare::PreparedStart,
+        guest_cleanup: Option<&super::plural_monitor::GuestCleanupPhase>,
+    ) -> Result<Run, OrchestratorError> {
+        let started = match provision::provision_and_start(self, run_id, prepared).await? {
             provision::ProvisionResult::Finished(run) => return Ok(*run),
             provision::ProvisionResult::Started(started) => *started,
         };
-        complete::complete_started_run(self, command.run_id, started).await
+        complete::complete_started_run(self, run_id, started, guest_cleanup).await
     }
 }

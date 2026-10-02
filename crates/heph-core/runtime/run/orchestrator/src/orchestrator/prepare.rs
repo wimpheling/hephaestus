@@ -5,7 +5,10 @@ use vm_trait::{VmError, VmId, VmSpec};
 use volume_trait::VolumeAttachment;
 use workspace_domain::PreparedRuntimeGitWorkspace;
 
-use super::{OrchestratorError, RunOrchestrator, authority::PreparedRunAuthority, resources};
+use super::{
+    OrchestratorError, RunOrchestrator, authority::PreparedRunAuthority,
+    plural_evidence::PreparedRunVolumes, resources,
+};
 
 pub enum Stage<T> {
     Continue(T),
@@ -20,6 +23,7 @@ pub enum PrepareStart {
 pub struct PreparedStart {
     pub run: Run,
     pub attachment: Option<VolumeAttachment>,
+    pub plural: Option<PreparedRunVolumes>,
     pub workspace_enabled: bool,
     pub expected_authority_ack: Option<(Uuid, u64)>,
     pub spec: VmSpec,
@@ -29,6 +33,7 @@ pub struct PreparedStart {
 pub struct BoundStart {
     pub run: Run,
     pub attachment: Option<VolumeAttachment>,
+    pub plural: Option<PreparedRunVolumes>,
 }
 
 pub struct PreparedResources {
@@ -50,11 +55,25 @@ pub async fn prepare_start(
     orchestrator: &RunOrchestrator,
     command: &StartRun,
 ) -> Result<PrepareStart, OrchestratorError> {
-    let attachment = match acquire_attachment(orchestrator, command).await? {
+    let plural = if orchestrator.plural_volumes {
+        let run = orchestrator.repository.get(command.run_id).await?;
+        Some(orchestrator.acquire_run_volumes(&run).await?)
+    } else {
+        None
+    };
+    let attachment = match if plural.is_some() {
+        Ok(Stage::Continue(
+            plural
+                .as_ref()
+                .and_then(PreparedRunVolumes::legacy_attachment),
+        ))
+    } else {
+        acquire_attachment(orchestrator, command).await
+    }? {
         Stage::Continue(attachment) => attachment,
         Stage::Finished(run) => return Ok(PrepareStart::Finished(run)),
     };
-    let bound = match bind_start(orchestrator, command, attachment).await? {
+    let bound = match bind_start(orchestrator, command, attachment, plural).await? {
         Stage::Continue(bound) => bound,
         Stage::Finished(run) => return Ok(PrepareStart::Finished(run)),
     };
@@ -113,6 +132,7 @@ async fn bind_start(
     orchestrator: &RunOrchestrator,
     command: &StartRun,
     attachment: Option<VolumeAttachment>,
+    plural: Option<PreparedRunVolumes>,
 ) -> Result<Stage<BoundStart>, OrchestratorError> {
     let vm_id = if orchestrator.canonical_cleanup.is_some() {
         let persisted = orchestrator.repository.get(command.run_id).await?;
@@ -142,7 +162,20 @@ async fn bind_start(
         .repository
         .transition(command.run_id, RunState::Provisioning, None, None)
         .await?;
-    if let Err(error) = orchestrator.launch_authorizer.authorize(&run).await {
+    let authorization = if let Some(volumes) = &plural {
+        orchestrator
+            .check_volume_authority(&run, &volumes.selections)
+            .await
+    } else {
+        orchestrator
+            .launch_authorizer
+            .authorize(&run)
+            .await
+            .map_err(|error| {
+                super::authority::RunAuthorityError::redacted(error.to_string()).into()
+            })
+    };
+    if let Err(error) = authorization {
         return terminal(
             orchestrator
                 .fail_with_resources(
@@ -170,7 +203,11 @@ async fn bind_start(
                 .await,
         );
     }
-    Ok(Stage::Continue(BoundStart { run, attachment }))
+    Ok(Stage::Continue(BoundStart {
+        run,
+        attachment,
+        plural,
+    }))
 }
 
 async fn assemble_start(
@@ -185,14 +222,20 @@ async fn assemble_start(
         authority,
         runtime_git_workspace,
     } = resources;
-    let mut spec = match orchestrator
-        .build_spec(
-            &bound.run,
-            bound.attachment.as_ref(),
-            std::mem::take(&mut mounts),
-        )
-        .await
-    {
+    let built = if let Some(volumes) = &bound.plural {
+        orchestrator
+            .build_plural_spec(&bound.run, volumes, std::mem::take(&mut mounts))
+            .await
+    } else {
+        orchestrator
+            .build_spec(
+                &bound.run,
+                bound.attachment.as_ref(),
+                std::mem::take(&mut mounts),
+            )
+            .await
+    };
+    let mut spec = match built {
         Ok(spec) => spec,
         Err(error) => {
             return terminal(
@@ -234,6 +277,7 @@ async fn assemble_start(
     Ok(Stage::Continue(PreparedStart {
         run: bound.run,
         attachment: bound.attachment,
+        plural: bound.plural,
         workspace_enabled,
         expected_authority_ack,
         spec,

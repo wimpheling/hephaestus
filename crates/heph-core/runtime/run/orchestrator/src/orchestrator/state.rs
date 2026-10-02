@@ -41,6 +41,7 @@ pub struct RunOrchestrator {
     pub(crate) cancellation_timeout: Duration,
     pub(crate) canonical_cleanup: Option<CanonicalCleanup>,
     pub(crate) cleanup_timeout: Duration,
+    pub(crate) plural_volumes: bool,
     pub(crate) operation_guards: RunOperationGuards,
 }
 
@@ -73,6 +74,7 @@ impl RunOrchestrator {
             cancellation_timeout: Duration::from_secs(10),
             canonical_cleanup: None,
             cleanup_timeout: Duration::from_secs(30),
+            plural_volumes: false,
             operation_guards: RunOperationGuards::default(),
         }
     }
@@ -94,6 +96,17 @@ impl RunOrchestrator {
             repository,
             volumes,
         });
+        self
+    }
+
+    /// Opts into complete persisted selection preparation and live monitoring.
+    ///
+    /// Requires the canonical cleanup repository, an explicitly implemented
+    /// plural spec factory and a trusted live caller/source authorizer. The
+    /// default is disabled. This alone does not enable database named dispatch.
+    #[must_use]
+    pub const fn with_volume_preparation(mut self) -> Self {
+        self.plural_volumes = true;
         self
     }
 

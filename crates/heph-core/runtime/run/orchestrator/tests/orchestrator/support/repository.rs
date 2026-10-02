@@ -2,7 +2,10 @@ use async_trait::async_trait;
 use run_domain::{CancelRun, Run, RunState, StartRun};
 use run_orchestrator::{CreateRunResult, RepositoryError, RunRepository, StoredVmEvent};
 use runtime_types::{LeaseId, RunId, VolumeId};
-use std::sync::Arc;
+use std::sync::{
+    Arc,
+    atomic::{AtomicBool, Ordering},
+};
 use time::OffsetDateTime;
 use tokio::sync::Mutex;
 use vm_trait::VmExit;
@@ -18,6 +21,9 @@ pub struct MemoryRepository {
     pub created: Mutex<bool>,
     pub events: Mutex<Vec<StoredVmEvent>>,
     pub pause_running_transition: Mutex<Option<TransitionPause>>,
+    pub hang_events: AtomicBool,
+    pub hang_get: AtomicBool,
+    pub event_entered: tokio::sync::Notify,
     pub planned_vm: Mutex<Option<(run_domain::RunCleanupHostId, vm_trait::VmId)>>,
 }
 
@@ -52,6 +58,9 @@ impl MemoryRepository {
             events: Mutex::new(Vec::new()),
             pause_running_transition: Mutex::new(None),
             planned_vm: Mutex::new(None),
+            hang_events: AtomicBool::new(false),
+            hang_get: AtomicBool::new(false),
+            event_entered: tokio::sync::Notify::new(),
         }
     }
 }
@@ -124,6 +133,9 @@ impl RunRepository for MemoryRepository {
     }
 
     async fn get(&self, _run_id: RunId) -> Result<Run, RepositoryError> {
+        if self.hang_get.load(Ordering::SeqCst) {
+            return std::future::pending().await;
+        }
         Ok(self.run.lock().await.clone())
     }
 
@@ -180,6 +192,10 @@ impl RunRepository for MemoryRepository {
         _run_id: RunId,
         event: StoredVmEvent,
     ) -> Result<(), RepositoryError> {
+        self.event_entered.notify_one();
+        if self.hang_events.load(Ordering::SeqCst) {
+            return std::future::pending().await;
+        }
         self.events.lock().await.push(event);
         Ok(())
     }

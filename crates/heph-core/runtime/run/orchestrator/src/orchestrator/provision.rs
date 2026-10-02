@@ -7,6 +7,7 @@ use volume_trait::{VolumeAttachment, VolumeLease};
 
 use super::{
     OrchestratorError, RunOrchestrator,
+    plural_evidence::PreparedRunVolumes,
     prepare::{PreparedStart, Stage, finished},
 };
 
@@ -18,6 +19,7 @@ pub enum ProvisionResult {
 pub struct StartedRun {
     pub run: Run,
     pub attachment: Option<VolumeAttachment>,
+    pub plural: Option<PreparedRunVolumes>,
     pub workspace_enabled: bool,
     pub instance: Arc<dyn VmInstance>,
     pub events: broadcast::Receiver<VmEvent>,
@@ -33,12 +35,21 @@ pub async fn provision_and_start(
     let PreparedStart {
         run,
         attachment,
+        plural,
         workspace_enabled,
         expected_authority_ack,
         spec,
         execution_timeout,
     } = prepared;
-    let instance = match provision_vm(orchestrator, run_id, &run, attachment.as_ref(), spec).await?
+    let instance = match provision_vm(
+        orchestrator,
+        run_id,
+        &run,
+        attachment.as_ref(),
+        plural.as_ref(),
+        spec,
+    )
+    .await?
     {
         Stage::Continue(instance) => instance,
         Stage::Finished(run) => return Ok(ProvisionResult::Finished(run)),
@@ -48,6 +59,7 @@ pub async fn provision_and_start(
         StartContext {
             run,
             attachment,
+            plural,
             workspace_enabled,
             expected_authority_ack,
             execution_timeout,
@@ -66,40 +78,21 @@ async fn provision_vm(
     run_id: RunId,
     run: &Run,
     attachment: Option<&VolumeAttachment>,
+    plural: Option<&PreparedRunVolumes>,
     spec: vm_trait::VmSpec,
 ) -> Result<Stage<Arc<dyn VmInstance>>, OrchestratorError> {
-    if let Err(error) = orchestrator.launch_authorizer.authorize(run).await {
-        return orchestrator
-            .fail_with_resources(
-                run_id,
-                attachment.map(|value| &value.lease),
-                None,
-                &error.to_string(),
-            )
-            .await
-            .map(finished);
-    }
-    if let Err(error) = orchestrator.secrets.reauthorize(run).await {
-        return orchestrator
-            .fail_with_resources(
-                run_id,
-                attachment.map(|value| &value.lease),
-                None,
-                &error.to_string(),
-            )
-            .await
-            .map(finished);
-    }
-    if let Err(error) = orchestrator.authority.reauthorize(run).await {
-        return orchestrator
-            .fail_with_resources(
-                run_id,
-                attachment.map(|value| &value.lease),
-                None,
-                &error.to_string(),
-            )
-            .await
-            .map(finished);
+    if plural.is_none() {
+        if let Err(error) = authorize_scalar_provision(orchestrator, run).await {
+            return orchestrator
+                .fail_with_resources(
+                    run_id,
+                    attachment.map(|value| &value.lease),
+                    None,
+                    &error.to_string(),
+                )
+                .await
+                .map(finished);
+        }
     }
     // Recheck immutable ownership and open planning immediately before IO.
     // This also rejects a cleanup closure made during preparation.
@@ -110,6 +103,11 @@ async fn provision_vm(
         return Err(OrchestratorError::RunInProgress(run_id));
     }
     orchestrator.bind_planned_vm(run).await?;
+    if let Some(volumes) = plural {
+        orchestrator
+            .check_volume_authority(run, &volumes.selections)
+            .await?;
+    }
     let instance = match orchestrator.provider.provision(spec).await {
         Ok(instance) => instance,
         Err(error) => {
@@ -162,6 +160,7 @@ async fn provision_vm(
 struct StartContext {
     run: Run,
     attachment: Option<VolumeAttachment>,
+    plural: Option<PreparedRunVolumes>,
     workspace_enabled: bool,
     expected_authority_ack: Option<(uuid::Uuid, u64)>,
     execution_timeout: Option<std::time::Duration>,
@@ -175,6 +174,11 @@ async fn start_vm(
     let run_id = context.run.id;
     let operation = orchestrator.lock_run_operation(run_id).await?;
     orchestrator.bind_planned_vm(&context.run).await?;
+    if let Some(volumes) = &context.plural {
+        orchestrator
+            .check_volume_authority(&context.run, &volumes.selections)
+            .await?;
+    }
     if let Err(error) = orchestrator
         .repository
         .transition(run_id, RunState::Starting, None, None)
@@ -236,7 +240,7 @@ async fn handle_start_failure(
 
 async fn finish_started(
     orchestrator: &RunOrchestrator,
-    context: StartContext,
+    mut context: StartContext,
     instance: Arc<dyn VmInstance>,
     mut events: tokio::sync::broadcast::Receiver<VmEvent>,
 ) -> Result<Stage<StartedRun>, OrchestratorError> {
@@ -261,7 +265,16 @@ async fn finish_started(
                 .map(finished);
         }
     }
-    let lease = match context.attachment.as_ref() {
+    if let Some(volumes) = &mut context.plural {
+        orchestrator
+            .refresh_run_volumes(&context.run, volumes, true)
+            .await?;
+    }
+    let lease = match context
+        .attachment
+        .as_ref()
+        .filter(|_| context.plural.is_none())
+    {
         Some(attachment) => match orchestrator.volumes.mark_attached(&attachment.lease).await {
             Ok(lease) => Some(lease),
             Err(error) => {
@@ -302,10 +315,26 @@ async fn finish_started(
     Ok(Stage::Continue(StartedRun {
         run: context.run,
         attachment: context.attachment,
+        plural: context.plural,
         workspace_enabled: context.workspace_enabled,
         instance,
         events,
         lease,
         execution_timeout: context.execution_timeout,
     }))
+}
+
+async fn authorize_scalar_provision(
+    orchestrator: &RunOrchestrator,
+    run: &Run,
+) -> Result<(), OrchestratorError> {
+    // Retain the scalar profile's existing checks; plural checks are combined.
+    orchestrator
+        .launch_authorizer
+        .authorize(run)
+        .await
+        .map_err(|error| super::authority::RunAuthorityError::redacted(error.to_string()))?;
+    orchestrator.secrets.reauthorize(run).await?;
+    orchestrator.authority.reauthorize(run).await?;
+    Ok(())
 }

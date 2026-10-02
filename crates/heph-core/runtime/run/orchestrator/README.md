@@ -92,3 +92,59 @@ another process/provider for that owner; providers without equivalent ownership
 remain unsupported. The operation guard is released before reentrant failure
 cleanup and never spans workload execution. Application enablement and plural
 runtime integration remain separate checkpoints.
+
+## Complete-set preparation and live execution (opt-in)
+
+`with_volume_preparation()` additionally enables preparation from the exact
+persisted revision's zero-to-32 selection set. It requires canonical cleanup.
+There is no `StartRun.requires_state` acquisition branch in this profile. Every
+attachment must match the selected run, release, revision, slot, resource,
+project, host and capacity; refreshes must preserve every acquired lease ID and
+fence. Empty sets remain explicit. Only an exact singleton `LegacyOrigin`
+projects the historical scalar tuple and built-in state labels. Named slots
+never supply scalar pointers. `LegacyDeclaration` fails closed until guest
+protocol 11 can carry its checked initialization purpose; ordinary explicit
+SQLite slots use existing named metadata and no built-in initialization.
+
+Factories must implement `build_with_volumes`; caller/source adapters must
+implement `authorize_with_volumes`. Both defaults reject this profile, even for
+zero volumes. The authorizer must prove live execute/update authority and use
+of the exact released source. Mailbox adapters must resolve their authoritative
+accepted/delegated producer evidence; no user is fabricated from an attachment
+or event. Mount preflight independently checks each live typed issuer/grant.
+
+Caller/source, secret, runtime capability and whole-set mount checks share one
+two-second deadline before acquisition and immediately before Start under the
+operation guard. An independent one-second monitor races provisioning, Start,
+guest acknowledgement, event persistence and workload completion. Its complete
+lease refresh also runs for zero volumes. Stalled event writes or missing guest
+acknowledgement cannot starve live checks. A successful check may take up to two seconds; an earlier successful snapshot,
+the next one-second poll and a new two-second check fit the five-second detection
+bound. A positive scoped physical cleanup
+observation ends monitoring; an absent in-memory handle cannot end it.
+
+After successful guest completion, the private owned drain phase skips mount
+renewal/preflight because its own acquisition closure is intentional and every
+fence remains held. Independent caller/source/runtime/secret checks continue
+within the same two-second deadline until scoped physical confirmation. External
+closure before this phase remains terminal; VM exit alone does not end checking.
+Cleanup snapshot setup is bounded to two seconds; scoped physical confirmation
+remains bounded by the cleanup timeout. Post-confirmation bookkeeping has a
+separate four-second bound.
+
+On live-check failure, the execution future is dropped before bounded physical
+revocation under the operation guard. Exact active-handle destruction and scoped
+confirmation use the captured, durably checked VM ID and actual owner scope.
+This physical step precedes database cleanup bookkeeping and creates no receipt
+or lease release. Physical uncertainty retains the handle and every fence.
+Database failure after physical confirmation still retains all fences until the
+normal durable target/receipt/atomic-finish protocol succeeds. Bookkeeping is
+bounded separately and exposes incomplete cleanup for recovery.
+
+The scalar profile remains the default. App composition and named database
+admission are not enabled here. Before enablement, the app authority adapter
+must support exact live `Starting`/`Running` pins and permanent closure, mailbox
+producers need positive fresh VM-plan admission, and caller/source adapters must
+implement the stronger plural authorization port. Guest protocol 11 and native
+full-runtime verification remain separate work. Core fake-port tests establish
+ordering and failure behavior, not physical VM or PostgreSQL enforcement.

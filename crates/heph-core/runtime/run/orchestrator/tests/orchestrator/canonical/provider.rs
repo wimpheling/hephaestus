@@ -1,7 +1,7 @@
 use async_trait::async_trait;
 use std::sync::{
     Arc, Mutex, Weak,
-    atomic::{AtomicBool, Ordering},
+    atomic::{AtomicBool, AtomicU64, Ordering},
 };
 use tokio::sync::broadcast;
 use vm_trait::{
@@ -14,6 +14,7 @@ pub struct ScopedProvider {
     pub inner: AutoExitProvider,
     pub scope: Mutex<VmProviderOwnerScope>,
     pub fail_cleanup: AtomicBool,
+    pub cleanup_delay_seconds: AtomicU64,
     pub hang_cleanup: AtomicBool,
     pub fail_destroy: Arc<AtomicBool>,
     pub wrong_handle: AtomicBool,
@@ -48,6 +49,7 @@ impl ScopedProvider {
                 VmProviderOwnerScope::new("test-owner".into(), "test".into()).unwrap(),
             ),
             fail_cleanup: AtomicBool::new(false),
+            cleanup_delay_seconds: AtomicU64::new(0),
             hang_cleanup: AtomicBool::new(false),
             fail_destroy: Arc::new(AtomicBool::new(false)),
             wrong_handle: AtomicBool::new(false),
@@ -103,6 +105,10 @@ impl VmProvider for ScopedProvider {
             return Err(VmError::InvalidState("provider ownership changed"));
         }
         lock(&self.inner.log).push("scoped-cleanup");
+        let delay = self.cleanup_delay_seconds.load(Ordering::SeqCst);
+        if delay != 0 {
+            tokio::time::sleep(std::time::Duration::from_secs(delay)).await;
+        }
         if self.hang_cleanup.load(Ordering::SeqCst) {
             return std::future::pending().await;
         }

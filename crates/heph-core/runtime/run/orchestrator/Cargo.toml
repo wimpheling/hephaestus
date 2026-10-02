@@ -21,11 +21,11 @@ tokio = { workspace = true, features = ["macros", "rt", "sync", "time"] }
 tracing.workspace = true
 uuid.workspace = true
 vm-trait.workspace = true
+volume-domain = { path = "../../volume/domain" }
 volume-trait = { path = "../../volume/trait" }
 workspace-domain = { path = "../../workspace/domain" }
 
 [dev-dependencies]
-volume-domain = { path = "../../volume/domain" }
 tokio = { workspace = true, features = ["macros", "rt-multi-thread", "test-util"] }
 
 [lints]
