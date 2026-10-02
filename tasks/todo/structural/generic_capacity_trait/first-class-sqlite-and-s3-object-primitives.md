@@ -29,12 +29,28 @@ Verified checkpoints:
   evidence. This rehearsal verifies database records and backing references,
   not filesystem bytes. Historical authorization generation is frozen;
   current authorization diagnostics pass with zero warnings.
+- Guest named-volume contracts (`0fee5224`) passed 107 focused tests and 10
+  protocol tests. Native guest mount enforcement remains pending.
+- Local provider provisioning (`64e96dcb`) passed real ext4 creation and
+  recovery checks, subprocess lock lifetime checks, actor/RLS tests, an upgrade of a populated
+  database from schema 0102 to 0103, and legacy lease/recovery regressions. Existing
+  backing bytes and immutable UUID/capacity reservations remain protected.
+- Deployment persistence (`9c5dc4b6`, `3087ddbe`) passed 10 real PostgreSQL
+  admission, inspection, and removal admission cases plus focused strict checks.
+  The ledger records authorized intent and progress; deployment effects and
+  verification of installed resources are still to be implemented.
 
-Provider provisioning, runtime bindings, deployment persistence, operator
-commands, SQLite execution, retained-data recovery, and the full repository
-quality gate remain to be completed. Project membership and deployment history
-grant no resource authority. The initial volume profile rejects sharing,
-including read-only sharing, until its consistency contract is defined.
+Typed volume grants and exact normal-run authorization checks (migration 0105)
+are written; their native and strict checks are pending. Provider orchestration,
+plural runtime attachment and cleanup, operator CLI/UI commands, real SQLite
+install/inspect/remove and retained-data recovery, and the full repository
+quality gate remain unfinished. Backup metadata fields do not implement backup:
+volume backup and restore are currently unimplemented and remain required below.
+
+Project membership and deployment history grant no resource authority. The
+initial volume profile rejects sharing, including read-only sharing, until its
+consistency contract is defined. This status covers steps toward the first
+usable local delivery; the broader service and networking checklist remains open.
 
 ## Outcome
 
