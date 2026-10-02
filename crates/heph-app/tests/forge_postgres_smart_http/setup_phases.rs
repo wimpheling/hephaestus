@@ -6,6 +6,11 @@ pub(super) async fn initialize(
     // Apply the current workspace schema before constructing the repository
     // service so this focused matrix covers the complete receive-path schema.
     let migrations = sqlx::migrate!("../../migrations");
+    let expected_migration = migrations
+        .iter()
+        .map(|migration| migration.version)
+        .max()
+        .expect("embedded workspace migration head");
     migrations
         .run(&pool)
         .await
@@ -16,7 +21,7 @@ pub(super) async fn initialize(
             .await
             .expect("latest applied migration");
     assert_eq!(
-        latest_migration, 100,
+        latest_migration, expected_migration,
         "focused matrix must use current schema"
     );
     let temporary = tempfile::tempdir().expect("temporary directory");
