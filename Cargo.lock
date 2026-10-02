@@ -4336,6 +4336,8 @@ version = "0.1.0"
 dependencies = [
  "runtime-types",
  "serde",
+ "sha2",
+ "thiserror 2.0.19",
  "time",
  "vm-trait",
 ]

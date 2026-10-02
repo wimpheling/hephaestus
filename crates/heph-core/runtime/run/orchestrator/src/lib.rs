@@ -11,7 +11,9 @@ pub use orchestrator::{
     RunResourceObservationError, RunResourceObserver, RunRuntimeError, RunRuntimeManager,
     RunSecretError, RunSecretManager, VmSpecFactory,
 };
-pub use repository::{CreateRunResult, RepositoryError, RunRepository, StoredVmEvent};
+pub use repository::{
+    CreateRunResult, RepositoryError, RunCleanupRepository, RunRepository, StoredVmEvent,
+};
 pub use runtime_catalog::{
     MailboxRuntimeEvent, RunRuntimeArtifact, RunRuntimeArtifactKind, RunRuntimeCatalog,
     RunRuntimeCatalogError, RunRuntimeInput,

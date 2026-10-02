@@ -80,3 +80,54 @@ pub trait RunRepository: Send + Sync + 'static {
     /// Returns non-cleaned runs that may require restart reconciliation.
     async fn recoverable_runs(&self) -> Result<Vec<Run>, RepositoryError>;
 }
+
+/// Worker-only persistence boundary for canonical complete-set cleanup.
+///
+/// Existing run repositories are not implicitly cleanup implementations. An
+/// adapter must enforce acquisition closure, exact target identity, and trusted
+/// provider observations; public domain values alone establish no cleanup proof.
+#[async_trait]
+pub trait RunCleanupRepository: Send + Sync + 'static {
+    /// Persists an exact planned VM identity before any provisioning IO.
+    ///
+    /// Trusted configured provider ownership supplies the host scope. Replays
+    /// must compare scope, VM identity, and exact run/revision. An adapter must
+    /// reject replacement, closed acquisition, and fabricated historical IDs.
+    async fn bind_vm_before_provision(
+        &self,
+        run_id: RunId,
+        instance_id: runtime_types::AgentInstanceId,
+        revision_id: runtime_types::AgentInstanceRevisionId,
+        host: &run_domain::RunCleanupHostId,
+        vm_id: &vm_trait::VmId,
+    ) -> Result<(), RepositoryError>;
+
+    /// Closes further acquisition under the run lock and snapshots every lease.
+    ///
+    /// Returns the same immutable generation/target on retry, including an
+    /// explicit empty set or unresolved historical VM identity. No IO belongs
+    /// in this transaction, and no in-memory attachment is a source of truth.
+    async fn begin_cleanup(
+        &self,
+        run_id: RunId,
+    ) -> Result<run_domain::RunCleanupTarget, RepositoryError>;
+
+    /// Persists a worker-verified exact VM destruction or authoritative absence.
+    ///
+    /// A DTO does not prove the observation: the trusted adapter must verify the
+    /// worker boundary and matching persisted generation/full fence-set digest.
+    async fn record_cleanup_receipt(
+        &self,
+        receipt: &run_domain::RunCleanupReceipt,
+    ) -> Result<(), RepositoryError>;
+
+    /// Consumes the persisted exact receipt and releases the complete fence set.
+    ///
+    /// One transaction verifies acquisition remains closed, matches every lease
+    /// and fence, releases the whole set, then permits `CleanedUp`. Missing or
+    /// stale receipt evidence must fail without releasing any lease.
+    async fn finish_cleanup(
+        &self,
+        receipt: &run_domain::RunCleanupReceipt,
+    ) -> Result<Run, RepositoryError>;
+}

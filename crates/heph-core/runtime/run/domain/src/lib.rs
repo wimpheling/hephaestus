@@ -1,5 +1,13 @@
 //! Durable run state, outcomes, commands, and transition rules.
 
+mod cleanup;
+
+pub use cleanup::{
+    MAX_RUN_CLEANUP_LEASES, RunCleanupError, RunCleanupHostId, RunCleanupLeaseFence,
+    RunCleanupReceipt, RunCleanupTarget, RunCleanupVmObservation, RunCleanupVmObservationKind,
+    RunCleanupVmTarget, RunCleanupVmTargetKind,
+};
+
 use runtime_types::{
     AgentAttachmentId, AgentInstanceId, AgentInstanceRevisionId, CommandId, LeaseId,
     ReleaseAgentId, ReleaseId, RunId, VolumeId,
