@@ -57,7 +57,7 @@ if ! cmp --silent "$composed" "$committed"; then
     exit 1
 fi
 printf 'historical and current Mélange migrations are current\n'
-if ! rg --fixed-strings --quiet "\"melange-0.8.5:${model_checksum}\"" \
+if ! grep -F -q "\"melange-0.8.5:${model_checksum}\"" \
     "$repository_root/crates/heph-std/authorization/authz-postgres/src/lib.rs"; then
     printf 'current authorization audit version differs; update AUTHORIZATION_MODEL_VERSION to melange-0.8.5:%s without changing historical audit records\n' "$model_checksum" >&2
     exit 1
