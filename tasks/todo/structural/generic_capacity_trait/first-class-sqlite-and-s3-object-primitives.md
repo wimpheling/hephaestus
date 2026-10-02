@@ -29,12 +29,14 @@ Verified checkpoints:
   evidence. This rehearsal verifies database records and backing references,
   not filesystem bytes. Historical authorization generation is frozen;
   current authorization diagnostics pass with zero warnings.
-- Guest named-volume contracts (`0fee5224`) passed 107 focused tests and 10
-  protocol tests. Native guest mount enforcement remains pending.
+- Guest named-volume contracts (`0fee5224`) passed 107 focused tests. Guest
+  protocol version 10 rejects stale initializers before execution; native guest
+  mount enforcement remains pending.
 - Local provider provisioning (`64e96dcb`) passed real ext4 creation and
-  recovery checks, subprocess lock lifetime checks, actor/RLS tests, an upgrade of a populated
-  database from schema 0102 to 0103, and legacy lease/recovery regressions. Existing
-  backing bytes and immutable UUID/capacity reservations remain protected.
+  recovery checks, subprocess lock lifetime checks, actor/RLS tests, an upgrade
+  of a populated database from schema 0102 to 0103, and legacy lease/recovery
+  regressions. Existing backing bytes and immutable UUID/capacity reservations
+  remain protected.
 - Deployment persistence (`9c5dc4b6`, `3087ddbe`) passed 10 real PostgreSQL
   admission, inspection, and removal admission cases plus focused strict checks.
   The ledger records authorized intent and progress; deployment effects and
