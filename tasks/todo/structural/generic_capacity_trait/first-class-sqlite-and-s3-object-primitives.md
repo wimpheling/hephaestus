@@ -1,6 +1,40 @@
 # Resource recipes for private volumes, SQLite, PostgreSQL, and S3
 
-Owner: unassigned
+Owner: resource-recipes implementation
+
+## Current implementation status
+
+Implementation is in progress on [PR #60](https://github.com/wimpheling/hephaestus/pull/60).
+The first delivery is local application/SQLite install, inspect, and remove.
+PostgreSQL and hosted S3 recipes remain dependent on private networking.
+
+Verified checkpoints:
+
+- `recipe-domain` validates the bounded version-1 static TOML graph, release
+  pins, inputs, exact volume slots, external references, and removal policy.
+  `volume-domain` defines validated paths, capacities, and RO/RW declarations.
+- `recipe-application` defines immutable deployment intent, stable predicted
+  resource IDs, lifecycle states, and repository/effect/reconciliation ports.
+  These ports alone do not execute deployments.
+- Release configuration and PostgreSQL catalogs persist authored named-volume
+  slots. Empty declarations preserve captured historical configuration and
+  runtime-contract hashes. Legacy import and update paths reject explicit slots
+  until typed runtime materialization is available.
+- Focused strict Rust checks, architecture checks, and real PostgreSQL
+  publication/import/update regressions passed for these checkpoints.
+- Additive migrations 0101/0102 generalize the existing volume table to stable
+  project ownership and add exact immutable revision-volume bindings. Real
+  actor/RLS checks and a populated schema-0100 upgrade rehearsal preserve
+  historical checksums, volume metadata, active leases, and mailbox fencing
+  evidence. This rehearsal verifies database records and backing references,
+  not filesystem bytes. Historical authorization generation is frozen;
+  current authorization diagnostics pass with zero warnings.
+
+Provider provisioning, runtime bindings, deployment persistence, operator
+commands, SQLite execution, retained-data recovery, and the full repository
+quality gate remain to be completed. Project membership and deployment history
+grant no resource authority. The initial volume profile rejects sharing,
+including read-only sharing, until its consistency contract is defined.
 
 ## Outcome
 

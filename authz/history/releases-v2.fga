@@ -103,14 +103,11 @@ type run
 type state_volume
   relations
     define instance: [agent_instance]
-    define project: [project]
-    # Stable project managers administer standalone volumes. Ordinary project
-    # readers receive no volume rights. Legacy instance-derived rights remain.
-    define can_read: can_read from instance or can_manage from project
-    define can_attach: can_execute from instance or can_manage from project
-    define can_restore: can_manage from instance or can_manage from project
-    define can_manage: can_manage from instance or can_manage from project
-    define can_grant_agent_capability: can_manage from instance or can_manage from project
+    define can_read: can_read from instance
+    define can_attach: can_execute from instance
+    define can_restore: can_manage from instance
+    define can_manage: can_manage from instance
+    define can_grant_agent_capability: can_manage from instance
     define agent_inspect: [agent_instance]
     define agent_attach: [agent_instance]
     define agent_restore: [agent_instance]

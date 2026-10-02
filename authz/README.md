@@ -2,6 +2,10 @@
 
 `hephaestus.fga` is the canonical production authorization model. Mélange
 compiles it to PostgreSQL functions; production does not contact OpenFGA.
+Applied release-model migration 0006 is verified against frozen inputs in
+`history/`. Current model generation writes migration 0102 after the private
+volume schema in 0101. Both complete outputs are verified; historical migration
+checksums are never rewritten.
 
 The toolchain is pinned to Mélange **v0.8.5**, upstream commit
 `7b0ba2f0979cbb8ea1d83dbe0d7617535a0bac7d`. The Linux amd64 release archive
@@ -23,15 +27,17 @@ HEPHAESTUS_POSTGRES_TEST_URL='postgres://...?sslmode=disable' \
   scripts/check-authz.sh
 ```
 
-The exact generation command is:
+The pinned compiler invocation used by the generator is:
 
 ```sh
 melange generate migration \
   --schema authz/hephaestus.fga \
   --up \
-  --no-update-check > migrations/0003_melange_generated.sql
+  --no-update-check
 ```
 
+The generator composes the current tuple projection and restores the deployed
+dispatcher security attributes. Use the script to write the composed migration.
 `0004_rls_and_roles.sql` wraps the generated dispatcher with a locked-down
 security-definer function. It does not modify generated SQL. This lets RLS call
 the generated evaluator without recursively applying tenant policies to tuple
