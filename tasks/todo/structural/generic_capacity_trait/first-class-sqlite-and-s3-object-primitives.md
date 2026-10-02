@@ -113,8 +113,43 @@ Verified checkpoints:
   allocation writes (`c9f05268`); all 66 filesystem tests passed. Ten actual
   worker PostgreSQL cases and three combined PostgreSQL/filesystem cases also
   passed on the unpublished migration chain. The worker fixtures do not prove
-  atomic actor retirement; that coordinator and its committed-fence proof
-  remain in progress.
+  atomic actor retirement. The subsequent coordinator checkpoint below verifies
+  that boundary against the coupled private implementation.
+- Complete volume-set execution (`ec818f40`) validates all 0–32 persisted
+  selections and fences and monitors live authority through provisioning,
+  guest acknowledgement and cleanup. Two unit and 58 integration tests passed
+  with strict checks. Controlled core ports are not application integration.
+- Concrete partial retention (`b56af0a9`) keeps the actual nonclone Local guard
+  through worker recording and the authorized actor transaction, including
+  caller cancellation. Twelve real PostgreSQL/filesystem cases and two mapping
+  tests passed: committed permanent fencing, current-manager cleanup after
+  creator/source access loss, stale observations, rollback and undrained
+  consumer refusal. Only core ports and the app coordinator are checkpointed;
+  coupled PostgreSQL source and migration 0112 remain unpublished.
+- Explicit guest initialization (`79ddbd8c`, protocol 11) distinguishes proven
+  built-in state from named application volumes. A fresh KVM check passed across
+  three managed VMs at guest UID/GID 10001: new WAL state, existing database
+  schema/journal/bytes preservation, named application persistence, and effective
+  read-only enforcement with unchanged backing bytes. All three worker PIDs,
+  VM directories and cgroups disappeared after destruction. Focused strict
+  checks passed; this probe does not publish or install the packaged recipe.
+- Readonly owner recovery (`2b137c80`) reopens an existing root without filesystem
+  writes or repair; all 75 Local filesystem tests passed. Authoritative owner
+  history (`2e003d4f`) defines worker discovery across all immutable purpose rows,
+  including retired resources. Seven actual PostgreSQL cases and one retired
+  root PostgreSQL/Local case passed. Its PostgreSQL adapter remains unpublished;
+  absent history never authorizes implicit initialization.
+- Frozen VM workload construction (`a7a135db`) checks exact persisted run,
+  release, revision and project pins, the full catalog and volume provenance.
+  Eight pure cases, one actual public-schema-107 loader regression and five
+  policy regressions passed with strict checks. It builds the base workload;
+  live launch authority and canonical application activation remain separate.
+
+Before publishing migrations 0108–0112, explicit execution profiles must preserve
+fresh legacy orchestration and require canonical ownership and cleanup for recipe
+runs. Unresolved historical rows stay held. Schema presence must not automatically
+enable owned execution. The private profile proposal is awaiting actual SQL tests
+and scalar release qualification.
 
 Provider orchestration and ownership seals, plural runtime attachment and cleanup,
 physical revocation, authenticated project web UI commands, real SQLite
