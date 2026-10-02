@@ -30,8 +30,11 @@ Verified checkpoints:
   not filesystem bytes. Historical authorization generation is frozen;
   current authorization diagnostics pass with zero warnings.
 - Guest named-volume contracts (`0fee5224`) passed 107 focused tests. Guest
-  protocol version 10 rejects stale initializers before execution; native guest
-  mount enforcement remains pending.
+  protocol version 10 rejects stale initializers before execution. A real KVM
+  guest check (`399979fe`) passed with privileged RO/RW controls, persisted RW
+  data, immutable RO backing bytes after confirmed VM destruction, and refusal
+  of dirty read-only filesystems before workload execution. This checks the
+  guest/provider boundary, not installed recipe execution.
 - Local provider provisioning (`64e96dcb`) passed real ext4 creation and
   recovery checks, subprocess lock lifetime checks, actor/RLS tests, an upgrade
   of a populated database from schema 0102 to 0103, and legacy lease/recovery
@@ -39,15 +42,32 @@ Verified checkpoints:
   remain protected.
 - Deployment persistence (`9c5dc4b6`, `3087ddbe`) passed 10 real PostgreSQL
   admission, inspection, and removal admission cases plus focused strict checks.
-  The ledger records authorized intent and progress; deployment effects and
-  verification of installed resources are still to be implemented.
+  This checkpoint records authorized intent and progress.
+- Exact consumer volume grants (`71ad46b1`, migration 0105) passed real
+  PostgreSQL authorization and populated upgrade checks. Grants pin the
+  revision, export, slot, volume, mode and contract hash; mount checks retain
+  live issuer authority and permanent revocation. Runtime enforcement and
+  physical revocation require the remaining orchestrator integration.
+- The execution ledger (`5ef6901f`, migration 0106) passed 15 real PostgreSQL
+  execution cases and 10 admission regressions, including a populated upgrade.
+  Durable claims, CAS generations, immutable results and worker-only outcome
+  receipts support cleanup by a current manager after original actor/source
+  access loss. Fixture receipts prove ledger semantics; real provider adapters
+  still need to prove creation ownership, readiness, destruction and detach.
+- The [local SQLite example](../../../../examples/local-sqlite/README.md)
+  (`401c64fb`) includes a pinned-builder application, bounded recipe inputs and
+  a distinct external-volume reuse recipe. Fourteen actual Python tests and one
+  Rust parser/resolver integration test passed, with focused strict checks.
+  Parser release fixtures are not publication or deployed VM evidence.
 
-Typed volume grants and exact normal-run authorization checks (migration 0105)
-are written; their native and strict checks are pending. Provider orchestration,
-plural runtime attachment and cleanup, operator CLI/UI commands, real SQLite
-install/inspect/remove and retained-data recovery, and the full repository
-quality gate remain unfinished. Backup metadata fields do not implement backup:
-volume backup and restore are currently unimplemented and remain required below.
+Typed instance import and permanent removal admission are undergoing checks.
+Provider orchestration and ownership seals, plural runtime attachment and cleanup,
+physical revocation, authenticated project web UI commands, real SQLite
+publication/install/inspect/remove and retained-data recovery, and the full
+repository quality gate remain unfinished. The existing authenticated web UI is
+the first entry point; there is no normal authenticated Heph CLI yet. Backup
+metadata fields do not implement backup: volume backup and restore remain
+unimplemented and required by the broader checklist below.
 
 Project membership and deployment history grant no resource authority. The
 initial volume profile rejects sharing, including read-only sharing, until its
