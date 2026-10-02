@@ -1,10 +1,8 @@
-use rusqlite::Connection;
 use std::{
     ffi::CString,
     fs::{self, File},
     io::{self, Read, Seek, SeekFrom},
     os::unix::ffi::OsStrExt,
-    os::unix::fs::chown,
     path::{Path, PathBuf},
     thread,
     time::{Duration, Instant},
@@ -12,7 +10,7 @@ use std::{
 use uuid::Uuid;
 use vm_libkrun::protocol::{GuestMessage, GuestStateVolume};
 
-use crate::{AGENT_GID, AGENT_UID, CONTROL_CONNECT_TIMEOUT, vsock, write_frame};
+use crate::{CONTROL_CONNECT_TIMEOUT, vsock, write_frame};
 
 pub fn mount_state_volume(volume: &GuestStateVolume) -> io::Result<PathBuf> {
     let filesystem_uuid = Uuid::parse_str(&volume.filesystem_uuid)
@@ -30,15 +28,27 @@ pub fn mount_state_volume(volume: &GuestStateVolume) -> io::Result<PathBuf> {
         &super::volume_mounts::pinned_path(&directory),
         false,
     )?;
-    if volume.guest_path == Path::new("/var/lib/hephaestus") {
-        if let Err(error) = initialize_database(&volume.guest_path) {
-            return match unmount(&volume.guest_path) {
-                Ok(()) => Err(error),
-                Err(cleanup) => Err(io::Error::other(format!(
-                    "{error}; legacy volume cleanup failed: {cleanup}"
-                ))),
-            };
-        }
+    drop(directory);
+    // Explicit compatibility conversion for the historical scalar state path.
+    // Scratch storage never receives built-in database preparation.
+    let purpose = if volume.guest_path == Path::new("/var/lib/hephaestus") {
+        vm_trait::VmVolumeInitializationPurpose::BuiltinStateSQLite
+    } else {
+        vm_trait::VmVolumeInitializationPurpose::None
+    };
+    let preparation = if purpose == vm_trait::VmVolumeInitializationPurpose::BuiltinStateSQLite {
+        super::volume_mounts::prepare_mounted_volume(&volume.guest_path, &device, false, purpose)
+    } else {
+        // Preserve historical scratch ownership while checking the exact mount.
+        super::volume_mounts::pin_mounted_volume(&volume.guest_path, &device).map(drop)
+    };
+    if let Err(error) = preparation {
+        return match unmount(&volume.guest_path) {
+            Ok(()) => Err(error),
+            Err(cleanup) => Err(io::Error::other(format!(
+                "{error}; legacy volume cleanup failed: {cleanup}"
+            ))),
+        };
     }
     Ok(volume.guest_path.clone())
 }
@@ -96,23 +106,6 @@ pub fn find_ext4_device_in(
             format!("ext4 filesystem UUID {expected} was not found"),
         )
     })
-}
-
-fn initialize_database(mount_path: &Path) -> io::Result<()> {
-    chown(mount_path, Some(AGENT_UID), Some(AGENT_GID))?;
-    let database = mount_path.join("state.db");
-    let connection = Connection::open(&database).map_err(io::Error::other)?;
-    let mode: String = connection
-        .query_row("PRAGMA journal_mode = WAL", [], |row| row.get(0))
-        .map_err(io::Error::other)?;
-    if !mode.eq_ignore_ascii_case("wal") {
-        return Err(io::Error::other("SQLite refused WAL journal mode"));
-    }
-    connection
-        .execute_batch("PRAGMA synchronous = FULL;")
-        .map_err(io::Error::other)?;
-    drop(connection);
-    chown(&database, Some(AGENT_UID), Some(AGENT_GID))
 }
 
 // Mounting is a privileged operation inside the guest, isolated from the host.

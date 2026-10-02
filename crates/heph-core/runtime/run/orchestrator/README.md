@@ -101,10 +101,14 @@ There is no `StartRun.requires_state` acquisition branch in this profile. Every
 attachment must match the selected run, release, revision, slot, resource,
 project, host and capacity; refreshes must preserve every acquired lease ID and
 fence. Empty sets remain explicit. Only an exact singleton `LegacyOrigin`
-projects the historical scalar tuple and built-in state labels. Named slots
-never supply scalar pointers. `LegacyDeclaration` fails closed until guest
-protocol 11 can carry its checked initialization purpose; ordinary explicit
-SQLite slots use existing named metadata and no built-in initialization.
+projects the historical scalar tuple. Both proven `LegacyOrigin` and
+`LegacyDeclaration` produce protocol 11 typed `BuiltinStateSQLite` metadata
+with the frozen legacy requirement marker; canonical specs use no scalar state
+labels. Named slots never supply scalar pointers. Ordinary explicit SQLite slots
+use `None`, even if their name/path resembles legacy state, and the application
+owns their database. Default scalar preparation retains its compatibility labels.
+App factories must recheck the frozen release requirement before enabling this
+profile; guest validation and initialization are separate from mount authority.
 
 Factories must implement `build_with_volumes`; caller/source adapters must
 implement `authorize_with_volumes`. Both defaults reject this profile, even for

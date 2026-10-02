@@ -5,6 +5,10 @@ use volume_domain::{GuestMountPath, MAX_VOLUME_SLOTS, VolumeAccessMode};
 
 use crate::{VmError, VmSpec};
 
+#[path = "guest_initialization.rs"]
+mod initialization;
+pub use initialization::VmVolumeInitializationPurpose;
+
 /// An exact guest attachment declaration referencing an existing VM disk.
 ///
 /// This metadata carries no grant and contains no host path. The orchestrator
@@ -17,6 +21,13 @@ pub struct VmGuestVolume {
     filesystem_uuid: Uuid,
     guest_path: GuestMountPath,
     access_mode: VolumeAccessMode,
+    #[serde(
+        default,
+        skip_serializing_if = "VmVolumeInitializationPurpose::is_none"
+    )]
+    initialization_purpose: VmVolumeInitializationPurpose,
+    #[serde(default, skip_serializing_if = "initialization::is_false")]
+    frozen_requires_state: bool,
 }
 
 #[derive(Deserialize)]
@@ -27,6 +38,10 @@ struct GuestVolumeWire {
     filesystem_uuid: Uuid,
     guest_path: GuestMountPath,
     access_mode: VolumeAccessMode,
+    #[serde(default)]
+    initialization_purpose: VmVolumeInitializationPurpose,
+    #[serde(default)]
+    frozen_requires_state: bool,
 }
 
 impl VmGuestVolume {
@@ -57,6 +72,8 @@ impl VmGuestVolume {
             filesystem_uuid,
             guest_path,
             access_mode,
+            initialization_purpose: VmVolumeInitializationPurpose::None,
+            frozen_requires_state: false,
         })
     }
 
@@ -96,7 +113,8 @@ impl TryFrom<GuestVolumeWire> for VmGuestVolume {
             wire.filesystem_uuid,
             wire.guest_path,
             wire.access_mode,
-        )
+        )?
+        .with_initialization_purpose(wire.initialization_purpose, wire.frozen_requires_state)
     }
 }
 
@@ -109,6 +127,7 @@ pub fn validate_guest_volume_set(volumes: &[VmGuestVolume]) -> Result<(), VmErro
         return Err(invalid("too many named guest volumes"));
     }
     for (index, volume) in volumes.iter().enumerate() {
+        initialization::validate(volume)?;
         for previous in &volumes[..index] {
             if volume.slot == previous.slot
                 || volume.disk_id == previous.disk_id
@@ -242,3 +261,7 @@ fn invalid(reason: &str) -> VmError {
 #[cfg(test)]
 #[path = "guest_volume_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "guest_initialization_tests.rs"]
+mod initialization_tests;

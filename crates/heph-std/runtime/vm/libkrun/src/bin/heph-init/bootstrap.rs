@@ -92,6 +92,10 @@ pub fn run() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         return Err(error.into());
     }
 
+    validate_boot_volumes(&volumes, state_volume.as_ref(), &mounts).inspect_err(|error| {
+        send_guest_error(&mut control, "volume-contract", error);
+    })?;
+
     // Persist the authority before mounting the immutable runtime control tree
     // at `/run/hephaestus`. A read-only nested virtiofs mount can otherwise
     // make its parent unsuitable for creating the sibling authority directory
@@ -105,9 +109,6 @@ pub fn run() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
             .transpose()?
     };
 
-    validate_boot_volumes(&volumes, state_volume.as_ref(), &mounts).inspect_err(|error| {
-        send_guest_error(&mut control, "volume-contract", error);
-    })?;
     for mount in mounts {
         if let Err(error) = mount_virtiofs(&mount.tag, &mount.guest_path, mount.read_only) {
             let error = io::Error::new(

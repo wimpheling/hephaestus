@@ -34,7 +34,7 @@ fn fresh_owner_survives_restart_and_rejects_host_redirect() {
     fs::create_dir(config.runtime_root.join("vm-1")).unwrap();
     assert!(ProviderOwner::initialize(&config, "host-1").is_err());
     drop(owner);
-    let restarted = ProviderOwner::initialize(&config, "host-1").unwrap();
+    let restarted = fresh_metadata_operation(|| ProviderOwner::initialize(&config, "host-1"));
     assert_eq!(restarted.scope().unwrap(), scope);
     assert!(restarted.validate(&config).is_ok());
     assert!(ProviderOwner::initialize(&config, "host-2").is_err());
@@ -125,14 +125,18 @@ fn changed_root_after_guard_is_detected_before_absence() {
 }
 
 fn fresh_validation_guard(owner: &ProviderOwner, config: &LibkrunConfig) -> OwnerGuard {
+    fresh_metadata_operation(|| owner.validate(config))
+}
+
+fn fresh_metadata_operation<T>(mut operation: impl FnMut() -> Result<T, VmError>) -> T {
     // Parallel subprocess tests can inherit initialization's CLOEXEC metadata
     // flock between fork and exec. This unchanged, freshly initialized fixture
     // waits only for that transient IO WouldBlock, never a live supervisor or
     // any identity/ownership denial. Production locking remains nonblocking.
     let deadline = std::time::Instant::now() + std::time::Duration::from_secs(1);
     loop {
-        match owner.validate(config) {
-            Ok(guard) => return guard,
+        match operation() {
+            Ok(value) => return value,
             Err(error) => {
                 let transient = matches!(&error, VmError::Provider { code, source, .. }
                 if code == "owner_metadata" && (
@@ -141,7 +145,7 @@ fn fresh_validation_guard(owner: &ProviderOwner, config: &LibkrunConfig) -> Owne
                 ));
                 assert!(
                     transient && std::time::Instant::now() < deadline,
-                    "fresh owner validation failed: {error:?}"
+                    "fresh owner metadata operation failed: {error:?}"
                 );
                 std::thread::sleep(std::time::Duration::from_millis(10));
             }

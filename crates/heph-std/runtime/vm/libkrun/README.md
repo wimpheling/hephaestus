@@ -68,15 +68,27 @@ ancestors must be protected from replacement by the guest user. Cleanup
 rechecks filesystem and kernel mount identity, attempts reverse unmounts, and
 reports unresolved failures for host destruction before attachment release.
 Empty named lists preserve the legacy wire shape and scalar state-volume path.
-Protocol version 10 rejects stale initializers that could ignore named fields;
-rebuild the initializer and cached guest roots together. The 107 focused tests
-verify contracts and bootstrap helpers; they provide no native KVM evidence.
-This slice does not implement run authorization or durable plural attachments.
+Protocol version 11 rejects version 10 initializers before execution; rebuild
+the initializer and cached guest roots together. Initialization defaults to
+`None`. Only the exact checked frozen legacy state declaration may request
+`BuiltinStateSQLite`. Historical scalar state labels use an explicit compatibility
+conversion; scratch volumes never request database initialization.
+
+Built-in initialization reopens the mounted filesystem without following links
+and verifies its device and kernel mount identity. An isolated initializer child
+pins that directory as its cwd before exec, rechecks its identity, and opens
+relative `state.db` with SQLite `NOFOLLOW`. New databases use WAL and FULL;
+existing schemas, bytes and journal modes are validated and preserved. Linked,
+invalid or orphan database evidence fails closed. Writable roots and built-in
+files retain the existing guest UID/GID 10001. Ordinary named SQLite data has
+no built-in database; its workload owns initialization. This protocol slice does
+not activate app composition or durable plural attachments. Native purpose
+enforcement requires a fresh initializer and remains a separate verification.
 
 ## Native named-volume proof
 
 Run `scripts/run-libkrun-named-volumes.sh` on the prepared KVM host. It builds
-fresh protocol 10 binaries and exports a disposable root from Ubuntu pinned at
+fresh current-protocol binaries and exports a disposable root from Ubuntu pinned at
 `sha256:52df9b1ee71626e0088f7d400d5c6b5f7bb916f8f0c82b474289a4ece6cf3faf`.
 The test-only root probe uses the trusted OCI builder path to exercise device
 ioctls, remounts, and raw writes; ordinary workloads receive no additional

@@ -150,6 +150,7 @@ fn runtime_authority_acknowledgement_is_exact_and_precedes_ready() {
 
 #[test]
 fn stale_guest_version_cannot_silently_ignore_named_attachments() {
+    assert!(validate_guest_hello(&GuestMessage::Hello { version: 10 }).is_err());
     assert!(validate_guest_hello(&GuestMessage::Hello { version: 9 }).is_err());
     validate_guest_hello(&GuestMessage::Hello {
         version: PROTOCOL_VERSION,

@@ -113,3 +113,27 @@ fn guest_boot_wire_preserves_empty_legacy_shape_and_rejects_aliases() {
     wire["Start"]["volumes"] = serde_json::json!([named(), named()]);
     assert!(serde_json::from_value::<HostMessage>(wire).is_err());
 }
+
+#[test]
+fn typed_builtin_wire_requires_frozen_marker_and_survives_roundtrip() {
+    let state = VmGuestVolume::new(
+        serde_json::from_value(serde_json::json!("state")).unwrap(),
+        "state",
+        Uuid::from_u128(2),
+        GuestMountPath::parse("/var/lib/hephaestus").unwrap(),
+        VolumeAccessMode::ReadWrite,
+    )
+    .unwrap()
+    .with_initialization_purpose(
+        vm_trait::VmVolumeInitializationPurpose::BuiltinStateSQLite,
+        true,
+    )
+    .unwrap();
+    let mut wire = serde_json::to_value(&state).unwrap();
+    assert_eq!(
+        serde_json::from_value::<VmGuestVolume>(wire.clone()).unwrap(),
+        state
+    );
+    wire["frozen_requires_state"] = serde_json::json!(false);
+    assert!(serde_json::from_value::<VmGuestVolume>(wire).is_err());
+}

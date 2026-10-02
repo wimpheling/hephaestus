@@ -167,7 +167,7 @@ async fn changed_released_pins_and_denied_mount_authority_reject_before_acquisit
 }
 
 #[tokio::test]
-async fn only_proven_legacy_origin_projects_the_scalar_tuple_and_builtin_state_labels() {
+async fn only_proven_legacy_origin_projects_scalar_tuple_and_typed_builtin_purpose() {
     let mut fixture = Fixture::new();
     fixture.command.requires_state = true;
     fixture.runs.run.lock().await.requires_state = true;
@@ -185,11 +185,17 @@ async fn only_proven_legacy_origin_projects_the_scalar_tuple_and_builtin_state_l
     assert_eq!(result.lease_id, Some(expected.id));
     assert_eq!(result.lease_fencing_token, Some(expected.fencing_token));
     let spec = fixture.provider.inner.spec().unwrap();
-    assert!(spec.guest_volumes.is_empty());
-    assert_eq!(spec.disks[0].id, volume_trait::INSTANCE_STATE_DISK_ID);
+    assert_eq!(spec.guest_volumes.len(), 1);
     assert_eq!(
-        spec.labels["hephaestus.agent-state.mount-path"],
-        "/var/lib/hephaestus"
+        spec.guest_volumes[0].initialization_purpose(),
+        vm_trait::VmVolumeInitializationPurpose::BuiltinStateSQLite
+    );
+    assert!(spec.guest_volumes[0].frozen_requires_state());
+    assert_eq!(spec.disks[0].id, volume_trait::INSTANCE_STATE_DISK_ID);
+    assert!(
+        !spec
+            .labels
+            .contains_key("hephaestus.agent-state.mount-path")
     );
     assert_eq!(
         fixture.count("attached"),
@@ -226,16 +232,64 @@ async fn named_legacy_declaration_cannot_fall_back_to_scalar_or_skip_initializat
         fixture.provider.clone(),
         Arc::new(Factory),
     );
-    let failed = orchestrator.start_run(&fixture.command).await.unwrap();
-    assert_failed_spec(
-        &fixture,
-        &failed,
-        "named built-in state initialization requires guest protocol 11",
-        1,
+    // The command flag is deliberately false: the frozen selection origin,
+    // rather than StartRun.requires_state, proves this initialization purpose.
+    assert!(!fixture.command.requires_state);
+    let completed = orchestrator.start_run(&fixture.command).await.unwrap();
+    assert_eq!(completed.outcome, Some(RunOutcome::Succeeded));
+    assert!(completed.volume_id.is_none());
+    assert!(completed.lease_id.is_none());
+    let spec = fixture.provider.inner.spec().unwrap();
+    assert_eq!(spec.guest_volumes.len(), 1);
+    assert_eq!(
+        spec.guest_volumes[0].initialization_purpose(),
+        vm_trait::VmVolumeInitializationPurpose::BuiltinStateSQLite
+    );
+    assert!(spec.guest_volumes[0].frozen_requires_state());
+    assert!(
+        !spec
+            .labels
+            .contains_key("hephaestus.agent-state.mount-path")
+    );
+}
+
+#[tokio::test]
+async fn explicit_state_name_and_path_never_invent_a_builtin_requirement() {
+    let fixture = Fixture::new();
+    let mut store = Store::legacy(&fixture);
+    let old = &store.selected.selections()[0];
+    let selection = volume_domain::RunVolumeSelection::new(
+        old.identity(),
+        old.scope().clone(),
+        old.declaration().clone(),
+        volume_domain::VolumeSelectionOrigin::Explicit,
     )
-    .await;
-    assert!(failed.volume_id.is_none());
-    assert!(failed.lease_id.is_none());
+    .unwrap();
+    store.selected =
+        volume_domain::RunVolumeSelections::new(selection.identity(), vec![selection.clone()])
+            .unwrap();
+    store.attachments[0].volume.instance_id = None;
+    store.attachments[0].lease = volume_trait::RunVolumeLease::selected(
+        store.attachments[0].lease.lease().clone(),
+        selection,
+    )
+    .unwrap();
+    let orchestrator = orchestrator(
+        &fixture,
+        Arc::new(store),
+        Arc::new(Authorizer::default()),
+        fixture.provider.clone(),
+        Arc::new(Factory),
+    );
+    let completed = orchestrator.start_run(&fixture.command).await.unwrap();
+    assert_eq!(completed.outcome, Some(RunOutcome::Succeeded));
+    assert!(completed.volume_id.is_none());
+    let spec = fixture.provider.inner.spec().unwrap();
+    assert_eq!(
+        spec.guest_volumes[0].initialization_purpose(),
+        vm_trait::VmVolumeInitializationPurpose::None
+    );
+    assert!(!spec.guest_volumes[0].frozen_requires_state());
 }
 
 async fn assert_failed_spec(fixture: &Fixture, run: &Run, reason: &str, leases: usize) {

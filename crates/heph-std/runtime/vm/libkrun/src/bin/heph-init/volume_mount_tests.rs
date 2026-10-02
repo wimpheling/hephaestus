@@ -95,3 +95,27 @@ fn guest_writable_ancestors_cannot_anchor_cleanup_paths() {
         assert!(verify_stable_ancestor(uid, mode).is_err());
     }
 }
+
+#[test]
+fn bootstrap_graph_rechecks_typed_purpose_and_legacy_disambiguation() {
+    let state = GuestVolume::new(
+        serde_json::from_value(serde_json::json!("state")).unwrap(),
+        "state",
+        uuid::Uuid::from_u128(1),
+        vm_trait::GuestMountPath::parse("/var/lib/hephaestus").unwrap(),
+        VolumeAccessMode::ReadWrite,
+    )
+    .unwrap()
+    .with_initialization_purpose(VmVolumeInitializationPurpose::BuiltinStateSQLite, true)
+    .unwrap();
+    validate_boot_volumes(std::slice::from_ref(&state), None, &[]).unwrap();
+    let legacy = GuestStateVolume {
+        filesystem_uuid: state.filesystem_uuid().to_string(),
+        guest_path: PathBuf::from("/var/lib/hephaestus"),
+    };
+    validate_boot_volumes(&[], Some(&legacy), &[]).unwrap();
+    assert!(validate_boot_volumes(&[state.clone()], Some(&legacy), &[]).is_err());
+    let mut wire = serde_json::to_value(state).unwrap();
+    wire["frozen_requires_state"] = serde_json::json!(false);
+    assert!(serde_json::from_value::<GuestVolume>(wire).is_err());
+}

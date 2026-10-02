@@ -4,10 +4,11 @@ use std::{
     fs::{self, File},
     io::{self, Read, Seek, SeekFrom, Write},
     os::fd::{AsRawFd, OwnedFd},
+    os::unix::fs::MetadataExt,
     path::{Path, PathBuf},
 };
 use vm_libkrun::protocol::{GuestMount, GuestStateVolume, GuestVolume};
-use vm_trait::VolumeAccessMode;
+use vm_trait::{VmVolumeInitializationPurpose, VolumeAccessMode};
 
 use super::mounts::{find_ext4_device_in, mount_ext4_access, unmount};
 use crate::{AGENT_GID, AGENT_UID};
@@ -125,10 +126,9 @@ fn mount_named_volume(volume: &GuestVolume) -> io::Result<()> {
     }
     let directory = walk_mountpoint(Path::new("/"), path, true, true)?;
     mount_ext4_access(&device, &pinned_path(&directory), read_only)?;
-    // Named data volumes contain application-owned bytes. Only writable roots
-    // receive the guest user; SQLite preparation belongs to the packaged app.
-    if !read_only
-        && let Err(error) = std::os::unix::fs::chown(path, Some(AGENT_UID), Some(AGENT_GID))
+    drop(directory);
+    if let Err(error) =
+        prepare_mounted_volume(path, &device, read_only, volume.initialization_purpose())
     {
         return match unmount(path) {
             Ok(()) => Err(error),
@@ -138,6 +138,43 @@ fn mount_named_volume(volume: &GuestVolume) -> io::Result<()> {
         };
     }
     Ok(())
+}
+
+/// Reopens the mounted filesystem through stable, non-symlink ancestors.
+pub fn prepare_mounted_volume(
+    path: &Path,
+    device: &Path,
+    read_only: bool,
+    purpose: VmVolumeInitializationPurpose,
+) -> io::Result<()> {
+    let directory = pin_mounted_volume(path, device)?;
+    if purpose == VmVolumeInitializationPurpose::BuiltinStateSQLite {
+        if read_only || path != Path::new("/var/lib/hephaestus") {
+            return Err(invalid(
+                "built-in initialization requires exact writable state mount",
+            ));
+        }
+        super::builtin_state::initialize_pinned(&directory)?;
+    } else if !read_only {
+        rustix::fs::fchown(
+            &directory,
+            Some(rustix::fs::Uid::from_raw(AGENT_UID)),
+            Some(rustix::fs::Gid::from_raw(AGENT_GID)),
+        )?;
+    }
+    Ok(())
+}
+
+/// Pins and checks the post-mount device before any ownership or database IO.
+pub fn pin_mounted_volume(path: &Path, device: &Path) -> io::Result<OwnedFd> {
+    let directory = walk_mountpoint(Path::new("/"), path, false, true)?;
+    let identity = mounted_identity(&directory)?;
+    if identity.0 != fs::symlink_metadata(device)?.rdev() {
+        return Err(invalid(
+            "mounted filesystem differs from selected block device",
+        ));
+    }
+    Ok(directory)
 }
 
 pub fn verify_device_mode(mode: &str, read_only: bool) -> io::Result<()> {
@@ -248,7 +285,7 @@ pub fn unmount_reverse(
     first_error.map_or(Ok(()), Err)
 }
 
-fn mounted_identity(descriptor: &OwnedFd) -> io::Result<(u64, u64)> {
+pub fn mounted_identity(descriptor: &OwnedFd) -> io::Result<(u64, u64)> {
     let file = File::open(format!("/proc/self/fdinfo/{}", descriptor.as_raw_fd()))?;
     let mut details = String::new();
     file.take(4096).read_to_string(&mut details)?;

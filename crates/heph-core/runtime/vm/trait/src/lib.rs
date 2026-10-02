@@ -13,8 +13,8 @@ mod owner_scope;
 pub use owner_scope::VmProviderOwnerScope;
 
 pub use guest_volume::{
-    VmGuestVolume, deserialize_guest_volumes, validate_guest_volume_mounts,
-    validate_guest_volume_set, validate_vm_guest_volumes,
+    VmGuestVolume, VmVolumeInitializationPurpose, deserialize_guest_volumes,
+    validate_guest_volume_mounts, validate_guest_volume_set, validate_vm_guest_volumes,
 };
 pub use volume_domain::{
     GuestMountPath, MAX_GUEST_MOUNT_PATH_BYTES, MAX_VOLUME_SLOTS, VolumeAccessMode,

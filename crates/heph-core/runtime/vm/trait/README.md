@@ -23,6 +23,12 @@ These are guest execution contracts; authoritative resource grants, durable
 attachment evidence, and run admission belong to the orchestration layer.
 Typed mount metadata itself grants no authority.
 
+Initialization defaults to `None`, including an explicit slot named `state`.
+`BuiltinStateSQLite` additionally requires the explicit frozen legacy state
+marker and exact `state`, read-write, `/var/lib/hephaestus` shape. The release
+loader must prove that marker; it is not inferred from a command flag. Guests
+repeat these checks before preparing the already mounted filesystem.
+
 `VmProviderOwnerScope` identifies the exact persistent provider namespace and
 configured host. It is separate from volume-root and recipe scopes. Providers
 must bind it to actual root/account ownership; a checked value alone grants no

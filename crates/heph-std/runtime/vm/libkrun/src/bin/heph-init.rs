@@ -5,6 +5,8 @@ use std::time::Duration;
 
 #[path = "heph-init/bootstrap.rs"]
 mod bootstrap;
+#[path = "heph-init/builtin_state.rs"]
+mod builtin_state;
 #[path = "heph-init/gateway.rs"]
 mod gateway;
 #[path = "heph-init/git_bridge.rs"]
@@ -51,6 +53,13 @@ pub(crate) use runtime::{
 };
 
 fn main() {
+    if let Some(result) = builtin_state::helper_entry() {
+        if let Err(error) = result {
+            let _write_result = writeln!(io::stderr(), "heph-init state helper: {error}");
+            std::process::exit(125);
+        }
+        return;
+    }
     if let Err(error) = bootstrap::run() {
         let _write_result = writeln!(io::stderr(), "heph-init: {error}");
         std::process::exit(125);
