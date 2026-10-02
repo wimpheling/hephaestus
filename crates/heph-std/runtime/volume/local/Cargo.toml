@@ -18,6 +18,7 @@ tokio = { workspace = true, features = ["fs", "process", "time"] }
 tracing.workspace = true
 uuid.workspace = true
 volume-trait = { path = "../../../../heph-core/runtime/volume/trait" }
+volume-domain = { path = "../../../../heph-core/runtime/volume/domain" }
 
 [dev-dependencies]
 tempfile = "3"

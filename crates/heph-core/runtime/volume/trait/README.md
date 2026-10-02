@@ -19,12 +19,24 @@ Unknown existing backing requires reconciliation; expiry authorizes no format.
 Standalone and named runtime attachment require the later plural integration.
 Existing leases retain their exclusive run/volume fence and recovery semantics.
 
+The additive `RunVolumeMetadataRepository` and `RunVolumeStore` ports describe
+zero to 32 exact revision selections and complete durable lease sets. Readonly
+and writable attachments are both exclusive initially. Selected leases carry
+checked declaration provenance; unmatched historical leases remain recovery
+evidence and cannot authorize new acquisition. Storage checks do not replace
+the caller's live source and execution authorization. Whole-set destruction and
+release use the separate canonical run cleanup contract.
+
 # When
 
 Use the actor resource port for authorized metadata operations. Use the trusted
 provider ports only in host workers. Keep provider handles out of transports,
 recipes, and resource inspection. Attachment authority differs from permission
 to query an application's database.
+
+The plural metadata adapters are staged against private migration 108. Existing
+application composition still uses the legacy path; named dispatch remains
+unsupported until runtime and legacy cleanup integration are complete.
 
 `VolumeMountGrantRepository` creates audited explicit immutable typed mount
 grants and permanent revocations. Creation requires consumer management and

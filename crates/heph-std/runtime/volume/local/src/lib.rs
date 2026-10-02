@@ -12,6 +12,7 @@ use time::OffsetDateTime;
 use tokio::fs;
 
 mod provisioning;
+mod run_volumes;
 use volume_trait::{
     INSTANCE_STATE_DISK_ID, Volume, VolumeAttachment, VolumeError, VolumeLease,
     VolumeMetadataRepository, VolumeStore,
@@ -38,6 +39,7 @@ pub struct LocalVolumeConfig {
 #[derive(Clone)]
 pub struct LocalVolumeStore {
     metadata: Arc<dyn VolumeMetadataRepository>,
+    run_metadata: Option<Arc<dyn volume_trait::RunVolumeMetadataRepository>>,
     config: LocalVolumeConfig,
 }
 
@@ -69,7 +71,24 @@ impl LocalVolumeStore {
         if config.lease_duration.is_zero() {
             return Err(invalid_backing("lease_duration must be greater than zero"));
         }
-        Ok(Self { metadata, config })
+        Ok(Self {
+            metadata,
+            run_metadata: None,
+            config,
+        })
+    }
+
+    /// Explicitly composes exact-run metadata over the same canonical resources.
+    ///
+    /// This extension remains unused by legacy startup. Missing composition
+    /// rejects exact-run operations before lease or backing effects.
+    #[must_use]
+    pub fn with_run_metadata(
+        mut self,
+        metadata: Arc<dyn volume_trait::RunVolumeMetadataRepository>,
+    ) -> Self {
+        self.run_metadata = Some(metadata);
+        self
     }
 
     /// Creates the configured backing root. Database migrations belong to the

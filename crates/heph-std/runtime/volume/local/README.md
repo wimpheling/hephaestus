@@ -22,6 +22,15 @@ retained. Encryption intent fails closed because this provider does not implemen
 it. These checks do not implement guest mounts or replace later mount resolution
 checks against symlinks and protected runtime paths.
 
+The staged exact-run attachment path verifies already provisioned ready backing
+without formatting, resizing, or clearing filesystem flags. It checks the safe
+root and file identity, UUID, capacity, and geometry. Dirty readonly backing is
+rejected. A known ready writable filesystem may retain normal ext4 recovery
+flags for guest journal replay under exclusive leases and confirmed old-writer
+destruction; this differs from adopting an uncertain initial-format result,
+which still requires the complete clean filesystem proof above. Host file
+identity checks do not prove original backing birth ownership.
+
 # When
 
 Initialize the root during host composition and provision registered resources
@@ -30,3 +39,9 @@ safe creation/recovery behavior and preserves an already reserved UUID and
 capacity on retry. Runtime attachment still supports its legacy single state
 volume; standalone attachment remains blocked pending named binding integration.
 The local tests include native ext4 recovery and require Linux with e2fsprogs.
+
+`with_run_metadata` explicitly injects the staged complete-set metadata port.
+Without it, plural calls fail before provider effects and cannot fall back to
+the scalar resolver. Current application startup does not inject this port.
+Metadata acquisition precedes backing inspection, so inspection failures retain
+all durable leases for canonical run cleanup and recovery.

@@ -4,6 +4,9 @@ use runtime_types::VolumeId;
 /// A private-volume contract failed validation before provider effects.
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
 pub enum VolumeContractError {
+    /// A run selection contains an invalid or mismatched immutable identity.
+    #[error("volume selection differs from the exact run identity or declaration")]
+    InvalidRunSelection,
     /// A mount grant scope contains a nil durable identifier.
     #[error("invalid exact volume mount grant scope")]
     InvalidMountGrantScope,

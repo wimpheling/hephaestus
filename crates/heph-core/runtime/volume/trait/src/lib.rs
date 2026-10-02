@@ -1,18 +1,24 @@
 //! Provider-neutral contracts for persistent agent volumes.
 
 use async_trait::async_trait;
-use runtime_types::{AgentInstanceId, LeaseId, RunId, VolumeId};
+use runtime_types::{AgentInstanceId, RunId, VolumeId};
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 use time::OffsetDateTime;
 use uuid::Uuid;
 
+mod leases;
 mod mount_grants;
 mod resources;
+mod run_volumes;
+pub use leases::{VolumeAttachment, VolumeLease};
 pub use mount_grants::{VolumeMountGrant, VolumeMountGrantRepository, VolumeMountRevocation};
 pub use resources::{
     MAX_REGISTERED_VOLUME_CAPACITY_BYTES, MIN_LOCAL_VOLUME_CAPACITY_BYTES, ProvisioningClaim,
     VolumeInspection, VolumeProvisioningState, VolumeRegistration, VolumeResourceRepository,
+};
+pub use run_volumes::{
+    RunVolumeAttachment, RunVolumeLease, RunVolumeMetadataRepository, RunVolumeStore,
 };
 
 /// Stable block-device identifier used for the agent state disk.
@@ -80,40 +86,6 @@ pub struct Volume {
     pub checksum: Option<String>,
     /// Completion time of the latest successful backup.
     pub last_successful_backup_at: Option<OffsetDateTime>,
-}
-
-/// Exclusive writable claim held by one run.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct VolumeLease {
-    /// Stable lease identifier.
-    pub id: LeaseId,
-    /// Leased volume.
-    pub volume_id: VolumeId,
-    /// Run holding the lease.
-    pub run_id: RunId,
-    /// Host on which the volume may be attached.
-    pub host_id: String,
-    /// Monotonic fencing generation for the volume.
-    pub fencing_token: i64,
-    /// Time at which the lease was acquired.
-    pub acquired_at: OffsetDateTime,
-    /// Most recent supervisor heartbeat.
-    pub heartbeat_at: OffsetDateTime,
-    /// Time after which the lease is eligible for supervised recovery.
-    pub expires_at: OffsetDateTime,
-    /// Time at which VM attachment was confirmed.
-    pub attached_at: Option<OffsetDateTime>,
-}
-
-/// Information needed to attach a leased volume to a VM.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct VolumeAttachment {
-    /// Persistent volume metadata.
-    pub volume: Volume,
-    /// Lease authorizing this writable attachment.
-    pub lease: VolumeLease,
-    /// Stable `VmDisk` identifier.
-    pub disk_id: &'static str,
 }
 
 /// Provider-neutral durable metadata boundary for local volume effects.

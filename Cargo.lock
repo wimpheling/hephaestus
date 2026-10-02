@@ -5988,6 +5988,7 @@ dependencies = [
  "tokio",
  "tracing",
  "uuid",
+ "volume-domain",
  "volume-trait",
 ]
 

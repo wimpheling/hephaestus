@@ -16,6 +16,8 @@ use volume_trait::{ProvisioningClaim, Volume, VolumeError, VolumeProvisioningSta
 
 use crate::{LocalVolumeStore, backing, ensure_direct_child, invalid_backing};
 
+mod attachment;
+
 impl LocalVolumeStore {
     /// Provisions a registered resource as a trusted host worker.
     ///

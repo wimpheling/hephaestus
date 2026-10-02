@@ -16,6 +16,9 @@ use volume_trait::{
     VolumeProvisioningState, VolumeState,
 };
 
+#[path = "tests/attachment.rs"]
+mod attachment;
+
 fn file_with_superblock(root: &TempDir, id: Uuid, blocks: u32) -> fs::File {
     let path = root.path().join("probe.raw");
     let mut bytes = vec![0_u8; 16 * 1024 * 1024];
@@ -267,8 +270,13 @@ async fn native_ext4_is_adopted_after_failed_readiness_commit_without_reformatti
     symlink(real_fsck, tools.path().join("e2fsck")).expect("fsck fixture");
     let (store, metadata, id) = fixture(&root, true, mkfs);
     assert!(
-        store.provision(id).await.is_err(),
-        "first readiness write fails"
+        matches!(
+            store.provision(id).await,
+            Err(VolumeError::InvalidState(
+                "simulated readiness commit failure"
+            ))
+        ),
+        "first readiness write fails after the filesystem is proven"
     );
     let path = metadata.volume.lock().expect("volume").host_path.clone();
     let before = fs::read(&path).expect("formatted retained bytes");

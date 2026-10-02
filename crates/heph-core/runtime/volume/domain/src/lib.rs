@@ -7,6 +7,8 @@ mod errors;
 mod grants;
 mod legacy;
 mod path;
+mod selection;
+mod selection_identity;
 mod slots;
 mod validation;
 
@@ -16,6 +18,8 @@ pub use legacy::{
     LEGACY_STATE_VOLUME_GUEST_PATH, LEGACY_STATE_VOLUME_SLOT, effective_volume_slots,
 };
 pub use path::GuestMountPath;
+pub use selection::{RunVolumeSelection, RunVolumeSelections, VolumeSelectionOrigin};
+pub use selection_identity::RunVolumeIdentity;
 pub use slots::{VolumeAccessMode, VolumeSlotBinding, VolumeSlotDeclaration};
 pub use validation::{validate_volume_bindings, validate_volume_slots};
 
