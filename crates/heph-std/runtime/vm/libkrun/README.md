@@ -16,6 +16,21 @@ applies CPU, memory, PID, I/O, disk, and wall-clock limits, and keeps secret
 and runtime-Git bridges on their dedicated channels. Readiness, bounded events,
 exit status, and orphan cleanup return through the core VM contract.
 
+Named ext4 attachments preserve the disk's read-only backend flag and validate
+its filesystem UUID on the exact selected raw file before launch. The guest
+rejects duplicate UUID devices, checks the kernel device mode, and mounts
+read-only data with `MS_RDONLY` after rejecting known dirty journal state.
+It does not initialize SQLite or change ownership on read-only data. Mount
+directories are opened component by component without following symlinks;
+ancestors must be protected from replacement by the guest user. Cleanup
+rechecks filesystem and kernel mount identity, attempts reverse unmounts, and
+reports unresolved failures for host destruction before attachment release.
+Empty named lists preserve the legacy wire shape and scalar state-volume path.
+Protocol version 10 rejects stale initializers that could ignore named fields;
+rebuild the initializer and cached guest roots together. The 107 focused tests
+verify contracts and bootstrap helpers; they provide no native KVM evidence.
+This slice does not implement run authorization or durable plural attachments.
+
 # When
 
 Construct the provider during daemon startup after host configuration and

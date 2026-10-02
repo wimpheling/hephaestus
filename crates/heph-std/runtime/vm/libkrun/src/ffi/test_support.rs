@@ -13,6 +13,7 @@ use std::{
 
 pub(super) fn prepared_spec() -> PreparedSpec {
     PreparedSpec {
+        guest_volumes: Vec::new(),
         id: String::from("recording"),
         root: PreparedRoot::Directory {
             path: Path::new("/images/root").to_path_buf(),

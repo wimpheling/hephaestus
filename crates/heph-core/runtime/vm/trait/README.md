@@ -16,6 +16,13 @@ persist useful evidence without treating guest output as authority. Providers
 must honor the spec and cleanup contract; they do not gain permission to read
 secrets or publish repository results merely by running a guest.
 
+Named `VmGuestVolume` entries bind a bounded slot, filesystem UUID, controlled
+guest path, and exact access mode to an existing disk ID. Validation rejects
+aliases, overlapping paths, platform-mount conflicts, and mixed legacy labels.
+These are guest execution contracts; authoritative resource grants, durable
+attachment evidence, and run admission belong to the orchestration layer.
+Typed mount metadata itself grants no authority.
+
 # When
 
 Use this crate when implementing a VM adapter or assembling a run specification

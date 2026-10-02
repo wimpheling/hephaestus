@@ -109,6 +109,7 @@ pub(in crate::provider::tests) fn instance_with_options(
 
 pub(in crate::provider::tests) fn spec(id: &str, root: PathBuf) -> VmSpec {
     VmSpec {
+        guest_volumes: Vec::new(),
         id: VmId(id.to_owned()),
         root: RootFilesystem::Directory { host_path: root },
         disks: Vec::new(),

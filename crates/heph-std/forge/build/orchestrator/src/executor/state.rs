@@ -145,6 +145,7 @@ impl BuildExecutor {
             NetworkProfile::BrokerOnly => return Err(BuildExecutionError::NetworkDenied),
         };
         Ok(VmSpec {
+            guest_volumes: Vec::new(),
             id: VmId(format!("build-{}", claimed.input.id)),
             root,
             disks: Vec::new(),

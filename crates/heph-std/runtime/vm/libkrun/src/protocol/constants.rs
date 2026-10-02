@@ -1,5 +1,5 @@
 /// Current host-to-guest protocol version.
-pub const PROTOCOL_VERSION: u16 = 9;
+pub const PROTOCOL_VERSION: u16 = 10;
 /// Maximum private HTTP body carried by the authenticated control protocol.
 pub const MAX_PRIVATE_HTTP_BODY_BYTES: usize = 1_048_576;
 /// Maximum private HTTP headers carried by one request or response.

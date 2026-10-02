@@ -313,6 +313,7 @@ impl GatewayVmLauncher for FakeGatewayLauncher {
 
 pub(super) fn gateway_vm_spec(route: &GatewayRouteBinding) -> VmSpec {
     VmSpec {
+        guest_volumes: Vec::new(),
         id: vm_trait::VmId(format!("gateway-{}", route.route_id)),
         root: RootFilesystem::Directory {
             host_path: "/gateway/release-root".into(),

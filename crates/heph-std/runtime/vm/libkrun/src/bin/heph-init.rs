@@ -20,6 +20,8 @@ mod service;
 #[cfg(test)]
 #[path = "heph-init/tests.rs"]
 mod tests;
+#[path = "heph-init/volume_mounts.rs"]
+mod volume_mounts;
 #[path = "heph-init/vsock.rs"]
 mod vsock;
 
@@ -37,9 +39,7 @@ const RUNTIME_AUTHORITY_DIRECTORY: &str = "/run/hephaestus-authority";
 pub(crate) use gateway::gateway_handler_loop;
 #[cfg(test)]
 pub(crate) use mounts::find_ext4_device_in;
-pub(crate) use mounts::{
-    connect_control, mount_state_volume, mount_virtiofs, send_guest_error, unmount,
-};
+pub(crate) use mounts::{connect_control, mount_state_volume, mount_virtiofs, send_guest_error};
 pub(crate) use protocol_io::{
     exit_parts, handle_host_messages, join_log_thread, lock, pump_logs, read_frame, signal_process,
     wait_command, write_frame, write_message,

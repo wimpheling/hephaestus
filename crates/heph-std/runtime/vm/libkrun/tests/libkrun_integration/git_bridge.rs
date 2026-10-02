@@ -101,6 +101,7 @@ async fn real_guest_runtime_git_bridge_forwards_disabled_network_http() {
     let authority = [0x31; RUNTIME_AUTHORITY_CREDENTIAL_BYTES];
     let git_credential = [0x32; RUNTIME_GIT_CREDENTIAL_BYTES];
     let spec = VmSpec {
+        guest_volumes: Vec::new(),
         id: VmId(format!("integration-runtime-git-{}", std::process::id())),
         root: RootFilesystem::Directory { host_path: rootfs },
         disks: Vec::new(),

@@ -5918,10 +5918,14 @@ version = "0.1.0"
 dependencies = [
  "async-trait",
  "bytes",
+ "capability-domain",
  "http",
+ "serde",
+ "serde_json",
  "thiserror 2.0.19",
  "tokio",
  "uuid",
+ "volume-domain",
 ]
 
 [[package]]

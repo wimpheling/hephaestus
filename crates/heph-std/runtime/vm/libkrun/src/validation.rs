@@ -10,6 +10,9 @@ mod spec;
 #[path = "validation/tests/mod.rs"]
 mod tests;
 mod types;
+mod volumes;
+
+pub use volumes::validate_named_disk_files;
 
 pub use config::validate_config;
 pub use helpers::validate_id;

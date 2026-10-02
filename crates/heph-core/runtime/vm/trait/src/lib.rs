@@ -4,8 +4,19 @@
 mod errors;
 #[path = "vm_trait/events.rs"]
 mod events;
+#[path = "vm_trait/guest_volume.rs"]
+mod guest_volume;
 #[path = "vm_trait/http.rs"]
 mod http;
+
+pub use guest_volume::{
+    VmGuestVolume, deserialize_guest_volumes, validate_guest_volume_mounts,
+    validate_guest_volume_set, validate_vm_guest_volumes,
+};
+pub use volume_domain::{
+    GuestMountPath, MAX_GUEST_MOUNT_PATH_BYTES, MAX_VOLUME_SLOTS, VolumeAccessMode,
+};
+
 #[path = "vm_trait/spec.rs"]
 mod spec;
 #[path = "vm_trait/traits.rs"]

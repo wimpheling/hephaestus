@@ -151,6 +151,7 @@ impl VmSpecFactory for PgAgentVmSpecFactory {
         }
         let env = guest_environment(run.kind, stored.agent_update_id)?;
         Ok(VmSpec {
+            guest_volumes: Vec::new(),
             id: heph_runtime::VmId(run.id.to_string()),
             root,
             disks: Vec::new(),
