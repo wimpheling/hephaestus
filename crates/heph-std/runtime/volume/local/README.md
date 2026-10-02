@@ -45,3 +45,11 @@ Without it, plural calls fail before provider effects and cannot fall back to
 the scalar resolver. Current application startup does not inject this port.
 Metadata acquisition precedes backing inspection, so inspection failures retain
 all durable leases for canonical run cleanup and recovery.
+
+`VolumeRootOwner::open_existing` reopens a previously owned root using the
+authoritative expected host and `VolumeRootNamespaceId`. It reads the existing
+marker and validates the actual root and marker descriptors without creating or
+repairing files. Missing or substituted roots and mismatching evidence fail held.
+The expected namespace must come from trusted persisted configuration or
+metadata; the current filesystem path is not a source of authority.
+`VolumeRootOwner::initialize` remains the prospective initialization API.
