@@ -16,6 +16,8 @@ mod execution_rows;
 mod execution_transitions;
 mod hydration;
 mod persistence;
+mod planning;
+mod planning_sources;
 mod receipts;
 mod repository;
 mod rows;
@@ -33,6 +35,7 @@ pub struct PostgresDeploymentRepository {
     pool: PgPool,
 }
 
+pub use planning::PostgresPlanningCatalog;
 pub use verification::{PostgresEffectVerificationRecorder, VerifiedOutcome};
 
 impl PostgresDeploymentRepository {

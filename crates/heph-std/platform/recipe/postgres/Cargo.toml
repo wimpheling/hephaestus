@@ -20,6 +20,7 @@ release-domain = { path = "../../../../heph-core/forge/release/domain" }
 runtime-types = { path = "../../../../heph-core/platform/runtime-types" }
 serde.workspace = true
 serde_json.workspace = true
+sha2.workspace = true
 sqlx.workspace = true
 uuid.workspace = true
 volume-domain = { path = "../../../../heph-core/runtime/volume/domain" }

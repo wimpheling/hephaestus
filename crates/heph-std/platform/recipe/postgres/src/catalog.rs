@@ -20,6 +20,14 @@ struct CatalogRow {
     parameter_schema: Value,
     secret_slot_schema: Value,
     requires_state: bool,
+    runtime_contract_hash: Vec<u8>,
+    publication_mode: String,
+}
+
+pub struct CatalogSource {
+    pub contract: Value,
+    pub hash: Vec<u8>,
+    pub publication_mode: String,
 }
 
 #[derive(sqlx::FromRow)]
@@ -44,51 +52,9 @@ pub async fn load(
         let ResourceDeclaration::Instance(instance) = resource else {
             continue;
         };
-        if !seen.insert(instance.release.release_agent_id) {
-            continue;
+        if seen.insert(instance.release.release_agent_id) {
+            catalog.push(load_release(tx, instance.release).await?.0);
         }
-        let row: CatalogRow = sqlx::query_as(
-            "SELECT release.state = 'published' AS published, agent.runtime_contract,
-                    agent.parameter_schema, agent.secret_slot_schema, agent.requires_state
-             FROM release_agents agent JOIN releases release ON release.id = agent.release_id
-             WHERE agent.id = $1 AND release.id = $2",
-        )
-        .bind(instance.release.release_agent_id.as_uuid())
-        .bind(instance.release.release_id.as_uuid())
-        .fetch_optional(&mut **tx)
-        .await
-        .map_err(repository_error)?
-        .ok_or(DeploymentError::Unavailable)?;
-        if !row.runtime_contract.is_object()
-            || row
-                .runtime_contract
-                .get("requires_state")
-                .is_some_and(|value| value.as_bool() != Some(row.requires_state))
-        {
-            return Err(DeploymentError::IntentMismatch);
-        }
-        let authored: Vec<VolumeSlotDeclaration> = row
-            .runtime_contract
-            .get("volume_slots")
-            .map(|value| serde_json::from_value(value.clone()))
-            .transpose()
-            .map_err(|_| DeploymentError::IntentMismatch)?
-            .unwrap_or_default();
-        let volume_slots = release_domain::effective_volume_slots(&authored, row.requires_state)
-            .map_err(|_| DeploymentError::IntentMismatch)?;
-        let secrets: Vec<SecretSlotDeclaration> = serde_json::from_value(row.secret_slot_schema)
-            .map_err(|_| DeploymentError::IntentMismatch)?;
-        let parameters = serde_json::from_value(row.parameter_schema)
-            .map_err(|_| DeploymentError::IntentMismatch)?;
-        catalog.push(CatalogEvidence {
-            pin: instance.release,
-            published: row.published,
-            parameters,
-            volume_slots,
-            required_secret_slot_count: secrets.iter().filter(|slot| slot.required).count(),
-            capability_requirements: requirements(tx, instance.release.release_agent_id.as_uuid())
-                .await?,
-        });
     }
     let mut external = BTreeMap::new();
     for (name, resource) in incoming.resolved().resources() {
@@ -123,6 +89,63 @@ pub async fn load(
         );
     }
     Ok(AdmissionEvidence { catalog, external })
+}
+
+/// Shared catalog validator; historical evidence retains its original shape.
+pub async fn load_release(
+    tx: &mut Transaction<'_, Postgres>,
+    pin: recipe_domain::ReleasePin,
+) -> Result<(CatalogEvidence, CatalogSource), DeploymentError> {
+    let row: CatalogRow = sqlx::query_as(
+        "SELECT release.state = 'published' AS published, agent.runtime_contract,
+                    agent.parameter_schema, agent.secret_slot_schema, agent.requires_state,
+                    agent.runtime_contract_hash, agent.publication_mode
+             FROM release_agents agent JOIN releases release ON release.id = agent.release_id
+             WHERE agent.id = $1 AND release.id = $2",
+    )
+    .bind(pin.release_agent_id.as_uuid())
+    .bind(pin.release_id.as_uuid())
+    .fetch_optional(&mut **tx)
+    .await
+    .map_err(repository_error)?
+    .ok_or(DeploymentError::Unavailable)?;
+    if !row.runtime_contract.is_object()
+        || row
+            .runtime_contract
+            .get("requires_state")
+            .is_some_and(|value| value.as_bool() != Some(row.requires_state))
+    {
+        return Err(DeploymentError::IntentMismatch);
+    }
+    let authored: Vec<VolumeSlotDeclaration> = row
+        .runtime_contract
+        .get("volume_slots")
+        .map(|value| serde_json::from_value(value.clone()))
+        .transpose()
+        .map_err(|_| DeploymentError::IntentMismatch)?
+        .unwrap_or_default();
+    let volume_slots = release_domain::effective_volume_slots(&authored, row.requires_state)
+        .map_err(|_| DeploymentError::IntentMismatch)?;
+    let secrets: Vec<SecretSlotDeclaration> = serde_json::from_value(row.secret_slot_schema)
+        .map_err(|_| DeploymentError::IntentMismatch)?;
+    let parameters = serde_json::from_value(row.parameter_schema)
+        .map_err(|_| DeploymentError::IntentMismatch)?;
+    let evidence = CatalogEvidence {
+        pin,
+        published: row.published,
+        parameters,
+        volume_slots,
+        required_secret_slot_count: secrets.iter().filter(|slot| slot.required).count(),
+        capability_requirements: requirements(tx, pin.release_agent_id.as_uuid()).await?,
+    };
+    Ok((
+        evidence,
+        CatalogSource {
+            contract: row.runtime_contract,
+            hash: row.runtime_contract_hash,
+            publication_mode: row.publication_mode,
+        },
+    ))
 }
 
 async fn requirements(

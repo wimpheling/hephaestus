@@ -1,4 +1,5 @@
 mod identity;
+mod planner;
 mod planning;
 
 use std::collections::BTreeMap;

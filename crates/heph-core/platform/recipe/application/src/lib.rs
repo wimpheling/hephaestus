@@ -13,6 +13,9 @@ mod commands;
 mod errors;
 mod ids;
 mod intent;
+mod planning;
+mod planning_observations;
+mod planning_request;
 mod repository;
 mod states;
 
@@ -22,6 +25,9 @@ pub use ids::{
     DeploymentAttemptId, DeploymentCommandId, DeploymentId, DeploymentKey, MAX_DEPLOYMENT_KEY_BYTES,
 };
 pub use intent::{DeploymentIntent, PlannedResource, PlannedResourceIdentity, ResourceOwnership};
+pub use planning::{PlanningCatalog, PlanningCatalogSnapshot, RecipePlan, RecipePlanner};
+pub use planning_observations::{PlatformPolicyObservation, SourceObservation};
+pub use planning_request::PlanningRequest;
 pub use repository::*;
 pub use states::*;
 

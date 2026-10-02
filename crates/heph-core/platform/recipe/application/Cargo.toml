@@ -11,6 +11,7 @@ context = "recipe"
 
 [dependencies]
 async-trait.workspace = true
+builder-catalog-domain = { path = "../../../image/domain" }
 capability-domain = { path = "../../../auth/authorization/capability-domain" }
 event-application = { path = "../../event/application" }
 forge-domain = { path = "../../../forge/domain" }

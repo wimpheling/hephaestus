@@ -3830,6 +3830,7 @@ name = "recipe-application"
 version = "0.1.0"
 dependencies = [
  "async-trait",
+ "builder-catalog-domain",
  "capability-domain",
  "event-application",
  "forge-domain",
@@ -3876,6 +3877,7 @@ dependencies = [
  "runtime-types",
  "serde",
  "serde_json",
+ "sha2",
  "sqlx",
  "tokio",
  "uuid",

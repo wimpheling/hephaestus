@@ -1,6 +1,12 @@
 /// Bounded deployment planning or repository failure.
 #[derive(Debug, thiserror::Error)]
 pub enum DeploymentError {
+    /// A planning request or source observation violates the bounded profile.
+    #[error("invalid recipe planning input or source")]
+    InvalidPlanningInput,
+    /// The released selection exceeds the configured platform ceiling.
+    #[error("released policy is incompatible with the platform")]
+    IncompatiblePolicy,
     /// A stable identity cannot be nil or malformed.
     #[error("invalid deployment identifier")]
     InvalidIdentifier,
