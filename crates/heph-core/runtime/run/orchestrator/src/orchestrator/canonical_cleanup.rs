@@ -1,6 +1,6 @@
 //! Opt-in durable cleanup; local attachment values never prove the resource set.
 
-use run_domain::{Run, RunCleanupHostId, RunState};
+use run_domain::{Run, RunCleanupHostId, RunState, StartRun};
 use runtime_types::RunId;
 use std::sync::Arc;
 use vm_trait::{VmId, VmInstance, VmProviderOwnerScope};
@@ -30,18 +30,25 @@ pub fn host(scope: &VmProviderOwnerScope) -> Result<RunCleanupHostId, Orchestrat
 }
 
 impl RunOrchestrator {
-    pub(super) async fn bind_planned_vm(
+    pub(super) async fn create_planned_run(
         &self,
-        run: &Run,
-        newly_created: bool,
-    ) -> Result<(), OrchestratorError> {
+        command: &StartRun,
+    ) -> Result<crate::CreateRunResult, OrchestratorError> {
+        let scope = self.provider.owner_scope()?;
+        let vm_id = VmId(command.run_id.to_string());
+        self.repository
+            .create_run_with_vm_plan(command, &host(&scope)?, &vm_id)
+            .await
+            .map_err(Into::into)
+    }
+
+    pub(super) async fn bind_planned_vm(&self, run: &Run) -> Result<(), OrchestratorError> {
         let Some(cleanup) = self.canonical_cleanup.as_ref() else {
             return Ok(());
         };
         let scope = self.provider.owner_scope()?;
         let vm_id = match run.vm_id.as_ref() {
             Some(id) => VmId(id.clone()),
-            None if newly_created => VmId(run.id.to_string()),
             None => return Err(invalid("historical run has no proven planned VM identity")),
         };
         cleanup

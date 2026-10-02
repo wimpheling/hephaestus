@@ -64,12 +64,13 @@ cannot release a newer consumer's fence. Cancellation admission requests stop;
 the active start worker owns physical cleanup, preventing a competing absence
 observation while provisioning is in flight.
 
-Run creation and planned binding are presently separate durable operations. A
-crash between them leaves an unresolved run held for reconciliation. Production
-composition must close this window with atomic creation/binding or an equally
-authoritative persisted admission proof before enabling the path. Historical
-rows are never adopted automatically. Application composition, migration
-publication, plural dispatch, and native runtime verification remain pending.
+The opt-in path requires `create_run_with_vm_plan`: creation commits the exact
+provider ownership and VM ID with the command before preparation. Adapters
+without this operation fail closed. Precreated update hooks require immutable
+fresh admission that prohibits IO until exact worker consumption; historical
+queued rows receive no admission by inference. Application composition,
+migration publication, plural dispatch, and native runtime verification remain
+pending.
 
 The opt-in path now holds a per-run operation guard from the final durable open
 check through asynchronous provisioning and active-handle registration. Launch
@@ -89,5 +90,5 @@ Composition must provide one shared orchestrator/registry for each exclusively
 supervised provider owner. Libkrun's version 2 lifetime supervisor lock excludes
 another process/provider for that owner; providers without equivalent ownership
 remain unsupported. The operation guard is released before reentrant failure
-cleanup and never spans workload execution. Application enablement, atomic
-creation/binding, and plural runtime integration remain separate checkpoints.
+cleanup and never spans workload execution. Application enablement and plural
+runtime integration remain separate checkpoints.

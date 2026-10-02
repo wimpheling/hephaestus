@@ -48,6 +48,22 @@ pub enum RepositoryError {
 pub trait RunRepository: Send + Sync + 'static {
     /// Creates a queued run and command-inbox record idempotently.
     async fn create_run(&self, command: &StartRun) -> Result<CreateRunResult, RepositoryError>;
+    /// Atomically admits a run with its configured provider ownership before IO.
+    ///
+    /// Replays must compare the complete command and VM plan. Historical rows
+    /// without a plan may not be adopted; a precreated update needs persisted
+    /// admission evidence proving that provisioning has not been permitted.
+    /// The default rejects use so existing adapters cannot imply atomicity.
+    async fn create_run_with_vm_plan(
+        &self,
+        _command: &StartRun,
+        _scope: &run_domain::RunCleanupHostId,
+        _vm_id: &vm_trait::VmId,
+    ) -> Result<CreateRunResult, RepositoryError> {
+        Err(RepositoryError::InvalidData(
+            "atomic planned run creation is unsupported",
+        ))
+    }
     /// Captures the immutable runtime Git target before materialization.
     async fn ensure_runtime_git_provenance(&self, run: &Run) -> Result<(), RepositoryError>;
     /// Loads one run.

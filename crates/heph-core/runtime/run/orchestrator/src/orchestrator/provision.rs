@@ -109,7 +109,7 @@ async fn provision_vm(
     {
         return Err(OrchestratorError::RunInProgress(run_id));
     }
-    orchestrator.bind_planned_vm(run, false).await?;
+    orchestrator.bind_planned_vm(run).await?;
     let instance = match orchestrator.provider.provision(spec).await {
         Ok(instance) => instance,
         Err(error) => {
@@ -174,7 +174,7 @@ async fn start_vm(
 ) -> Result<Stage<StartedRun>, OrchestratorError> {
     let run_id = context.run.id;
     let operation = orchestrator.lock_run_operation(run_id).await?;
-    orchestrator.bind_planned_vm(&context.run, false).await?;
+    orchestrator.bind_planned_vm(&context.run).await?;
     if let Err(error) = orchestrator
         .repository
         .transition(run_id, RunState::Starting, None, None)

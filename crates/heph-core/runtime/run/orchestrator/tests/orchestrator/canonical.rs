@@ -1,5 +1,7 @@
 //! Opt-in durable cleanup ordering and conservative recovery with fake ports.
 
+#[path = "canonical/atomic_creation.rs"]
+mod atomic_creation;
 #[path = "canonical/fixture.rs"]
 mod fixture;
 #[path = "canonical/provider.rs"]

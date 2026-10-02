@@ -18,6 +18,7 @@ pub struct MemoryRepository {
     pub created: Mutex<bool>,
     pub events: Mutex<Vec<StoredVmEvent>>,
     pub pause_running_transition: Mutex<Option<TransitionPause>>,
+    pub planned_vm: Mutex<Option<(run_domain::RunCleanupHostId, vm_trait::VmId)>>,
 }
 
 impl MemoryRepository {
@@ -50,12 +51,63 @@ impl MemoryRepository {
             created: Mutex::new(false),
             events: Mutex::new(Vec::new()),
             pause_running_transition: Mutex::new(None),
+            planned_vm: Mutex::new(None),
         }
     }
 }
 
 #[async_trait]
 impl RunRepository for MemoryRepository {
+    async fn create_run_with_vm_plan(
+        &self,
+        command: &StartRun,
+        scope: &run_domain::RunCleanupHostId,
+        vm_id: &vm_trait::VmId,
+    ) -> Result<CreateRunResult, RepositoryError> {
+        let mut created = self.created.lock().await;
+        let mut plan = self.planned_vm.lock().await;
+        let mut run = self.run.lock().await;
+        let same_run = run.id == command.run_id;
+        if !same_run
+            || run.command_id != command.command_id
+            || run.instance_id != command.instance_id
+            || run.instance_revision_id != command.instance_revision_id
+            || run.release_id != command.release_id
+            || run.release_agent_id != command.release_agent_id
+            || run.requires_state != command.requires_state
+            || run.kind != command.kind
+            || run.attachment_id != command.attachment_id
+        {
+            return Err(RepositoryError::InvalidData("immutable run input differs"));
+        }
+        let was_created = !*created;
+        if let Some(existing) = plan.as_ref() {
+            if existing != &(scope.clone(), vm_id.clone()) {
+                return Err(RepositoryError::InvalidData("immutable VM plan differs"));
+            }
+        } else if run.state != RunState::CleanedUp {
+            if vm_id.0 != command.run_id.to_string() {
+                return Err(RepositoryError::InvalidData("fresh VM identity differs"));
+            }
+            if *created || run.vm_id.is_some() {
+                return Err(RepositoryError::InvalidData(
+                    "historical run has no admission",
+                ));
+            }
+            *plan = Some((scope.clone(), vm_id.clone()));
+            run.vm_id = Some(vm_id.0.clone());
+        }
+        *created = true;
+        let result = CreateRunResult {
+            run: run.clone(),
+            created: was_created,
+        };
+        drop(run);
+        drop(plan);
+        drop(created);
+        Ok(result)
+    }
+
     async fn create_run(&self, _command: &StartRun) -> Result<CreateRunResult, RepositoryError> {
         let mut created = self.created.lock().await;
         let was_created = !*created;

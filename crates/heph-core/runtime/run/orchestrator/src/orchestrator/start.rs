@@ -23,7 +23,11 @@ impl RunOrchestrator {
     }
 
     async fn start_claimed_run(&self, command: &StartRun) -> Result<Run, OrchestratorError> {
-        let created = self.repository.create_run(command).await?;
+        let created = if self.canonical_cleanup.is_some() {
+            self.create_planned_run(command).await?
+        } else {
+            self.repository.create_run(command).await?
+        };
         if !created.created {
             match created.run.state {
                 RunState::Queued | RunState::LeasingVolume => {}
@@ -39,7 +43,7 @@ impl RunOrchestrator {
         }
         // New runs persist the actual provider owner and planned identity
         // before any preparation, authority check or acquisition effect.
-        self.bind_planned_vm(&created.run, created.created).await?;
+        self.bind_planned_vm(&created.run).await?;
         let result = self.execute_claimed_run(command, &created.run).await;
         if self.canonical_cleanup.is_none() {
             return result;

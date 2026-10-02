@@ -43,6 +43,7 @@ impl RunCleanupRepository for CleanupRepository {
         vm: &VmId,
     ) -> Result<(), RepositoryError> {
         let mut state = self.state.lock().await;
+        let durable_plan = self.runs.planned_vm.lock().await.clone();
         let mut run = self.runs.run.lock().await;
         if (run.id, run.instance_id, run.instance_revision_id) != (run_id, instance, revision)
             || state.target.is_some()
@@ -50,7 +51,9 @@ impl RunCleanupRepository for CleanupRepository {
                 .binding
                 .as_ref()
                 .is_some_and(|binding| binding != &(host.clone(), vm.clone()))
-            || (state.binding.is_none() && run.vm_id.is_some())
+            || (state.binding.is_none()
+                && run.vm_id.is_some()
+                && durable_plan.as_ref() != Some(&(host.clone(), vm.clone())))
         {
             return Err(RepositoryError::InvalidData(
                 "binding conflicts with durable history",
@@ -78,6 +81,11 @@ impl RunCleanupRepository for CleanupRepository {
             return Ok(target.clone());
         }
         let run = self.runs.get(run_id).await?;
+        if state.binding.is_none() {
+            let plan = self.runs.planned_vm.lock().await;
+            state.binding.clone_from(&plan);
+            drop(plan);
+        }
         let vm = state
             .binding
             .as_ref()
