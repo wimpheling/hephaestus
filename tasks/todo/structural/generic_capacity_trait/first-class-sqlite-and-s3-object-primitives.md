@@ -59,8 +59,19 @@ Verified checkpoints:
   a distinct external-volume reuse recipe. Fourteen actual Python tests and one
   Rust parser/resolver integration test passed, with focused strict checks.
   Parser release fixtures are not publication or deployed VM evidence.
+- Typed instance lifecycle (`55063387`, migration 0107) passed actual
+  PostgreSQL import/removal, actor/RLS, concurrent grant/closure, and populated
+  schema-0106 upgrade checks, preserving legacy hashes, leases and mailbox
+  fences. Initial import atomically records exact bindings and grants;
+  permanent removal closes admission and revokes grants. Named dispatch stays
+  unsupported, and removal admission does not prove physical cleanup.
+- Canonical run cleanup contracts (`eff9758b`) passed 19 domain tests
+  (16 new cleanup cases), 13 existing orchestrator integration tests, focused
+  strict Clippy/docs, formatting and architecture checks. Targets bind the
+  exact provider/host/VM and complete lease/fence set, including an explicit
+  empty set. These are additive core contracts; worker persistence, verified
+  destruction and atomic whole-set lease release remain to be integrated.
 
-Typed instance import and permanent removal admission are undergoing checks.
 Provider orchestration and ownership seals, plural runtime attachment and cleanup,
 physical revocation, authenticated project web UI commands, real SQLite
 publication/install/inspect/remove and retained-data recovery, and the full
