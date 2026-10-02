@@ -28,6 +28,9 @@ configured host. It is separate from volume-root and recipe scopes. Providers
 must bind it to actual root/account ownership; a checked value alone grants no
 cleanup authority. Ownership lookup and scoped orphan cleanup default to
 unsupported, preserving existing provisioning without inventing absence proof.
+Canonical cleanup also requires exclusive supervisor ownership retained through
+clones, live handles, and in-flight IO. Composition supplies one shared run
+operation registry per supervisor; an identity value alone proves no quiescence.
 
 # When
 

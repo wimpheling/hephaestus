@@ -38,6 +38,26 @@ impl RunOrchestrator {
             .as_ref()
             .ok_or_else(|| invalid("canonical cleanup is not configured"))?;
         let target = cleanup.repository.begin_cleanup(run_id).await?;
+        tokio::time::timeout(self.cleanup_timeout, async {
+            let operation = self.lock_run_operation(run_id).await?;
+            let result = self.confirm_quiescent_target(target, instance).await;
+            drop(operation);
+            result
+        })
+        .await
+        .map_err(|_| VmError::InvalidState("scoped VM cleanup deadline elapsed"))?
+    }
+
+    async fn confirm_quiescent_target(
+        &self,
+        target: RunCleanupTarget,
+        instance: Option<Arc<dyn VmInstance>>,
+    ) -> Result<RunCleanupReceipt, OrchestratorError> {
+        let run_id = target.run_id();
+        let cleanup = self
+            .canonical_cleanup
+            .as_ref()
+            .ok_or_else(|| invalid("canonical cleanup is not configured"))?;
         let scope = self.validate_cleanup_scope(&target)?;
         if let Some(receipt) = cleanup.repository.recorded_cleanup_receipt(run_id).await? {
             checked(receipt.matches_target(&target))?;
@@ -51,23 +71,18 @@ impl RunOrchestrator {
             Some(instance) => Some(instance),
             None => self.active.lock().await.get(&run_id).cloned(),
         };
-        tokio::time::timeout(self.cleanup_timeout, async {
-            if let Some(instance) = instance.as_ref() {
-                if instance.id() != vm_id {
-                    return Err(invalid(
-                        "active VM handle differs from durable cleanup target",
-                    ));
-                }
-                instance.destroy().await?;
+        if let Some(instance) = instance.as_ref() {
+            if instance.id() != vm_id {
+                return Err(invalid(
+                    "active VM handle differs from durable cleanup target",
+                ));
             }
-            // Missing process-local handles never establish authoritative absence.
-            // Scoped confirmation also follows active-handle destruction.
-            self.provider.cleanup_orphan_scoped(&scope, vm_id).await?;
-            self.validate_cleanup_scope(&target)?;
-            Ok::<(), OrchestratorError>(())
-        })
-        .await
-        .map_err(|_| VmError::InvalidState("scoped VM cleanup deadline elapsed"))??;
+            instance.destroy().await?;
+        }
+        // The operation guard excludes future provisioning/start IO. Scoped
+        // confirmation also follows exact active-handle destruction.
+        self.provider.cleanup_orphan_scoped(&scope, vm_id).await?;
+        self.validate_cleanup_scope(&target)?;
         self.active.lock().await.remove(&run_id);
         let observation = checked(if instance.is_some() {
             RunCleanupVmObservation::destroyed(host(&scope)?, vm_id.clone())

@@ -2,14 +2,22 @@ use async_trait::async_trait;
 use run_domain::{CancelRun, Run, RunState, StartRun};
 use run_orchestrator::{CreateRunResult, RepositoryError, RunRepository, StoredVmEvent};
 use runtime_types::{LeaseId, RunId, VolumeId};
+use std::sync::Arc;
 use time::OffsetDateTime;
 use tokio::sync::Mutex;
 use vm_trait::VmExit;
+
+#[derive(Clone)]
+pub struct TransitionPause {
+    pub entered: Arc<tokio::sync::Notify>,
+    pub release: Arc<tokio::sync::Notify>,
+}
 
 pub struct MemoryRepository {
     pub run: Mutex<Run>,
     pub created: Mutex<bool>,
     pub events: Mutex<Vec<StoredVmEvent>>,
+    pub pause_running_transition: Mutex<Option<TransitionPause>>,
 }
 
 impl MemoryRepository {
@@ -41,6 +49,7 @@ impl MemoryRepository {
             }),
             created: Mutex::new(false),
             events: Mutex::new(Vec::new()),
+            pause_running_transition: Mutex::new(None),
         }
     }
 }
@@ -89,6 +98,13 @@ impl RunRepository for MemoryRepository {
         exit: Option<&VmExit>,
         failure: Option<&str>,
     ) -> Result<Run, RepositoryError> {
+        if next == RunState::Running {
+            let pause = self.pause_running_transition.lock().await.clone();
+            if let Some(pause) = pause {
+                pause.entered.notify_one();
+                pause.release.notified().await;
+            }
+        }
         let mut run = self.run.lock().await;
         if !run.state.can_transition_to(next) {
             return Err(RepositoryError::InvalidTransition(

@@ -6,6 +6,7 @@ mod cleanup;
 mod complete;
 mod errors;
 mod events;
+mod operation_guards;
 mod prepare;
 mod provision;
 mod recovery;

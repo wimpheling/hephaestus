@@ -27,7 +27,7 @@ impl LibkrunProvider {
     ///
     /// Rejects invalid backend configuration or mismatching durable ownership.
     pub fn new_owned(config: LibkrunConfig, host_id: &str) -> Result<Self, VmError> {
-        let provider = Self::new(config)?;
+        let provider = Self::construct(config, Arc::new(ProcessWorkerSpawner))?;
         let owner = super::ownership::ProviderOwner::initialize(&provider.inner.config, host_id)?;
         provider
             .inner
@@ -51,6 +51,14 @@ impl LibkrunProvider {
     }
 
     pub(super) fn new_with_spawner(
+        config: LibkrunConfig,
+        worker_spawner: Arc<dyn WorkerSpawner>,
+    ) -> Result<Self, VmError> {
+        super::ownership::reject_unowned(&config)?;
+        Self::construct(config, worker_spawner)
+    }
+
+    fn construct(
         config: LibkrunConfig,
         worker_spawner: Arc<dyn WorkerSpawner>,
     ) -> Result<Self, VmError> {
@@ -130,6 +138,9 @@ impl VmProvider for LibkrunProvider {
     }
 
     async fn provision(&self, spec: VmSpec) -> Result<Arc<dyn VmInstance>, VmError> {
+        if self.inner.owner.get().is_none() {
+            super::ownership::reject_unowned(&self.inner.config)?;
+        }
         let owner_guard = self
             .inner
             .owner
@@ -187,6 +198,7 @@ impl VmProvider for LibkrunProvider {
         if let Some(owner) = self.inner.owner.get() {
             return self.cleanup_orphan_scoped(&owner.scope()?, id).await;
         }
+        super::ownership::reject_unowned(&self.inner.config)?;
         validate_id(id)?;
         if self.inner.ids.lock().await.contains(id) {
             return Err(VmError::InvalidState(

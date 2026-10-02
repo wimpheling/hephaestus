@@ -5,11 +5,15 @@ use run_domain::{
 };
 use run_orchestrator::{RepositoryError, RunCleanupRepository, RunRepository};
 use runtime_types::{AgentInstanceId, AgentInstanceRevisionId, RunId};
-use std::sync::{Arc, Mutex};
+use std::sync::{
+    Arc, Mutex,
+    atomic::{AtomicUsize, Ordering},
+};
 use tokio::sync::Mutex as AsyncMutex;
 use vm_trait::VmId;
 
 use super::super::support::{MemoryRepository, MemoryVolumeStore, lock};
+use super::provider::Pause;
 
 #[derive(Default)]
 pub struct CleanupState {
@@ -24,6 +28,8 @@ pub struct CleanupRepository {
     pub volumes: Arc<MemoryVolumeStore>,
     pub state: AsyncMutex<CleanupState>,
     pub log: Arc<Mutex<Vec<&'static str>>>,
+    pub planning_calls: AtomicUsize,
+    pub pause_planning: Mutex<Option<(usize, Arc<Pause>)>>,
 }
 
 #[async_trait]
@@ -55,6 +61,14 @@ impl RunCleanupRepository for CleanupRepository {
         drop(run);
         drop(state);
         lock(&self.log).push("bind-planned");
+        let call = self.planning_calls.fetch_add(1, Ordering::SeqCst) + 1;
+        let pause = lock(&self.pause_planning)
+            .as_ref()
+            .filter(|(at, _)| *at == call)
+            .map(|(_, pause)| pause.clone());
+        if let Some(pause) = pause {
+            pause.wait().await;
+        }
         Ok(())
     }
 

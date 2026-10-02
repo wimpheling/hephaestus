@@ -4,7 +4,7 @@ use run_orchestrator::{PreparedRunRuntime, RunOrchestrator, RunRuntimeError, Run
 use runtime_types::{LeaseId, RunId, VolumeId};
 use std::sync::{
     Arc, Mutex,
-    atomic::{AtomicBool, Ordering},
+    atomic::{AtomicBool, AtomicUsize, Ordering},
 };
 use tokio::sync::Mutex as AsyncMutex;
 
@@ -41,6 +41,8 @@ impl Fixture {
             volumes: Arc::clone(&volumes),
             state: AsyncMutex::new(CleanupState::default()),
             log: Arc::clone(&log),
+            planning_calls: AtomicUsize::new(0),
+            pause_planning: Mutex::new(None),
         });
         Self {
             command,

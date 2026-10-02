@@ -109,12 +109,9 @@ impl RunOrchestrator {
 
     pub(super) async fn abort_vm_keep_lease(&self, run_id: RunId, instance: &Arc<dyn VmInstance>) {
         if self.canonical_cleanup.is_some() {
-            // Keep the exact live handle for canonical closure and scoped
-            // confirmation. The claimed-run error path performs cleanup.
-            self.active
-                .lock()
-                .await
-                .insert(run_id, Arc::clone(instance));
+            // Every caller follows registration. Preserve that entry without
+            // restoring a handle already removed by confirmed concurrent
+            // cleanup. The canonical path alone owns handle removal.
             return;
         }
         if let Err(error) = instance.destroy().await {

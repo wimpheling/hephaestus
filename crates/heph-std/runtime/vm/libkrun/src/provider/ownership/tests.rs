@@ -32,10 +32,13 @@ fn fresh_owner_survives_restart_and_rejects_host_redirect() {
     let owner = ProviderOwner::initialize(&config, "host-1").unwrap();
     let scope = owner.scope().unwrap();
     fs::create_dir(config.runtime_root.join("vm-1")).unwrap();
+    assert!(ProviderOwner::initialize(&config, "host-1").is_err());
+    drop(owner);
     let restarted = ProviderOwner::initialize(&config, "host-1").unwrap();
     assert_eq!(restarted.scope().unwrap(), scope);
     assert!(restarted.validate(&config).is_ok());
     assert!(ProviderOwner::initialize(&config, "host-2").is_err());
+    drop(restarted);
 }
 
 #[test]
@@ -43,21 +46,24 @@ fn concurrent_initialization_retains_one_durable_namespace() {
     let temp = TempDir::new().unwrap();
     let config = Arc::new(config(&temp));
     let mut threads = Vec::new();
+    let barrier = Arc::new(std::sync::Barrier::new(4));
     // Spawn every contender before joining so the real flock is exercised.
     for _ in 0..4 {
         let config = config.clone();
+        let barrier = barrier.clone();
         threads.push(std::thread::spawn(move || {
-            ProviderOwner::initialize(&config, "host-1")
-                .unwrap()
-                .scope()
-                .unwrap()
+            let owner = ProviderOwner::initialize(&config, "host-1");
+            let scope = owner.as_ref().ok().map(|owner| owner.scope().unwrap());
+            barrier.wait();
+            drop(owner);
+            scope
         }));
     }
     let scopes: Vec<_> = threads
         .into_iter()
         .map(|thread| thread.join().unwrap())
         .collect();
-    assert!(scopes.iter().all(|scope| scope == &scopes[0]));
+    assert_eq!(scopes.iter().filter(|scope| scope.is_some()).count(), 1);
 }
 
 #[test]
@@ -72,12 +78,15 @@ fn copied_marker_and_replaced_runtime_or_cgroup_cannot_claim_old_owner() {
     config.runtime_root = replacement;
     assert!(ProviderOwner::initialize(&config, "host-1").is_err());
     assert!(owner.validate(&config).is_err());
+    assert!(!config.runtime_root.join(LOCK).exists());
+    assert!(!config.runtime_root.join(SUPERVISOR).exists());
     config.runtime_root = original;
     let cgroup = temp.path().join("other-cgroup");
     fs::create_dir(&cgroup).unwrap();
     config.cgroup_root = cgroup;
     assert!(ProviderOwner::initialize(&config, "host-1").is_err());
     assert!(owner.validate(&config).is_err());
+    drop(owner);
 }
 
 #[test]
@@ -110,6 +119,9 @@ fn changed_root_after_guard_is_detected_before_absence() {
     fs::rename(&config.runtime_root, temp.path().join("old-runtime")).unwrap();
     fs::create_dir(&config.runtime_root).unwrap();
     assert!(owner.validate_guard(&config, &guard).is_err());
+    assert_eq!(fs::read_dir(&config.runtime_root).unwrap().count(), 0);
+    drop(guard);
+    drop(owner);
 }
 
 #[test]
@@ -129,7 +141,7 @@ fn old_cgroups_partial_metadata_and_redirected_lock_are_not_adopted() {
     .unwrap();
     assert!(ProviderOwner::initialize(&config, "host-1").is_err());
     fs::remove_file(config.runtime_root.join(MARKER)).unwrap();
-    fs::remove_file(config.runtime_root.join(LOCK)).unwrap();
+    assert!(!config.runtime_root.join(LOCK).exists());
     let outside = temp.path().join("outside-lock");
     fs::write(&outside, b"untouched").unwrap();
     symlink(&outside, config.runtime_root.join(LOCK)).unwrap();
@@ -163,4 +175,7 @@ fn shared_physical_guards_coexist_without_relaxing_owner_validation() {
     fs::create_dir(&config.runtime_root).unwrap();
     assert!(owner.validate_guard(&config, &first).is_err());
     assert!(owner.validate_guard(&config, &second).is_err());
+    drop(second);
+    drop(first);
+    drop(owner);
 }

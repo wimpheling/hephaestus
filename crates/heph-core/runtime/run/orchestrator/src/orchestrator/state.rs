@@ -11,6 +11,7 @@ use super::{
         DisabledRuntimeGitWorkspaceManager, RunAuthorityManager,
     },
     canonical_cleanup::CanonicalCleanup,
+    operation_guards::RunOperationGuards,
     runtime::{
         DisabledRunResourceObserver, RunLaunchAuthorizer, RunResourceObserver, RunRuntimeManager,
     },
@@ -40,6 +41,7 @@ pub struct RunOrchestrator {
     pub(crate) cancellation_timeout: Duration,
     pub(crate) canonical_cleanup: Option<CanonicalCleanup>,
     pub(crate) cleanup_timeout: Duration,
+    pub(crate) operation_guards: RunOperationGuards,
 }
 
 impl RunOrchestrator {
@@ -71,6 +73,7 @@ impl RunOrchestrator {
             cancellation_timeout: Duration::from_secs(10),
             canonical_cleanup: None,
             cleanup_timeout: Duration::from_secs(30),
+            operation_guards: RunOperationGuards::default(),
         }
     }
 

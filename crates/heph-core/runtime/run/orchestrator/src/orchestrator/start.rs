@@ -10,6 +10,19 @@ impl RunOrchestrator {
     /// Returns an error when durable state, volume, or VM operations fail.
     /// Cleanup failures deliberately retain the volume lease for recovery.
     pub async fn start_run(&self, command: &StartRun) -> Result<Run, OrchestratorError> {
+        let claim = if self.canonical_cleanup.is_some() {
+            Some(self.operation_guards.claim_start(command.run_id)?)
+        } else {
+            None
+        };
+        let result = self.start_claimed_run(command).await;
+        // The admission token spans the whole future, including cleanup; the
+        // independent physical operation mutex never spans guest execution.
+        drop(claim);
+        result
+    }
+
+    async fn start_claimed_run(&self, command: &StartRun) -> Result<Run, OrchestratorError> {
         let created = self.repository.create_run(command).await?;
         if !created.created {
             match created.run.state {
@@ -32,7 +45,10 @@ impl RunOrchestrator {
             return result;
         }
         match result {
-            Err(error @ OrchestratorError::CleanupIncomplete { .. }) => Err(error),
+            Err(
+                error @ (OrchestratorError::CleanupIncomplete { .. }
+                | OrchestratorError::RunInProgress(_)),
+            ) => Err(error),
             Err(error) => {
                 if let Ok(current) = self.repository.get(command.run_id).await
                     && current.state == RunState::CleanedUp

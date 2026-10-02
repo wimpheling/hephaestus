@@ -18,6 +18,13 @@ pub trait VmProvider: Send + Sync + 'static {
 
     /// Returns validated ownership tied to the configured provider root/account.
     ///
+    /// Canonical cleanup requires exclusive supervisor ownership for this
+    /// namespace. The owner remains retained through provider clones, live
+    /// instances, and in-flight IO; a replacement supervisor cannot admit
+    /// future provisioning until the previous supervisor has ceased IO. Local
+    /// providers use a durable lifetime lock, separate from per-VM operations.
+    /// One configured orchestrator owns the per-run operation registry.
+    ///
     /// # Errors
     ///
     /// Providers without durable ownership support fail closed.

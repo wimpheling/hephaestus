@@ -1,6 +1,6 @@
 use async_trait::async_trait;
 use std::sync::{
-    Arc, Mutex,
+    Arc, Mutex, Weak,
     atomic::{AtomicBool, Ordering},
 };
 use tokio::sync::broadcast;
@@ -17,6 +17,27 @@ pub struct ScopedProvider {
     pub hang_cleanup: AtomicBool,
     pub fail_destroy: Arc<AtomicBool>,
     pub wrong_handle: AtomicBool,
+    pub pause_provision: Mutex<Option<Arc<Pause>>>,
+    pub pause_start: Mutex<Option<Arc<Pause>>>,
+    pub instances: Mutex<Vec<Weak<dyn VmInstance>>>,
+}
+
+pub struct Pause {
+    pub entered: tokio::sync::Notify,
+    pub release: tokio::sync::Notify,
+}
+
+impl Pause {
+    pub fn new() -> Arc<Self> {
+        Arc::new(Self {
+            entered: tokio::sync::Notify::new(),
+            release: tokio::sync::Notify::new(),
+        })
+    }
+    pub async fn wait(&self) {
+        self.entered.notify_one();
+        self.release.notified().await;
+    }
 }
 
 impl ScopedProvider {
@@ -30,6 +51,9 @@ impl ScopedProvider {
             hang_cleanup: AtomicBool::new(false),
             fail_destroy: Arc::new(AtomicBool::new(false)),
             wrong_handle: AtomicBool::new(false),
+            pause_provision: Mutex::new(None),
+            pause_start: Mutex::new(None),
+            instances: Mutex::new(Vec::new()),
         }
     }
 }
@@ -45,16 +69,23 @@ impl VmProvider for ScopedProvider {
     }
 
     async fn provision(&self, spec: VmSpec) -> Result<Arc<dyn VmInstance>, VmError> {
+        let pause = lock(&self.pause_provision).clone();
+        if let Some(pause) = pause {
+            pause.wait().await;
+        }
         let id = if self.wrong_handle.load(Ordering::SeqCst) {
             VmId("different-vm".into())
         } else {
             spec.id.clone()
         };
-        Ok(Arc::new(ScopedInstance {
+        let instance: Arc<dyn VmInstance> = Arc::new(ScopedInstance {
             inner: self.inner.provision(spec).await?,
             id,
             fail_destroy: Arc::clone(&self.fail_destroy),
-        }))
+            pause_start: lock(&self.pause_start).clone(),
+        });
+        lock(&self.instances).push(Arc::downgrade(&instance));
+        Ok(instance)
     }
 
     async fn cleanup_orphan(&self, _id: &VmId) -> Result<(), VmError> {
@@ -86,6 +117,7 @@ struct ScopedInstance {
     inner: Arc<dyn VmInstance>,
     id: VmId,
     fail_destroy: Arc<AtomicBool>,
+    pause_start: Option<Arc<Pause>>,
 }
 
 #[async_trait]
@@ -94,6 +126,9 @@ impl VmInstance for ScopedInstance {
         &self.id
     }
     async fn start(&self) -> Result<(), VmError> {
+        if let Some(pause) = self.pause_start.as_ref() {
+            pause.wait().await;
+        }
         self.inner.start().await
     }
     async fn stop(&self, mode: StopMode) -> Result<(), VmError> {

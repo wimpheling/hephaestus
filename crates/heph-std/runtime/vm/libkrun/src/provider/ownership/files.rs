@@ -1,4 +1,4 @@
-use super::{LOCK, MARKER, Marker, OwnerGuard};
+use super::{DirectoryIdentity, LOCK, MARKER, Marker, OwnerGuard, SUPERVISOR};
 use crate::config::LibkrunConfig;
 use rustix::fs::{FlockOperation, Mode, OFlags};
 use std::{
@@ -46,7 +46,7 @@ pub(super) fn open_root(path: &Path, uid: u32) -> Result<File, VmError> {
     Ok(file)
 }
 
-fn check_file(file: &File, uid: u32) -> Result<(), VmError> {
+pub(super) fn check_file(file: &File, uid: u32) -> Result<(), VmError> {
     let metadata = file.metadata().map_err(io_error)?;
     if !metadata.is_file()
         || metadata.uid() != uid
@@ -108,7 +108,68 @@ pub(super) fn read_marker(root: &File) -> Result<Option<Marker>, VmError> {
     if bytes.len() > 4096 {
         return Err(invalid("VM owner metadata exceeds its bounded format"));
     }
-    serde_json::from_slice(&bytes).map(Some).map_err(io_error)
+    let value: serde_json::Value = serde_json::from_slice(&bytes).map_err(io_error)?;
+    if value.get("version").and_then(serde_json::Value::as_u64) != Some(2) {
+        return Err(invalid(
+            "VM owner lacks version 2 supervisor proof; automatic adoption is unavailable",
+        ));
+    }
+    serde_json::from_value(value).map(Some).map_err(io_error)
+}
+
+pub(super) fn preflight_owner(config: &LibkrunConfig, host: &str) -> Result<bool, VmError> {
+    let runtime = open_root(&config.runtime_root, config.service_uid)?;
+    let cgroup = open_root(&config.cgroup_root, config.service_uid)?;
+    if let Some(marker) = read_marker(&runtime)? {
+        if marker.host_id != host
+            || marker.runtime != DirectoryIdentity::read(&runtime)?
+            || marker.cgroup != DirectoryIdentity::read(&cgroup)?
+        {
+            return Err(invalid(
+                "VM owner metadata differs from configured roots/host",
+            ));
+        }
+        return Ok(true);
+    }
+    require_empty_runtime(&runtime)?;
+    require_unclassified_cgroups_absent(&cgroup)?;
+    Ok(false)
+}
+
+pub(super) fn supervisor_file(root: &File, creating: bool, uid: u32) -> Result<File, VmError> {
+    let mut flags = OFlags::RDWR | OFlags::NOFOLLOW | OFlags::NONBLOCK | OFlags::CLOEXEC;
+    if creating {
+        flags |= OFlags::CREATE | OFlags::EXCL;
+    }
+    let file: File = rustix::fs::openat(root, SUPERVISOR, flags, Mode::from_bits_truncate(0o600))
+        .map_err(io_error)?
+        .into();
+    check_file(&file, uid)?;
+    if creating {
+        file.sync_all().map_err(io_error)?;
+        root.sync_all().map_err(io_error)?;
+    }
+    Ok(file)
+}
+
+pub(super) fn claim_supervisor(file: &File) -> Result<(), VmError> {
+    rustix::fs::flock(file, FlockOperation::NonBlockingLockExclusive)
+        .map_err(|_| invalid("VM owner already has a live supervisor; reuse its provider clone"))
+}
+
+pub(super) fn reject_marked_root(config: &LibkrunConfig) -> Result<(), VmError> {
+    for name in [MARKER, SUPERVISOR] {
+        match fs::symlink_metadata(config.runtime_root.join(name)) {
+            Ok(_) => {
+                return Err(invalid(
+                    "managed VM root requires its owned supervisor provider",
+                ));
+            }
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+            Err(error) => return Err(io_error(error)),
+        }
+    }
+    Ok(())
 }
 
 pub(super) fn write_marker(root: &File, marker: &Marker) -> Result<(), VmError> {

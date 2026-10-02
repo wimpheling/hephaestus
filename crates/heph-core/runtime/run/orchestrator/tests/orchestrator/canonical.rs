@@ -13,6 +13,8 @@ mod volumes;
 mod failures;
 #[path = "canonical/primary_error.rs"]
 mod primary_error;
+#[path = "canonical/quiescence.rs"]
+mod quiescence;
 #[path = "canonical/recovery.rs"]
 mod recovery;
 #[path = "canonical/replay.rs"]

@@ -103,10 +103,17 @@ async fn provision_vm(
     }
     // Recheck immutable ownership and open planning immediately before IO.
     // This also rejects a cleanup closure made during preparation.
+    let operation = orchestrator.lock_run_operation(run_id).await?;
+    if orchestrator.canonical_cleanup.is_some()
+        && orchestrator.active.lock().await.contains_key(&run_id)
+    {
+        return Err(OrchestratorError::RunInProgress(run_id));
+    }
     orchestrator.bind_planned_vm(run, false).await?;
     let instance = match orchestrator.provider.provision(spec).await {
         Ok(instance) => instance,
         Err(error) => {
+            drop(operation);
             return orchestrator
                 .fail_with_resources(
                     run_id,
@@ -132,6 +139,7 @@ async fn provision_vm(
             vm_trait::VmError::InvalidState("provider returned a different VM identity").into(),
         );
     }
+    drop(operation);
     if orchestrator
         .repository
         .get(run_id)
@@ -165,16 +173,21 @@ async fn start_vm(
     instance: Arc<dyn VmInstance>,
 ) -> Result<Stage<StartedRun>, OrchestratorError> {
     let run_id = context.run.id;
+    let operation = orchestrator.lock_run_operation(run_id).await?;
+    orchestrator.bind_planned_vm(&context.run, false).await?;
     if let Err(error) = orchestrator
         .repository
         .transition(run_id, RunState::Starting, None, None)
         .await
     {
+        drop(operation);
         orchestrator.abort_vm_keep_lease(run_id, &instance).await;
         return Err(error.into());
     }
     let events = instance.subscribe_events();
-    if let Err(error) = instance.start().await {
+    let started = instance.start().await;
+    drop(operation);
+    if let Err(error) = started {
         return handle_start_failure(
             orchestrator,
             run_id,

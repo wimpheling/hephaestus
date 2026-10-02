@@ -71,10 +71,23 @@ authoritative persisted admission proof before enabling the path. Historical
 rows are never adopted automatically. Application composition, migration
 publication, plural dispatch, and native runtime verification remain pending.
 
-Before production enablement, provisioning and cleanup also need a per-VM
-physical operation guard and authoritative supervisor quiescence. A durable
-pre-provision check alone cannot prevent another recovery process from observing
-absence while an asynchronous provision call is still in flight. Cancellation
-admission avoids starting that competing cleanup, but cross-process recovery
-requires the additional proof before any absence receipt. No application or
-migration enablement is authorized by this opt-in checkpoint.
+The opt-in path now holds a per-run operation guard from the final durable open
+check through asynchronous provisioning and active-handle registration. Launch
+repeats the authoritative open check under the same guard before transitioning
+to `Starting`, and keeps it until the Start RPC returns. Cleanup closes
+acquisition first, then waits for that guard before receipt lookup, destruction,
+or authoritative absence. Waiting and physical confirmation share the cleanup
+deadline. Already-in-flight provisioning/Start may finish after closure; cleanup
+cannot certify absence before those calls quiesce. No DB transaction spans IO.
+
+A separate live-start claim lasts through each start future. Duplicate starts
+are rejected before preparation and do not clean another worker's resources.
+Weak registry entries are reclaimed only after holders and queued waiters drop
+their exact guard/claim. Different runs use different operation mutexes.
+
+Composition must provide one shared orchestrator/registry for each exclusively
+supervised provider owner. Libkrun's version 2 lifetime supervisor lock excludes
+another process/provider for that owner; providers without equivalent ownership
+remain unsupported. The operation guard is released before reentrant failure
+cleanup and never spans workload execution. Application enablement, atomic
+creation/binding, and plural runtime integration remain separate checkpoints.

@@ -36,8 +36,27 @@ instances, and revalidates ownership before confirming destruction or absence.
 An unchanged pathname or missing VM directory never establishes another root's
 ownership. A changed cgroup root also requires explicit future reconciliation;
 there is no implicit ownership rollover across host reboot. The ordinary `new`
-constructor preserves existing provisioning and reports ownership unsupported.
+constructor preserves provisioning on unclassified roots and reports ownership
+unsupported. It rejects marked owned roots, including when a marker appears
+after that provider was constructed.
 Owned providers also apply their ownership checks to unscoped orphan cleanup.
+
+Version 2 ownership pins a separate private supervisor lock by device, inode,
+and UID. `new_owned` retains its exclusive flock through clones, live instances,
+monitor tasks, and in-flight IO. Another provider/process for the same root is
+rejected until the supervisor lifetime ends. The lock is close-on-exec so stale
+VM children cannot prevent restart takeover; their cgroups still require scoped
+cleanup before lease release. Physical owner guards remain shared, allowing
+different VMs to provision concurrently. Validation never creates metadata or
+converts/clones the supervisor flock into a physical operation lock.
+
+Version 1 markers and partial supervisor metadata fail closed without automatic
+adoption. Use a fresh managed root for this profile. Existing live-instance
+monitor references can retain ownership after facade destruction; reuse the
+provider clone rather than constructing a second supervisor. These locks govern
+cooperating current-version providers, not a malicious same-UID administrator
+or an older unowned binary. Deployment must stop old supervisors and preserve
+the database/version rollback gate before activating managed ownership.
 
 Named ext4 attachments preserve the disk's read-only backend flag and validate
 its filesystem UUID on the exact selected raw file before launch. The guest
