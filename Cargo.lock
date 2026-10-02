@@ -5945,6 +5945,7 @@ version = "0.1.0"
 dependencies = [
  "async-trait",
  "runtime-types",
+ "rustix",
  "tempfile",
  "time",
  "tokio",
@@ -5958,13 +5959,18 @@ name = "volume-postgres"
 version = "0.1.0"
 dependencies = [
  "async-trait",
+ "authz-domain",
+ "authz-postgres",
+ "identity-domain",
  "runtime-types",
+ "serde_json",
  "serial_test",
  "sqlx",
  "tempfile",
  "time",
  "tokio",
  "uuid",
+ "volume-local",
  "volume-trait",
 ]
 
@@ -5973,6 +5979,7 @@ name = "volume-trait"
 version = "0.1.0"
 dependencies = [
  "async-trait",
+ "identity-domain",
  "runtime-types",
  "serde",
  "thiserror 2.0.19",

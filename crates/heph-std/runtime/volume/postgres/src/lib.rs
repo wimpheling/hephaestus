@@ -4,7 +4,9 @@ use sqlx::PgPool;
 
 mod errors;
 mod models;
+mod provisioning;
 mod repository;
+mod resources;
 
 /// PostgreSQL-backed volume metadata repository.
 #[derive(Clone)]

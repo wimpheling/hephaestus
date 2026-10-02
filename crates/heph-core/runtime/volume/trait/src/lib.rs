@@ -7,6 +7,12 @@ use std::path::PathBuf;
 use time::OffsetDateTime;
 use uuid::Uuid;
 
+mod resources;
+pub use resources::{
+    MAX_REGISTERED_VOLUME_CAPACITY_BYTES, MIN_LOCAL_VOLUME_CAPACITY_BYTES, ProvisioningClaim,
+    VolumeInspection, VolumeProvisioningState, VolumeRegistration, VolumeResourceRepository,
+};
+
 /// Stable block-device identifier used for the agent state disk.
 pub const INSTANCE_STATE_DISK_ID: &str = "instance-state";
 
@@ -14,6 +20,8 @@ pub const INSTANCE_STATE_DISK_ID: &str = "instance-state";
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[non_exhaustive]
 pub enum VolumeKind {
+    /// Standalone project-owned private filesystem.
+    Private,
     /// Per-agent `SQLite` state.
     InstanceState,
 }
@@ -40,8 +48,10 @@ pub enum VolumeState {
 pub struct Volume {
     /// Stable volume identifier.
     pub id: VolumeId,
-    /// Agent that owns the volume.
-    pub instance_id: AgentInstanceId,
+    /// Stable owning project. Provider access never implies project authority.
+    pub project_id: Uuid,
+    /// Optional historical origin; a consuming instance is recorded by its lease.
+    pub instance_id: Option<AgentInstanceId>,
     /// Purpose of the volume.
     pub kind: VolumeKind,
     /// Host that owns the local backing file.
@@ -54,6 +64,10 @@ pub struct Volume {
     pub filesystem_uuid: Uuid,
     /// Current durable state.
     pub state: VolumeState,
+    /// Provisioning progress, separate from attachment and lease recovery.
+    pub provisioning_state: VolumeProvisioningState,
+    /// Monotonic fence for provisioning metadata transitions.
+    pub provisioning_generation: i64,
     /// External encryption-key reference, when encryption is introduced.
     pub key_reference: Option<String>,
     /// Encryption metadata format version.
@@ -107,6 +121,27 @@ pub struct VolumeAttachment {
 /// filesystem formatting.
 #[async_trait]
 pub trait VolumeMetadataRepository: Send + Sync + 'static {
+    /// Reserves immutable provider handles once for an existing resource.
+    async fn reserve_provider(
+        &self,
+        volume_id: VolumeId,
+        host_id: &str,
+        root: &std::path::Path,
+    ) -> Result<Volume, VolumeError>;
+
+    /// Claims a new metadata generation while the caller holds its host file lock.
+    async fn claim_provisioning(
+        &self,
+        volume_id: VolumeId,
+    ) -> Result<ProvisioningClaim, VolumeError>;
+
+    /// Records progress using the exact provisioning generation.
+    async fn provisioning_progress(
+        &self,
+        claim: &ProvisioningClaim,
+        state: VolumeProvisioningState,
+    ) -> Result<(), VolumeError>;
+
     /// Reserves or returns one instance-state volume metadata row.
     async fn resolve_instance_state(
         &self,
@@ -117,7 +152,10 @@ pub trait VolumeMetadataRepository: Send + Sync + 'static {
         filesystem_uuid: Uuid,
     ) -> Result<Volume, VolumeError>;
 
-    /// Marks a successfully formatted backing file ready for use.
+    /// Verifies already proven readiness for compatibility callers.
+    ///
+    /// New provisioning uses its fenced progress API. This operation must not
+    /// change an attached or recovering lifecycle, even after format completion.
     async fn mark_ready(&self, volume_id: VolumeId) -> Result<(), VolumeError>;
 
     /// Reads one durable volume row.
@@ -174,6 +212,15 @@ pub trait VolumeMetadataRepository: Send + Sync + 'static {
 #[derive(Debug, thiserror::Error)]
 #[non_exhaustive]
 pub enum VolumeError {
+    /// The authenticated actor lacks exact authority; existence is not disclosed.
+    #[error("volume permission denied")]
+    PermissionDenied,
+    /// An immutable registration or provider reservation differs from its retry.
+    #[error("volume intent conflicts with its existing reservation")]
+    IntentConflict,
+    /// Existing backing bytes require supervised reconciliation.
+    #[error("volume provisioning is uncertain: {0}")]
+    ProvisioningUncertain(&'static str),
     /// The requested volume does not exist.
     #[error("volume {0} was not found")]
     NotFound(VolumeId),

@@ -26,7 +26,10 @@ impl MemoryVolumeStore {
         Self {
             volume: Volume {
                 id: VolumeId::new(),
-                instance_id,
+                instance_id: Some(instance_id),
+                project_id: Uuid::new_v4(),
+                provisioning_state: volume_trait::VolumeProvisioningState::Ready,
+                provisioning_generation: 0,
                 kind: VolumeKind::InstanceState,
                 host_id: String::from("test"),
                 host_path: PathBuf::from("/fake/agent-state.raw"),

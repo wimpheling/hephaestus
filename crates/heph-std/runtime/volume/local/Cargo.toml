@@ -12,6 +12,7 @@ context = "volume"
 [dependencies]
 async-trait.workspace = true
 runtime-types = { path = "../../../../heph-core/platform/runtime-types" }
+rustix.workspace = true
 time.workspace = true
 tokio = { workspace = true, features = ["fs", "process", "time"] }
 tracing.workspace = true

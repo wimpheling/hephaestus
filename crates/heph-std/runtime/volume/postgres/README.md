@@ -1,29 +1,33 @@
 # Purpose
 
-`volume-postgres` persists the metadata and fencing state required by the local
-volume provider. It implements the core metadata repository for volume rows,
-exclusive run leases, host ownership, attachment state, heartbeat, and
-supervised recovery.
+`volume-postgres` persists private-volume resources, provider intent, provisioning
+progress, and the existing exclusive run leases on the canonical volume table.
 
 # Responsibilities
 
-The adapter keeps acquisition and state transitions transactional and checks
-the current fencing token on attachment, heartbeat, release, and recovery.
-Lease expiry is surfaced for a supervisor to fence; it is never treated as
-immediate permission for another writer. SQL row conversion returns typed core
-values and typed conflicts, stale leases, wrong hosts, or invalid transitions.
-The application composition root owns migration timing while this crate keeps
-volume SQL inside the declared PostgreSQL adapter.
+The actor resource port uses authenticated identity and canonical live policy
+checks, plus committed decision audit. Owner-project `can_manage` is required
+for registration and replay. Inspection checks exact resource `can_read` before
+reading a row; listing filters exact readable resources before paging. Denials
+are committed to the audit separately from rejected effects. Public inspection
+contains no host paths, host IDs, or encryption-key references.
+
+Trusted workers reserve provider handles once. Immutable registration compares
+ID, project, capacity, and filesystem UUID on replay. Database guards preserve
+reserved UUID/capacity/host/path, and progress uses compare-and-set against an
+independent provisioning generation. No implicit consumer grants are created.
+The legacy resolver returns assigned intent rather than replacing it with fresh
+retry options. Prior standalone rows with no UUID or handles receive a UUID once
+in the additive migration; existing backing metadata remains unchanged.
+
+Run lease foreign keys, uniqueness, and scalar execution evidence remain intact.
+Standalone acquire fails until the later named runtime binding integration.
+No SQL-provider abstraction or filesystem handles cross the metadata port.
 
 # When
 
-Construct the repository from the daemon's shared pool and initialize the
-schema during startup:
-
-```rust
-let metadata = PostgresVolumeMetadataRepository::new(pool);
-metadata.initialize().await?;
-```
-
-Inject it into `LocalVolumeStore`; the caller receives durable lease decisions
-that can be paired with host backing-file operations.
+Use `VolumeResourceRepository` with an actor pool for registration and safe
+metadata discovery. Inject a separate trusted worker repository into the local
+provider. The composition root owns migration timing. The ignored provisioning
+integration test and the 0102-to-0103 upgrade fixture require a disposable
+PostgreSQL database; native backing evidence also requires e2fsprogs.

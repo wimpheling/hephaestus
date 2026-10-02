@@ -68,8 +68,8 @@ async fn create_as_manager(pool: &PgPool, fixture: &Fixture, volume: Uuid, occur
         .await
         .expect("event occurrence");
     let created: Uuid = sqlx::query_scalar(
-        "INSERT INTO agent_instance_state_volumes (id, project_id, state, capacity_bytes)
-         VALUES ($1, $2, 'uninitialized', 16777216) RETURNING id",
+        "INSERT INTO agent_instance_state_volumes (id, project_id, state, capacity_bytes, filesystem_uuid)
+         VALUES ($1, $2, 'uninitialized', 16777216, gen_random_uuid()) RETURNING id",
     )
     .bind(volume)
     .bind(fixture.project)
@@ -174,8 +174,8 @@ async fn rls_cases(pool: &PgPool, fixture: &Fixture, volume: Uuid) {
                 .expect("standalone denied read");
         assert!(hidden.is_none());
         let forbidden = sqlx::query(
-            "INSERT INTO agent_instance_state_volumes (id, project_id, state, capacity_bytes)
-             VALUES ($1, $2, 'uninitialized', 16777216)",
+            "INSERT INTO agent_instance_state_volumes (id, project_id, state, capacity_bytes, filesystem_uuid)
+             VALUES ($1, $2, 'uninitialized', 16777216, gen_random_uuid())",
         )
         .bind(Uuid::new_v4())
         .bind(fixture.project)

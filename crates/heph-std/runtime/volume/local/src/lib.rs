@@ -9,13 +9,15 @@ use std::{
     time::Duration,
 };
 use time::OffsetDateTime;
-use tokio::{fs, process::Command};
+use tokio::fs;
+
+mod provisioning;
 use volume_trait::{
     INSTANCE_STATE_DISK_ID, Volume, VolumeAttachment, VolumeError, VolumeLease,
     VolumeMetadataRepository, VolumeStore,
 };
 
-const MINIMUM_CAPACITY_BYTES: u64 = 16 * 1024 * 1024;
+const MINIMUM_CAPACITY_BYTES: u64 = volume_trait::MIN_LOCAL_VOLUME_CAPACITY_BYTES;
 
 /// Configuration for [`LocalVolumeStore`].
 #[derive(Debug, Clone)]
@@ -89,56 +91,6 @@ impl LocalVolumeStore {
         Ok(())
     }
 
-    async fn initialize_backing(&self, volume: &Volume) -> Result<(), VolumeError> {
-        let path = &volume.host_path;
-        ensure_direct_child(&self.config.volume_root, path)?;
-        match fs::symlink_metadata(path).await {
-            Ok(metadata) => {
-                if !metadata.file_type().is_file() || metadata.file_type().is_symlink() {
-                    return Err(invalid_backing("volume backing path is not a regular file"));
-                }
-                let file = fs::OpenOptions::new()
-                    .write(true)
-                    .open(path)
-                    .await
-                    .map_err(backing)?;
-                file.set_len(volume.capacity_bytes).await.map_err(backing)?;
-                file.sync_all().await.map_err(backing)?;
-            }
-            Err(error) if error.kind() == io::ErrorKind::NotFound => {
-                let file = fs::OpenOptions::new()
-                    .create_new(true)
-                    .write(true)
-                    .open(path)
-                    .await
-                    .map_err(backing)?;
-                file.set_len(volume.capacity_bytes).await.map_err(backing)?;
-                file.sync_all().await.map_err(backing)?;
-            }
-            Err(error) => return Err(backing(error)),
-        }
-        let status = Command::new(&self.config.mkfs_ext4)
-            .arg("-q")
-            .arg("-F")
-            .arg("-U")
-            .arg(volume.filesystem_uuid.to_string())
-            .arg(path)
-            .status()
-            .await
-            .map_err(backing)?;
-        if !status.success() {
-            return Err(invalid_backing(format!("mkfs.ext4 exited with {status}")));
-        }
-        fs::OpenOptions::new()
-            .read(true)
-            .open(path)
-            .await
-            .map_err(backing)?
-            .sync_all()
-            .await
-            .map_err(backing)
-    }
-
     fn expiry(&self, now: OffsetDateTime) -> Result<OffsetDateTime, VolumeError> {
         let duration = time::Duration::try_from(self.config.lease_duration).map_err(backing)?;
         now.checked_add(duration)
@@ -172,8 +124,7 @@ impl VolumeStore for LocalVolumeStore {
             )
             .await?;
         if matches!(volume.state, volume_trait::VolumeState::Uninitialized) {
-            self.initialize_backing(&volume).await?;
-            self.metadata.mark_ready(volume.id).await?;
+            return self.provision(volume.id).await;
         }
         self.metadata.volume(volume.id).await
     }

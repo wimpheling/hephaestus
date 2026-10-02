@@ -1,6 +1,6 @@
 use super::{
     PostgresVolumeMetadataRepository,
-    errors::{assert_host, invalid, metadata},
+    errors::{assert_host, metadata},
     models::{LeaseRow, VolumeRow},
 };
 use async_trait::async_trait;
@@ -21,48 +21,46 @@ impl VolumeMetadataRepository for PostgresVolumeMetadataRepository {
         host_path: &Path,
         filesystem_uuid: Uuid,
     ) -> Result<Volume, VolumeError> {
-        let mut tx = self.pool.begin().await.map_err(metadata)?;
-        let existing = sqlx::query_as::<_, VolumeRow>(
-            "SELECT * FROM agent_instance_state_volumes WHERE instance_id = $1 FOR UPDATE",
+        self.reserve_legacy(
+            instance_id,
+            capacity_bytes,
+            host_id,
+            host_path.parent().unwrap_or(host_path),
+            filesystem_uuid,
         )
-        .bind(instance_id.as_uuid())
-        .fetch_optional(&mut *tx)
         .await
-        .map_err(metadata)?;
-        let Some(row) = existing else {
-            return Err(VolumeError::NotFound(VolumeId::from_uuid(Uuid::nil())));
-        };
-        let row = if row.state == "uninitialized" {
-            let capacity = i64::try_from(capacity_bytes).map_err(metadata)?;
-            let root = host_path.parent().unwrap_or(host_path);
-            let path = root.join(format!("{}.raw", row.id));
-            let path = path
-                .to_str()
-                .ok_or_else(|| invalid("volume path is not UTF-8"))?;
-            sqlx::query_as::<_, VolumeRow>(
-                "UPDATE agent_instance_state_volumes SET host_id = $2, host_path = $3,
-                 capacity_bytes = $4, filesystem_uuid = $5, updated_at = now()
-                 WHERE id = $1 AND state = 'uninitialized' RETURNING *",
-            )
-            .bind(row.id)
-            .bind(host_id)
-            .bind(path)
-            .bind(capacity)
-            .bind(filesystem_uuid)
-            .fetch_one(&mut *tx)
-            .await
-            .map_err(metadata)?
-        } else {
-            row
-        };
-        tx.commit().await.map_err(metadata)?;
-        row.try_into()
+    }
+
+    async fn reserve_provider(
+        &self,
+        volume_id: VolumeId,
+        host_id: &str,
+        root: &Path,
+    ) -> Result<Volume, VolumeError> {
+        self.reserve_standalone(volume_id, host_id, root).await
+    }
+
+    async fn claim_provisioning(
+        &self,
+        volume_id: VolumeId,
+    ) -> Result<volume_trait::ProvisioningClaim, VolumeError> {
+        self.claim(volume_id).await
+    }
+
+    async fn provisioning_progress(
+        &self,
+        claim: &volume_trait::ProvisioningClaim,
+        state: volume_trait::VolumeProvisioningState,
+    ) -> Result<(), VolumeError> {
+        self.progress(claim, state).await
     }
 
     async fn mark_ready(&self, volume_id: VolumeId) -> Result<(), VolumeError> {
-        let result = sqlx::query("UPDATE agent_instance_state_volumes SET state = 'ready', updated_at = now() WHERE id = $1 AND state = 'uninitialized'")
-            .bind(volume_id.as_uuid()).execute(&self.pool).await.map_err(metadata)?;
-        if result.rows_affected() == 0 {
+        // Compatibility entry point verifies prior fenced provisioning only;
+        // attachment and lease recovery must never be reset through this API.
+        let ready: bool = sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM agent_instance_state_volumes WHERE id=$1 AND state='ready' AND provisioning_state='ready')")
+            .bind(volume_id.as_uuid()).fetch_one(&self.pool).await.map_err(metadata)?;
+        if !ready {
             return Err(VolumeError::StaleLease);
         }
         Ok(())
@@ -112,7 +110,12 @@ impl VolumeMetadataRepository for PostgresVolumeMetadataRepository {
                 holder_run_id: RunId::from_uuid(existing.run_id),
             });
         }
-        if volume.state != "ready" {
+        if volume.instance_id.is_none() {
+            return Err(VolumeError::InvalidState(
+                "standalone attachment requires named runtime bindings",
+            ));
+        }
+        if volume.state != "ready" || volume.provisioning_state != "ready" {
             return Err(VolumeError::InvalidState(
                 "only a ready volume can be leased",
             ));
