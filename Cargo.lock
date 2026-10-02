@@ -2504,6 +2504,7 @@ dependencies = [
  "pat-domain",
  "pat-postgres",
  "rcgen",
+ "recipe-application",
  "registry-domain",
  "registry-http",
  "registry-notification",
@@ -2563,6 +2564,7 @@ dependencies = [
  "vm-libkrun",
  "volume-local",
  "volume-postgres",
+ "volume-trait",
  "workspace-local",
  "workspace-postgres",
  "zeroize",
@@ -3842,6 +3844,7 @@ dependencies = [
  "serde_json",
  "thiserror 2.0.19",
  "uuid",
+ "volume-domain",
 ]
 
 [[package]]
