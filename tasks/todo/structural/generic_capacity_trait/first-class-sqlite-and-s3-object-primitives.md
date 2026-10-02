@@ -79,8 +79,8 @@ Verified checkpoints:
   exact scoped VM, records a complete-set receipt, and releases every matching
   lease atomically before completion callbacks. Twenty-nine orchestrator tests
   and twenty domain tests passed with strict checks. Its PostgreSQL adapter is
-  tested on an unpublished migration chain; application composition, atomic
-  run ownership admission and plural execution remain pending.
+  tested on an unpublished migration chain; application composition and plural
+  execution remain pending.
 - Owned backing provisioning (`a85f3da5`) records the exact root namespace,
   inode birth and formatting intent, pins filesystem descriptors, and rechecks
   the original actor's authority before formatting. Fifty-four filesystem
@@ -93,8 +93,28 @@ Verified checkpoints:
   operations and excludes a second supervisor for an owned provider root.
   Cleanup waits for in-flight provisioning or Start before confirming absence.
   Thirty-six orchestrator integration tests, two guard tests, seven VM-trait
-  tests and 97 libkrun library tests passed with strict checks. Real owned-VM
-  validation and atomic run creation remain separate work.
+  tests and 97 libkrun library tests passed with strict checks.
+- Owned-VM recovery (`7e16ffe4`) passed actual KVM provision, start, destruction,
+  supervisor exclusion, process death and same-namespace cleanup. Both worker
+  PIDs and VM cgroups disappeared; foreign roots remained untouched. The check
+  found an event-forwarder reference cycle, fixed with a weak reference and a
+  regression that failed before the fix. All 98 VM library tests passed.
+- Atomic core Run admission (`78782b71`) requires the actual provider ownership
+  and planned VM identity to commit with the command before preparation.
+  Historical queued runs are not adopted. Two unit and 39 integration tests,
+  actual private-schema-108 creation and cleanup checks, and three separate
+  public-schema-107 regressions passed with strict checks. The coupled
+  PostgreSQL adapter and migration remain unpublished.
+- Partial-birth custody (`e196cc1e`) holds pinned host descriptors and the actual
+  volume flock while observing an unfinished owned backing. It distinguishes
+  retained partial bytes from a Ready filesystem and refuses contradictory
+  ownership. Twenty-four domain, four trait and 65 filesystem tests passed.
+  Creation now rechecks authority inside the physical lock before journal or
+  allocation writes (`c9f05268`); all 66 filesystem tests passed. Ten actual
+  worker PostgreSQL cases and three combined PostgreSQL/filesystem cases also
+  passed on the unpublished migration chain. The worker fixtures do not prove
+  atomic actor retirement; that coordinator and its committed-fence proof
+  remain in progress.
 
 Provider orchestration and ownership seals, plural runtime attachment and cleanup,
 physical revocation, authenticated project web UI commands, real SQLite
