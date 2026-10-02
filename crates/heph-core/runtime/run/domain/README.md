@@ -29,3 +29,7 @@ if run.state.can_transition_to(RunState::Provisioning) {
 
 Store the exact release, revision, attachment, and command identifiers with
 the run before work reaches a VM.
+
+`FreshRunExecutionProfile` is trusted constructor configuration for new
+producers: `LegacyScalar` or `OwnedCanonical`. It has no historical option and
+conveys no source, delegation, provider ownership or physical cleanup authority.

@@ -1,6 +1,9 @@
 //! Durable run state, outcomes, commands, and transition rules.
 
 mod cleanup;
+mod execution_profile;
+
+pub use execution_profile::FreshRunExecutionProfile;
 
 pub use cleanup::{
     MAX_RUN_CLEANUP_LEASES, RunCleanupError, RunCleanupHostId, RunCleanupLeaseFence,
