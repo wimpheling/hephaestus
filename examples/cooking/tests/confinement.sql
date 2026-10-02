@@ -274,3 +274,29 @@ UNION ALL
 SELECT 'ui_source_manifest_revisions' AS surface, row_to_json(stored)::text AS payload FROM public.ui_source_manifest_revisions stored
 UNION ALL
 SELECT 'users' AS surface, row_to_json(stored)::text AS payload FROM public.users stored
+UNION ALL
+SELECT 'agent_instance_removal_requests' AS surface, row_to_json(stored)::text AS payload FROM public.agent_instance_removal_requests stored
+UNION ALL
+SELECT 'agent_instance_revision_volume_bindings' AS surface, row_to_json(stored)::text AS payload FROM public.agent_instance_revision_volume_bindings stored
+UNION ALL
+SELECT 'agent_instance_volume_mount_grants' AS surface, row_to_json(stored)::text AS payload FROM public.agent_instance_volume_mount_grants stored
+UNION ALL
+SELECT 'agent_instance_volume_mount_revocations' AS surface, row_to_json(stored)::text AS payload FROM public.agent_instance_volume_mount_revocations stored
+UNION ALL
+SELECT 'recipe_command_results' AS surface, row_to_json(stored)::text AS payload FROM public.recipe_command_results stored
+UNION ALL
+SELECT 'recipe_definitions' AS surface, row_to_json(stored)::text AS payload FROM public.recipe_definitions stored
+UNION ALL
+SELECT 'recipe_deployment_admission_attempts' AS surface, row_to_json(stored)::text AS payload FROM public.recipe_deployment_admission_attempts stored
+UNION ALL
+SELECT 'recipe_deployment_commands' AS surface, row_to_json(stored)::text AS payload FROM public.recipe_deployment_commands stored
+UNION ALL
+SELECT 'recipe_deployment_resources' AS surface, row_to_json(stored)::text AS payload FROM public.recipe_deployment_resources stored
+UNION ALL
+SELECT 'recipe_deployments' AS surface, row_to_json(stored)::text AS payload FROM public.recipe_deployments stored
+UNION ALL
+SELECT 'recipe_effect_attempts' AS surface, row_to_json(stored)::text AS payload FROM public.recipe_effect_attempts stored
+UNION ALL
+SELECT 'recipe_effect_verifications' AS surface, row_to_json(stored)::text AS payload FROM public.recipe_effect_verifications stored
+UNION ALL
+SELECT 'recipe_execution_transitions' AS surface, row_to_json(stored)::text AS payload FROM public.recipe_execution_transitions stored
