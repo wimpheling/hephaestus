@@ -2562,6 +2562,7 @@ dependencies = [
  "uuid",
  "vm-fake",
  "vm-libkrun",
+ "volume-domain",
  "volume-local",
  "volume-postgres",
  "volume-trait",

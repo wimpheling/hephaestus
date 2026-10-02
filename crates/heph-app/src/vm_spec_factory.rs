@@ -3,7 +3,14 @@ use super::{
     RuntimePolicy, Uuid, VmError, VmMount, VmResources, VmSpec,
 };
 use async_trait::async_trait;
-use control_plane_postgres::load_vm_launch_contract;
+use control_plane_postgres::{load_vm_launch_contract, run::VmLaunchContract};
+use volume_domain::RunVolumeSelections;
+
+#[cfg(test)]
+#[path = "vm_spec_factory/loader_postgres.rs"]
+mod loader_postgres;
+#[path = "vm_spec_factory/volumes.rs"]
+mod volumes;
 use heph_run::VmSpecFactory;
 pub struct PgAgentVmSpecFactory {
     pub pool: PgPool,
@@ -51,14 +58,34 @@ pub enum StoredNetworkAccess {
 
 #[async_trait]
 impl VmSpecFactory for PgAgentVmSpecFactory {
-    // Loading and validating the entire immutable launch contract in one
-    // place keeps the no-substitution boundary directly auditable.
-    #[allow(clippy::too_many_lines)]
     async fn build(&self, run: &Run) -> Result<VmSpec, VmError> {
-        let stored = load_vm_launch_contract(&self.pool, run.id.as_uuid())
+        let stored = self.load_contract(run).await?;
+        self.build_stored(run, stored)
+    }
+
+    async fn build_with_volumes(
+        &self,
+        run: &Run,
+        selections: &RunVolumeSelections,
+    ) -> Result<VmSpec, VmError> {
+        let stored = self.load_contract(run).await?;
+        volumes::validate(run, &stored, selections)?;
+        self.build_stored(run, stored)
+    }
+}
+
+impl PgAgentVmSpecFactory {
+    async fn load_contract(&self, run: &Run) -> Result<VmLaunchContract, VmError> {
+        load_vm_launch_contract(&self.pool, run.id.as_uuid())
             .await
             .map_err(vm_factory_error)?
-            .ok_or_else(|| invalid_spec("run", "exact reusable run provenance is missing"))?;
+            .ok_or_else(|| invalid_spec("run", "exact reusable run provenance is missing"))
+    }
+
+    // Keep the immutable workload construction shared with the scalar profile;
+    // controlled disks and initialization purposes belong to the orchestrator.
+    #[allow(clippy::too_many_lines)]
+    fn build_stored(&self, run: &Run, stored: VmLaunchContract) -> Result<VmSpec, VmError> {
         if stored.release_state != "published" {
             return Err(invalid_spec(
                 "release",

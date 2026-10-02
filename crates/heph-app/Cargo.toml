@@ -121,6 +121,7 @@ vm-libkrun = { path = "../heph-std/runtime/vm/libkrun" }
 volume-local = { path = "../heph-std/runtime/volume/local" }
 volume-postgres = { path = "../heph-std/runtime/volume/postgres" }
 volume-trait = { path = "../heph-core/runtime/volume/trait" }
+volume-domain = { path = "../heph-core/runtime/volume/domain" }
 workspace-local = { path = "../heph-std/runtime/workspace/local" }
 workspace-postgres = { path = "../heph-std/runtime/workspace/postgres" }
 
