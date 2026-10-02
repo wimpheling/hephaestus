@@ -71,6 +71,30 @@ Verified checkpoints:
   exact provider/host/VM and complete lease/fence set, including an explicit
   empty set. These are additive core contracts; worker persistence, verified
   destruction and atomic whole-set lease release remain to be integrated.
+- Authoritative planning (`bc542fe5`) reloads published releases and pinned
+  images, checks live permissions and exact bindings, and derives stable
+  project-scoped deployment IDs. Twelve real PostgreSQL planning cases and ten
+  admission regressions passed. Planning itself performs no provider effects.
+- Opt-in canonical run cleanup (`61490201`) closes acquisition, confirms the
+  exact scoped VM, records a complete-set receipt, and releases every matching
+  lease atomically before completion callbacks. Twenty-nine orchestrator tests
+  and twenty domain tests passed with strict checks. Its PostgreSQL adapter is
+  tested on an unpublished migration chain; application composition, atomic
+  run ownership admission and plural execution remain pending.
+- Owned backing provisioning (`a85f3da5`) records the exact root namespace,
+  inode birth and formatting intent, pins filesystem descriptors, and rechecks
+  the original actor's authority before formatting. Fifty-four filesystem
+  tests passed. Three combined real PostgreSQL/local-provider tests also passed
+  with strict Clippy, including readonly recovery after a missing final record
+  and actor permission loss, and refusal of contradictory or foreign backing.
+  Migrations 0108–0111 remain unpublished. These checks establish the provider
+  boundary; they do not run an installed SQLite application.
+- Provisioning and cleanup coordination (`d6ad7fe6`) serializes each run's VM
+  operations and excludes a second supervisor for an owned provider root.
+  Cleanup waits for in-flight provisioning or Start before confirming absence.
+  Thirty-six orchestrator integration tests, two guard tests, seven VM-trait
+  tests and 97 libkrun library tests passed with strict checks. Real owned-VM
+  validation and atomic run creation remain separate work.
 
 Provider orchestration and ownership seals, plural runtime attachment and cleanup,
 physical revocation, authenticated project web UI commands, real SQLite
