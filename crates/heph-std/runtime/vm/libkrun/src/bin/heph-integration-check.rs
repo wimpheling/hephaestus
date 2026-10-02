@@ -12,6 +12,8 @@ mod broker;
 mod checks;
 #[path = "heph-integration-check/handlers.rs"]
 mod handlers;
+#[path = "heph-integration-check/named_volumes.rs"]
+mod named_volumes;
 #[path = "heph-integration-check/service_protocol.rs"]
 mod service_protocol;
 #[path = "heph-integration-check/service_server.rs"]
@@ -45,6 +47,7 @@ fn main() {
 
 fn run() -> Result<(), Box<dyn std::error::Error>> {
     match std::env::args().nth(1).as_deref() {
+        Some("--named-volumes-root-proof") => return named_volumes::run(),
         Some("--private-http-handler") => {
             return handlers::private_http_handler().map_err(Into::into);
         }

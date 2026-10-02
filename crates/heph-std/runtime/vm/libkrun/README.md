@@ -31,6 +31,24 @@ rebuild the initializer and cached guest roots together. The 107 focused tests
 verify contracts and bootstrap helpers; they provide no native KVM evidence.
 This slice does not implement run authorization or durable plural attachments.
 
+## Native named-volume proof
+
+Run `scripts/run-libkrun-named-volumes.sh` on the prepared KVM host. It builds
+fresh protocol 10 binaries and exports a disposable root from Ubuntu pinned at
+`sha256:52df9b1ee71626e0088f7d400d5c6b5f7bb916f8f0c82b474289a4ece6cf3faf`.
+The test-only root probe uses the trusted OCI builder path to exercise device
+ioctls, remounts, and raw writes; ordinary workloads receive no additional
+authority. The fixture leaves historical image caches and volumes untouched.
+
+The native test verifies named paths and UUIDs, kernel read-only flags, denied
+file/raw writes and writable remounts, unchanged read-only backing bytes after
+VM destruction, persisted writable data, and dirty-filesystem rejection before
+workload execution. Equivalent privileged writable controls must succeed.
+On libkrun 1.19 the read-only device accepts `BLKROSET(0)` but its effective
+read-only flag remains set and the altered raw write is denied. The test records
+this distinction rather than assuming the ioctl itself fails. Its output records
+the exact initializer, probe, and worker hashes and confirmed destruction.
+
 # When
 
 Construct the provider during daemon startup after host configuration and
