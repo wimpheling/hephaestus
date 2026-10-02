@@ -70,6 +70,7 @@ async fn kernel_enforces_named_read_only_and_writable_volume_contracts() {
     );
 
     rejects_dirty_read_only_before_workload(&fixture).await;
+    drop(fixture);
     println!(
         "REAL_NAMED_VOLUME_KVM=1 protocol=10 privileged_guest_controls=1 ro_file_raw_remount_denied=1 kernel_device_ro=1 ro_backing_hash_unchanged=1 ro_sha256={before} rw_data_persisted=1 dirty_ro_rejected=1 vm_destroyed=1"
     );

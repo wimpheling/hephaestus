@@ -16,6 +16,29 @@ applies CPU, memory, PID, I/O, disk, and wall-clock limits, and keeps secret
 and runtime-Git bridges on their dedicated channels. Readiness, bounded events,
 exit status, and orphan cleanup return through the core VM contract.
 
+`LibkrunProvider::new_owned(config, host_id)` explicitly enables scoped cleanup.
+It exclusively writes and fsyncs a private random owner GUID bound to the
+runtime directory and delegated cgroup directory device/inode/UID plus the
+configured host. A managed restart retains that owner. Unclassified VM resources,
+copied markers, symlink roots or metadata, changed hosts and replacement roots
+fail closed; automatic historical adoption is unavailable. Roots must belong to
+the configured service UID and deny group/world writes.
+
+Validation and physical operations hold shared owner guards; initialization alone
+holds an exclusive guard. Independent VM operations can proceed together.
+Provisioning revalidates ownership before returning a VM and destroys its exact
+worker and pinned allocation roots if ownership changed during allocation.
+Failed destruction retains the exact worker/resource handle and refuses VM ID
+reuse. Scoped recovery rechecks ownership and confirms termination/reap before
+releasing that retained handle; uncertain cleanup never reports success.
+Scoped cleanup pins both directory handles through IO, rejects registered live
+instances, and revalidates ownership before confirming destruction or absence.
+An unchanged pathname or missing VM directory never establishes another root's
+ownership. A changed cgroup root also requires explicit future reconciliation;
+there is no implicit ownership rollover across host reboot. The ordinary `new`
+constructor preserves existing provisioning and reports ownership unsupported.
+Owned providers also apply their ownership checks to unscoped orphan cleanup.
+
 Named ext4 attachments preserve the disk's read-only backend flag and validate
 its filesystem UUID on the exact selected raw file before launch. The guest
 rejects duplicate UUID devices, checks the kernel device mode, and mounts
@@ -61,3 +84,7 @@ let provider = LibkrunProvider::new(config)?;
 
 Pass the provider to `RunOrchestrator`; use `worker_main` only for the dedicated
 worker executable, never inside the supervisor process.
+
+The owned constructor is not yet wired into application startup or run cleanup.
+No existing runtime path layout changes in this slice. Unit tests cover ownership
+and emulated cleanup; native scoped VM destruction remains separate evidence.

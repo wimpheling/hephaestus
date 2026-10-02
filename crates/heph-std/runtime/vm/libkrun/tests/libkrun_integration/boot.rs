@@ -64,11 +64,12 @@ async fn boots_and_exercises_guest_runtime_without_privilege_escalation() {
     modes::run(&context).await;
     network::run(&mut context).await;
     let conformance = LibkrunHarness {
-        provider: Arc::new(context.provider),
-        rootfs: context.rootfs_for_force_test,
-        runtime_root: context.runtime_root,
-        cgroup_root: context.cgroup_root,
+        provider: Arc::new(context.provider.clone()),
+        rootfs: context.rootfs_for_force_test.clone(),
+        runtime_root: context.runtime_root.clone(),
+        cgroup_root: context.cgroup_root.clone(),
     };
+    drop(context);
     vm_conformance::lifecycle_suite(&conformance).await;
 }
 

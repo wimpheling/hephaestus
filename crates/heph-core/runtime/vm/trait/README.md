@@ -23,6 +23,12 @@ These are guest execution contracts; authoritative resource grants, durable
 attachment evidence, and run admission belong to the orchestration layer.
 Typed mount metadata itself grants no authority.
 
+`VmProviderOwnerScope` identifies the exact persistent provider namespace and
+configured host. It is separate from volume-root and recipe scopes. Providers
+must bind it to actual root/account ownership; a checked value alone grants no
+cleanup authority. Ownership lookup and scoped orphan cleanup default to
+unsupported, preserving existing provisioning without inventing absence proof.
+
 # When
 
 Use this crate when implementing a VM adapter or assembling a run specification

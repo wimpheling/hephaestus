@@ -287,8 +287,12 @@ impl LibkrunInstance {
         }
         let mut resources = self.resources.lock().await;
         if let Some(owned) = resources.as_ref() {
-            cleanup_runtime(&owned.runtime_dir)?;
-            owned.cgroup.cleanup()?;
+            if let Some(roots) = owned.cleanup_roots.as_ref() {
+                roots.cleanup(&self.config, &self.id)?;
+            } else {
+                cleanup_runtime(&owned.runtime_dir)?;
+                owned.cgroup.cleanup()?;
+            }
             info!(
                 vm_id = %self.id.0,
                 runtime_dir = %owned.runtime_dir.display(),

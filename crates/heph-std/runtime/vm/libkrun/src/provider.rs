@@ -3,6 +3,7 @@ mod helpers;
 mod http;
 mod instance;
 mod lifecycle;
+mod ownership;
 mod provider_api;
 mod worker;
 mod worker_client;

@@ -8,6 +8,9 @@ mod events;
 mod guest_volume;
 #[path = "vm_trait/http.rs"]
 mod http;
+#[path = "vm_trait/owner_scope.rs"]
+mod owner_scope;
+pub use owner_scope::VmProviderOwnerScope;
 
 pub use guest_volume::{
     VmGuestVolume, deserialize_guest_volumes, validate_guest_volume_mounts,

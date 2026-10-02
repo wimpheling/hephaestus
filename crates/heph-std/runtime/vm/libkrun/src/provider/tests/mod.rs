@@ -4,6 +4,9 @@ mod basic;
 mod launch;
 #[path = "lifecycle.rs"]
 mod lifecycle;
+mod ownership;
+mod ownership_cleanup_failure;
+mod ownership_provision;
 #[path = "service.rs"]
 mod service;
 #[path = "support.rs"]

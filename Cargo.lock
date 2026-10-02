@@ -5909,6 +5909,7 @@ dependencies = [
  "http",
  "tempfile",
  "tokio",
+ "uuid",
  "vm-conformance",
  "vm-trait",
 ]

@@ -51,6 +51,8 @@ pub(super) struct ProviderInner {
     pub(super) config: Arc<LibkrunConfig>,
     pub(super) ids: Mutex<HashSet<VmId>>,
     pub(super) worker_spawner: Arc<dyn WorkerSpawner>,
+    pub(super) owner: std::sync::OnceLock<super::ownership::ProviderOwner>,
+    pub(super) failed_cleanup: Mutex<HashMap<VmId, Arc<LibkrunInstance>>>,
 }
 pub(super) struct LibkrunInstance {
     pub(super) id: VmId,
@@ -92,6 +94,7 @@ pub(super) struct OwnedResources {
     pub(super) runtime_dir: PathBuf,
     pub(super) cgroup: Cgroup,
     pub(super) service_broker: Option<Arc<ServiceBroker>>,
+    pub(super) cleanup_roots: Option<super::ownership::PinnedCleanupRoots>,
 }
 
 #[derive(Debug, Clone)]

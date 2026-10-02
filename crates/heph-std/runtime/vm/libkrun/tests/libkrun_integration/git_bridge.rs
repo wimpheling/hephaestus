@@ -132,6 +132,7 @@ async fn real_guest_runtime_git_bridge_forwards_disabled_network_http() {
         .provision(spec)
         .await
         .expect("provision runtime Git bridge VM");
+    drop(provider);
     let vm_id = vm.id().0.clone();
     let mut events = vm.subscribe_events();
     vm.start().await.expect("start runtime Git bridge VM");
