@@ -3881,29 +3881,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "recipe-postgres"
-version = "0.1.0"
-dependencies = [
- "agent-config",
- "authz-domain",
- "authz-postgres",
- "capability-domain",
- "event-application",
- "forge-domain",
- "identity-domain",
- "recipe-application",
- "recipe-domain",
- "release-domain",
- "runtime-types",
- "serde",
- "serde_json",
- "sqlx",
- "tokio",
- "uuid",
- "volume-domain",
-]
-
-[[package]]
 name = "redox_syscall"
 version = "0.5.18"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -5983,7 +5960,6 @@ dependencies = [
  "serde",
  "serde_json",
  "thiserror 2.0.19",
- "uuid",
 ]
 
 [[package]]
@@ -6032,7 +6008,6 @@ dependencies = [
  "thiserror 2.0.19",
  "time",
  "uuid",
- "volume-domain",
 ]
 
 [[package]]
