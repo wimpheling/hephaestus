@@ -25,7 +25,7 @@ use std::path::PathBuf;
 use std::sync::{Arc, RwLock};
 
 /// Ordered database migration expected by this application version.
-pub const EXPECTED_DATABASE_MIGRATION: i64 = 103;
+pub const EXPECTED_DATABASE_MIGRATION: i64 = 104;
 
 pub const GATEWAY_SERVICE_SERVING_CAPACITY: usize = 8;
 pub const GATEWAY_SERVICE_REPLACEMENT_CAPACITY: usize = 2;
