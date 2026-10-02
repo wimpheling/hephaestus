@@ -24,6 +24,11 @@ pub async fn provision(
         .owner
         .journal_lock(journal_purpose(&current)?, false)?;
     metadata.owner.validate()?;
+    // Cached pre-lock admission cannot authorize namespace/allocation writes.
+    // Recheck live original actor plus permanent birth fence under the actual
+    // same-volume flock, before even open() may prepare journal metadata.
+    fresh_actor(metadata, identity, request, &current).await?;
+    metadata.owner.validate()?;
     let mut journal = if current.observation.is_some() {
         OwnedJournal::open_existing(&mut lock).map_err(backing)?
     } else {

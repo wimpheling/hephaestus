@@ -176,7 +176,7 @@ async fn dirty_initial_birth_is_held_by_readonly_worker_without_reformat() {
 #[tokio::test]
 async fn fresh_actor_revocation_after_allocation_prevents_first_format() {
     let fixture = Fixture::new();
-    fixture.state.lock().expect("state").reject_begin = Some(3);
+    fixture.state.lock().expect("state").reject_begin = Some(4);
     assert!(
         fixture
             .store

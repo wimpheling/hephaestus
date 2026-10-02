@@ -1,6 +1,7 @@
 //! Real host filesystem tests; injected memory ports make no `PostgreSQL` claims.
 
 mod cancellation;
+mod fence;
 mod legacy;
 mod metadata;
 mod partial_retention;
