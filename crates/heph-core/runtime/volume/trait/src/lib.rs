@@ -13,6 +13,7 @@ mod mount_grants;
 mod owned_provisioning;
 mod partial_retention;
 mod resources;
+mod root_history;
 mod run_volumes;
 pub use creation::{
     OwnedVolumeRegistration, OwnedVolumeRegistrationReceipt, VolumeCreationIdentity,
@@ -34,6 +35,9 @@ pub use partial_retention::{
 pub use resources::{
     MAX_REGISTERED_VOLUME_CAPACITY_BYTES, MIN_LOCAL_VOLUME_CAPACITY_BYTES, ProvisioningClaim,
     VolumeInspection, VolumeProvisioningState, VolumeRegistration, VolumeResourceRepository,
+};
+pub use root_history::{
+    OwnedVolumeRootHistory, OwnedVolumeRootHistoryConflict, VolumeRootHistoryRepository,
 };
 pub use run_volumes::{
     RunVolumeAttachment, RunVolumeLease, RunVolumeMetadataRepository, RunVolumeStore,

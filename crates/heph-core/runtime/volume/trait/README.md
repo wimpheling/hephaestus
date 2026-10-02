@@ -42,3 +42,10 @@ unsupported until runtime and legacy cleanup integration are complete.
 grants and permanent revocations. Creation requires consumer management and
 source grant plus attachment authority. A revoked revision/slot cannot be
 silently regranted. This port neither activates revisions nor mounts volumes.
+
+`VolumeRootHistoryRepository` lets trusted workers read all immutable owned
+purpose history for one configured host, including retired births. It returns
+no history, one exact expected root namespace, or a bounded conflict. Other
+hosts may use the same absolute path independently. A no-history result grants
+no bootstrap authority; normal startup must reopen an expected owner or require
+an explicit prospective bootstrap decision.
