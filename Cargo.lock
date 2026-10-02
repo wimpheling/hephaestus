@@ -3824,6 +3824,21 @@ dependencies = [
 ]
 
 [[package]]
+name = "recipe-domain"
+version = "0.1.0"
+dependencies = [
+ "capability-domain",
+ "release-domain",
+ "runtime-types",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.19",
+ "toml",
+ "uuid",
+ "volume-domain",
+]
+
+[[package]]
 name = "redox_syscall"
 version = "0.5.18"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -5887,6 +5902,17 @@ dependencies = [
  "thiserror 2.0.19",
  "tokio",
  "uuid",
+]
+
+[[package]]
+name = "volume-domain"
+version = "0.1.0"
+dependencies = [
+ "capability-domain",
+ "runtime-types",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.19",
 ]
 
 [[package]]
