@@ -115,13 +115,38 @@ fn changed_root_after_guard_is_detected_before_absence() {
     let temp = TempDir::new().unwrap();
     let config = config(&temp);
     let owner = ProviderOwner::initialize(&config, "host-1").unwrap();
-    let guard = owner.validate(&config).unwrap();
+    let guard = fresh_validation_guard(&owner, &config);
     fs::rename(&config.runtime_root, temp.path().join("old-runtime")).unwrap();
     fs::create_dir(&config.runtime_root).unwrap();
     assert!(owner.validate_guard(&config, &guard).is_err());
     assert_eq!(fs::read_dir(&config.runtime_root).unwrap().count(), 0);
     drop(guard);
     drop(owner);
+}
+
+fn fresh_validation_guard(owner: &ProviderOwner, config: &LibkrunConfig) -> OwnerGuard {
+    // Parallel subprocess tests can inherit initialization's CLOEXEC metadata
+    // flock between fork and exec. This unchanged, freshly initialized fixture
+    // waits only for that transient IO WouldBlock, never a live supervisor or
+    // any identity/ownership denial. Production locking remains nonblocking.
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(1);
+    loop {
+        match owner.validate(config) {
+            Ok(guard) => return guard,
+            Err(error) => {
+                let transient = matches!(&error, VmError::Provider { code, source, .. }
+                if code == "owner_metadata" && (
+                    source.downcast_ref::<std::io::Error>().is_some_and(|error| error.kind() == std::io::ErrorKind::WouldBlock)
+                    || source.downcast_ref::<rustix::io::Errno>().is_some_and(|error| *error == rustix::io::Errno::WOULDBLOCK)
+                ));
+                assert!(
+                    transient && std::time::Instant::now() < deadline,
+                    "fresh owner validation failed: {error:?}"
+                );
+                std::thread::sleep(std::time::Duration::from_millis(10));
+            }
+        }
+    }
 }
 
 #[test]

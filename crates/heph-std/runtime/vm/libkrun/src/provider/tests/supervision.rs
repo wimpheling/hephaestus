@@ -88,3 +88,44 @@ async fn two_vms_reach_paused_spawners_concurrently_with_one_supervisor() {
     first.destroy().await.unwrap();
     second.destroy().await.unwrap();
 }
+
+#[tokio::test]
+async fn destroyed_instance_releases_supervisor_even_with_live_event_sender() {
+    let temp = TempDir::new().unwrap();
+    let (config, root, runtime, cgroups) = emulated_config(&temp);
+    let worker = Arc::new(MockWorker::new());
+    let spawner = Arc::new(PausedSpawner {
+        worker: worker.clone(),
+        entered: Notify::new(),
+        release: Notify::new(),
+    });
+    spawner.release.notify_one();
+    let provider = owned(&config, spawner);
+    let expected = provider.owner_scope().unwrap();
+    let vm = provider
+        .provision(spec("owned-lifetime", root))
+        .await
+        .unwrap();
+    vm.start().await.unwrap();
+    let weak = Arc::downgrade(&vm);
+    drop(provider);
+    assert!(LibkrunProvider::new_owned(config.clone(), "test-host").is_err());
+    vm.destroy().await.unwrap();
+    assert!(!runtime.join("owned-lifetime").exists());
+    assert!(!cgroups.join("owned-lifetime").exists());
+    drop(vm);
+    tokio::time::timeout(Duration::from_secs(1), async {
+        while weak.upgrade().is_some() {
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .expect("terminal monitor tasks must release the instance despite an open event sender");
+    // Keep the external sender alive across reopening: receiver closure cannot
+    // be the condition that releases persistent supervisor ownership.
+    assert!(worker.process_exit.borrow().is_some());
+    let reopened = LibkrunProvider::new_owned(config, "test-host").unwrap();
+    assert_eq!(reopened.owner_scope().unwrap(), expected);
+    drop(reopened);
+    drop(worker);
+}
