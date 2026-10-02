@@ -28,8 +28,12 @@ time.workspace = true
 toml.workspace = true
 tracing.workspace = true
 uuid.workspace = true
+volume-domain = { path = "../../../../heph-core/runtime/volume/domain" }
+volume-trait = { path = "../../../../heph-core/runtime/volume/trait" }
 
 [dev-dependencies]
+# Cross-adapter native tests prove actor grants against exact worker mount checks.
+runtime-authority-postgres = { path = "../../../authorization/runtime-authority-postgres" }
 async-nats.workspace = true
 event-postgres = { path = "../../../event/postgres" }
 futures-util.workspace = true

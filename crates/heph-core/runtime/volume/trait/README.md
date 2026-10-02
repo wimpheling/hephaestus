@@ -25,3 +25,8 @@ Use the actor resource port for authorized metadata operations. Use the trusted
 provider ports only in host workers. Keep provider handles out of transports,
 recipes, and resource inspection. Attachment authority differs from permission
 to query an application's database.
+
+`VolumeMountGrantRepository` creates audited explicit immutable typed mount
+grants and permanent revocations. Creation requires consumer management and
+source grant plus attachment authority. A revoked revision/slot cannot be
+silently regranted. This port neither activates revisions nor mounts volumes.

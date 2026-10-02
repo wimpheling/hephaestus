@@ -105,6 +105,8 @@ mod release_update_finalization;
 mod release_update_gate;
 mod release_update_preparation;
 mod release_update_recovery;
+mod release_volume_grant_rows;
+mod release_volume_grants;
 mod ui_browser;
 mod ui_browser_resources;
 mod ui_installation;

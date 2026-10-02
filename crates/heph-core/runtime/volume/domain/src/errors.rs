@@ -4,6 +4,9 @@ use runtime_types::VolumeId;
 /// A private-volume contract failed validation before provider effects.
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
 pub enum VolumeContractError {
+    /// A mount grant scope contains a nil durable identifier.
+    #[error("invalid exact volume mount grant scope")]
+    InvalidMountGrantScope,
     /// The built-in legacy declaration could not satisfy domain invariants.
     #[error("invalid built-in legacy volume declaration")]
     InvalidLegacyDeclaration,

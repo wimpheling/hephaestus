@@ -5,6 +5,7 @@ mod gateway_helpers;
 mod gateway_repository;
 mod gateway_sessions;
 mod issuer;
+mod volume_mounts;
 
 pub const HTTP_HANDLER_CONTRACT_V1: &str = "http.v1";
 pub const HTTP_SERVICE_HANDLER_CONTRACT_V1: &str = "http.service.v1";

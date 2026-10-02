@@ -34,3 +34,9 @@ read-write at that legacy path without mutating authored declarations. Its
 one-byte minimum preserves compatibility with releases that declared no
 minimum capacity; provider capacity rules still apply. Combined catalogs are
 validated and sorted. This view grants no authority and rewrites no records.
+
+Typed mount grant scopes pin an instance, immutable revision, release agent,
+slot, resource, exact access mode and frozen runtime contract hash. Grant and
+revocation IDs reject nil values. A scope is evidence and grants no authority;
+the actor adapter verifies its declaration and live two-sided permissions.
+Attachment authority does not establish database query permissions.

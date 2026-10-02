@@ -7,7 +7,9 @@ use std::path::PathBuf;
 use time::OffsetDateTime;
 use uuid::Uuid;
 
+mod mount_grants;
 mod resources;
+pub use mount_grants::{VolumeMountGrant, VolumeMountGrantRepository, VolumeMountRevocation};
 pub use resources::{
     MAX_REGISTERED_VOLUME_CAPACITY_BYTES, MIN_LOCAL_VOLUME_CAPACITY_BYTES, ProvisioningClaim,
     VolumeInspection, VolumeProvisioningState, VolumeRegistration, VolumeResourceRepository,

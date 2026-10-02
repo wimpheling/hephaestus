@@ -5,7 +5,7 @@ repository_root=$(git rev-parse --show-toplevel)
 melange_binary=${MELANGE_BIN:-"$repository_root/.tools/melange/0.8.5/melange"}
 schema="$repository_root/authz/hephaestus.fga"
 committed="$repository_root/migrations/0102_private_volume_authorization.sql"
-tuple_source="$repository_root/authz/melange_tuples.sql"
+tuple_source="$repository_root/authz/history/private-volumes-v1-tuples.sql"
 
 # Applied migration 0006 is reproduced only from frozen historical inputs.
 # A model update must never change its SQLx checksum or forward schema needs.
@@ -47,13 +47,12 @@ SQL
 } | sed -E -e 's/[[:space:]]+$//' -e 's/ +\t/\t/g' > "$composed"
 
 if [[ ${1:-} == --write ]]; then
-    cp "$composed" "$committed"
-    printf 'wrote %s\n' "$committed"
-    exit 0
+    printf 'migration0102 is applied and frozen; add a new authorization migration for model changes\n' >&2
+    exit 1
 fi
 if ! cmp --silent "$composed" "$committed"; then
     diff --unified "$committed" "$composed" || true
-    printf 'current authorization migration differs; run scripts/generate-authz.sh --write; historical migration 0006 stays frozen\n' >&2
+    printf 'frozen authorization migration0102 differs; preserve applied history and inspect frozen inputs\n' >&2
     exit 1
 fi
 printf 'historical and current Mélange migrations are current\n'
@@ -62,3 +61,5 @@ if ! grep -F -q "\"melange-0.8.5:${model_checksum}\"" \
     printf 'current authorization audit version differs; update AUTHORIZATION_MODEL_VERSION to melange-0.8.5:%s without changing historical audit records\n' "$model_checksum" >&2
     exit 1
 fi
+
+"$repository_root/scripts/generate-volume-mount-tuples.sh"

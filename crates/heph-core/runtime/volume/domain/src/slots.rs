@@ -16,6 +16,17 @@ pub enum VolumeAccessMode {
     ReadWrite,
 }
 
+impl VolumeAccessMode {
+    /// Returns the exact persisted mode spelling.
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::ReadOnly => "read_only",
+            Self::ReadWrite => "read_write",
+        }
+    }
+}
+
 /// One validated named private-volume requirement in a release.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(try_from = "VolumeSlotDeclarationWire")]

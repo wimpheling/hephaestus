@@ -46,3 +46,12 @@ or empty declarations retain the legacy paths.
 Recipe installation and normal import need subsequent binding/materialization
 work before explicit-slot instances can run. Runtime mount conflict/symlink checks,
 exact consumer grants, writer detach/fencing, and revocation remain separate work.
+
+Typed volume mount grants are separate from immutable binding evidence and
+published generic capability hashes. The actor API audits consumer management
+and source grant/attach decisions before creation or replay, commits rejected
+authorization audit records separately, and records permanent revocations.
+Its transaction helper supports a future atomic initial import without requiring
+an already active or runnable consumer revision. Typed update candidates remain
+unsupported. Same-project v1 bindings make source ownership and consumer
+management equivalent under the pinned0102 model; no grant is backfilled.

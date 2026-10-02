@@ -17,6 +17,7 @@ serde.workspace = true
 thiserror.workspace = true
 time.workspace = true
 uuid.workspace = true
+volume-domain = { path = "../domain" }
 
 [lints]
 workspace = true
