@@ -101,6 +101,9 @@ async fn provision_vm(
             .await
             .map(finished);
     }
+    // Recheck immutable ownership and open planning immediately before IO.
+    // This also rejects a cleanup closure made during preparation.
+    orchestrator.bind_planned_vm(run, false).await?;
     let instance = match orchestrator.provider.provision(spec).await {
         Ok(instance) => instance,
         Err(error) => {
@@ -120,6 +123,15 @@ async fn provision_vm(
         .lock()
         .await
         .insert(run_id, Arc::clone(&instance));
+    if orchestrator.canonical_cleanup.is_some()
+        && run.vm_id.as_deref() != Some(instance.id().0.as_str())
+    {
+        // Retain the unexpected handle; it must not start or masquerade as the
+        // planned target. Recovery cannot invent authority to destroy it.
+        return Err(
+            vm_trait::VmError::InvalidState("provider returned a different VM identity").into(),
+        );
+    }
     if orchestrator
         .repository
         .get(run_id)

@@ -47,10 +47,7 @@ pub async fn complete_started_run(
                 .await;
         }
     };
-    instance.destroy().await?;
-    orchestrator.active.lock().await.remove(&run_id);
-    orchestrator.authority.revoke_after_guest(run_id).await?;
-    orchestrator.secrets.destroy_after_guest(run_id).await?;
+    cleanup_completed_guest(orchestrator, run_id, instance).await?;
     let current = orchestrator.repository.get(run_id).await?;
     let mut result_failure = None;
     if current.cancel_requested_at.is_some() {
@@ -88,4 +85,26 @@ pub async fn complete_started_run(
         )
         .await?;
     orchestrator.cleanup(run_id, lease.as_ref(), None).await
+}
+
+async fn cleanup_completed_guest(
+    orchestrator: &RunOrchestrator,
+    run_id: runtime_types::RunId,
+    instance: std::sync::Arc<dyn vm_trait::VmInstance>,
+) -> Result<(), OrchestratorError> {
+    if orchestrator.canonical_cleanup.is_some() {
+        orchestrator
+            .confirm_canonical_guest_cleanup(run_id, Some(instance))
+            .await
+            .map_err(|cleanup| OrchestratorError::CleanupIncomplete {
+                failure: String::from("guest completion cleanup"),
+                cleanup: Box::new(cleanup),
+            })?;
+    } else {
+        instance.destroy().await?;
+        orchestrator.active.lock().await.remove(&run_id);
+    }
+    orchestrator.authority.revoke_after_guest(run_id).await?;
+    orchestrator.secrets.destroy_after_guest(run_id).await?;
+    Ok(())
 }

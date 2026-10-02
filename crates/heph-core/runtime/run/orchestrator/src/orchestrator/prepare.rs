@@ -114,7 +114,14 @@ async fn bind_start(
     command: &StartRun,
     attachment: Option<VolumeAttachment>,
 ) -> Result<Stage<BoundStart>, OrchestratorError> {
-    let vm_id = VmId(command.run_id.to_string());
+    let vm_id = if orchestrator.canonical_cleanup.is_some() {
+        let persisted = orchestrator.repository.get(command.run_id).await?;
+        VmId(persisted.vm_id.ok_or(crate::RepositoryError::InvalidData(
+            "new run lacks its durable planned VM binding",
+        ))?)
+    } else {
+        VmId(command.run_id.to_string())
+    };
     let run = orchestrator
         .repository
         .bind_resources(

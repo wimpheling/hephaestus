@@ -1,4 +1,7 @@
 mod authority;
+mod canonical_cleanup;
+mod canonical_recovery;
+mod canonical_vm;
 mod cleanup;
 mod complete;
 mod errors;

@@ -2,7 +2,10 @@ use async_trait::async_trait;
 use runtime_types::{AgentInstanceId, LeaseId, RunId, VolumeId};
 use std::{
     path::PathBuf,
-    sync::{Arc, Mutex as StdMutex},
+    sync::{
+        Arc, Mutex as StdMutex,
+        atomic::{AtomicBool, Ordering},
+    },
 };
 use time::OffsetDateTime;
 use uuid::Uuid;
@@ -18,6 +21,7 @@ pub struct MemoryVolumeStore {
     pub lease: VolumeLease,
     pub log: Arc<StdMutex<Vec<&'static str>>>,
     pub stale: StdMutex<Vec<VolumeLease>>,
+    pub fail_acquire: AtomicBool,
 }
 
 impl MemoryVolumeStore {
@@ -55,6 +59,7 @@ impl MemoryVolumeStore {
             },
             log,
             stale: StdMutex::new(Vec::new()),
+            fail_acquire: AtomicBool::new(false),
         }
     }
 }
@@ -74,6 +79,11 @@ impl VolumeStore for MemoryVolumeStore {
         volume_id: VolumeId,
         run_id: RunId,
     ) -> Result<VolumeAttachment, VolumeError> {
+        if self.fail_acquire.load(Ordering::SeqCst) {
+            return Err(VolumeError::InvalidState(
+                "acquisition failed after durable reservation",
+            ));
+        }
         let mut lease = self.lease.clone();
         lease.volume_id = volume_id;
         lease.run_id = run_id;

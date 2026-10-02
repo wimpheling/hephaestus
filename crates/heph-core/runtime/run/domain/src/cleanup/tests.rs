@@ -295,3 +295,4 @@ fn planned_vm_still_requires_matching_destroy_or_absence() {
 
 mod digests;
 mod host_scope;
+mod receipt_time;

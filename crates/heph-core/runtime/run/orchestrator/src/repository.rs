@@ -112,6 +112,15 @@ pub trait RunCleanupRepository: Send + Sync + 'static {
         run_id: RunId,
     ) -> Result<run_domain::RunCleanupTarget, RepositoryError>;
 
+    /// Loads an immutable observation before repeating provider destruction IO.
+    ///
+    /// The worker adapter must check configured provider ownership even for an
+    /// empty lease set. Absence of a receipt is not evidence of absent resources.
+    async fn recorded_cleanup_receipt(
+        &self,
+        run_id: RunId,
+    ) -> Result<Option<run_domain::RunCleanupReceipt>, RepositoryError>;
+
     /// Persists a worker-verified exact VM destruction or authoritative absence.
     ///
     /// A DTO does not prove the observation: the trusted adapter must verify the

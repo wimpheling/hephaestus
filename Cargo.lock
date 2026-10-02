@@ -4374,6 +4374,7 @@ dependencies = [
  "tracing",
  "uuid",
  "vm-trait",
+ "volume-domain",
  "volume-trait",
  "workspace-domain",
 ]

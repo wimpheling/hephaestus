@@ -25,6 +25,7 @@ volume-trait = { path = "../../volume/trait" }
 workspace-domain = { path = "../../workspace/domain" }
 
 [dev-dependencies]
+volume-domain = { path = "../../volume/domain" }
 tokio = { workspace = true, features = ["macros", "rt-multi-thread", "test-util"] }
 
 [lints]

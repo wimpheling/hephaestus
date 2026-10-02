@@ -22,7 +22,18 @@ impl RunOrchestrator {
         workspace_mounts: Vec<vm_trait::VmMount>,
     ) -> Result<VmSpec, VmError> {
         let mut spec = self.spec_factory.build(run).await?;
-        spec.id = VmId(run.id.to_string());
+        if self.canonical_cleanup.is_some() {
+            let expected = run.vm_id.as_ref().ok_or(VmError::InvalidState(
+                "run lacks its durable planned VM identity",
+            ))?;
+            if spec.id.0 != *expected {
+                return Err(VmError::InvalidState(
+                    "VM specification differs from durable planned identity",
+                ));
+            }
+        } else {
+            spec.id = VmId(run.id.to_string());
+        }
         spec.disks.retain(|disk| disk.id != INSTANCE_STATE_DISK_ID);
         if let Some(attachment) = attachment {
             spec.disks.push(VmDisk {

@@ -12,6 +12,9 @@ impl RunOrchestrator {
         run_id: RunId,
         failure: &str,
     ) -> Result<Run, OrchestratorError> {
+        if self.canonical_cleanup.is_some() {
+            return self.fail_with_resources(run_id, None, None, failure).await;
+        }
         self.repository
             .transition(run_id, RunState::Failed, None, Some(failure))
             .await?;
@@ -36,7 +39,14 @@ impl RunOrchestrator {
         self.repository
             .transition(run_id, RunState::Failed, None, Some(failure))
             .await?;
-        self.cleanup(run_id, lease, instance).await
+        let result = self.cleanup(run_id, lease, instance).await;
+        if self.canonical_cleanup.is_some() {
+            return result.map_err(|cleanup| OrchestratorError::CleanupIncomplete {
+                failure: failure.to_owned(),
+                cleanup: Box::new(cleanup),
+            });
+        }
+        result
     }
 
     pub(super) async fn cancel_before_vm(
@@ -56,6 +66,15 @@ impl RunOrchestrator {
         lease: Option<&VolumeLease>,
         instance: Option<Arc<dyn VmInstance>>,
     ) -> Result<Run, OrchestratorError> {
+        if self.canonical_cleanup.is_some() {
+            return self
+                .canonical_cleanup(run_id, instance)
+                .await
+                .map_err(|cleanup| OrchestratorError::CleanupIncomplete {
+                    failure: String::from("run cleanup"),
+                    cleanup: Box::new(cleanup),
+                });
+        }
         if let Err(error) = self
             .repository
             .transition(run_id, RunState::CleaningUp, None, None)
@@ -89,6 +108,15 @@ impl RunOrchestrator {
     }
 
     pub(super) async fn abort_vm_keep_lease(&self, run_id: RunId, instance: &Arc<dyn VmInstance>) {
+        if self.canonical_cleanup.is_some() {
+            // Keep the exact live handle for canonical closure and scoped
+            // confirmation. The claimed-run error path performs cleanup.
+            self.active
+                .lock()
+                .await
+                .insert(run_id, Arc::clone(instance));
+            return;
+        }
         if let Err(error) = instance.destroy().await {
             tracing::error!(%run_id, %error, "failed to destroy VM after orchestration error");
         }
@@ -96,6 +124,14 @@ impl RunOrchestrator {
     }
 
     pub(super) async fn finish_recovered_run(&self, run: Run) -> Result<(), OrchestratorError> {
+        if self.canonical_cleanup.is_some() {
+            self.fail_claimed_run(
+                run.id,
+                "supervisor restarted while run resources were active",
+            )
+            .await?;
+            return Ok(());
+        }
         self.runtime_git_workspace
             .abandon_runtime_git(run.id)
             .await?;

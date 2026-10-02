@@ -1,5 +1,8 @@
 //! Hardware-independent orchestration and cleanup-ordering coverage.
 
+#[path = "orchestrator/canonical.rs"]
+mod canonical;
+
 #[path = "orchestrator/completion.rs"]
 mod completion;
 #[path = "orchestrator/launch.rs"]

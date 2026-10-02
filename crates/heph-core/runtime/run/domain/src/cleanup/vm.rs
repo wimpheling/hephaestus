@@ -175,6 +175,10 @@ pub struct RunCleanupReceipt {
 impl RunCleanupReceipt {
     /// Validates an observation against the full immutable target.
     ///
+    /// Observation time is truncated to microsecond precision so durable
+    /// `PostgreSQL` receipt round trips preserve exact equality. Time is not
+    /// an authority or lease fence.
+    ///
     /// # Errors
     ///
     /// Rejects unresolved historical scope, a different provider namespace or
@@ -194,6 +198,8 @@ impl RunCleanupReceipt {
         if expected != observation.vm_id() {
             return Err(RunCleanupError::VmMismatch);
         }
+        let observed_at =
+            observed_at - time::Duration::nanoseconds(i64::from(observed_at.nanosecond() % 1_000));
         Ok(Self {
             target,
             observation,
