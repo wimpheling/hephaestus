@@ -4163,6 +4163,7 @@ dependencies = [
  "thiserror 2.0.19",
  "time",
  "uuid",
+ "volume-domain",
 ]
 
 [[package]]

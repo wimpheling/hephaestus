@@ -46,6 +46,12 @@ pub enum ReleaseServiceError {
     /// Exact resource is missing, outside the project, or not implemented.
     #[error("agent instance capability resource is unavailable")]
     CapabilityResourceUnavailable,
+    /// Typed volume selection does not exactly satisfy the frozen contract.
+    #[error("agent instance volume selection is invalid")]
+    InvalidVolumeSelection,
+    /// Typed volume grant or metadata operation failed.
+    #[error(transparent)]
+    Volume(#[from] volume_trait::VolumeError),
     /// Another update already closed the instance run gate.
     #[error("agent instance already has an active update")]
     ConcurrentUpdate,

@@ -33,3 +33,8 @@ Use this crate when importing a published release, creating an instance or
 attachment, validating a candidate update, or installing a release's UI. Build
 the domain values first; application services use their validated IDs, hashes,
 policies, and lifecycle states to perform durable commands.
+
+`InstanceVolumeMode` records the immutable legacy or named attachment profile.
+It does not replace revision completeness or the live launch gate.
+`InstanceRemovalId` names retained permanent closure admission; the ID alone is
+not proof of VM destruction, fenced lease cleanup, or terminal tombstoning.

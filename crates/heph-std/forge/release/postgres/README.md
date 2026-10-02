@@ -37,21 +37,40 @@ before its content hash is computed. Empty declarations omit the field and retai
 the exact legacy JSON/hash. Legacy state requirements remain separate provenance
 and are lifted only in typed effective views; published rows are not rewritten.
 
-Publication accepts these declarations. Until exact instance bindings can be
-materialized, legacy import, update candidate creation, and update hook admission
-reject nonempty declarations after live project/source authorization and before
-replay or metadata effects. Malformed persisted declarations fail closed. Absent
+Publication accepts these declarations. Legacy import, update candidate creation,
+and update hook admission reject nonempty declarations after live project/source
+authorization and before replay or metadata effects. Malformed persisted declarations fail closed. Absent
 or empty declarations retain the legacy paths.
 
-Recipe installation and normal import need subsequent binding/materialization
-work before explicit-slot instances can run. Runtime mount conflict/symlink checks,
-exact consumer grants, writer detach/fencing, and revocation remain separate work.
+`import_agent_with_volumes` creates a named instance, its complete immutable
+revision, exact declared bindings, and explicit grants in one actor transaction.
+It checks live source use, target management, and each volume's attach/grant
+permissions before full-input replay. Resolved parameters and sorted selections
+are hashed with actor, pins, predicted IDs, policies, and name. Required secret or
+generic capability bindings and typed updates remain unsupported. Legacy state
+ceilings may select standalone resources as `legacy_declaration` provenance;
+no origin pointer or scalar attachment evidence is fabricated.
+
+Named instances keep an independent closed run gate while the runtime profile
+is unsupported. Revision runnable state records completeness, and
+`instance_volume_status` reports live profile support and removal admission.
+Plural runtime materialization, mount safety, and supervised detach/fencing
+remain necessary before named instances execute.
 
 Typed volume mount grants are separate from immutable binding evidence and
 published generic capability hashes. The actor API audits consumer management
 and source grant/attach decisions before creation or replay, commits rejected
 authorization audit records separately, and records permanent revocations.
-Its transaction helper supports a future atomic initial import without requiring
+Its transaction helper supports atomic initial import without requiring
 an already active or runnable consumer revision. Typed update candidates remain
 unsupported. Same-project v1 bindings make source ownership and consumer
 management equivalent under the pinned0102 model; no grant is backfilled.
+
+`request_instance_removal` permanently closes future launches under current
+consumer management authority, independently of source or original creator
+access. It withdraws grants and commits cancellation requests, pauses mailboxes,
+and cancels pending delivery/request admission. Existing leased/running attempts,
+lease fences, revisions, and external volume references remain retained. Update
+recovery cannot reopen the permanent gate. This method records admission only;
+trusted VM destruction and complete fenced lease cleanup must be proved before
+terminal tombstoning or physical volume deletion is implemented.

@@ -7,6 +7,7 @@ pub mod ui_browser_serving;
 mod ui_installation;
 mod ui_installation_navigation;
 mod ui_request_audit;
+mod volume_instances;
 
 pub use release_domain::ui::UiCachePolicy;
 pub use types::{
@@ -47,4 +48,8 @@ pub use ui_installation_navigation::{
 pub use ui_request_audit::{
     NewUiRequestAuditEvent, UiRequestAuditContext, UiRequestAuditDecision, UiRequestAuditError,
     UiRequestAuditOutcome, UiRequestAuditReason, UiRequestAuditSink, UiRequestAuditSurface,
+};
+pub use volume_instances::{
+    ImportAgentWithVolumes, InstanceRemovalAdmission, InstanceVolumeStatus, RequestInstanceRemoval,
+    VolumeSlotSelection,
 };

@@ -25,10 +25,12 @@ mod errors;
 pub use errors::ReleaseValueError;
 
 mod identifiers;
+mod volume_lifecycle;
 pub use identifiers::{
-    AgentFamilyId, AgentUpdateId, BuildRequestId, DeferredTriggerId, ReleaseArtifactId,
-    UiInstallationGenerationId, UiInstallationId,
+    AgentFamilyId, AgentUpdateId, BuildRequestId, DeferredTriggerId, InstanceRemovalId,
+    ReleaseArtifactId, UiInstallationGenerationId, UiInstallationId,
 };
+pub use volume_lifecycle::InstanceVolumeMode;
 
 mod value_objects;
 pub use value_objects::{
