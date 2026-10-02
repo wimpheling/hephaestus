@@ -158,7 +158,11 @@ pub trait DeploymentRepository: Send + Sync + 'static {
         diagnostic: DiagnosticCode,
     ) -> Result<ResourceProgress, DeploymentError>;
 
-    /// Records a fresh authorized reconciliation attempt against the original claim.
+    /// Records a fresh authorized reconciliation against an immutable target claim.
+    ///
+    /// `command` belongs to the current actor. An admitted removal may reconcile
+    /// an earlier owned installation claim without borrowing its actor's command
+    /// or requiring continued source access. It never reopens installation.
     ///
     /// NotApplied requires authoritative absence proof. Delete/detach completion
     /// requires proof of drain, detach, and fencing; unproven results stay blocked.
@@ -168,6 +172,7 @@ pub trait DeploymentRepository: Send + Sync + 'static {
     async fn record_reconciliation(
         &self,
         identity: &AuthenticatedIdentity,
+        command: CommandIdentity,
         claim: &EffectClaim,
         provenance: AttemptProvenance,
         outcome: ReconciledOutcome,

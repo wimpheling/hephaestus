@@ -6,6 +6,7 @@ edition.workspace = true
 rust-version.workspace = true
 
 [dependencies]
+async-trait.workspace = true
 agent-config = { path = "../../../../heph-core/platform/agent-config" }
 authz-domain = { path = "../../../../heph-core/auth/authorization/authz-domain" }
 authz-postgres = { path = "../../../authorization/authz-postgres" }

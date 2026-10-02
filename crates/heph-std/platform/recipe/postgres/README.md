@@ -1,8 +1,8 @@
-# Recipe deployment admission ledger
+# Recipe deployment ledger
 
-This declared PostgreSQL adapter provides three inherent operations:
-`admit_install`, `inspect`, and `admit_remove`. It performs no provider work and
-does not implement the effect methods of `DeploymentRepository` yet.
+This declared PostgreSQL adapter implements `DeploymentRepository`: admission,
+inspection, fenced effect claims, verified completion, ambiguity, reconciliation,
+and terminal command receipts. It performs no provider work.
 
 Installation resolves canonical declarations again inside the actor transaction
 using exact authoritative release exports, typed parameters, secret schemas,
@@ -27,5 +27,33 @@ existing independently committed audit pattern.
 
 Migration 0104 guards immutable identity, intent, evidence, command receipts,
 provenance, bounded progress vocabularies, and legal lifecycle transitions under
-forced row security. Provider claims, ambiguous-result reconciliation, completion,
-and their further schema guards belong to the next slice.
+forced row security. Migration 0106 adds append-only execution attempts, worker
+verification receipts, exact transition proofs, and separate immutable terminal
+results. Claims increment deployment/resource CAS and execution fencing generation
+before a provider can run. Ambiguous and failed actions keep their active fence;
+only authoritative reconciliation can release it. Expiry proves no absence or
+attachment safety. Cleanup reverses dependencies, enforces immutable retain/delete
+policies, and never mutates external references.
+
+Public `EffectClaim` and `EffectEvidence` values are untrusted comparisons against
+stored facts. Completion and proved reconciliation require a receipt recorded
+through `PostgresEffectVerificationRecorder` with the trusted worker database role.
+That recorder is a backend composition boundary and verifies ledger identity; the
+owning provider must first establish action-specific facts. In particular, a create
+needs durable operation-bound ownership provenance. A preexisting independent
+volume with matching predicted ID, capacity, and filesystem UUID cannot be adopted
+or deleted. Definitive absence must exclude such an unowned resource. Provider
+ownership seals and actual provider invocation remain future integration work.
+
+Fresh effects and terminal/replayed commands require current authenticated actor
+authority. Trusted worker observations can be appended without synthesizing an
+identity from a historical actor. Removal excludes source access; observation of
+an original owned install fence after removal was admitted may resolve cleanup
+safety under a separately admitted current manager command, without borrowing the
+original actor identity or reopening installation. The immutable target attempt
+and the current reconciliation command/provenance remain separately recorded. Terminal completion is distinct from its stable
+original admission receipt.
+
+The ignored PostgreSQL tests use explicit trusted worker proof fixtures to verify
+ledger semantics, forgery rejection, CAS, replay, cleanup, SQL guards, and a frozen
+0105-to-0106 database upgrade. They do not prove provider, filesystem, or VM safety.

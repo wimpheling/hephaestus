@@ -7,22 +7,33 @@
 mod admission;
 mod authorization;
 mod catalog;
+mod effect_claim;
+mod effect_context;
+mod effect_outcome;
+mod effect_state;
 mod evidence;
+mod execution_rows;
+mod execution_transitions;
 mod hydration;
 mod persistence;
 mod receipts;
+mod repository;
 mod rows;
+mod terminal;
+mod verification;
 
 use sqlx::PgPool;
 
 /// `PostgreSQL` adapter for install, inspect, and remove admission.
 ///
-/// These inherent methods commit intent and receipts only. Provider effects and
-/// the complete application repository trait are added when implemented.
+/// Repository methods commit intent, claims, and verified outcomes. Provider
+/// execution happens outside these transactions through trusted worker adapters.
 #[derive(Clone)]
 pub struct PostgresDeploymentRepository {
     pool: PgPool,
 }
+
+pub use verification::{PostgresEffectVerificationRecorder, VerifiedOutcome};
 
 impl PostgresDeploymentRepository {
     /// Creates an admission ledger over an existing pool.

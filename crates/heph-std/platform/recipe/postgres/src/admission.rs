@@ -43,7 +43,11 @@ impl PostgresDeploymentRepository {
             let snapshot = hydration::load(&mut tx, intent.id()).await?;
             intent.validate_replay(&snapshot.intent)?;
             let receipt = receipts::restore(&row, command.command, &snapshot, intent.input_hash())?;
-            let disposition = AdmissionDisposition::Resume;
+            let disposition = if crate::terminal::exists(&mut tx, command.command).await? {
+                AdmissionDisposition::Replay
+            } else {
+                AdmissionDisposition::Resume
+            };
             receipts::attempt(
                 &mut tx,
                 identity,
@@ -150,7 +154,11 @@ impl PostgresDeploymentRepository {
         if let Some(row) = receipts::find(&mut tx, command.command).await? {
             // Compare original expected-version input; progress may now be newer.
             let receipt = receipts::restore(&row, command.command, &snapshot, input_hash)?;
-            let disposition = AdmissionDisposition::Resume;
+            let disposition = if crate::terminal::exists(&mut tx, command.command).await? {
+                AdmissionDisposition::Replay
+            } else {
+                AdmissionDisposition::Resume
+            };
             receipts::attempt(&mut tx, identity, &receipt, project, disposition).await?;
             tx.commit().await.map_err(repository_error)?;
             return Ok(DeploymentAdmission {

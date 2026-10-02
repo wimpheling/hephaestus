@@ -3862,6 +3862,7 @@ name = "recipe-postgres"
 version = "0.1.0"
 dependencies = [
  "agent-config",
+ "async-trait",
  "authz-domain",
  "authz-postgres",
  "capability-domain",
