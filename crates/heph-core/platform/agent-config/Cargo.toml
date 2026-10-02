@@ -22,5 +22,8 @@ toml.workspace = true
 uuid.workspace = true
 volume-domain = { path = "../../runtime/volume/domain" }
 
+[dev-dependencies]
+recipe-domain = { path = "../recipe/domain" }
+
 [lints]
 workspace = true
