@@ -9,6 +9,7 @@ use super::{
     model_runtime::{TriggerConfig, UpdateHookConfig},
 };
 use serde::{Deserialize, Serialize};
+use volume_domain::{VolumeContractError, VolumeSlotDeclaration};
 
 /// A successfully parsed and validated configuration.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -35,6 +36,12 @@ pub struct AgentConfig {
     pub publication: PublicationConfig,
     /// Persistent agent-state volume intent.
     pub state_volume: StateVolume,
+    /// Authored named-volume requirements, without resource IDs or grants.
+    ///
+    /// Empty catalogs are omitted so legacy normalized configuration identity
+    /// remains stable. Legacy state is projected only by the effective helper.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub volume_slots: Vec<VolumeSlotDeclaration>,
     /// Files copied into durable result artifacts after a successful run.
     #[serde(default)]
     pub results: ResultConfig,
@@ -56,6 +63,33 @@ pub struct AgentConfig {
     /// Optional isolated candidate-release update hook.
     #[serde(default)]
     pub update_hook: Option<UpdateHookConfig>,
+}
+
+impl AgentConfig {
+    /// Returns the validated named-volume catalog including enabled legacy state.
+    ///
+    /// Authored volume keys cannot shadow generic capability declarations.
+    /// Historical generic `state` capability collisions remain parse-compatible,
+    /// but require separate rejection when constructing a recipe catalog.
+    /// This view never grants authority or changes configuration identity.
+    ///
+    /// # Errors
+    ///
+    /// Rejects explicit capability-key collisions and invalid combined slots.
+    pub fn effective_volume_slots(
+        &self,
+    ) -> Result<Vec<VolumeSlotDeclaration>, VolumeContractError> {
+        for slot in &self.volume_slots {
+            if self
+                .capability_slots
+                .iter()
+                .any(|capability| capability.key == slot.slot().as_str())
+            {
+                return Err(VolumeContractError::DuplicateSlot(slot.slot().clone()));
+            }
+        }
+        volume_domain::effective_volume_slots(&self.volume_slots, self.state_volume.enabled)
+    }
 }
 
 /// Stable exported identity and human-readable display name.

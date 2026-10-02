@@ -208,6 +208,9 @@ pub fn hash(source: &[u8]) -> ConfigHash {
 }
 
 fn normalized_config(mut config: AgentConfig) -> AgentConfig {
+    config
+        .volume_slots
+        .sort_unstable_by(|left, right| left.slot().cmp(right.slot()));
     for declaration in &mut config.capability_slots {
         declaration.required_operations.sort_unstable();
         declaration.optional_operations.sort_unstable();

@@ -40,6 +40,10 @@ pub async fn prepare_update(
     current: UpdateCurrentRow,
     candidate: UpdateCandidateRow,
 ) -> Result<PreparedUpdate, ReleaseServiceError> {
+    super::release_build::runtime_contract::require_legacy_import(
+        &candidate.runtime_contract,
+        candidate.requires_state,
+    )?;
     let declarations: Vec<ParameterDeclaration> =
         serde_json::from_value(candidate.parameter_schema)?;
     let release_policy = policy_from_contract(&candidate.runtime_contract)?;

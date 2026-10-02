@@ -4,6 +4,7 @@ members = [
     "crates/heph-core/platform/rpc-proto",
     "crates/heph-core/platform/runtime-types",
     "crates/heph-core/platform/recipe/domain",
+    "crates/heph-core/platform/recipe/application",
     "crates/heph-core/platform/event/*",
     "crates/heph-core/platform/gateway/*",
     "crates/heph-core/auth/authorization/*",

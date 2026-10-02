@@ -28,3 +28,9 @@ Use this crate when validating a release's volume slots or resolving immutable
 bindings to stable volume IDs. Local provider capacity limits, lease recovery,
 detach/fencing, and live authorization remain in their existing contracts and
 adapters. The legacy `/var/lib/hephaestus` guest mount is allowed.
+
+`effective_volume_slots` adds the enabled historical `state` slot as required
+read-write at that legacy path without mutating authored declarations. Its
+one-byte minimum preserves compatibility with releases that declared no
+minimum capacity; provider capacity rules still apply. Combined catalogs are
+validated and sorted. This view grants no authority and rewrites no records.

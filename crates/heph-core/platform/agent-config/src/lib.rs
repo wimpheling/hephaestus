@@ -13,6 +13,7 @@ mod validation_images;
 mod validation_parameters;
 mod validation_shared;
 mod validation_v2;
+mod validation_volumes;
 
 pub mod build_identity;
 pub mod ui;
@@ -65,4 +66,5 @@ mod tests {
     mod release;
     mod repositories;
     mod support;
+    mod volumes;
 }

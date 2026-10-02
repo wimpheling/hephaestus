@@ -8,6 +8,9 @@
 pub use runtime_types::{
     AgentAttachmentId, AgentInstanceId, AgentInstanceRevisionId, ReleaseAgentId, ReleaseId,
 };
+pub use volume_domain::{
+    GuestMountPath, VolumeAccessMode, VolumeSlotDeclaration, effective_volume_slots,
+};
 
 pub mod ui;
 pub mod ui_browser;
@@ -61,3 +64,5 @@ pub use validation::{validate_attachment_project, validate_update_family};
 
 #[cfg(test)]
 mod tests;
+#[cfg(test)]
+mod volume_slot_tests;

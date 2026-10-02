@@ -4,6 +4,9 @@ use runtime_types::VolumeId;
 /// A private-volume contract failed validation before provider effects.
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
 pub enum VolumeContractError {
+    /// The built-in legacy declaration could not satisfy domain invariants.
+    #[error("invalid built-in legacy volume declaration")]
+    InvalidLegacyDeclaration,
     /// A guest path was not a bounded canonical unprotected absolute path.
     #[error("invalid controlled guest mount path")]
     InvalidGuestMountPath,

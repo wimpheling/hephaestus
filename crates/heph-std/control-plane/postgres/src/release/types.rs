@@ -1,7 +1,7 @@
 use super::ui;
 use crate::build::BuildView;
 use agent_config::SecretSlotDeclaration;
-use release_domain::{ParameterDeclaration, UpdateHook};
+use release_domain::{ParameterDeclaration, UpdateHook, VolumeSlotDeclaration};
 use time::OffsetDateTime;
 use uuid::Uuid;
 
@@ -55,10 +55,31 @@ pub struct ReleaseAgent {
     pub display_name: String,
     pub policy: release_domain::RuntimePolicy,
     pub requires_state: bool,
+    /// Authored release volume declarations; legacy state remains separate provenance.
+    pub volume_slots: Vec<VolumeSlotDeclaration>,
     pub parameter_schema: Vec<ParameterDeclaration>,
     pub secret_slots: Vec<SecretSlotDeclaration>,
     pub update_hook: Option<UpdateHook>,
     pub created_at: OffsetDateTime,
+}
+impl ReleaseAgent {
+    /// Returns the validated released attachment scope, including legacy state.
+    ///
+    /// # Errors
+    ///
+    /// Rejects invalid, overlapping, or conflicting stored declarations.
+    pub fn effective_volume_slots(&self) -> Result<Vec<VolumeSlotDeclaration>, ReleaseError> {
+        release_domain::effective_volume_slots(&self.volume_slots, self.requires_state)
+            .map_err(|_| ReleaseError::InvalidStoredData)
+    }
+
+    /// Counts required secrets from the authoritative typed released secret schema.
+    pub fn required_secret_slot_count(&self) -> usize {
+        self.secret_slots
+            .iter()
+            .filter(|slot| slot.required)
+            .count()
+    }
 }
 pub struct ReleaseDetail {
     pub summary: ReleaseSummary,

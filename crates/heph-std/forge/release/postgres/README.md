@@ -29,3 +29,20 @@ let service = ReleaseService::new(pool, authorizer);
 
 Call the service inside the command workflow and use its committed result or
 recovery decision to drive run, gateway, and event publication.
+
+## Explicit volume compatibility
+
+Authored volume slots are validated, sorted, and frozen into the runtime contract
+before its content hash is computed. Empty declarations omit the field and retain
+the exact legacy JSON/hash. Legacy state requirements remain separate provenance
+and are lifted only in typed effective views; published rows are not rewritten.
+
+Publication accepts these declarations. Until exact instance bindings can be
+materialized, legacy import, update candidate creation, and update hook admission
+reject nonempty declarations after live project/source authorization and before
+replay or metadata effects. Malformed persisted declarations fail closed. Absent
+or empty declarations retain the legacy paths.
+
+Recipe installation and normal import need subsequent binding/materialization
+work before explicit-slot instances can run. Runtime mount conflict/symlink checks,
+exact consumer grants, writer detach/fencing, and revocation remain separate work.
