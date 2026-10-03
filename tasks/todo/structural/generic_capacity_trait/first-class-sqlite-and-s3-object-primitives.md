@@ -144,12 +144,24 @@ Verified checkpoints:
   Eight pure cases, one actual public-schema-107 loader regression and five
   policy regressions passed with strict checks. It builds the base workload;
   live launch authority and canonical application activation remain separate.
+- Explicit fresh execution profiles (`f9f5ae7a`) distinguish legacy scalar
+  runs from owned canonical runs without an option to adopt historical records.
+  Fifteen private-schema PostgreSQL foundation cases, eleven producer cases and
+  thirty-one public-schema-107 regressions passed with strict checks. Only the
+  core contract is committed; adapters, migrations and scalar lifecycle
+  qualification remain unpublished.
+- Live runtime checks (`0666ac51`) separate pre-issuance checks from inspection
+  against an already stored session ceiling. Thirteen private-schema PostgreSQL
+  cases, one public-schema-107 regression and five pure/API cases passed with
+  strict checks. This verifies current source authority and immutable session
+  bounds; it does not issue credentials, authorize mounts or enable recipe runs.
+  The PostgreSQL implementation remains unpublished.
 
 Before publishing migrations 0108–0112, explicit execution profiles must preserve
 fresh legacy orchestration and require canonical ownership and cleanup for recipe
 runs. Unresolved historical rows stay held. Schema presence must not automatically
-enable owned execution. The private profile proposal is awaiting actual SQL tests
-and scalar release qualification.
+enable owned execution. The private profile foundation passed actual SQL tests;
+scalar release, Run lifecycle and application compatibility remain to be verified.
 
 Provider orchestration and ownership seals, plural runtime attachment and cleanup,
 physical revocation, authenticated project web UI commands, real SQLite
