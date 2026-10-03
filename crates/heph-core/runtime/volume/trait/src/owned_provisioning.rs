@@ -1,10 +1,12 @@
 //! Canonical sealed provisioning metadata; values never prove host IO on their own.
 
+mod discovery;
 mod observation;
 mod purpose;
 #[cfg(test)]
 mod tests;
 
+pub use discovery::{OwnedProvisioningDiscovery, OwnedProvisioningExpectation};
 pub use observation::{OwnedBackingObservation, OwnedBackingObservationWire, OwnedFilesystemBirth};
 pub use purpose::OwnedBackingPurpose;
 pub use volume_domain::{OwnedBackingPhase, VolumeRootNamespaceId};
@@ -63,6 +65,25 @@ pub trait VolumeOwnedProvisioningRepository: Send + Sync + 'static {
         identity: &AuthenticatedIdentity,
         request: &BeginOwnedProvisioning,
     ) -> Result<OwnedProvisioningContext, VolumeError>;
+    /// Discovers the original first operation from exact sealed backend inputs.
+    ///
+    /// Reads global history before comparing the configured provider scope. An
+    /// unadmitted result requires a positive 110 birth and genuine zero 111 history;
+    /// it grants neither physical absence nor new admission or format permission.
+    /// Existing operations return their original identity and fence, including
+    /// uncertain progress. Multiple, foreign, retired or contradictory histories
+    /// remain held rather than selecting another operation or generation.
+    ///
+    /// # Errors
+    /// Unsupported implementations and unproven or conflicting history deny.
+    async fn discover_owned_provisioning(
+        &self,
+        _expected: &OwnedProvisioningExpectation,
+    ) -> Result<OwnedProvisioningDiscovery, VolumeError> {
+        Err(VolumeError::InvalidState(
+            "original owned provisioning discovery is unsupported",
+        ))
+    }
     /// Worker-only exact readonly context; never reconstructs an OIDC identity.
     ///
     /// Survives creator role loss, but conveys no new first-format permission.

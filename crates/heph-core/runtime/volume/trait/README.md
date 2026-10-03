@@ -55,3 +55,24 @@ The optional `scalar_lease_history` port observes global original Run history.
 recovery state rather than expiry. Multiple, foreign or contradictory rows deny.
 It grants no provider IO or lease-release authority; unsupported adapters fail
 closed. A released original tuple does not describe a newer resource generation.
+
+## Original owned provisioning discovery
+
+Use original provisioning discovery to recover an interrupted installation's exact
+volume operation from its sealed creation record and configured disk owner, then
+resume recovery with that original operation.
+
+`discover_owned_provisioning` is a trusted worker readonly lookup using the exact
+sealed registration and configured physical host, root path and owner namespace.
+The checked expectation derives the versioned first operation UUID from the
+immutable creation operation; first birth uses expected generation zero and
+operation generation one. It never selects a later CAS or creates an operation.
+
+`Unadmitted` requires the original sealed birth, generation zero, reserved
+metadata and genuinely zero global purpose/operation/observation history. It
+is not filesystem absence or admission permission. `Original` preserves the
+original receipt, request, event, purpose, operation and current worker progress.
+Interrupted or uncertain progress remains uncertain; Ready is database history,
+not a replacement for host journal, inode or filesystem validation. Multiple,
+foreign, retired and contradictory histories deny. The API grants no format or
+claim authority and never reconstructs an authenticated identity.

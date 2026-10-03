@@ -27,7 +27,8 @@ pub use mount_grants::{VolumeMountGrant, VolumeMountGrantRepository, VolumeMount
 pub use owned_provisioning::{
     BeginOwnedProvisioning, OwnedBackingObservation, OwnedBackingObservationWire,
     OwnedBackingPhase, OwnedBackingPurpose, OwnedFilesystemBirth, OwnedProvisioningClaim,
-    OwnedProvisioningContext, VolumeOwnedProvisioningRepository, VolumeRootNamespaceId,
+    OwnedProvisioningContext, OwnedProvisioningDiscovery, OwnedProvisioningExpectation,
+    VolumeOwnedProvisioningRepository, VolumeRootNamespaceId,
 };
 pub use partial_retention::{
     OwnedPartialRetentionContext, OwnedPartialRetentionReceipt, PartialRetentionObservationHead,
