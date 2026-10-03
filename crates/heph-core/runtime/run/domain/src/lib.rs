@@ -2,6 +2,13 @@
 
 mod cleanup;
 mod execution_profile;
+mod legacy_vm_placement;
+
+pub use legacy_vm_placement::{
+    LegacyVmPlacement, LegacyVmPlacementConsumption, LegacyVmPlacementError, LegacyVmPlacementHold,
+    LegacyVmPlacementHoldReason, LegacyVmPlacementInventory, LegacyVmPlacementProducer,
+    LegacyVmPlacementScope,
+};
 
 pub use execution_profile::FreshRunExecutionProfile;
 

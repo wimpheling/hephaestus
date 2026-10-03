@@ -1,5 +1,12 @@
 # Purpose
 
+The default-unsupported Legacy placement ports record prospective metadata,
+consume exact birth eligibility, close acquisition and inspect placed/held
+history. This does not yet wire the scalar start or recovery algorithms. Managed
+Legacy execution must consume its configured scope before any resource IO;
+historical and foreign-owner rows remain held. No canonical receipt is inferred
+from these projections.
+
 `run-orchestrator` coordinates one run from durable command acceptance through
 guest cleanup. It is the provider-neutral workflow that joins the run state
 machine to VM, volume, workspace, runtime-artifact, authority, secret, and

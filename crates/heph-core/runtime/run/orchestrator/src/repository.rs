@@ -46,6 +46,56 @@ pub enum RepositoryError {
 /// Persistence boundary required by the orchestrator.
 #[async_trait]
 pub trait RunRepository: Send + Sync + 'static {
+    /// Commits exact fresh Legacy placement before IO; unsupported by default.
+    async fn create_run_with_legacy_placement(
+        &self,
+        _command: &StartRun,
+        _scope: &run_domain::LegacyVmPlacementScope,
+    ) -> Result<CreateRunResult, RepositoryError> {
+        Err(RepositoryError::InvalidData(
+            "Legacy placement creation is unsupported",
+        ))
+    }
+    /// Consumes exact producer eligibility once; `CleanupOnly` grants no IO.
+    async fn consume_legacy_vm_placement(
+        &self,
+        _command: &StartRun,
+        _scope: &run_domain::LegacyVmPlacementScope,
+        _kind: run_domain::LegacyVmPlacementConsumption,
+    ) -> Result<run_domain::LegacyVmPlacement, RepositoryError> {
+        Err(RepositoryError::InvalidData(
+            "Legacy placement consumption is unsupported",
+        ))
+    }
+    /// Loads scoped birth metadata; a projection is not physical absence proof.
+    async fn legacy_vm_placement(
+        &self,
+        _run_id: RunId,
+        _scope: &run_domain::LegacyVmPlacementScope,
+    ) -> Result<run_domain::LegacyVmPlacement, RepositoryError> {
+        Err(RepositoryError::InvalidData(
+            "Legacy placement lookup is unsupported",
+        ))
+    }
+    /// Closes acquisition permanently without resource release or receipts.
+    async fn close_legacy_vm_acquisition(
+        &self,
+        _run_id: RunId,
+        _scope: &run_domain::LegacyVmPlacementScope,
+    ) -> Result<run_domain::LegacyVmPlacement, RepositoryError> {
+        Err(RepositoryError::InvalidData(
+            "Legacy acquisition closure is unsupported",
+        ))
+    }
+    /// Inspects placed and held history; unsupported never returns false empty.
+    async fn legacy_vm_placement_inventory(
+        &self,
+        _scope: &run_domain::LegacyVmPlacementScope,
+    ) -> Result<run_domain::LegacyVmPlacementInventory, RepositoryError> {
+        Err(RepositoryError::InvalidData(
+            "Legacy placement inventory is unsupported",
+        ))
+    }
     /// Creates a queued run and command-inbox record idempotently.
     async fn create_run(&self, command: &StartRun) -> Result<CreateRunResult, RepositoryError>;
     /// Atomically admits a run with its configured provider ownership before IO.

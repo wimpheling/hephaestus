@@ -33,3 +33,9 @@ the run before work reaches a VM.
 `FreshRunExecutionProfile` is trusted constructor configuration for new
 producers: `LegacyScalar` or `OwnedCanonical`. It has no historical option and
 conveys no source, delegation, provider ownership or physical cleanup authority.
+
+`LegacyVmPlacementScope` checks an actual configured provider owner UUID and
+host. `LegacyVmPlacement` projects immutable fresh command/project/catalog pins
+and recorded producer eligibility. Provision consumption and cleanup-only
+consumption are distinct; neither is a physical observation. These values do
+not adopt historical Runs or replace canonical complete-set cleanup receipts.

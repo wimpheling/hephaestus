@@ -15,6 +15,7 @@ serde.workspace = true
 sha2.workspace = true
 thiserror.workspace = true
 time.workspace = true
+uuid.workspace = true
 vm-trait.workspace = true
 
 [lints]
