@@ -101,3 +101,20 @@ owning adapters' exact persisted cleanup evidence; a closed gate, terminal statu
 missing VM ID or lease expiry is insufficient. The initial zero-Run database case
 makes no physical VM shutdown claim. Actual runtime drain, guarded removal
 mutation and application orchestration remain separate boundaries.
+
+### Close a prepared instance before removal
+
+A current deployment manager can load the original instance creation as data,
+without replaying import or borrowing the installer's identity or Source rights.
+The loader accepts checked immutable deployment intent and compares it with the
+stored preparation. Only an exact active original Create or a uniquely proven
+completed original Create is eligible; ambiguous history stays held.
+
+The closure port accepts the current admitted Remove Drain claim and permanently
+closes future work through a durable removal request and cancellation outbox. It
+reserves every original import command and instance before locking parents; late
+participants use nonblocking locks. Exact replay preserves the request, closed
+gate, versions and events. Closure is scheduling evidence: the separate safety
+observer must still qualify actual runtime cleanup before Drain, Detach or Retain.
+Adapters that do not implement these ports fail closed. This does not enable an
+application removal driver or a new manager's Remove resume while Removing.

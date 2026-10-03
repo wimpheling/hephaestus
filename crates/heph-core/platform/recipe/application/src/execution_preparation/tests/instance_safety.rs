@@ -9,7 +9,7 @@ use std::{
     task::{Context, Poll, Waker},
 };
 
-fn target() -> PreparedInstanceSafetyTarget {
+pub fn target() -> PreparedInstanceSafetyTarget {
     let intent = fixture::intent(fixture::SOURCE, 1);
     let prepared = fixture::prepared().instances()[0].clone();
     let plan = &intent.resources()[prepared.resource()];

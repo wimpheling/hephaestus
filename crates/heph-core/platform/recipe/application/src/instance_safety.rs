@@ -13,7 +13,8 @@ use async_trait::async_trait;
 use identity_domain::AuthenticatedIdentity;
 use release_domain::InstanceRemovalId;
 
-use crate::{CommandIdentity, DeploymentError};
+use crate::{CommandIdentity, DeploymentError, DeploymentIntent};
+use capability_domain::CapabilitySlotKey;
 
 /// Action-specific observation, separate from installation and activation.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -51,6 +52,24 @@ pub struct PreparedInstanceSafetyObservation {
 /// held; unsupported adapters must never fall back to import replay.
 #[async_trait]
 pub trait PreparedInstanceSafetyRepository: Send + Sync + 'static {
+    /// Loads the exact active or uniquely completed original Create as data.
+    ///
+    /// Current Remove authority and complete stored intent/preparation must be
+    /// checked independently; historical command identity is never credentials.
+    ///
+    /// # Errors
+    /// Denies unsupported adapters, roles, current cleanup permissions, config
+    /// drift, absent preparation or ambiguous/contradictory original history.
+    async fn load_original_target(
+        &self,
+        _identity: &AuthenticatedIdentity,
+        _command: CommandIdentity,
+        _intent: &DeploymentIntent,
+        _resource: &CapabilitySlotKey,
+    ) -> Result<PreparedInstanceSafetyTarget, DeploymentError> {
+        Err(DeploymentError::InvalidAction)
+    }
+
     /// Inspects the exact original target after fresh current Remove authorization.
     ///
     /// # Errors
