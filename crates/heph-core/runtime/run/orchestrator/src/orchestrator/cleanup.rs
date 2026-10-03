@@ -12,7 +12,7 @@ impl RunOrchestrator {
         run_id: RunId,
         failure: &str,
     ) -> Result<Run, OrchestratorError> {
-        if self.canonical_cleanup.is_some() {
+        if self.canonical_cleanup.is_some() || self.legacy_scope.is_some() {
             return self.fail_with_resources(run_id, None, None, failure).await;
         }
         self.repository
@@ -36,6 +36,15 @@ impl RunOrchestrator {
         instance: Option<Arc<dyn VmInstance>>,
         failure: &str,
     ) -> Result<Run, OrchestratorError> {
+        if self.legacy_scope.is_some() {
+            return self
+                .cleanup_legacy(run_id, instance, Some((failure, None)))
+                .await
+                .map_err(|cleanup| OrchestratorError::CleanupIncomplete {
+                    failure: failure.to_owned(),
+                    cleanup: Box::new(cleanup),
+                });
+        }
         self.repository
             .transition(run_id, RunState::Failed, None, Some(failure))
             .await?;
@@ -54,6 +63,11 @@ impl RunOrchestrator {
         run: Run,
         lease: Option<&VolumeLease>,
     ) -> Result<Run, OrchestratorError> {
+        if self.legacy_scope.is_some() {
+            return self
+                .cleanup_legacy(run.id, None, Some(("Run was cancelled before VM IO", None)))
+                .await;
+        }
         self.repository
             .transition(run.id, RunState::Cancelled, None, None)
             .await?;
@@ -66,6 +80,15 @@ impl RunOrchestrator {
         lease: Option<&VolumeLease>,
         instance: Option<Arc<dyn VmInstance>>,
     ) -> Result<Run, OrchestratorError> {
+        if self.legacy_scope.is_some() {
+            return self
+                .cleanup_legacy(run_id, instance, None)
+                .await
+                .map_err(|cleanup| OrchestratorError::CleanupIncomplete {
+                    failure: "Legacy resource cleanup".into(),
+                    cleanup: Box::new(cleanup),
+                });
+        }
         if self.canonical_cleanup.is_some() {
             return self
                 .canonical_cleanup(run_id, instance)
@@ -108,7 +131,7 @@ impl RunOrchestrator {
     }
 
     pub(super) async fn abort_vm_keep_lease(&self, run_id: RunId, instance: &Arc<dyn VmInstance>) {
-        if self.canonical_cleanup.is_some() {
+        if self.canonical_cleanup.is_some() || self.legacy_scope.is_some() {
             // Every caller follows registration. Preserve that entry without
             // restoring a handle already removed by confirmed concurrent
             // cleanup. The canonical path alone owns handle removal.
@@ -121,6 +144,15 @@ impl RunOrchestrator {
     }
 
     pub(super) async fn finish_recovered_run(&self, run: Run) -> Result<(), OrchestratorError> {
+        if self.legacy_scope.is_some() {
+            self.cleanup_legacy(
+                run.id,
+                None,
+                Some(("supervisor restarted while resources were active", None)),
+            )
+            .await?;
+            return Ok(());
+        }
         if self.canonical_cleanup.is_some() {
             self.fail_claimed_run(
                 run.id,

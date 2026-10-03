@@ -21,7 +21,7 @@ pub use creation::{
     VolumeCreationOperationId, VolumeCreationSealId, VolumeOwnedRegistrationRepository,
     VolumeOwnershipScopeId,
 };
-pub use leases::{VolumeAttachment, VolumeLease};
+pub use leases::{ScalarLeaseHistory, VolumeAttachment, VolumeLease};
 pub use mount_grants::{VolumeMountGrant, VolumeMountGrantRepository, VolumeMountRevocation};
 pub use owned_provisioning::{
     BeginOwnedProvisioning, OwnedBackingObservation, OwnedBackingObservationWire,
@@ -187,6 +187,20 @@ pub trait VolumeMetadataRepository: Send + Sync + 'static {
         expires_at: OffsetDateTime,
     ) -> Result<VolumeLease, VolumeError>;
 
+    /// Observes global original scalar history; absence is never host-filtered.
+    ///
+    /// # Errors
+    ///
+    /// Unsupported adapters and contradictory or multiple history fail closed.
+    async fn scalar_lease_history(
+        &self,
+        _run_id: RunId,
+    ) -> Result<ScalarLeaseHistory, VolumeError> {
+        Err(VolumeError::InvalidState(
+            "global scalar history is unsupported",
+        ))
+    }
+
     /// Returns the active lease held by one run.
     async fn active_lease_for_run(
         &self,
@@ -296,6 +310,20 @@ pub trait VolumeStore: Send + Sync + 'static {
     ///
     /// Returns an error if the supplied lease is no longer current.
     async fn heartbeat(&self, lease: &VolumeLease) -> Result<VolumeLease, VolumeError>;
+
+    /// Observes global original scalar history; absence is never host-filtered.
+    ///
+    /// # Errors
+    ///
+    /// Unsupported adapters and contradictory or multiple history fail closed.
+    async fn scalar_lease_history(
+        &self,
+        _run_id: RunId,
+    ) -> Result<ScalarLeaseHistory, VolumeError> {
+        Err(VolumeError::InvalidState(
+            "global scalar history is unsupported",
+        ))
+    }
 
     /// Returns the active lease held by `run_id`, when one exists.
     ///

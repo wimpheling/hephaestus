@@ -134,7 +134,10 @@ async fn bind_start(
     attachment: Option<VolumeAttachment>,
     plural: Option<PreparedRunVolumes>,
 ) -> Result<Stage<BoundStart>, OrchestratorError> {
-    let vm_id = if orchestrator.canonical_cleanup.is_some() {
+    let vm_id = if orchestrator.legacy_scope.is_some() {
+        let run = orchestrator.repository.get(command.run_id).await?;
+        orchestrator.check_legacy_open(&run).await?.vm_id().clone()
+    } else if orchestrator.canonical_cleanup.is_some() {
         let persisted = orchestrator.repository.get(command.run_id).await?;
         VmId(persisted.vm_id.ok_or(crate::RepositoryError::InvalidData(
             "new run lacks its durable planned VM binding",

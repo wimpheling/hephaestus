@@ -207,6 +207,9 @@ pub struct LegacyVmPlacementHold {
 /// Read-only scoped inspection, not permission to destroy or release resources.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct LegacyVmPlacementInventory {
+    /// Permanently closed Run IDs, strictly a unique subset of checked placements.
+    /// This classification grants no IO, consumption or physical cleanup proof.
+    pub closed_runs: Vec<RunId>,
     /// Exact owner placements, including eligible, VM-NULL and terminal rows.
     pub placements: Vec<LegacyVmPlacement>,
     /// Unknown and known foreign evidence remains visible as held identifiers.

@@ -43,9 +43,14 @@ impl RunOrchestrator {
     }
 
     pub(super) async fn bind_planned_vm(&self, run: &Run) -> Result<(), OrchestratorError> {
+        if self.legacy_scope.is_some() {
+            self.check_legacy_open(run).await?;
+            return Ok(());
+        }
         let Some(cleanup) = self.canonical_cleanup.as_ref() else {
             return Ok(());
         };
+        self.operation_guards.check_io(run.id)?;
         let scope = self.provider.owner_scope()?;
         let vm_id = match run.vm_id.as_ref() {
             Some(id) => VmId(id.clone()),

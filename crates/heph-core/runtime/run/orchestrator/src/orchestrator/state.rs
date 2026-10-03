@@ -42,7 +42,9 @@ pub struct RunOrchestrator {
     pub(crate) canonical_cleanup: Option<CanonicalCleanup>,
     pub(crate) cleanup_timeout: Duration,
     pub(crate) plural_volumes: bool,
-    pub(crate) operation_guards: RunOperationGuards,
+    pub(crate) operation_guards: Arc<RunOperationGuards>,
+    pub(crate) legacy_scope: Option<run_domain::LegacyVmPlacementScope>,
+    pub(crate) legacy_plans: Mutex<HashMap<RunId, run_domain::LegacyVmPlacement>>,
 }
 
 impl RunOrchestrator {
@@ -75,10 +77,30 @@ impl RunOrchestrator {
             canonical_cleanup: None,
             cleanup_timeout: Duration::from_secs(30),
             plural_volumes: false,
-            operation_guards: RunOperationGuards::default(),
+            operation_guards: Arc::new(RunOperationGuards::default()),
+            legacy_scope: None,
+            legacy_plans: Mutex::new(HashMap::new()),
         }
     }
 
+    /// Opts into prospective managed Legacy placement and scoped scalar cleanup.
+    ///
+    /// Requires the exact provider owner and supported placement/history ports.
+    /// This is mutually exclusive with canonical cleanup and named preparation.
+    #[must_use]
+    pub fn with_legacy_vm_placement(mut self, scope: run_domain::LegacyVmPlacementScope) -> Self {
+        self.legacy_scope = Some(scope);
+        self
+    }
+    /// Shares admission and physical IO guards for one managed provider owner.
+    ///
+    /// All canonical and Legacy orchestrators for the same provider clone family
+    /// must share this registry. No guard is held across ordinary guest execution.
+    #[must_use]
+    pub fn with_operation_guards(mut self, guards: Arc<RunOperationGuards>) -> Self {
+        self.operation_guards = guards;
+        self
+    }
     /// Opts into durable complete-set cleanup and exact provider ownership.
     ///
     /// The worker repository closes acquisition and persists trusted scoped
@@ -114,7 +136,7 @@ impl RunOrchestrator {
     ///
     /// The default and maximum are 30 seconds. Timeout keeps every fence and
     /// any active handle, with no cleanup receipt. This controls only the
-    /// opt-in canonical cleanup path.
+    /// opt-in canonical or strict Legacy cleanup path.
     #[must_use]
     pub fn with_cleanup_timeout(mut self, timeout: Duration) -> Self {
         self.cleanup_timeout = timeout.min(Duration::from_secs(30));

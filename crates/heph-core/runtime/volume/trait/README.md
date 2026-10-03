@@ -49,3 +49,9 @@ no history, one exact expected root namespace, or a bounded conflict. Other
 hosts may use the same absolute path independently. A no-history result grants
 no bootstrap authority; normal startup must reopen an expected owner or require
 an explicit prospective bootstrap decision.
+
+The optional `scalar_lease_history` port observes global original Run history.
+`NoHistory` is genuine global zero, and `HeldRecovering` comes from persisted
+recovery state rather than expiry. Multiple, foreign or contradictory rows deny.
+It grants no provider IO or lease-release authority; unsupported adapters fail
+closed. A released original tuple does not describe a newer resource generation.

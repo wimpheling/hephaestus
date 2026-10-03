@@ -5,7 +5,7 @@ mod atomic_creation;
 #[path = "canonical/fixture.rs"]
 mod fixture;
 #[path = "canonical/provider.rs"]
-mod provider;
+pub mod provider;
 #[path = "canonical/repository.rs"]
 mod repository;
 #[path = "canonical/volumes.rs"]

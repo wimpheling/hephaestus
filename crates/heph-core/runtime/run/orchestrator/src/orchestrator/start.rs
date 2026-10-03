@@ -16,7 +16,18 @@ impl RunOrchestrator {
             )
             .into());
         }
-        let claim = if self.canonical_cleanup.is_some() {
+        if self.legacy_scope.is_some() {
+            if self.canonical_cleanup.is_some() || self.plural_volumes {
+                return Err(crate::RepositoryError::InvalidData(
+                    "strict Legacy and canonical modes are exclusive",
+                )
+                .into());
+            }
+            self.legacy_owner()?;
+            self.operation_guards.check_io(command.run_id)?;
+        }
+        let claim = if self.canonical_cleanup.is_some() || self.legacy_scope.is_some() {
+            self.operation_guards.check_io(command.run_id)?;
             Some(self.operation_guards.claim_start(command.run_id)?)
         } else {
             None
@@ -34,6 +45,8 @@ impl RunOrchestrator {
     async fn start_claimed_run(&self, command: &StartRun) -> Result<Run, OrchestratorError> {
         let created = if self.canonical_cleanup.is_some() {
             self.create_planned_run(command).await?
+        } else if self.legacy_scope.is_some() {
+            self.create_legacy_run(command).await?
         } else {
             self.repository.create_run(command).await?
         };
@@ -41,6 +54,9 @@ impl RunOrchestrator {
             match created.run.state {
                 RunState::Queued | RunState::LeasingVolume => {}
                 RunState::CleanedUp => {
+                    if self.legacy_scope.is_some() {
+                        return self.legacy_terminal(command.run_id).await;
+                    }
                     if self.canonical_cleanup.is_some() {
                         return self.canonical_cleanup(command.run_id, None).await;
                     }
@@ -52,8 +68,16 @@ impl RunOrchestrator {
         }
         // New runs persist the actual provider owner and planned identity
         // before any preparation, authority check or acquisition effect.
-        self.bind_planned_vm(&created.run).await?;
-        let result = self.execute_claimed_run(command, &created.run).await;
+        let result = async {
+            self.bind_planned_vm(&created.run).await?;
+            self.execute_claimed_run(command, &created.run).await
+        }
+        .await;
+        if self.legacy_scope.is_some() {
+            return self
+                .finish_legacy_start_result(command.run_id, result)
+                .await;
+        }
         if self.canonical_cleanup.is_none() {
             return result;
         }

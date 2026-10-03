@@ -2,20 +2,50 @@
 
 use runtime_types::RunId;
 use std::{
-    collections::HashMap,
+    collections::{HashMap, HashSet},
     sync::{Arc, Mutex, Weak},
 };
 use tokio::sync::{Mutex as AsyncMutex, OwnedMutexGuard};
 
 use super::{OrchestratorError, RunOrchestrator, canonical_cleanup::invalid};
 
+/// Shared per-owner admission, physical operation and local IO quarantine.
+/// Managed orchestrators for one provider clone family must share one registry.
 #[derive(Default)]
 pub struct RunOperationGuards {
     operations: Mutex<HashMap<RunId, Weak<AsyncMutex<()>>>>,
     starts: Mutex<HashMap<RunId, Weak<()>>>,
+    quarantined: Mutex<HashSet<RunId>>,
 }
 
 impl RunOperationGuards {
+    pub(super) fn check_io(&self, run: RunId) -> Result<(), OrchestratorError> {
+        if self
+            .quarantined
+            .lock()
+            .map_err(|_| invalid("IO quarantine is poisoned"))?
+            .contains(&run)
+        {
+            return Err(invalid(
+                "Legacy Run IO is quarantined pending durable cleanup",
+            ));
+        }
+        Ok(())
+    }
+    pub(super) fn quarantine(&self, run: RunId) -> Result<(), OrchestratorError> {
+        self.quarantined
+            .lock()
+            .map_err(|_| invalid("IO quarantine is poisoned"))?
+            .insert(run);
+        Ok(())
+    }
+    pub(super) fn clear_quarantine(&self, run: RunId) -> Result<(), OrchestratorError> {
+        self.quarantined
+            .lock()
+            .map_err(|_| invalid("IO quarantine is poisoned"))?
+            .remove(&run);
+        Ok(())
+    }
     fn operation(&self, run: RunId) -> Result<Arc<AsyncMutex<()>>, OrchestratorError> {
         let mut registry = self
             .operations
@@ -31,7 +61,7 @@ impl RunOperationGuards {
         Ok(guard)
     }
 
-    pub fn claim_start(&self, run: RunId) -> Result<Arc<()>, OrchestratorError> {
+    pub(super) fn claim_start(&self, run: RunId) -> Result<Arc<()>, OrchestratorError> {
         let mut registry = self
             .starts
             .lock()
@@ -52,7 +82,7 @@ impl RunOrchestrator {
         &self,
         run: RunId,
     ) -> Result<Option<OwnedMutexGuard<()>>, OrchestratorError> {
-        if self.canonical_cleanup.is_none() {
+        if self.canonical_cleanup.is_none() && self.legacy_scope.is_none() {
             return Ok(None);
         }
         Ok(Some(

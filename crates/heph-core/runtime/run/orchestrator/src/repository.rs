@@ -96,6 +96,26 @@ pub trait RunRepository: Send + Sync + 'static {
             "Legacy placement inventory is unsupported",
         ))
     }
+    /// Rechecks exact consumed placement and live openness before Legacy IO.
+    async fn assert_legacy_vm_placement_open(
+        &self,
+        _run_id: RunId,
+        _scope: &run_domain::LegacyVmPlacementScope,
+    ) -> Result<run_domain::LegacyVmPlacement, RepositoryError> {
+        Err(RepositoryError::InvalidData(
+            "Legacy open placement is unsupported",
+        ))
+    }
+    /// Reads exact qualified terminal evidence for callback replay, with no IO.
+    async fn legacy_vm_cleanup_completed(
+        &self,
+        _run_id: RunId,
+        _scope: &run_domain::LegacyVmPlacementScope,
+    ) -> Result<Run, RepositoryError> {
+        Err(RepositoryError::InvalidData(
+            "Legacy terminal evidence is unsupported",
+        ))
+    }
     /// Creates a queued run and command-inbox record idempotently.
     async fn create_run(&self, command: &StartRun) -> Result<CreateRunResult, RepositoryError>;
     /// Atomically admits a run with its configured provider ownership before IO.

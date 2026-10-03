@@ -22,7 +22,7 @@ impl RunOrchestrator {
         workspace_mounts: Vec<vm_trait::VmMount>,
     ) -> Result<VmSpec, VmError> {
         let mut spec = self.spec_factory.build(run).await?;
-        if self.canonical_cleanup.is_some() {
+        if self.canonical_cleanup.is_some() || self.legacy_scope.is_some() {
             let expected = run.vm_id.as_ref().ok_or(VmError::InvalidState(
                 "run lacks its durable planned VM identity",
             ))?;
@@ -99,7 +99,11 @@ impl RunOrchestrator {
                             self.persist_vm_event(run_id, event).await?;
                             if finalize_message.is_some() && !finalize_stop_requested {
                                 finalize_stop_requested = true;
-                                instance.stop(StopMode::Force).await?;
+                                if self.legacy_scope.is_some() {
+                                    self.stop_legacy_guest(run_id,instance).await?;
+                                } else {
+                                    instance.stop(StopMode::Force).await?;
+                                }
                             }
                         }
                         Err(tokio::sync::broadcast::error::RecvError::Lagged(skipped)) => {

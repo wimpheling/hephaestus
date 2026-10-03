@@ -159,3 +159,20 @@ producers need positive fresh VM-plan admission, and caller/source adapters must
 implement the stronger plural authorization port. Guest protocol 11 and native
 full-runtime verification remain separate work. Core fake-port tests establish
 ordering and failure behavior, not physical VM or PostgreSQL enforcement.
+
+## Strict Legacy placement
+
+`with_legacy_vm_placement` explicitly requires the managed provider's checked
+owner scope and the prospective placement/history ports. It is mutually exclusive
+with canonical cleanup and named preparation. The default scalar path is retained.
+Managed orchestrators for one actual provider clone family must share one
+`Arc<RunOperationGuards>` through `with_operation_guards`.
+
+Positive birth and provision consumption precede backing and runtime IO. Cleanup
+closes acquisition, waits for operation quiescence, confirms the exact scoped VM,
+then tears down only that Run's transients and releases its original scalar lease.
+Unknown/foreign history remains Held. Both strict recovery entrypoints avoid global
+sweeps. Failed closure quarantines local future IO; exact physical-only fallback
+keeps all fences and creates no receipt or terminal proof. Callback replay requires
+qualified persisted terminal evidence and performs no VM IO. No app composition
+or private schema publication is enabled by this builder.

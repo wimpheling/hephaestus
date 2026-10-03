@@ -97,7 +97,7 @@ async fn provision_vm(
     // Recheck immutable ownership and open planning immediately before IO.
     // This also rejects a cleanup closure made during preparation.
     let operation = orchestrator.lock_run_operation(run_id).await?;
-    if orchestrator.canonical_cleanup.is_some()
+    if (orchestrator.canonical_cleanup.is_some() || orchestrator.legacy_scope.is_some())
         && orchestrator.active.lock().await.contains_key(&run_id)
     {
         return Err(OrchestratorError::RunInProgress(run_id));
@@ -128,7 +128,7 @@ async fn provision_vm(
         .lock()
         .await
         .insert(run_id, Arc::clone(&instance));
-    if orchestrator.canonical_cleanup.is_some()
+    if (orchestrator.canonical_cleanup.is_some() || orchestrator.legacy_scope.is_some())
         && run.vm_id.as_deref() != Some(instance.id().0.as_str())
     {
         // Retain the unexpected handle; it must not start or masquerade as the

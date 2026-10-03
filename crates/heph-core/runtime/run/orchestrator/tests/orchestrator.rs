@@ -13,5 +13,7 @@ mod legacy_placement;
 mod recovery;
 #[path = "orchestrator/resource.rs"]
 mod resource;
+#[path = "orchestrator/strict_legacy.rs"]
+mod strict_legacy;
 #[path = "orchestrator/support/mod.rs"]
 mod support;

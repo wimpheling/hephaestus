@@ -28,7 +28,7 @@ pub async fn complete_started_run(
             if let Ok(result) = tokio::time::timeout(limit, completion_result).await {
                 result
             } else {
-                if orchestrator.canonical_cleanup.is_none() {
+                if orchestrator.canonical_cleanup.is_none() && orchestrator.legacy_scope.is_none() {
                     instance.stop(vm_trait::StopMode::Force).await?;
                 }
                 return orchestrator
@@ -104,6 +104,13 @@ async fn fail_completed_guest_cleanup(
     exit: &vm_trait::VmExit,
     error: OrchestratorError,
 ) -> Result<run_domain::Run, OrchestratorError> {
+    if orchestrator.legacy_scope.is_some() {
+        // Do not extend the physical deadline with an immediate second destroy.
+        // Retain the exact active handle and known exit for explicit recovery.
+        return orchestrator
+            .record_legacy_destroy_failure(run_id, exit, error)
+            .await;
+    }
     if orchestrator.canonical_cleanup.is_some() {
         return Err(error);
     }
@@ -176,7 +183,11 @@ async fn cleanup_completed_guest(
     instance: std::sync::Arc<dyn vm_trait::VmInstance>,
     guest_cleanup: Option<&super::plural_monitor::GuestCleanupPhase>,
 ) -> Result<(), OrchestratorError> {
-    if orchestrator.canonical_cleanup.is_some() {
+    if orchestrator.legacy_scope.is_some() {
+        orchestrator
+            .close_confirm_legacy(run_id, Some(instance))
+            .await?;
+    } else if orchestrator.canonical_cleanup.is_some() {
         orchestrator
             .confirm_canonical_guest_cleanup(run_id, Some(instance))
             .await

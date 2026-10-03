@@ -26,6 +26,19 @@ pub struct VolumeLease {
     pub attached_at: Option<OffsetDateTime>,
 }
 
+/// Global original scalar lease history, never a host-filtered absence claim.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ScalarLeaseHistory {
+    /// No lease of any kind has ever named this Run.
+    NoHistory,
+    /// One exact original live scalar lease remains held.
+    Held(VolumeLease),
+    /// One original lease is fenced in persisted recovery state.
+    HeldRecovering(VolumeLease),
+    /// One exact original scalar lease was durably released.
+    Released(VolumeLease),
+}
+
 /// Information needed to attach a leased volume to a VM.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct VolumeAttachment {
