@@ -76,3 +76,16 @@ Interrupted or uncertain progress remains uncertain; Ready is database history,
 not a replacement for host journal, inode or filesystem validation. Multiple,
 foreign, retired and contradictory histories deny. The API grants no format or
 claim authority and never reconstructs an authenticated identity.
+
+## First-consumer filesystem verification
+
+`assert_owned_first_ready_verification` checks a trusted worker's exact original
+owned operation before an owning provider verifies its Ready filesystem. It
+requires positive protected creation correlation, unfinished first completion
+and genuinely zero global runtime lease history. A dedicated durable guard
+blocks every runtime lease until that same creation has immutable successful
+completion. Missing, contradictory or inactive claims never open admission.
+
+This readonly assertion grants no filesystem proof, format permission or actor
+completion authority. Unsupported repositories deny. Completed stale calls
+must use protected progress replay, not another filesystem check.

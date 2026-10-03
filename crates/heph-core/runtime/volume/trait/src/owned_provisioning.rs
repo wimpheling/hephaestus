@@ -84,6 +84,25 @@ pub trait VolumeOwnedProvisioningRepository: Send + Sync + 'static {
             "original owned provisioning discovery is unsupported",
         ))
     }
+    /// Worker-only admission fence for one unfinished recipe first completion.
+    ///
+    /// Requires exact positive protected original Create/110/111 correlation,
+    /// immutable lease exclusion until that Create completes, and genuinely zero
+    /// GLOBAL runtime lease history. Invoke under the actual journal flock before
+    /// any readonly filesystem check and again before returning custody. It grants
+    /// no physical proof, format permission, receipt, or authority to complete106.
+    ///
+    /// # Errors
+    /// Unsupported composition, completed Create, any lease history or conflicting
+    /// correlation denies; missing history never proves physical absence.
+    async fn assert_owned_first_ready_verification(
+        &self,
+        _claim: &OwnedProvisioningClaim,
+    ) -> Result<(), VolumeError> {
+        Err(VolumeError::InvalidState(
+            "first Ready verification is unsupported",
+        ))
+    }
     /// Worker-only exact readonly context; never reconstructs an OIDC identity.
     ///
     /// Survives creator role loss, but conveys no new first-format permission.
