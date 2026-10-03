@@ -55,7 +55,7 @@ impl PgRunRepository {
         failure: Option<&str>,
     ) -> Result<Run, RepositoryError> {
         let mut transaction = self.pool.begin().await.map_err(storage)?;
-        let current = Self::locked_run(&mut transaction, run_id).await?;
+        let current = Self::locked_default_transition_run(&mut transaction, run_id).await?;
         let current_state = parse_state(&current.state)?;
         if !current_state.can_transition_to(next) {
             return Err(InvalidTransition {
