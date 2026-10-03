@@ -12,6 +12,11 @@ impl PgRunRepository {
         &self,
         command: &StartRun,
     ) -> Result<CreateRunResult, RepositoryError> {
+        if command.kind == run_domain::RunKind::Invocation {
+            return Err(RepositoryError::InvalidData(
+                "Invocation creation is unsupported",
+            ));
+        }
         let mut transaction = self.pool.begin().await.map_err(storage)?;
         let payload = serde_json::to_value(command).map_err(storage)?;
         let inbox = sqlx::query(

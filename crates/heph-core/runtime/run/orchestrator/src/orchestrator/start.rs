@@ -1,4 +1,4 @@
-use run_domain::{Run, RunState, StartRun};
+use run_domain::{Run, RunKind, RunState, StartRun};
 
 use super::{OrchestratorError, RunOrchestrator, complete, prepare, provision};
 
@@ -10,6 +10,9 @@ impl RunOrchestrator {
     /// Returns an error when durable state, volume, or VM operations fail.
     /// Cleanup failures deliberately retain the volume lease for recovery.
     pub async fn start_run(&self, command: &StartRun) -> Result<Run, OrchestratorError> {
+        if command.kind == RunKind::Invocation {
+            return Err(OrchestratorError::InvocationUnsupported);
+        }
         if self.plural_volumes && self.canonical_cleanup.is_none() {
             return Err(volume_trait::VolumeError::InvalidState(
                 "complete-set preparation requires canonical cleanup",

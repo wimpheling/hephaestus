@@ -13,6 +13,7 @@ use super::{
 #[async_trait]
 impl RunRuntimeCatalog for PgRunRepository {
     async fn load_runtime(&self, run: &Run) -> Result<RunRuntimeInput, RunRuntimeCatalogError> {
+        require_supported_kind(run.kind)?;
         let context = sqlx::query_as::<_, RuntimeContextRow>(
             "SELECT revision.parameters,
                     CASE WHEN revision.publication_mode = 'runtime_git'
@@ -129,4 +130,13 @@ impl RunRuntimeCatalog for PgRunRepository {
         .await
         .map_err(storage)
     }
+}
+
+fn require_supported_kind(kind: RunKind) -> Result<(), RunRuntimeCatalogError> {
+    if kind == RunKind::Invocation {
+        return Err(RunRuntimeCatalogError::InvalidData(
+            "Invocation runtime catalog is unsupported",
+        ));
+    }
+    Ok(())
 }

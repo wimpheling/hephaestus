@@ -76,6 +76,12 @@ impl VmSpecFactory for PgAgentVmSpecFactory {
 
 impl PgAgentVmSpecFactory {
     async fn load_contract(&self, run: &Run) -> Result<VmLaunchContract, VmError> {
+        if run.kind == RunKind::Invocation {
+            return Err(invalid_spec(
+                "run.kind",
+                "Invocation VM construction is unsupported",
+            ));
+        }
         load_vm_launch_contract(&self.pool, run.id.as_uuid())
             .await
             .map_err(vm_factory_error)?
@@ -132,6 +138,12 @@ impl PgAgentVmSpecFactory {
                 },
                 None,
             ),
+            RunKind::Invocation => {
+                return Err(invalid_spec(
+                    "run.kind",
+                    "Invocation VM construction is unsupported",
+                ));
+            }
             RunKind::Update => {
                 let hook: StoredUpdateHook = serde_json::from_value(
                     stored
@@ -204,6 +216,10 @@ pub fn guest_environment(
     update_id: Option<Uuid>,
 ) -> Result<BTreeMap<String, String>, VmError> {
     match (kind, update_id) {
+        (RunKind::Invocation, _) => Err(invalid_spec(
+            "run.kind",
+            "Invocation environment is unsupported",
+        )),
         (RunKind::Normal, _) => Ok(BTreeMap::new()),
         (RunKind::Update, Some(update_id)) => Ok(BTreeMap::from([(
             String::from("HEPHAESTUS_UPDATE_ID"),

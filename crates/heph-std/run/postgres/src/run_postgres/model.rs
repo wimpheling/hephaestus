@@ -121,6 +121,7 @@ pub const fn run_kind_name(kind: RunKind) -> &'static str {
     match kind {
         RunKind::Normal => "normal",
         RunKind::Update => "update",
+        RunKind::Invocation => "invocation",
     }
 }
 
@@ -128,6 +129,9 @@ fn parse_run_kind(value: &str) -> Result<RunKind, RepositoryError> {
     match value {
         "normal" => Ok(RunKind::Normal),
         "update" => Ok(RunKind::Update),
+        "invocation" => Err(RepositoryError::InvalidData(
+            "Invocation storage admission is unsupported",
+        )),
         _ => Err(RepositoryError::InvalidData("run kind")),
     }
 }

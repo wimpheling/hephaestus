@@ -56,6 +56,9 @@ where
         &self,
         run: &Run,
     ) -> Result<Option<SecretDispatchInput>, RunSecretError> {
+        if run.kind == RunKind::Invocation {
+            return Err(secret_error("Invocation secret dispatch is unsupported"));
+        }
         let row = self
             .metadata
             .dispatch_input(run)
@@ -122,6 +125,9 @@ where
                     phase: match run.kind {
                         RunKind::Normal => ExecutionPhase::Normal,
                         RunKind::Update => ExecutionPhase::Update,
+                        RunKind::Invocation => {
+                            return Err(secret_error("Invocation secret dispatch is unsupported"));
+                        }
                     },
                     expires_at: time::OffsetDateTime::now_utc() + Duration::from_secs(600),
                 },

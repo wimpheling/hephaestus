@@ -74,6 +74,9 @@ impl LocalRunRuntimeManager {
     }
 
     pub(crate) async fn load(&self, run: &Run) -> Result<RunRuntimeInput, RunRuntimeError> {
+        if run.kind == RunKind::Invocation {
+            return Err(runtime_error("Invocation materialization is unsupported"));
+        }
         let input = self.catalog.load_runtime(run).await.map_err(catalog)?;
         if input.artifacts.is_empty() || input.artifacts.len() > MAX_RUNTIME_ARTIFACTS {
             return Err(runtime_error("release artifact count is invalid"));
@@ -92,6 +95,9 @@ impl LocalRunRuntimeManager {
         run: &Run,
         input: &RunRuntimeInput,
     ) -> Result<PreparedRunRuntime, RunRuntimeError> {
+        if run.kind == RunKind::Invocation {
+            return Err(runtime_error("Invocation materialization is unsupported"));
+        }
         let staging = self
             .config
             .runtime_root

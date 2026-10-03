@@ -5,6 +5,8 @@ mod canonical;
 
 #[path = "orchestrator/completion.rs"]
 mod completion;
+#[path = "orchestrator/invocation.rs"]
+mod invocation;
 #[path = "orchestrator/launch.rs"]
 mod launch;
 #[path = "orchestrator/legacy_placement.rs"]
