@@ -53,3 +53,25 @@ repairing files. Missing or substituted roots and mismatching evidence fail held
 The expected namespace must come from trusted persisted configuration or
 metadata; the current filesystem path is not a source of authority.
 `VolumeRootOwner::initialize` remains the prospective initialization API.
+
+## Bootstrapping a configured disk root
+
+`VolumeRootOwner::bootstrap_empty_with_namespace` publishes an operator-chosen,
+checked UUID only in an already existing, canonical and empty prospective root.
+It creates no directory, chooses no UUID, adopts no raw file, and repairs no
+existing or interrupted marker. Save the UUID in trusted durable configuration
+before the explicit bootstrap; restart with `open_existing` and that same UUID.
+An existing marker, pending record or other entry makes bootstrap fail held.
+
+The new operation retains pinned descriptors, checks emptiness and linked-root
+identity around durable no-replace publication, and uses a transient nonblocking
+root-directory lock to serialize cooperating new bootstraps. The lock uses its
+own open file description and is released before an owner is returned; it is not
+a lifetime supervisor or exclusion of arbitrary same-UID writers. Existing
+`initialize` and its unsealed-file behavior are unchanged. Interrupted or racing
+evidence is retained for a separate recovery decision.
+
+This filesystem API establishes neither database absence nor operator authority.
+The owning composition must supply the configured namespace and independently
+check all immutable root history; an empty history observation grants no
+bootstrap permission. Disk UUIDs stay separate from VM ownership labels.

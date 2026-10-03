@@ -1,5 +1,6 @@
 //! Persistent physical volume-root identity, independent of recipe and VM scopes.
 
+mod bootstrap;
 mod marker;
 mod reopen;
 #[cfg(test)]

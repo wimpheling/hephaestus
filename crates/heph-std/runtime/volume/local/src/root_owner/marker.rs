@@ -62,6 +62,16 @@ pub fn load_or_create(
         return Err(invalid_backing("root changed before owner initialization"));
     }
     let namespace = VolumeRootNamespaceId::from_uuid(Uuid::new_v4()).map_err(backing)?;
+    publish(root, host, identity, namespace, || Ok(()))
+}
+
+pub fn publish(
+    root: &File,
+    host: &str,
+    identity: FileIdentity,
+    namespace: VolumeRootNamespaceId,
+    before_write: impl FnOnce() -> Result<(), VolumeError>,
+) -> Result<(File, Vec<u8>, VolumeRootNamespaceId), VolumeError> {
     let bytes = encode(
         namespace,
         identity,
@@ -70,6 +80,7 @@ pub fn load_or_create(
     )?;
     // EXCL pending record serializes initialization; interrupted writes remain held.
     let mut pending = filesystem::create_file(root, PENDING).map_err(backing)?;
+    before_write()?;
     pending.write_all(&bytes).map_err(backing)?;
     pending.sync_all().map_err(backing)?;
     filesystem::rename_new(root, PENDING, root, NAME).map_err(backing)?;
