@@ -2,6 +2,8 @@
 
 mod activation;
 mod configuration;
+mod invocation;
+mod invocation_reservation;
 mod reservation;
 mod rows;
 
@@ -28,6 +30,7 @@ pub struct PostgresInstanceExecutionService {
     pool: PgPool,
     authorization: ReleaseService,
     configuration: InstanceExecutionConfiguration,
+    qualified_invocation_admission: bool,
 }
 
 impl PostgresInstanceExecutionService {
@@ -45,7 +48,21 @@ impl PostgresInstanceExecutionService {
             authorization: ReleaseService::new(pool.clone(), authorizer),
             pool,
             configuration,
+            qualified_invocation_admission: false,
         }
+    }
+    /// Selects the explicit115 admission adapter in trusted server composition.
+    ///
+    /// Requires the private115 schema and its qualified114 prerequisite.
+    /// Default construction returns Unsupported before Invocation SQL. There is
+    /// no schema probing or automatic enablement. Success records queued
+    /// admission only; it does not enable runtime execution or create a VM.
+    /// This grants no caller, producer, mount or runtime authority. The immutable
+    /// request records qualification version115 separately from114 config bytes.
+    #[must_use]
+    pub const fn with_qualified_invocation_admission(mut self) -> Self {
+        self.qualified_invocation_admission = true;
+        self
     }
 }
 
@@ -61,10 +78,12 @@ impl InstanceExecutionService for PostgresInstanceExecutionService {
 
     async fn invoke_instance(
         &self,
-        _identity: &AuthenticatedIdentity,
-        _command: InvokeInstance,
+        identity: &AuthenticatedIdentity,
+        command: InvokeInstance,
     ) -> Result<InstanceInvocationAdmission, InstanceExecutionError> {
-        // Invocation SQL/kind/dispatch is a separate coherent implementation.
-        Err(InstanceExecutionError::Unsupported)
+        if !self.qualified_invocation_admission {
+            return Err(InstanceExecutionError::Unsupported);
+        }
+        invocation::invoke(self, identity, command).await
     }
 }

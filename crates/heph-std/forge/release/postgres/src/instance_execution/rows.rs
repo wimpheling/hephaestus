@@ -25,11 +25,20 @@ pub fn database(error: &sqlx::Error) -> InstanceExecutionError {
         .as_deref()
     {
         Some("42501") => InstanceExecutionError::AuthorizationDenied,
-        Some("P1140") => InstanceExecutionError::Unsupported,
-        Some("P1141") => InstanceExecutionError::Closed,
-        Some("P1142") => InstanceExecutionError::StaleInstance,
-        Some("P1143" | "23505") => InstanceExecutionError::InputConflict,
-        Some("P1144") => InstanceExecutionError::ConfigurationConflict,
+        Some("P1140" | "P1150") => InstanceExecutionError::Unsupported,
+        Some("P1141" | "P1151") => InstanceExecutionError::Closed,
+        Some("P1142" | "P1152") => InstanceExecutionError::StaleInstance,
+        Some("P1143" | "P1153" | "23505") => InstanceExecutionError::InputConflict,
+        Some("P1144" | "P1154") => InstanceExecutionError::ConfigurationConflict,
         _ => InstanceExecutionError::OutcomeUncertain,
     }
+}
+
+#[derive(FromRow)]
+pub struct InvocationResult {
+    pub invocation: Uuid,
+    pub instance: Uuid,
+    pub revision: Uuid,
+    pub run: Uuid,
+    pub start_command: Uuid,
 }
