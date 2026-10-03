@@ -132,3 +132,12 @@ manager, grant provider ownership, prove physical cleanup, or reopen an instance
 This boundary supports original owned Drain, Detach and Retain work. Delete and
 terminal Removed inspection remain held in this first adapter slice. A genuine
 worker observation is still required before recording a successful outcome.
+
+### Inspecting an original permanent closure
+
+A fresh manager's removal can read the unchanged original instance closure using
+`ExistingInstanceClosureRepository`. Checked request values are comparison data;
+the adapter must independently authenticate the new command, compare saved input
+and import lineage, and verify current cleanup permissions in a coherent read-only
+snapshot. Old actors and requests remain history. No new closure, runtime permission
+or physical cleanup proof is created. Existing adapters default to Unsupported.

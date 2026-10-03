@@ -14,6 +14,7 @@ mod commands;
 mod errors;
 mod execution_preparation;
 mod execution_preparation_repository;
+mod existing_instance_closure;
 mod ids;
 mod instance_closure;
 mod instance_safety;
@@ -37,6 +38,9 @@ pub use execution_preparation::{
 pub use execution_preparation_repository::{
     DeploymentExecutionPreparationRepository, ExecutionPreparationAdmission,
     ExecutionPreparationReceipt,
+};
+pub use existing_instance_closure::{
+    ExistingInstanceClosureRepository, ExistingInstanceClosureRequest,
 };
 pub use ids::{
     DeploymentAttemptId, DeploymentCommandId, DeploymentId, DeploymentKey, MAX_DEPLOYMENT_KEY_BYTES,

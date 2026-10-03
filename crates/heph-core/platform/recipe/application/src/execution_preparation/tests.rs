@@ -7,3 +7,5 @@ mod instance_safety;
 mod observations;
 
 mod remove_resume;
+
+mod existing_instance_closure;
