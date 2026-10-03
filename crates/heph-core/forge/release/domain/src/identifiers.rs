@@ -70,6 +70,10 @@ identifier!(
     "A stable identifier for one instance update transaction."
 );
 identifier!(
+    InstanceRemovalId,
+    "Stable identity for permanent instance removal admission, not cleanup proof."
+);
+identifier!(
     DeferredTriggerId,
     "A stable identifier for a trigger received behind a closed run gate."
 );

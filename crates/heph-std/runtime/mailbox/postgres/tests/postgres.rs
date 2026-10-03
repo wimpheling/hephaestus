@@ -2,6 +2,10 @@
 
 #[path = "postgres/acceptance.rs"]
 mod acceptance;
+#[path = "postgres/acceptance_locking.rs"]
+mod acceptance_locking;
+#[path = "postgres/acceptance_locking_support.rs"]
+mod acceptance_locking_support;
 #[path = "postgres/acceptance_recovery.rs"]
 mod acceptance_recovery;
 #[path = "postgres/acceptance_setup.rs"]

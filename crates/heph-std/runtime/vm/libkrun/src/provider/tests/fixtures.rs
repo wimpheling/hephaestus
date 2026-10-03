@@ -70,6 +70,8 @@ pub(in crate::provider::tests) fn instance_with_options(
         config: Arc::clone(&config),
         ids: Mutex::new(HashSet::from([VmId("test".to_owned())])),
         worker_spawner: Arc::new(ProcessWorkerSpawner),
+        owner: std::sync::OnceLock::new(),
+        failed_cleanup: Mutex::new(HashMap::new()),
     });
     let (events, _) = broadcast::channel(32);
     let (terminal, _) = watch::channel(None::<Terminal>);
@@ -82,6 +84,7 @@ pub(in crate::provider::tests) fn instance_with_options(
     let resources = service.map(|(_, broker, runtime_dir)| OwnedResources {
         runtime_dir,
         cgroup: Cgroup::existing(&config, "test"),
+        cleanup_roots: None,
         service_broker: Some(broker),
     });
     let instance = Arc::new(LibkrunInstance {
@@ -109,6 +112,7 @@ pub(in crate::provider::tests) fn instance_with_options(
 
 pub(in crate::provider::tests) fn spec(id: &str, root: PathBuf) -> VmSpec {
     VmSpec {
+        guest_volumes: Vec::new(),
         id: VmId(id.to_owned()),
         root: RootFilesystem::Directory { host_path: root },
         disks: Vec::new(),

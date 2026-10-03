@@ -24,3 +24,5 @@ pub(crate) use constants::{
     GUEST_CONTROL_SOCKET_NAME, PRIVATE_SERVICE_SOCKET_NAME, SUPERVISOR_SOCKET_NAME,
 };
 pub use messages::*;
+/// Named volume metadata on the authenticated guest bootstrap stream.
+pub use vm_trait::VmGuestVolume as GuestVolume;

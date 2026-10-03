@@ -4,7 +4,7 @@ use tokio::sync::broadcast;
 
 use super::{
     BoxedPrivateServiceConnection, PrivateHttpRequest, PrivateHttpResponse, StopMode, VmError,
-    VmEvent, VmExit, VmId, VmSpec,
+    VmEvent, VmExit, VmId, VmProviderOwnerScope, VmSpec,
 };
 
 /// Provisions virtual machines using a particular backend.
@@ -15,6 +15,44 @@ use super::{
 pub trait VmProvider: Send + Sync + 'static {
     /// Returns the stable name of this provider implementation.
     fn name(&self) -> &'static str;
+
+    /// Returns validated ownership tied to the configured provider root/account.
+    ///
+    /// Canonical cleanup requires exclusive supervisor ownership for this
+    /// namespace. The owner remains retained through provider clones, live
+    /// instances, and in-flight IO; a replacement supervisor cannot admit
+    /// future provisioning until the previous supervisor has ceased IO. Local
+    /// providers use a durable lifetime lock, separate from per-VM operations.
+    /// One configured orchestrator owns the per-run operation registry.
+    ///
+    /// # Errors
+    ///
+    /// Providers without durable ownership support fail closed.
+    fn owner_scope(&self) -> Result<VmProviderOwnerScope, VmError> {
+        Err(VmError::Unsupported {
+            feature: "persistent VM provider ownership".into(),
+            provider: self.name().into(),
+        })
+    }
+
+    /// Confirms cleanup only inside the exact persisted provider ownership.
+    ///
+    /// Implementations must revalidate ownership before IO and before claiming
+    /// absence. This default never delegates to unscoped orphan cleanup.
+    ///
+    /// # Errors
+    ///
+    /// Unsupported ownership or mismatching roots/hosts must fail closed.
+    async fn cleanup_orphan_scoped(
+        &self,
+        _scope: &VmProviderOwnerScope,
+        _id: &VmId,
+    ) -> Result<(), VmError> {
+        Err(VmError::Unsupported {
+            feature: "scoped VM orphan cleanup".into(),
+            provider: self.name().into(),
+        })
+    }
 
     /// Allocates a stopped VM from `spec`.
     ///

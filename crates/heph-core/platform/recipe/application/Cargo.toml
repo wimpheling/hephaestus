@@ -1,0 +1,29 @@
+[package]
+name = "recipe-application"
+description = "Provider-neutral durable recipe deployment contracts and intent planning"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+
+[package.metadata.hephaestus]
+layer = "application"
+context = "recipe"
+
+[dependencies]
+async-trait.workspace = true
+builder-catalog-domain = { path = "../../../image/domain" }
+capability-domain = { path = "../../../auth/authorization/capability-domain" }
+event-application = { path = "../../event/application" }
+forge-domain = { path = "../../../forge/domain" }
+identity-domain = { path = "../../../auth/identity/domain" }
+recipe-domain = { path = "../domain" }
+release-domain = { path = "../../../forge/release/domain" }
+runtime-types = { path = "../../runtime-types" }
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+uuid.workspace = true
+volume-domain = { path = "../../../runtime/volume/domain" }
+
+[lints]
+workspace = true

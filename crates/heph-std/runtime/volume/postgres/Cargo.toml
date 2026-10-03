@@ -7,6 +7,9 @@ rust-version.workspace = true
 
 [dependencies]
 async-trait.workspace = true
+authz-domain = { path = "../../../../heph-core/auth/authorization/authz-domain" }
+authz-postgres = { path = "../../../authorization/authz-postgres" }
+identity-domain = { path = "../../../../heph-core/auth/identity/domain" }
 runtime-types = { path = "../../../../heph-core/platform/runtime-types" }
 sqlx.workspace = true
 time.workspace = true
@@ -14,9 +17,11 @@ uuid.workspace = true
 volume-trait = { path = "../../../../heph-core/runtime/volume/trait" }
 
 [dev-dependencies]
+serde_json.workspace = true
 serial_test = "3"
 tempfile = "3"
 tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }
+volume-local = { path = "../local" }
 
 [lints]
 workspace = true
@@ -24,5 +29,7 @@ workspace = true
 [package.metadata.hephaestus]
 layer = "adapter"
 context = "volume"
+# Actor resource operations reuse the transaction-scoped authorization adapter.
+allow_cross_context_dependencies = ["authz-postgres"]
 postgres_adapter = true
 database_context = "volume"

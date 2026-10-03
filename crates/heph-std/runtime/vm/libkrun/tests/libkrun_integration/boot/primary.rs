@@ -19,7 +19,6 @@ pub async fn run(context: &mut BootContext) {
     let sqlite_disk_for_assertion = context.sqlite_disk_for_assertion.clone();
     let cgroup_root_for_assertion = context.cgroup_root.clone();
     let expected_limits = &context.expected_limits;
-    let provider = &context.provider;
     let mut secret_mount = context.secret_mount.take().expect("primary secret mount");
     let secret_path = context.secret_path.clone();
     let spec = integration_spec(
@@ -32,7 +31,11 @@ pub async fn run(context: &mut BootContext) {
         Some(secret_mount.vm_mount()),
     );
 
-    let vm = provider.provision(spec).await.expect("provision VM");
+    let vm = context
+        .provider
+        .provision(spec)
+        .await
+        .expect("provision VM");
     let vm_id = vm.id().0.clone();
     let mut events = vm.subscribe_events();
     let first = Arc::clone(&vm);
@@ -107,7 +110,8 @@ pub async fn run(context: &mut BootContext) {
     assert!(!runtime_root.join(&vm_id).exists());
     assert!(!cgroup_root_for_assertion.join(&vm_id).exists());
 
-    let rollback = provider
+    let rollback = context
+        .provider
         .provision(state_probe_spec(
             "integration-state-rollback",
             rootfs.clone(),
@@ -130,7 +134,8 @@ pub async fn run(context: &mut BootContext) {
     assert!(!runtime_root.join(&rollback_id).exists());
     assert!(!cgroup_root_for_assertion.join(&rollback_id).exists());
 
-    let persisted = provider
+    let persisted = context
+        .provider
         .provision(integration_spec(
             "integration-persistence",
             rootfs.clone(),
@@ -158,7 +163,8 @@ pub async fn run(context: &mut BootContext) {
     );
     assert!(!runtime_root.join(&persisted_id).exists());
 
-    let gateway = provider
+    let gateway = context
+        .provider
         .provision(private_http_spec(rootfs.clone()))
         .await
         .expect("provision private HTTP gateway VM");

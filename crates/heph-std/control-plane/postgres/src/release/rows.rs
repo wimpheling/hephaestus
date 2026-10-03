@@ -1,6 +1,6 @@
 use super::types::{ReleaseAgent, ReleaseArtifact, ReleaseError, ReleaseState, ReleaseSummary};
 use agent_config::SecretSlotDeclaration;
-use release_domain::{RuntimePolicy, UpdateHook};
+use release_domain::{RuntimePolicy, UpdateHook, VolumeSlotDeclaration};
 use serde::Deserialize;
 use serde_json::Value;
 use sqlx::FromRow;
@@ -130,6 +130,7 @@ impl TryFrom<AgentRow> for ReleaseAgent {
     type Error = ReleaseError;
 
     fn try_from(row: AgentRow) -> Result<Self, Self::Error> {
+        let volume_slots = authored_volume_slots(&row.runtime_contract, row.requires_state)?;
         let policy = row
             .runtime_contract
             .get("policy_ceiling")
@@ -147,6 +148,7 @@ impl TryFrom<AgentRow> for ReleaseAgent {
             display_name: row.display_name,
             policy,
             requires_state: row.requires_state,
+            volume_slots,
             parameter_schema,
             secret_slots,
             update_hook: row.update_hook.map(parse_update_hook).transpose()?,
@@ -154,6 +156,32 @@ impl TryFrom<AgentRow> for ReleaseAgent {
         })
     }
 }
+
+fn authored_volume_slots(
+    contract: &Value,
+    requires_state: bool,
+) -> Result<Vec<VolumeSlotDeclaration>, ReleaseError> {
+    if contract
+        .get("requires_state")
+        .is_some_and(|value| value.as_bool() != Some(requires_state))
+    {
+        return Err(ReleaseError::InvalidStoredData);
+    }
+    let mut authored: Vec<VolumeSlotDeclaration> = contract
+        .get("volume_slots")
+        .map(|value| serde_json::from_value(value.clone()))
+        .transpose()
+        .map_err(|_| ReleaseError::InvalidStoredData)?
+        .unwrap_or_default();
+    release_domain::effective_volume_slots(&authored, requires_state)
+        .map_err(|_| ReleaseError::InvalidStoredData)?;
+    authored.sort_by(|left, right| left.slot().cmp(right.slot()));
+    Ok(authored)
+}
+
+#[cfg(test)]
+#[path = "volume_slot_tests.rs"]
+mod volume_slot_tests;
 
 fn parse_json<T: for<'de> Deserialize<'de>>(value: Value) -> Result<T, ReleaseError> {
     serde_json::from_value(value).map_err(ReleaseError::Serialization)

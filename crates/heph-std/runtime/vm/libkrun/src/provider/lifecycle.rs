@@ -64,17 +64,25 @@ impl LibkrunInstance {
         }
     }
 
-    // The task must own this Arc for the complete event-forwarding lifetime.
-    #[allow(clippy::significant_drop_tightening)]
+    // The instance owns the worker's event sender. Retaining the instance while
+    // waiting for receiver closure would keep both the sender and supervisor
+    // alive forever after destruction. Process/terminal monitors retain live
+    // VMs; upgrade this weak reference only while handling an actual event.
     pub(super) fn spawn_event_forwarder(self: &Arc<Self>) {
-        let instance = Arc::clone(self);
-        let mut events = instance.worker.subscribe_events();
+        let instance = Arc::downgrade(self);
+        let id = self.id.clone();
+        let mut events = self.worker.subscribe_events();
         tokio::spawn(async move {
             loop {
                 match events.recv().await {
-                    Ok(event) => instance.handle_worker_event(event).await,
+                    Ok(event) => {
+                        let Some(instance) = instance.upgrade() else {
+                            break;
+                        };
+                        instance.handle_worker_event(event).await;
+                    }
                     Err(broadcast::error::RecvError::Lagged(count)) => {
-                        warn!(vm_id = %instance.id.0, count, "worker event receiver lagged");
+                        warn!(vm_id = %id.0, count, "worker event receiver lagged");
                     }
                     Err(broadcast::error::RecvError::Closed) => break,
                 }
@@ -287,8 +295,12 @@ impl LibkrunInstance {
         }
         let mut resources = self.resources.lock().await;
         if let Some(owned) = resources.as_ref() {
-            cleanup_runtime(&owned.runtime_dir)?;
-            owned.cgroup.cleanup()?;
+            if let Some(roots) = owned.cleanup_roots.as_ref() {
+                roots.cleanup(&self.config, &self.id)?;
+            } else {
+                cleanup_runtime(&owned.runtime_dir)?;
+                owned.cgroup.cleanup()?;
+            }
             info!(
                 vm_id = %self.id.0,
                 runtime_dir = %owned.runtime_dir.display(),

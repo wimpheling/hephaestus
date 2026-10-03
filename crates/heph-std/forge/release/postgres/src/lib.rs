@@ -48,6 +48,8 @@ use release_domain::{
     ReleaseCommandKey, ReleaseId, RuntimePolicy,
 };
 pub use release_errors::ReleaseServiceError;
+mod instance_execution;
+pub use instance_execution::{InstanceExecutionConfiguration, PostgresInstanceExecutionService};
 use release_revision_persistence::{
     clone_revision_binding, insert_revision, insert_revision_with_binding_ids,
     insert_update_candidate_revision,
@@ -94,6 +96,8 @@ mod release_capability_selection;
 mod release_command_events;
 mod release_errors;
 mod release_instance_import;
+mod release_instance_removal;
+mod release_instance_removal_work;
 mod release_instance_revision;
 mod release_publication;
 mod release_revision_persistence;
@@ -105,6 +109,11 @@ mod release_update_finalization;
 mod release_update_gate;
 mod release_update_preparation;
 mod release_update_recovery;
+mod release_volume_grant_rows;
+mod release_volume_grants;
+mod release_volume_instance_import;
+mod release_volume_instance_inputs;
+mod release_volume_instance_status;
 mod ui_browser;
 mod ui_browser_resources;
 mod ui_installation;

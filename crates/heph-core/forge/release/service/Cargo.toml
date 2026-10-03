@@ -17,6 +17,9 @@ git-capability-domain = { path = "../../git-capability" }
 identity-domain = { path = "../../../auth/identity/domain" }
 release-domain = { path = "../domain" }
 runtime-types = { path = "../../../platform/runtime-types" }
+serde_json.workspace = true
+vm-trait.workspace = true
+volume-domain = { path = "../../../runtime/volume/domain" }
 time.workspace = true
 thiserror.workspace = true
 uuid.workspace = true

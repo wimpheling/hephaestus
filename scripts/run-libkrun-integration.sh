@@ -848,7 +848,13 @@ mkdir -p \
     "${fixture_root}/mounts/repository" \
     "${fixture_root}/mounts/workspace"
 
-materialize_image "${ubuntu_image}" "${fixture_root}/rootfs" fixture
+if [[ "${HEPHAESTUS_APP_SQLITE_PUBLICATION:-0}" == "1" ]]; then
+    materialize_layout_image "${ubuntu_image}" \
+        "${HEPHAESTUS_SQLITE_PYTHON_LAYOUT:?reviewed Python layout required}" \
+        "${fixture_root}/rootfs" fixture
+else
+    materialize_image "${ubuntu_image}" "${fixture_root}/rootfs" fixture
+fi
 prepare_guest_root "${fixture_root}/rootfs"
 if [[ "${HEPHAESTUS_APP_COOKING_BUILD_PROOF:-0}" == "1" ]]; then
     phase_timing_start oci-image-materialization
@@ -958,6 +964,10 @@ if [[ "${HEPHAESTUS_APP_LIBKRUN_E2E:-0}" == "1" ]]; then
     phase_timing_end runtime-worker-build passed
     phase_timing_start golden-tests
     golden_features=()
+    golden_test_args=(--nocapture)
+    if [[ "${HEPHAESTUS_APP_SQLITE_PUBLICATION:-0}" == "1" ]]; then
+        golden_test_args=(sqlite_publication::configured_source_build_and_authenticated_publication --ignored --exact --nocapture)
+    fi
     if [[ "${HEPHAESTUS_APP_GATEWAY_SERVICE_LOG_GUEST_E2E:-0}" == "1" ||
         "${HEPHAESTUS_APP_GATEWAY_SERVICE_LOG_RPC_E2E:-0}" == "1" ]]; then
         golden_features+=(--features test-fixtures)
@@ -988,7 +998,7 @@ if [[ "${HEPHAESTUS_APP_LIBKRUN_E2E:-0}" == "1" ]]; then
         --package hephaestus-app \
         --test golden \
         "${golden_features[@]}" \
-        -- --nocapture
+        -- "${golden_test_args[@]}"
     phase_timing_end golden-tests passed
     if [[ "${HEPHAESTUS_APP_SESSION_CHAT_NEGATIVE_E2E:-0}" == "1" ]]; then
         # Keep the negative proof in a fresh golden process. The canonical
@@ -1096,16 +1106,18 @@ if [[ "${HEPHAESTUS_APP_LIBKRUN_E2E:-0}" == "1" ]]; then
     # Reuse the same disposable authority database and JetStream fixture for
     # the gateway publication persistence, RLS, and recovery proof. Keeping
     # it here makes the joined wrapper one complete operator command.
-    phase_timing_start database-tests
-    run_as_guest_owner env \
-        HEPHAESTUS_POSTGRES_TEST_URL="${postgres_url}" \
-        HEPHAESTUS_NATS_TEST_URL="${nats_url}" \
-        cargo test \
-        --manifest-path "${repo_root}/Cargo.toml" \
-        --package gateway-postgres \
-        --test postgres \
-        -- --nocapture
-    phase_timing_end database-tests passed
+    if [[ "${HEPHAESTUS_APP_SQLITE_PUBLICATION:-0}" != "1" ]]; then
+        phase_timing_start database-tests
+        run_as_guest_owner env \
+            HEPHAESTUS_POSTGRES_TEST_URL="${postgres_url}" \
+            HEPHAESTUS_NATS_TEST_URL="${nats_url}" \
+            cargo test \
+            --manifest-path "${repo_root}/Cargo.toml" \
+            --package gateway-postgres \
+            --test postgres \
+            -- --nocapture
+        phase_timing_end database-tests passed
+    fi
 elif [[ "${HEPHAESTUS_PHASE1B_INTEGRATION:-0}" == "1" ]]; then
     printf 'Running Phase 1B persistence test with pinned image %s\n' "${ubuntu_image}"
     [[ -n "${HEPHAESTUS_POSTGRES_TEST_URL:-}" ]] ||

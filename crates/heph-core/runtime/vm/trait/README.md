@@ -16,6 +16,28 @@ persist useful evidence without treating guest output as authority. Providers
 must honor the spec and cleanup contract; they do not gain permission to read
 secrets or publish repository results merely by running a guest.
 
+Named `VmGuestVolume` entries bind a bounded slot, filesystem UUID, controlled
+guest path, and exact access mode to an existing disk ID. Validation rejects
+aliases, overlapping paths, platform-mount conflicts, and mixed legacy labels.
+These are guest execution contracts; authoritative resource grants, durable
+attachment evidence, and run admission belong to the orchestration layer.
+Typed mount metadata itself grants no authority.
+
+Initialization defaults to `None`, including an explicit slot named `state`.
+`BuiltinStateSQLite` additionally requires the explicit frozen legacy state
+marker and exact `state`, read-write, `/var/lib/hephaestus` shape. The release
+loader must prove that marker; it is not inferred from a command flag. Guests
+repeat these checks before preparing the already mounted filesystem.
+
+`VmProviderOwnerScope` identifies the exact persistent provider namespace and
+configured host. It is separate from volume-root and recipe scopes. Providers
+must bind it to actual root/account ownership; a checked value alone grants no
+cleanup authority. Ownership lookup and scoped orphan cleanup default to
+unsupported, preserving existing provisioning without inventing absence proof.
+Canonical cleanup also requires exclusive supervisor ownership retained through
+clones, live handles, and in-flight IO. Composition supplies one shared run
+operation registry per supervisor; an identity value alone proves no quiescence.
+
 # When
 
 Use this crate when implementing a VM adapter or assembling a run specification

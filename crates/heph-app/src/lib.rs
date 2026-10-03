@@ -2,6 +2,7 @@
 mod application;
 mod event_adapter;
 mod event_cursor;
+pub mod recipe;
 pub mod rpc;
 mod runtime_git_listener;
 mod service_log_maintenance;

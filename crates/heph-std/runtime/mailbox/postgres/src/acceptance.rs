@@ -5,6 +5,9 @@ use crate::{
     AcceptedMailboxEvent, MailboxPersistenceError, PostgresMailboxRepository, errors::storage,
     helpers::validate_payload,
 };
+
+mod ownership;
+
 impl PostgresMailboxRepository {
     /// Accepts one event and its encoded body exactly once per producer key.
     ///
@@ -31,6 +34,10 @@ impl PostgresMailboxRepository {
             .execute(&mut *transaction)
             .await
             .map_err(storage)?;
+        // Acquire the parent before payload/event FK locks. The 0107 admission
+        // trigger deliberately uses NOWAIT to reject inverted child-first
+        // locking; duplicates must wait here, before they own any child writes.
+        ownership::lock(&mut transaction, project_id, event).await?;
         sqlx::query(
             "INSERT INTO mailbox_payloads
                  (id, mailbox_id, project_id, encoded_body, encoded_length,

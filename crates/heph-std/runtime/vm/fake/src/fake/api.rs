@@ -19,6 +19,24 @@ pub struct FakeProvider {
 }
 
 impl FakeProvider {
+    /// Creates an explicitly owned fake provider; clones retain its owner.
+    ///
+    /// Each fresh fake has a different namespace and cannot confirm absence for
+    /// another provider's in-memory resources. This is test support, not durable
+    /// physical host ownership.
+    ///
+    /// # Errors
+    ///
+    /// Rejects an unsafe configured host identifier.
+    pub fn new_owned(host_id: String) -> Result<Self, VmError> {
+        let scope = vm_trait::VmProviderOwnerScope::new(uuid::Uuid::new_v4().to_string(), host_id)?;
+        Ok(Self {
+            inner: Arc::new(ProviderInner {
+                owner: Some(scope),
+                ..ProviderInner::default()
+            }),
+        })
+    }
     /// Creates an empty fake provider.
     #[must_use]
     pub fn new() -> Self {
@@ -48,6 +66,27 @@ impl Default for FakeProvider {
 impl VmProvider for FakeProvider {
     fn name(&self) -> &'static str {
         "fake"
+    }
+
+    fn owner_scope(&self) -> Result<vm_trait::VmProviderOwnerScope, VmError> {
+        self.inner
+            .owner
+            .clone()
+            .ok_or_else(|| VmError::Unsupported {
+                feature: "persistent VM provider ownership".into(),
+                provider: "fake".into(),
+            })
+    }
+
+    async fn cleanup_orphan_scoped(
+        &self,
+        scope: &vm_trait::VmProviderOwnerScope,
+        id: &VmId,
+    ) -> Result<(), VmError> {
+        if self.owner_scope()?.ne(scope) {
+            return Err(VmError::InvalidState("fake VM owner scope differs"));
+        }
+        self.cleanup_orphan(id).await
     }
 
     async fn provision(&self, spec: VmSpec) -> Result<Arc<dyn VmInstance>, VmError> {

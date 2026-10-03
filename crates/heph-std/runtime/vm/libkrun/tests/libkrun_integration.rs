@@ -4,6 +4,10 @@
 mod boot;
 #[path = "libkrun_integration/git_bridge.rs"]
 mod git_bridge;
+#[path = "libkrun_integration/guest_initialization.rs"]
+mod guest_initialization;
+#[path = "libkrun_integration/named_volumes.rs"]
+mod named_volumes;
 #[path = "libkrun_integration/support/mod.rs"]
 mod support;
 

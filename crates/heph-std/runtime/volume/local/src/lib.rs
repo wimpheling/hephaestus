@@ -9,13 +9,23 @@ use std::{
     time::Duration,
 };
 use time::OffsetDateTime;
-use tokio::{fs, process::Command};
+use tokio::fs;
+
+mod owned_journal;
+mod owned_provisioning;
+mod root_owner;
+pub use owned_journal::partial_retention::OwnedPartialBirthCustody;
+pub use owned_provisioning::OwnedVolumeMetadata;
+pub use owned_provisioning::partial_retention::PartialBirthCustodyError;
+pub use root_owner::VolumeRootOwner;
+mod provisioning;
+mod run_volumes;
 use volume_trait::{
     INSTANCE_STATE_DISK_ID, Volume, VolumeAttachment, VolumeError, VolumeLease,
     VolumeMetadataRepository, VolumeStore,
 };
 
-const MINIMUM_CAPACITY_BYTES: u64 = 16 * 1024 * 1024;
+const MINIMUM_CAPACITY_BYTES: u64 = volume_trait::MIN_LOCAL_VOLUME_CAPACITY_BYTES;
 
 /// Configuration for [`LocalVolumeStore`].
 #[derive(Debug, Clone)]
@@ -36,7 +46,9 @@ pub struct LocalVolumeConfig {
 #[derive(Clone)]
 pub struct LocalVolumeStore {
     metadata: Arc<dyn VolumeMetadataRepository>,
+    run_metadata: Option<Arc<dyn volume_trait::RunVolumeMetadataRepository>>,
     config: LocalVolumeConfig,
+    owned_metadata: Option<OwnedVolumeMetadata>,
 }
 
 impl LocalVolumeStore {
@@ -67,7 +79,25 @@ impl LocalVolumeStore {
         if config.lease_duration.is_zero() {
             return Err(invalid_backing("lease_duration must be greater than zero"));
         }
-        Ok(Self { metadata, config })
+        Ok(Self {
+            metadata,
+            run_metadata: None,
+            owned_metadata: None,
+            config,
+        })
+    }
+
+    /// Explicitly composes exact-run metadata over the same canonical resources.
+    ///
+    /// This extension remains unused by legacy startup. Missing composition
+    /// rejects exact-run operations before lease or backing effects.
+    #[must_use]
+    pub fn with_run_metadata(
+        mut self,
+        metadata: Arc<dyn volume_trait::RunVolumeMetadataRepository>,
+    ) -> Self {
+        self.run_metadata = Some(metadata);
+        self
     }
 
     /// Creates the configured backing root. Database migrations belong to the
@@ -87,56 +117,6 @@ impl LocalVolumeStore {
             return Err(invalid_backing("volume_root must be canonical"));
         }
         Ok(())
-    }
-
-    async fn initialize_backing(&self, volume: &Volume) -> Result<(), VolumeError> {
-        let path = &volume.host_path;
-        ensure_direct_child(&self.config.volume_root, path)?;
-        match fs::symlink_metadata(path).await {
-            Ok(metadata) => {
-                if !metadata.file_type().is_file() || metadata.file_type().is_symlink() {
-                    return Err(invalid_backing("volume backing path is not a regular file"));
-                }
-                let file = fs::OpenOptions::new()
-                    .write(true)
-                    .open(path)
-                    .await
-                    .map_err(backing)?;
-                file.set_len(volume.capacity_bytes).await.map_err(backing)?;
-                file.sync_all().await.map_err(backing)?;
-            }
-            Err(error) if error.kind() == io::ErrorKind::NotFound => {
-                let file = fs::OpenOptions::new()
-                    .create_new(true)
-                    .write(true)
-                    .open(path)
-                    .await
-                    .map_err(backing)?;
-                file.set_len(volume.capacity_bytes).await.map_err(backing)?;
-                file.sync_all().await.map_err(backing)?;
-            }
-            Err(error) => return Err(backing(error)),
-        }
-        let status = Command::new(&self.config.mkfs_ext4)
-            .arg("-q")
-            .arg("-F")
-            .arg("-U")
-            .arg(volume.filesystem_uuid.to_string())
-            .arg(path)
-            .status()
-            .await
-            .map_err(backing)?;
-        if !status.success() {
-            return Err(invalid_backing(format!("mkfs.ext4 exited with {status}")));
-        }
-        fs::OpenOptions::new()
-            .read(true)
-            .open(path)
-            .await
-            .map_err(backing)?
-            .sync_all()
-            .await
-            .map_err(backing)
     }
 
     fn expiry(&self, now: OffsetDateTime) -> Result<OffsetDateTime, VolumeError> {
@@ -172,8 +152,7 @@ impl VolumeStore for LocalVolumeStore {
             )
             .await?;
         if matches!(volume.state, volume_trait::VolumeState::Uninitialized) {
-            self.initialize_backing(&volume).await?;
-            self.metadata.mark_ready(volume.id).await?;
+            return self.provision(volume.id).await;
         }
         self.metadata.volume(volume.id).await
     }

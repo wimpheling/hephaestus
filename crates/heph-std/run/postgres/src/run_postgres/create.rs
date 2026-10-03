@@ -12,6 +12,7 @@ impl PgRunRepository {
         &self,
         command: &StartRun,
     ) -> Result<CreateRunResult, RepositoryError> {
+        require_supported_kind(command.kind)?;
         let mut transaction = self.pool.begin().await.map_err(storage)?;
         let payload = serde_json::to_value(command).map_err(storage)?;
         let inbox = sqlx::query(
@@ -110,5 +111,14 @@ impl PgRunRepository {
             run: self.load_run(command.run_id).await?,
             created: true,
         })
+    }
+}
+
+const fn require_supported_kind(kind: run_domain::RunKind) -> Result<(), RepositoryError> {
+    match kind {
+        run_domain::RunKind::Normal | run_domain::RunKind::Update => Ok(()),
+        run_domain::RunKind::Invocation => Err(RepositoryError::InvalidData(
+            "Invocation creation is unsupported",
+        )),
     }
 }

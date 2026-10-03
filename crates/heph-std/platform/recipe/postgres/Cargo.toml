@@ -1,0 +1,39 @@
+[package]
+name = "recipe-postgres"
+description = "PostgreSQL resource recipe deployment admission ledger"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+async-trait.workspace = true
+agent-config = { path = "../../../../heph-core/platform/agent-config" }
+authz-domain = { path = "../../../../heph-core/auth/authorization/authz-domain" }
+authz-postgres = { path = "../../../authorization/authz-postgres" }
+capability-domain = { path = "../../../../heph-core/auth/authorization/capability-domain" }
+event-application = { path = "../../../../heph-core/platform/event/application" }
+forge-domain = { path = "../../../../heph-core/forge/domain" }
+identity-domain = { path = "../../../../heph-core/auth/identity/domain" }
+recipe-application = { path = "../../../../heph-core/platform/recipe/application" }
+recipe-domain = { path = "../../../../heph-core/platform/recipe/domain" }
+release-domain = { path = "../../../../heph-core/forge/release/domain" }
+runtime-types = { path = "../../../../heph-core/platform/runtime-types" }
+serde.workspace = true
+serde_json.workspace = true
+sha2.workspace = true
+sqlx.workspace = true
+uuid.workspace = true
+volume-domain = { path = "../../../../heph-core/runtime/volume/domain" }
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }
+
+[lints]
+workspace = true
+
+[package.metadata.hephaestus]
+layer = "adapter"
+context = "recipe"
+allow_cross_context_dependencies = ["authz-postgres"]
+postgres_adapter = true
+database_context = "recipe"

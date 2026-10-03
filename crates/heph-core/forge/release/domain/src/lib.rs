@@ -8,6 +8,9 @@
 pub use runtime_types::{
     AgentAttachmentId, AgentInstanceId, AgentInstanceRevisionId, ReleaseAgentId, ReleaseId,
 };
+pub use volume_domain::{
+    GuestMountPath, VolumeAccessMode, VolumeSlotDeclaration, effective_volume_slots,
+};
 
 pub mod ui;
 pub mod ui_browser;
@@ -22,10 +25,12 @@ mod errors;
 pub use errors::ReleaseValueError;
 
 mod identifiers;
+mod volume_lifecycle;
 pub use identifiers::{
-    AgentFamilyId, AgentUpdateId, BuildRequestId, DeferredTriggerId, ReleaseArtifactId,
-    UiInstallationGenerationId, UiInstallationId,
+    AgentFamilyId, AgentUpdateId, BuildRequestId, DeferredTriggerId, InstanceRemovalId,
+    ReleaseArtifactId, UiInstallationGenerationId, UiInstallationId,
 };
+pub use volume_lifecycle::InstanceVolumeMode;
 
 mod value_objects;
 pub use value_objects::{
@@ -61,3 +66,5 @@ pub use validation::{validate_attachment_project, validate_update_family};
 
 #[cfg(test)]
 mod tests;
+#[cfg(test)]
+mod volume_slot_tests;

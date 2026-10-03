@@ -20,6 +20,8 @@ sqlx.workspace = true
 time.workspace = true
 tracing.workspace = true
 uuid.workspace = true
+runtime-types = { path = "../../../heph-core/platform/runtime-types" }
+volume-domain = { path = "../../../heph-core/runtime/volume/domain" }
 
 [dev-dependencies]
 serial_test = "3"

@@ -2,6 +2,9 @@
 #[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
 #[non_exhaustive]
 pub enum RuntimeAuthorityError {
+    /// The requested live profile or its positive provenance is unavailable.
+    #[error("runtime live authority profile is unsupported")]
+    Unsupported,
     /// Durable storage was unavailable or rejected the operation.
     #[error("runtime authority persistence failed")]
     Persistence,

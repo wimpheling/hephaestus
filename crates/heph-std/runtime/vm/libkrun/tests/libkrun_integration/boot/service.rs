@@ -24,7 +24,6 @@ pub async fn run(context: &BootContext) {
     let rootfs = context.rootfs.clone();
     let runtime_root = context.runtime_root.clone();
     let cgroup_root_for_assertion = context.cgroup_root.clone();
-    let provider = &context.provider;
     let service_spec = private_service_spec(
         rootfs.clone(),
         format!("integration-private-service-{}", std::process::id()),
@@ -36,7 +35,8 @@ pub async fn run(context: &BootContext) {
             .labels
             .contains_key("hephaestus.gateway.handler-contract")
     );
-    let service = provider
+    let service = context
+        .provider
         .provision(service_spec)
         .await
         .expect("provision persistent private service VM");
@@ -147,7 +147,8 @@ pub async fn run(context: &BootContext) {
         .expect("worker service declaration"),
         spec: worker_spec,
     };
-    let worker_vm = provider
+    let worker_vm = context
+        .provider
         .provision(worker_launch.spec.clone())
         .await
         .expect("provision prepared service worker VM");
@@ -238,7 +239,8 @@ pub async fn run(context: &BootContext) {
             format!("gateway-service-{}", replacement_identity.instance_id),
         ),
     };
-    let replacement_vm = provider
+    let replacement_vm = context
+        .provider
         .provision(replacement_launch.spec.clone())
         .await
         .expect("provision replacement service worker VM");

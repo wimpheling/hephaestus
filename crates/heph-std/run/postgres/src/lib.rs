@@ -8,6 +8,7 @@ mod errors;
 mod model;
 #[path = "run_postgres/operations.rs"]
 mod operations;
+mod parent_transition;
 #[path = "run_postgres/provenance.rs"]
 mod provenance;
 #[path = "run_postgres/repository.rs"]

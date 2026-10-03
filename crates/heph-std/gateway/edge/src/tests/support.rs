@@ -313,6 +313,7 @@ impl GatewayVmLauncher for FakeGatewayLauncher {
 
 pub(super) fn gateway_vm_spec(route: &GatewayRouteBinding) -> VmSpec {
     VmSpec {
+        guest_volumes: Vec::new(),
         id: vm_trait::VmId(format!("gateway-{}", route.route_id)),
         root: RootFilesystem::Directory {
             host_path: "/gateway/release-root".into(),
@@ -336,15 +337,11 @@ pub(super) fn gateway_vm_spec(route: &GatewayRouteBinding) -> VmSpec {
         labels: BTreeMap::new(),
     }
 }
-#[cfg(test)]
 #[path = "caddy.rs"]
 mod caddy;
-#[cfg(test)]
 #[path = "dispatch.rs"]
 mod dispatch;
-#[cfg(test)]
 #[path = "dispatch_timeout.rs"]
 mod dispatch_timeout;
-#[cfg(test)]
 #[path = "ui.rs"]
 mod ui;

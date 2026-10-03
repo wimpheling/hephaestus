@@ -1,11 +1,59 @@
 //! Provider-neutral contracts for persistent agent volumes.
 
 use async_trait::async_trait;
-use runtime_types::{AgentInstanceId, LeaseId, RunId, VolumeId};
+use runtime_types::{AgentInstanceId, RunId, VolumeId};
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 use time::OffsetDateTime;
 use uuid::Uuid;
+
+mod creation;
+mod leases;
+mod mount_grants;
+mod owned_provisioning;
+mod partial_retention;
+mod ready_retention;
+mod resources;
+mod root_history;
+mod run_volumes;
+mod store;
+pub use creation::{
+    OwnedVolumeRegistration, OwnedVolumeRegistrationReceipt, VolumeCreationIdentity,
+    VolumeCreationIdentityError, VolumeCreationIdentityWire, VolumeCreationLineage,
+    VolumeCreationOperationId, VolumeCreationSealId, VolumeOwnedRegistrationRepository,
+    VolumeOwnershipScopeId,
+};
+pub use leases::{ScalarLeaseHistory, VolumeAttachment, VolumeLease};
+pub use mount_grants::{VolumeMountGrant, VolumeMountGrantRepository, VolumeMountRevocation};
+pub use owned_provisioning::{
+    BeginOwnedProvisioning, OwnedBackingObservation, OwnedBackingObservationWire,
+    OwnedBackingPhase, OwnedBackingPurpose, OwnedFilesystemBirth, OwnedProvisioningClaim,
+    OwnedProvisioningContext, OwnedProvisioningDiscovery, OwnedProvisioningExpectation,
+    VolumeOwnedProvisioningRepository, VolumeRootNamespaceId,
+};
+pub use partial_retention::{
+    OwnedPartialRetentionContext, OwnedPartialRetentionReceipt, PartialRetentionObservationHead,
+    VolumePartialRetentionRepository,
+};
+pub use ready_retention::{
+    OwnedReadyRetentionClosure, OwnedReadyRetentionClosureWire, OwnedReadyRetentionContext,
+    OwnedReadyRetentionFact, VolumeReadyRetentionRepository,
+};
+pub use resources::{
+    MAX_REGISTERED_VOLUME_CAPACITY_BYTES, MIN_LOCAL_VOLUME_CAPACITY_BYTES, ProvisioningClaim,
+    VolumeInspection, VolumeProvisioningState, VolumeRegistration, VolumeResourceRepository,
+};
+pub use root_history::{
+    OwnedVolumeRootHistory, OwnedVolumeRootHistoryConflict, VolumeRootHistoryRepository,
+};
+pub use run_volumes::{
+    RunVolumeAttachment, RunVolumeLease, RunVolumeMetadataRepository, RunVolumeStore,
+};
+pub use store::VolumeStore;
+pub use volume_domain::{
+    OwnedPartialBirthObservation, OwnedPartialBirthObservationWire, OwnedPartialBirthPhase,
+    OwnedPartialRetentionReceiptId, PartialRetentionContractError,
+};
 
 /// Stable block-device identifier used for the agent state disk.
 pub const INSTANCE_STATE_DISK_ID: &str = "instance-state";
@@ -14,6 +62,8 @@ pub const INSTANCE_STATE_DISK_ID: &str = "instance-state";
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[non_exhaustive]
 pub enum VolumeKind {
+    /// Standalone project-owned private filesystem.
+    Private,
     /// Per-agent `SQLite` state.
     InstanceState,
 }
@@ -40,8 +90,10 @@ pub enum VolumeState {
 pub struct Volume {
     /// Stable volume identifier.
     pub id: VolumeId,
-    /// Agent that owns the volume.
-    pub instance_id: AgentInstanceId,
+    /// Stable owning project. Provider access never implies project authority.
+    pub project_id: Uuid,
+    /// Optional historical origin; a consuming instance is recorded by its lease.
+    pub instance_id: Option<AgentInstanceId>,
     /// Purpose of the volume.
     pub kind: VolumeKind,
     /// Host that owns the local backing file.
@@ -54,6 +106,10 @@ pub struct Volume {
     pub filesystem_uuid: Uuid,
     /// Current durable state.
     pub state: VolumeState,
+    /// Provisioning progress, separate from attachment and lease recovery.
+    pub provisioning_state: VolumeProvisioningState,
+    /// Monotonic fence for provisioning metadata transitions.
+    pub provisioning_generation: i64,
     /// External encryption-key reference, when encryption is introduced.
     pub key_reference: Option<String>,
     /// Encryption metadata format version.
@@ -66,40 +122,6 @@ pub struct Volume {
     pub last_successful_backup_at: Option<OffsetDateTime>,
 }
 
-/// Exclusive writable claim held by one run.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct VolumeLease {
-    /// Stable lease identifier.
-    pub id: LeaseId,
-    /// Leased volume.
-    pub volume_id: VolumeId,
-    /// Run holding the lease.
-    pub run_id: RunId,
-    /// Host on which the volume may be attached.
-    pub host_id: String,
-    /// Monotonic fencing generation for the volume.
-    pub fencing_token: i64,
-    /// Time at which the lease was acquired.
-    pub acquired_at: OffsetDateTime,
-    /// Most recent supervisor heartbeat.
-    pub heartbeat_at: OffsetDateTime,
-    /// Time after which the lease is eligible for supervised recovery.
-    pub expires_at: OffsetDateTime,
-    /// Time at which VM attachment was confirmed.
-    pub attached_at: Option<OffsetDateTime>,
-}
-
-/// Information needed to attach a leased volume to a VM.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct VolumeAttachment {
-    /// Persistent volume metadata.
-    pub volume: Volume,
-    /// Lease authorizing this writable attachment.
-    pub lease: VolumeLease,
-    /// Stable `VmDisk` identifier.
-    pub disk_id: &'static str,
-}
-
 /// Provider-neutral durable metadata boundary for local volume effects.
 ///
 /// Implementations own rows, leases, transactions, optimistic fencing, and
@@ -107,6 +129,27 @@ pub struct VolumeAttachment {
 /// filesystem formatting.
 #[async_trait]
 pub trait VolumeMetadataRepository: Send + Sync + 'static {
+    /// Reserves immutable provider handles once for an existing resource.
+    async fn reserve_provider(
+        &self,
+        volume_id: VolumeId,
+        host_id: &str,
+        root: &std::path::Path,
+    ) -> Result<Volume, VolumeError>;
+
+    /// Claims a new metadata generation while the caller holds its host file lock.
+    async fn claim_provisioning(
+        &self,
+        volume_id: VolumeId,
+    ) -> Result<ProvisioningClaim, VolumeError>;
+
+    /// Records progress using the exact provisioning generation.
+    async fn provisioning_progress(
+        &self,
+        claim: &ProvisioningClaim,
+        state: VolumeProvisioningState,
+    ) -> Result<(), VolumeError>;
+
     /// Reserves or returns one instance-state volume metadata row.
     async fn resolve_instance_state(
         &self,
@@ -117,7 +160,10 @@ pub trait VolumeMetadataRepository: Send + Sync + 'static {
         filesystem_uuid: Uuid,
     ) -> Result<Volume, VolumeError>;
 
-    /// Marks a successfully formatted backing file ready for use.
+    /// Verifies already proven readiness for compatibility callers.
+    ///
+    /// New provisioning uses its fenced progress API. This operation must not
+    /// change an attached or recovering lifecycle, even after format completion.
     async fn mark_ready(&self, volume_id: VolumeId) -> Result<(), VolumeError>;
 
     /// Reads one durable volume row.
@@ -149,6 +195,20 @@ pub trait VolumeMetadataRepository: Send + Sync + 'static {
         expires_at: OffsetDateTime,
     ) -> Result<VolumeLease, VolumeError>;
 
+    /// Observes global original scalar history; absence is never host-filtered.
+    ///
+    /// # Errors
+    ///
+    /// Unsupported adapters and contradictory or multiple history fail closed.
+    async fn scalar_lease_history(
+        &self,
+        _run_id: RunId,
+    ) -> Result<ScalarLeaseHistory, VolumeError> {
+        Err(VolumeError::InvalidState(
+            "global scalar history is unsupported",
+        ))
+    }
+
     /// Returns the active lease held by one run.
     async fn active_lease_for_run(
         &self,
@@ -174,6 +234,15 @@ pub trait VolumeMetadataRepository: Send + Sync + 'static {
 #[derive(Debug, thiserror::Error)]
 #[non_exhaustive]
 pub enum VolumeError {
+    /// The authenticated actor lacks exact authority; existence is not disclosed.
+    #[error("volume permission denied")]
+    PermissionDenied,
+    /// An immutable registration or provider reservation differs from its retry.
+    #[error("volume intent conflicts with its existing reservation")]
+    IntentConflict,
+    /// Existing backing bytes require supervised reconciliation.
+    #[error("volume provisioning is uncertain: {0}")]
+    ProvisioningUncertain(&'static str),
     /// The requested volume does not exist.
     #[error("volume {0} was not found")]
     NotFound(VolumeId),
@@ -205,87 +274,4 @@ pub enum VolumeError {
     /// Local backing storage access failed.
     #[error("volume backing operation failed: {0}")]
     Backing(#[source] Box<dyn std::error::Error + Send + Sync>),
-}
-
-/// Persistent volume operations used by the run orchestrator.
-#[async_trait]
-pub trait VolumeStore: Send + Sync + 'static {
-    /// Creates or resolves the single instance-state volume for `instance_id`.
-    ///
-    /// The returned backing file is formatted by the host before the volume
-    /// enters [`VolumeState::Ready`].
-    ///
-    /// # Errors
-    ///
-    /// Returns an error when metadata or backing-file creation fails.
-    async fn resolve_instance_state(
-        &self,
-        instance_id: AgentInstanceId,
-        capacity_bytes: u64,
-    ) -> Result<Volume, VolumeError>;
-
-    /// Acquires the exclusive writable lease for a run.
-    ///
-    /// # Errors
-    ///
-    /// Returns [`VolumeError::LeaseConflict`] while another run holds the
-    /// active lease.
-    async fn acquire(
-        &self,
-        volume_id: VolumeId,
-        run_id: RunId,
-    ) -> Result<VolumeAttachment, VolumeError>;
-
-    /// Records that the VM successfully attached the leased disk.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error if the supplied lease is no longer current.
-    async fn mark_attached(&self, lease: &VolumeLease) -> Result<VolumeLease, VolumeError>;
-
-    /// Extends a live lease heartbeat.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error if the supplied lease is no longer current.
-    async fn heartbeat(&self, lease: &VolumeLease) -> Result<VolumeLease, VolumeError>;
-
-    /// Returns the active lease held by `run_id`, when one exists.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error when durable metadata cannot be read.
-    async fn active_lease_for_run(&self, run_id: RunId)
-    -> Result<Option<VolumeLease>, VolumeError>;
-
-    /// Releases a lease after VM destruction confirmed disk detachment.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error if the supplied lease is no longer current.
-    async fn release_after_detach(&self, lease: &VolumeLease) -> Result<(), VolumeError>;
-
-    /// Returns expired leases that require supervised recovery.
-    ///
-    /// Expiry is only a signal to begin recovery; it never permits immediate
-    /// writable reuse.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error when durable metadata cannot be read.
-    async fn stale_leases(&self, now: OffsetDateTime) -> Result<Vec<VolumeLease>, VolumeError>;
-
-    /// Fences an expired lease before provider cleanup begins.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error if the supplied lease is no longer current.
-    async fn begin_recovery(&self, lease: &VolumeLease) -> Result<(), VolumeError>;
-
-    /// Releases a fenced lease after provider cleanup confirms detachment.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error if the supplied lease is no longer current.
-    async fn finish_recovery(&self, lease: &VolumeLease) -> Result<(), VolumeError>;
 }

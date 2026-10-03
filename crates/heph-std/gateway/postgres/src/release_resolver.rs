@@ -148,6 +148,7 @@ impl GatewayReleaseResolver for PostgresGatewayReleaseResolver {
             .open(session_id, generation, OffsetDateTime::now_utc())
             .map_err(|_| GatewayEdgeError::HandlerUnavailable)?;
         Ok(VmSpec {
+            guest_volumes: Vec::new(),
             id: VmId(format!("gateway-{invocation_id}")),
             root,
             disks: Vec::new(),

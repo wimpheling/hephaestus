@@ -1,7 +1,7 @@
 import {AxeBuilder} from "@axe-core/playwright";
 import {expect, test} from "@playwright/test";
 import {execFileSync} from "node:child_process";
-import {randomUUID} from "node:crypto";
+import {createHash, randomUUID} from "node:crypto";
 import {mkdtempSync, rmSync, writeFileSync, mkdirSync} from "node:fs";
 import {tmpdir} from "node:os";
 import path from "node:path";
@@ -714,9 +714,72 @@ async function waitForUpdateState(instanceId: string, expectedState: string) {
         {timeout: 30_000}
       )
       .toBe(expectedState);
+  } catch (error) {
+    // Whitelisted lifecycle facts correlate the failed poll without exposing
+    // request payloads, secrets, or raw provider failure text.
+    try {
+      await logUpdateStateFailure(client, instanceId, expectedState);
+    } catch {
+      console.error("Update-state failure diagnostics unavailable.");
+    }
+    throw error;
   } finally {
     await client.end();
   }
+}
+
+async function logUpdateStateFailure(
+  client: pg.Client,
+  instanceId: string,
+  expectedState: string
+) {
+  const result = await client.query(
+    `SELECT update.id AS update_id, update.state AS update_state,
+            update.hook_run_id,
+            hook.state AS hook_run_state, hook.outcome AS hook_run_outcome,
+            hook.exit_code AS hook_run_exit_code,
+            hook.exit_signal AS hook_run_exit_signal,
+            hook.cancel_requested_at AS hook_run_cancel_requested_at,
+            hook.state_version AS hook_run_state_version,
+            current_run.id AS current_run_id,
+            current_run.state AS current_run_state,
+            current_run.outcome AS current_run_outcome,
+            current_run.exit_code AS current_run_exit_code,
+            current_run.exit_signal AS current_run_exit_signal,
+            current_run.cancel_requested_at AS current_run_cancel_requested_at,
+            current_run.state_version AS current_run_state_version,
+            hook.command_id AS hook_command_id,
+            inbox.received_at AS hook_command_received_at,
+            inbox.processed_at AS hook_command_processed_at,
+            publication.attempts AS hook_command_publication_attempts,
+            publication.published_at AS hook_command_published_at
+       FROM agent_updates update
+       LEFT JOIN runs hook ON hook.id = update.hook_run_id
+       LEFT JOIN command_inbox inbox ON inbox.command_id = hook.command_id
+       LEFT JOIN LATERAL (
+         SELECT run.id, run.state, run.outcome, run.exit_code, run.exit_signal,
+                run.cancel_requested_at, run.state_version
+           FROM runs run
+          WHERE run.instance_id = update.instance_id AND run.run_kind = 'normal'
+          ORDER BY run.created_at DESC, run.id DESC
+          LIMIT 1
+       ) current_run ON true
+       LEFT JOIN LATERAL (
+         SELECT event.attempts, event.published_at
+           FROM outbox event
+          WHERE event.aggregate_id = hook.id AND event.event_type = 'run.start.v1'
+          ORDER BY event.occurred_at DESC, event.id DESC
+          LIMIT 1
+       ) publication ON true
+      WHERE update.instance_id = $1
+      ORDER BY update.created_at DESC, update.id DESC
+      LIMIT 1`,
+    [instanceId]
+  );
+  // Publication attempts are persisted outbox facts, not NATS redelivery counts.
+  console.error("Update-state failure diagnostics:", JSON.stringify({
+    instanceId, expectedState, lifecycle: result.rows[0] ?? null
+  }));
 }
 
 async function seedGateway(
@@ -792,6 +855,9 @@ async function verifiableBuildId() {
 
 async function seedFailedBuild(fixture: Awaited<ReturnType<typeof loadFixture>>) {
   const buildId = randomUUID();
+  // Serial-suite retries keep the database. Isolate the full natural key as
+  // well as the row UUID while retaining an actual failed build execution.
+  const buildDefinitionHash = createHash("sha256").update(buildId).digest();
   const client = new pg.Client({connectionString: databaseUrl});
   await client.connect();
   await client.query(
@@ -802,7 +868,7 @@ async function seedFailedBuild(fixture: Awaited<ReturnType<typeof loadFixture>>)
      VALUES ($1, $2, $3, 'refs/heads/main', $4, 'failed', 'manual',
              'browser-reviewer', '{}'::jsonb, '{}'::jsonb, '[]'::jsonb,
              now() - interval '1 second', now())`,
-    [buildId, fixture.repositoryId, fixture.sourceCommit, Buffer.alloc(32, 17)]
+    [buildId, fixture.repositoryId, fixture.sourceCommit, buildDefinitionHash]
   );
   await client.query(
     `INSERT INTO build_executions

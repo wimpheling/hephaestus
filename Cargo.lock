@@ -51,12 +51,14 @@ dependencies = [
  "forge-domain",
  "gateway-domain",
  "git-capability-domain",
+ "recipe-domain",
  "release-domain",
  "serde",
  "serde_json",
  "sha2",
  "toml",
  "uuid",
+ "volume-domain",
 ]
 
 [[package]]
@@ -2502,6 +2504,7 @@ dependencies = [
  "pat-domain",
  "pat-postgres",
  "rcgen",
+ "recipe-application",
  "registry-domain",
  "registry-http",
  "registry-notification",
@@ -2559,8 +2562,10 @@ dependencies = [
  "uuid",
  "vm-fake",
  "vm-libkrun",
+ "volume-domain",
  "volume-local",
  "volume-postgres",
+ "volume-trait",
  "workspace-local",
  "workspace-postgres",
  "zeroize",
@@ -3824,6 +3829,66 @@ dependencies = [
 ]
 
 [[package]]
+name = "recipe-application"
+version = "0.1.0"
+dependencies = [
+ "async-trait",
+ "builder-catalog-domain",
+ "capability-domain",
+ "event-application",
+ "forge-domain",
+ "identity-domain",
+ "recipe-domain",
+ "release-domain",
+ "runtime-types",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.19",
+ "uuid",
+ "volume-domain",
+]
+
+[[package]]
+name = "recipe-domain"
+version = "0.1.0"
+dependencies = [
+ "capability-domain",
+ "release-domain",
+ "runtime-types",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.19",
+ "toml",
+ "uuid",
+ "volume-domain",
+]
+
+[[package]]
+name = "recipe-postgres"
+version = "0.1.0"
+dependencies = [
+ "agent-config",
+ "async-trait",
+ "authz-domain",
+ "authz-postgres",
+ "capability-domain",
+ "event-application",
+ "forge-domain",
+ "identity-domain",
+ "recipe-application",
+ "recipe-domain",
+ "release-domain",
+ "runtime-types",
+ "serde",
+ "serde_json",
+ "sha2",
+ "sqlx",
+ "tokio",
+ "uuid",
+ "volume-domain",
+]
+
+[[package]]
 name = "redox_syscall"
 version = "0.5.18"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -4043,6 +4108,7 @@ dependencies = [
  "thiserror 2.0.19",
  "time",
  "uuid",
+ "volume-domain",
 ]
 
 [[package]]
@@ -4068,6 +4134,7 @@ dependencies = [
  "release-domain",
  "release-service",
  "run-domain",
+ "runtime-authority-postgres",
  "runtime-types",
  "secret-application",
  "secret-domain",
@@ -4083,6 +4150,9 @@ dependencies = [
  "toml",
  "tracing",
  "uuid",
+ "vm-trait",
+ "volume-domain",
+ "volume-trait",
 ]
 
 [[package]]
@@ -4097,9 +4167,12 @@ dependencies = [
  "identity-domain",
  "release-domain",
  "runtime-types",
+ "serde_json",
  "thiserror 2.0.19",
  "time",
  "uuid",
+ "vm-trait",
+ "volume-domain",
 ]
 
 [[package]]
@@ -4272,7 +4345,10 @@ version = "0.1.0"
 dependencies = [
  "runtime-types",
  "serde",
+ "sha2",
+ "thiserror 2.0.19",
  "time",
+ "uuid",
  "vm-trait",
 ]
 
@@ -4281,10 +4357,12 @@ name = "run-nats"
 version = "0.1.0"
 dependencies = [
  "async-nats",
+ "async-trait",
  "futures-util",
  "review-domain",
  "run-domain",
  "run-orchestrator",
+ "runtime-types",
  "serde_json",
  "thiserror 2.0.19",
  "tokio",
@@ -4306,6 +4384,7 @@ dependencies = [
  "tracing",
  "uuid",
  "vm-trait",
+ "volume-domain",
  "volume-trait",
  "workspace-domain",
 ]
@@ -4374,12 +4453,14 @@ dependencies = [
  "capability-domain",
  "run-domain",
  "runtime-authority",
+ "runtime-types",
  "serial_test",
  "sqlx",
  "time",
  "tokio",
  "tracing",
  "uuid",
+ "volume-domain",
 ]
 
 [[package]]
@@ -5839,6 +5920,7 @@ dependencies = [
  "http",
  "tempfile",
  "tokio",
+ "uuid",
  "vm-conformance",
  "vm-trait",
 ]
@@ -5883,9 +5965,25 @@ version = "0.1.0"
 dependencies = [
  "async-trait",
  "bytes",
+ "capability-domain",
  "http",
+ "serde",
+ "serde_json",
  "thiserror 2.0.19",
  "tokio",
+ "uuid",
+ "volume-domain",
+]
+
+[[package]]
+name = "volume-domain"
+version = "0.1.0"
+dependencies = [
+ "capability-domain",
+ "runtime-types",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.19",
  "uuid",
 ]
 
@@ -5894,12 +5992,16 @@ name = "volume-local"
 version = "0.1.0"
 dependencies = [
  "async-trait",
+ "identity-domain",
  "runtime-types",
+ "rustix",
+ "sha2",
  "tempfile",
  "time",
  "tokio",
  "tracing",
  "uuid",
+ "volume-domain",
  "volume-trait",
 ]
 
@@ -5908,13 +6010,18 @@ name = "volume-postgres"
 version = "0.1.0"
 dependencies = [
  "async-trait",
+ "authz-domain",
+ "authz-postgres",
+ "identity-domain",
  "runtime-types",
+ "serde_json",
  "serial_test",
  "sqlx",
  "tempfile",
  "time",
  "tokio",
  "uuid",
+ "volume-local",
  "volume-trait",
 ]
 
@@ -5923,11 +6030,15 @@ name = "volume-trait"
 version = "0.1.0"
 dependencies = [
  "async-trait",
+ "identity-domain",
  "runtime-types",
  "serde",
+ "serde_json",
+ "sha2",
  "thiserror 2.0.19",
  "time",
  "uuid",
+ "volume-domain",
 ]
 
 [[package]]

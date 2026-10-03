@@ -3,6 +3,7 @@ use super::{
     validation_images::validate_image_selection,
     validation_shared::{diagnostic, validate_absolute_path},
     validation_v2::validate_v2,
+    validation_volumes::validate_volume_slots,
 };
 use crate::{AgentConfig, Diagnostic, PublicationMode, REUSABLE_RELEASE_VERSION};
 use capability_domain::CapabilityResourceKind;
@@ -34,6 +35,7 @@ pub fn validate(config: &AgentConfig) -> Vec<Diagnostic> {
         );
     }
     validate_v2(config, &mut diagnostics);
+    validate_volume_slots(config, &mut diagnostics);
     if !(1..=64).contains(&config.resources.vcpus) {
         diagnostic(
             &mut diagnostics,

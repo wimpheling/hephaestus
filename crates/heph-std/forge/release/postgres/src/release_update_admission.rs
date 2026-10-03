@@ -62,6 +62,22 @@ impl ReleaseService {
             ObjectRef::new(ObjectType::AgentInstance, update.instance_id),
         )
         .await?;
+        self.require(
+            &mut tx,
+            identity,
+            Permission::CanUse,
+            ObjectRef::new(ObjectType::ReleaseAgent, update.release_agent_id),
+        )
+        .await?;
+        let contract: serde_json::Value =
+            sqlx::query_scalar("SELECT runtime_contract FROM release_agents WHERE id = $1")
+                .bind(update.release_agent_id)
+                .fetch_one(&mut *tx)
+                .await?;
+        super::release_build::runtime_contract::require_legacy_import(
+            &contract,
+            update.requires_state,
+        )?;
         if existing_command(&mut tx, command.command_key, "begin_update_hook")
             .await?
             .is_some()

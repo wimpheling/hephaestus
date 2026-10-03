@@ -1,4 +1,4 @@
-use run_domain::Run;
+use run_domain::{Run, RunKind};
 use runtime_types::RunId;
 use serde_json::json;
 use std::{sync::Arc, time::Duration};
@@ -22,7 +22,18 @@ impl RunOrchestrator {
         workspace_mounts: Vec<vm_trait::VmMount>,
     ) -> Result<VmSpec, VmError> {
         let mut spec = self.spec_factory.build(run).await?;
-        spec.id = VmId(run.id.to_string());
+        if self.canonical_cleanup.is_some() || self.legacy_scope.is_some() {
+            let expected = run.vm_id.as_ref().ok_or(VmError::InvalidState(
+                "run lacks its durable planned VM identity",
+            ))?;
+            if spec.id.0 != *expected {
+                return Err(VmError::InvalidState(
+                    "VM specification differs from durable planned identity",
+                ));
+            }
+        } else {
+            spec.id = VmId(run.id.to_string());
+        }
         spec.disks.retain(|disk| disk.id != INSTANCE_STATE_DISK_ID);
         if let Some(attachment) = attachment {
             spec.disks.push(VmDisk {
@@ -47,6 +58,7 @@ impl RunOrchestrator {
     pub(super) async fn wait_and_persist_events(
         &self,
         run_id: RunId,
+        kind: RunKind,
         instance: &Arc<dyn VmInstance>,
         events: &mut tokio::sync::broadcast::Receiver<VmEvent>,
         mut lease: Option<&mut VolumeLease>,
@@ -70,7 +82,7 @@ impl RunOrchestrator {
             tokio::select! {
                 result = &mut wait => {
                     let exit = result?;
-                    self.drain_vm_events(run_id, events, &mut finalize_message)
+                    self.drain_vm_events(run_id, kind, events, &mut finalize_message)
                         .await?;
                     return Ok(GuestCompletion {
                         exit,
@@ -84,11 +96,17 @@ impl RunOrchestrator {
                 event = events.recv(), if events_open => {
                     match event {
                         Ok(event) => {
-                            capture_finalize(&event, &mut finalize_message);
+                            if kind != RunKind::Invocation {
+                                capture_finalize(&event, &mut finalize_message);
+                            }
                             self.persist_vm_event(run_id, event).await?;
                             if finalize_message.is_some() && !finalize_stop_requested {
                                 finalize_stop_requested = true;
-                                instance.stop(StopMode::Force).await?;
+                                if self.legacy_scope.is_some() {
+                                    self.stop_legacy_guest(run_id,instance).await?;
+                                } else {
+                                    instance.stop(StopMode::Force).await?;
+                                }
                             }
                         }
                         Err(tokio::sync::broadcast::error::RecvError::Lagged(skipped)) => {
@@ -153,13 +171,16 @@ impl RunOrchestrator {
     async fn drain_vm_events(
         &self,
         run_id: RunId,
+        kind: RunKind,
         events: &mut tokio::sync::broadcast::Receiver<VmEvent>,
         finalize_message: &mut Option<String>,
     ) -> Result<(), OrchestratorError> {
         loop {
             match events.try_recv() {
                 Ok(event) => {
-                    capture_finalize(&event, finalize_message);
+                    if kind != RunKind::Invocation {
+                        capture_finalize(&event, finalize_message);
+                    }
                     self.persist_vm_event(run_id, event).await?;
                 }
                 Err(tokio::sync::broadcast::error::TryRecvError::Lagged(skipped)) => {

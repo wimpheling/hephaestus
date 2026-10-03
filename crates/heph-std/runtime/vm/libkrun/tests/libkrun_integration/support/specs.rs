@@ -22,6 +22,7 @@ pub fn state_probe_spec(
     argument: &str,
 ) -> VmSpec {
     VmSpec {
+        guest_volumes: Vec::new(),
         id: VmId(id.to_owned()),
         root: RootFilesystem::Directory { host_path: rootfs },
         disks: vec![VmDisk {
@@ -73,6 +74,7 @@ impl ProviderHarness for LibkrunHarness {
 
     fn long_running_spec(&self, id: &str) -> VmSpec {
         VmSpec {
+            guest_volumes: Vec::new(),
             id: VmId(id.to_owned()),
             root: RootFilesystem::Directory {
                 host_path: self.rootfs.clone(),
@@ -142,6 +144,7 @@ pub fn integration_spec(
     let expects_secrets = secret_mount.is_some();
     mounts.extend(secret_mount);
     VmSpec {
+        guest_volumes: Vec::new(),
         id: VmId(id.to_owned()),
         root: RootFilesystem::Directory { host_path: rootfs },
         disks: vec![VmDisk {
@@ -192,6 +195,7 @@ pub fn integration_spec(
 
 pub fn mode_spec(rootfs: PathBuf, id: &str, argument: &str, network: NetworkMode) -> VmSpec {
     VmSpec {
+        guest_volumes: Vec::new(),
         id: VmId(id.to_owned()),
         root: RootFilesystem::Directory { host_path: rootfs },
         disks: Vec::new(),
@@ -216,6 +220,7 @@ pub fn mode_spec(rootfs: PathBuf, id: &str, argument: &str, network: NetworkMode
 
 pub fn private_http_spec(rootfs: PathBuf) -> VmSpec {
     VmSpec {
+        guest_volumes: Vec::new(),
         id: VmId(format!("integration-private-http-{}", std::process::id())),
         root: RootFilesystem::Directory { host_path: rootfs },
         disks: Vec::new(),
@@ -243,6 +248,7 @@ pub fn private_http_spec(rootfs: PathBuf) -> VmSpec {
 
 pub fn private_service_spec(rootfs: PathBuf, id: String) -> VmSpec {
     VmSpec {
+        guest_volumes: Vec::new(),
         id: VmId(id),
         root: RootFilesystem::Directory { host_path: rootfs },
         disks: Vec::new(),

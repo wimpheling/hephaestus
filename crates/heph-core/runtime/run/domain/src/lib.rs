@@ -1,5 +1,23 @@
 //! Durable run state, outcomes, commands, and transition rules.
 
+mod cleanup;
+mod execution_profile;
+mod legacy_vm_placement;
+
+pub use legacy_vm_placement::{
+    LegacyVmPlacement, LegacyVmPlacementConsumption, LegacyVmPlacementError, LegacyVmPlacementHold,
+    LegacyVmPlacementHoldReason, LegacyVmPlacementInventory, LegacyVmPlacementProducer,
+    LegacyVmPlacementScope,
+};
+
+pub use execution_profile::FreshRunExecutionProfile;
+
+pub use cleanup::{
+    MAX_RUN_CLEANUP_LEASES, RunCleanupError, RunCleanupHostId, RunCleanupLeaseFence,
+    RunCleanupReceipt, RunCleanupTarget, RunCleanupVmObservation, RunCleanupVmObservationKind,
+    RunCleanupVmTarget, RunCleanupVmTargetKind,
+};
+
 use runtime_types::{
     AgentAttachmentId, AgentInstanceId, AgentInstanceRevisionId, CommandId, LeaseId,
     ReleaseAgentId, ReleaseId, RunId, VolumeId,
@@ -88,6 +106,10 @@ pub enum RunKind {
     Normal,
     /// An isolated state-migration hook for an instance update.
     Update,
+    /// An explicit instance invocation without a repository attachment or Git target.
+    ///
+    /// This kind grants no admission or execution authority.
+    Invocation,
 }
 
 /// Durable representation of one run.
@@ -103,7 +125,7 @@ pub struct Run {
     pub release_id: ReleaseId,
     /// Exported release agent selected by the revision.
     pub release_agent_id: ReleaseAgentId,
-    /// Repository attachment for a normal run; update hooks have none.
+    /// Repository attachment for a normal run; updates and invocations have none.
     pub attachment_id: Option<AgentAttachmentId>,
     /// Execution purpose.
     pub kind: RunKind,
@@ -138,6 +160,9 @@ pub struct Run {
 }
 
 /// Idempotent request to start an exact reusable-agent run.
+///
+/// Invocation carries no Git target; its future qualified admission must be
+/// persisted separately. Deserializing a command does not authorize execution.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct StartRun {
     /// Idempotency key for duplicate delivery handling.
@@ -152,7 +177,7 @@ pub struct StartRun {
     pub release_id: ReleaseId,
     /// Exported release agent selected by the revision.
     pub release_agent_id: ReleaseAgentId,
-    /// Repository attachment for a normal run; update hooks have none.
+    /// Repository attachment for a normal run; updates and invocations have none.
     pub attachment_id: Option<AgentAttachmentId>,
     /// Execution purpose.
     pub kind: RunKind,

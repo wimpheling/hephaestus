@@ -2,6 +2,9 @@
 
 extern crate heph_forge as forge_domain;
 
+#[path = "golden/sqlite_publication.rs"]
+mod sqlite_publication;
+
 use authz_postgres::PostgresMelangeAuthorizer;
 use brokered_egress_domain::{
     BrokeredSecretRule, BrokeredSecretRuleId, ExactHttpsOrigin, HeaderName, HttpInjectionLocation,

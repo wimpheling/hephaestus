@@ -26,6 +26,9 @@ mod lifecycle;
 mod validation;
 
 #[cfg(test)]
+#[path = "fake/ownership_tests.rs"]
+mod ownership_tests;
+#[cfg(test)]
 #[path = "fake/tests.rs"]
 mod tests;
 
@@ -39,6 +42,7 @@ pub trait PrivateHttpResponder: Send + Sync {
 }
 
 struct ProviderInner {
+    owner: Option<vm_trait::VmProviderOwnerScope>,
     ids: Mutex<HashSet<VmId>>,
     ports: Mutex<HashSet<PortBinding>>,
     next_port: AtomicU16,
@@ -48,6 +52,7 @@ struct ProviderInner {
 impl Default for ProviderInner {
     fn default() -> Self {
         Self {
+            owner: None,
             ids: Mutex::new(HashSet::new()),
             ports: Mutex::new(HashSet::new()),
             next_port: AtomicU16::new(0),

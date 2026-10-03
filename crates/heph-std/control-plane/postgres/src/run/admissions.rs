@@ -12,7 +12,10 @@ pub async fn load_vm_launch_contract(
     run_id: Uuid,
 ) -> Result<Option<VmLaunchContract>, sqlx::Error> {
     sqlx::query_as(
-        "SELECT release_agent.runtime_contract,
+        "SELECT run.id AS run_id, run.instance_id, run.instance_revision_id,
+                run.release_id, run.release_agent_id, instance.project_id,
+                release_agent.runtime_contract_hash, instance.volume_mode,
+                instance.state_volume_id, release_agent.runtime_contract,
                 revision.effective_runtime_policy,
                 release_agent.requires_state,
                 release_agent.update_hook,

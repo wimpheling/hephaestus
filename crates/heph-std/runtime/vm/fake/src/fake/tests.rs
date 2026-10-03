@@ -69,8 +69,9 @@ fn harness() -> FakeHarness {
 
 vm_conformance::provider_conformance_tests!(harness);
 
-fn spec(id: &str) -> VmSpec {
+pub fn spec(id: &str) -> VmSpec {
     VmSpec {
+        guest_volumes: Vec::new(),
         id: VmId(id.to_owned()),
         root: RootFilesystem::Directory {
             host_path: PathBuf::from("/fake/root"),

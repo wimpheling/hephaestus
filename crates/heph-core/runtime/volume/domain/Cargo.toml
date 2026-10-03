@@ -1,0 +1,23 @@
+[package]
+name = "volume-domain"
+description = "Validated private-volume release slots and exact bindings"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+
+[package.metadata.hephaestus]
+layer = "domain"
+context = "volume"
+
+[dependencies]
+capability-domain = { path = "../../../auth/authorization/capability-domain" }
+runtime-types = { path = "../../../platform/runtime-types" }
+serde.workspace = true
+thiserror.workspace = true
+uuid.workspace = true
+
+[dev-dependencies]
+serde_json.workspace = true
+
+[lints]
+workspace = true

@@ -53,10 +53,6 @@ impl ReleaseService {
             ObjectRef::new(ObjectType::ReleaseAgent, command.release_agent_id.as_uuid()),
         )
         .await?;
-        if let Some(id) = existing_command(&mut tx, command.command_key, "import_agent").await? {
-            tx.commit().await?;
-            return Ok(AgentInstanceId::from_uuid(id.0));
-        }
         let release: ReleaseAgentRow = sqlx::query_as(
             "SELECT agent.family_id, agent.parameter_schema,
                     agent.secret_slot_schema, agent.runtime_contract,
@@ -69,6 +65,14 @@ impl ReleaseService {
         .fetch_optional(&mut *tx)
         .await?
         .ok_or(ReleaseServiceError::Unavailable)?;
+        super::release_build::runtime_contract::require_legacy_import(
+            &release.runtime_contract,
+            release.requires_state,
+        )?;
+        if let Some(id) = existing_command(&mut tx, command.command_key, "import_agent").await? {
+            tx.commit().await?;
+            return Ok(AgentInstanceId::from_uuid(id.0));
+        }
         let declarations: Vec<ParameterDeclaration> =
             serde_json::from_value(release.parameter_schema)?;
         let parameters = ParameterDocument::resolve(&declarations, &command.parameters)

@@ -179,6 +179,7 @@ pub(super) fn launch(instance_id: Uuid) -> GatewayServiceLaunch {
         identity,
         service: gateway_domain::GatewayServiceConfig::new(8080, ready, health).expect("service"),
         spec: VmSpec {
+            guest_volumes: Vec::new(),
             id: VmId(format!("gateway-service-{}", identity.instance_id)),
             root: RootFilesystem::Directory {
                 host_path: PathBuf::from("/fake/root"),

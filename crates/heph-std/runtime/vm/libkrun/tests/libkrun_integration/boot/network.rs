@@ -18,7 +18,6 @@ use crate::{boot::BootContext, support::*};
 // cross-step assertions remain auditable.
 #[allow(clippy::cognitive_complexity, clippy::too_many_lines)]
 pub async fn run(context: &mut BootContext) {
-    let provider = &context.provider;
     let rootfs = context.rootfs.clone();
     let mount_root = context.mount_root.clone();
     let runtime_root = context.runtime_root.clone();
@@ -27,7 +26,6 @@ pub async fn run(context: &mut BootContext) {
     let broker_credential = context.broker_credential;
     let broker_shutdown = context.broker_shutdown.take().expect("broker shutdown");
     let broker_task = context.broker_task.take().expect("broker task");
-    let timeout_provider = &context.timeout_provider;
     // This is the VM half of the durable mailbox journey: the same sealed
     // control mount produced by `run-runtime-local` reaches a real libkrun
     // guest as a generic envelope plus exact opaque body, never via NATS.
@@ -57,7 +55,8 @@ pub async fn run(context: &mut BootContext) {
         guest_path: PathBuf::from("/run/hephaestus"),
         read_only: true,
     });
-    let mailbox = provider
+    let mailbox = context
+        .provider
         .provision(mailbox_spec)
         .await
         .expect("provision mailbox control VM");
@@ -84,7 +83,8 @@ pub async fn run(context: &mut BootContext) {
         1,
         broker_credential,
     ));
-    let broker_only = provider
+    let broker_only = context
+        .provider
         .provision(broker_spec)
         .await
         .expect("provision broker-only VM");
@@ -103,7 +103,8 @@ pub async fn run(context: &mut BootContext) {
     assert!(!runtime_root.join(&broker_only_id).exists());
     assert!(!cgroup_root_for_assertion.join(&broker_only_id).exists());
 
-    let http = provider
+    let http = context
+        .provider
         .provision(mode_spec(
             rootfs.clone(),
             "integration-http",
@@ -145,7 +146,8 @@ pub async fn run(context: &mut BootContext) {
     assert!(!runtime_root.join(&http_id).exists());
     assert!(!cgroup_root_for_assertion.join(&http_id).exists());
 
-    let ignored = provider
+    let ignored = context
+        .provider
         .provision(mode_spec(
             rootfs.clone(),
             "integration-ignore-cancellation",
@@ -179,7 +181,8 @@ pub async fn run(context: &mut BootContext) {
         String::from("HEPH_TEST_READY_DELAY_MS"),
         String::from("1000"),
     );
-    let delayed = timeout_provider
+    let delayed = context
+        .timeout_provider
         .provision(delayed_spec)
         .await
         .expect("provision delayed-readiness VM");

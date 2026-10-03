@@ -25,3 +25,29 @@ Use the command types when a worker or authenticated application request needs
 to import a release, revise an instance, attach a repository, run an update
 hook, or install UI. Pass each command to the corresponding application port
 with its expected revision and command key.
+
+`ImportAgentWithVolumes` pins the release/export, predicted instance/revision and
+grant IDs, ordinary parameters, policies, and exact named resource selections.
+The adapter validates complete bindings and hashes normalized inputs before
+activation. Named dispatch remains independently closed until the runtime
+supports the profile; immutable revision completeness is preserved.
+
+`RequestInstanceRemoval` carries an expected instance version and predicted
+permanent admission identity. It admits cancellation under current management
+without claiming VM cleanup, lease release, volume deletion, or a terminal
+instance tombstone. `InstanceVolumeStatus` reports that live boundary without
+exposing provider handles or encryption material.
+
+Use `InstanceExecutionService` to activate an installed recipe instance once its
+resources are ready, then request runs of its saved revision. Activation checks
+current management and source-use permissions; Invocation checks execution and
+source-use permissions. Exact instance, revision, and command identities preserve
+the original receipt while replay rechecks current permissions. Activation replay
+keeps a subsequently closed gate closed. These interfaces define admission;
+adapters provide the transaction commits and scheduling behind them.
+
+`InstanceExecutionConfiguration` is checked server composition data shared by
+qualified adapters. Its v1 canonical JSON preserves the existing admission
+stamp. Construction, typed getters and encoding perform no IO and grant no
+caller authority or physical ownership/readiness proof; composition must validate
+the actual provider and volume roots separately.
