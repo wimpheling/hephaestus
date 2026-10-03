@@ -59,3 +59,10 @@ The preparation fingerprint is distinct from the release import inbox hash.
 The versioned storage proposal remains private; this core contract supplies no
 PostgreSQL adapter, import conversion, engine, dispatch activation or provider
 completion proof. Existing per-claim owned-volume preparation remains separate.
+
+The backend `DeploymentExecutionPreparationRepository` separates whole-graph
+preparation from admission and provider execution. Its result includes the
+complete checked input and a preparation event receipt, rather than an Install
+admission or terminal result. A retry must reauthorize the original real actor,
+all source pins and selected external bindings before returning historical input.
+Manager-only inspection returns data after withdrawal and conveys no authority.

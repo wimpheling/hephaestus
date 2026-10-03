@@ -12,6 +12,7 @@
 mod commands;
 mod errors;
 mod execution_preparation;
+mod execution_preparation_repository;
 mod ids;
 mod intent;
 mod owned_partial_retention;
@@ -26,6 +27,10 @@ pub use errors::DeploymentError;
 pub use execution_preparation::{
     DeploymentExecutionPreparation, DeploymentExecutionProfile, MAX_EXECUTION_PREPARATION_BYTES,
     PreparedInstanceImport, PreparedVolumeSelection,
+};
+pub use execution_preparation_repository::{
+    DeploymentExecutionPreparationRepository, ExecutionPreparationAdmission,
+    ExecutionPreparationReceipt,
 };
 pub use ids::{
     DeploymentAttemptId, DeploymentCommandId, DeploymentId, DeploymentKey, MAX_DEPLOYMENT_KEY_BYTES,
