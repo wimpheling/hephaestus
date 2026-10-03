@@ -1,5 +1,7 @@
 //! Opt-in real KVM proof of persistent provider ownership and scoped cleanup.
 
+#[path = "owned_vm/configured.rs"]
+mod configured;
 #[path = "owned_vm/fixture.rs"]
 mod fixture;
 #[path = "owned_vm/process.rs"]

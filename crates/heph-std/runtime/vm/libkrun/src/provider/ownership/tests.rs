@@ -6,7 +6,7 @@ use std::{
 };
 use tempfile::TempDir;
 
-fn config(temp: &TempDir) -> LibkrunConfig {
+pub(super) fn config(temp: &TempDir) -> LibkrunConfig {
     let runtime = temp.path().join("runtime");
     let cgroup = temp.path().join("cgroup");
     fs::create_dir(&runtime).unwrap();
@@ -183,8 +183,8 @@ fn shared_physical_guards_coexist_without_relaxing_owner_validation() {
     let temp = TempDir::new().unwrap();
     let config = config(&temp);
     let owner = ProviderOwner::initialize(&config, "host-1").unwrap();
-    let first = owner.validate(&config).unwrap();
-    let second = owner.validate(&config).unwrap();
+    let first = fresh_validation_guard(&owner, &config);
+    let second = fresh_validation_guard(&owner, &config);
     owner.validate_guard(&config, &first).unwrap();
     owner.validate_guard(&config, &second).unwrap();
     let lock: File = rustix::fs::openat(

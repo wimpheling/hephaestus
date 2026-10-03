@@ -1,5 +1,10 @@
 //! Durable owner metadata for explicitly managed libkrun roots.
 
+mod configured;
+#[cfg(test)]
+mod configured_provider_tests;
+#[cfg(test)]
+mod configured_tests;
 mod files;
 #[cfg(test)]
 mod supervision_tests;
@@ -78,6 +83,9 @@ pub(super) struct ProviderOwner {
     // This exact open file description owns the lifetime exclusive flock.
     // Never clone it for workers or convert it to the shared physical IO lock.
     supervisor: File,
+    // Explicit configured owners keep their original directory descriptors for
+    // the entire supervisor lifetime; legacy initialization remains unchanged.
+    pinned_roots: Option<PinnedCleanupRoots>,
 }
 
 /// Holds pinned directories and a shared owner lock through physical IO.
@@ -159,7 +167,11 @@ impl ProviderOwner {
                 "VM owner metadata differs from configured host/root/cgroup; automatic adoption is unavailable",
             ));
         }
-        Ok(Self { marker, supervisor })
+        Ok(Self {
+            marker,
+            supervisor,
+            pinned_roots: None,
+        })
     }
 
     pub fn scope(&self) -> Result<VmProviderOwnerScope, VmError> {
@@ -188,6 +200,13 @@ impl ProviderOwner {
         config: &LibkrunConfig,
         guard: &OwnerGuard,
     ) -> Result<(), VmError> {
+        if let Some(roots) = &self.pinned_roots {
+            if DirectoryIdentity::read(&roots.runtime)? != self.marker.runtime
+                || DirectoryIdentity::read(&roots.cgroup)? != self.marker.cgroup
+            {
+                return Err(files::invalid("pinned VM provider roots changed"));
+            }
+        }
         if DirectoryIdentity::read(&guard.runtime)? != self.marker.runtime
             || DirectoryIdentity::read(&guard.cgroup)? != self.marker.cgroup
             || DirectoryIdentity::read(&files::open_root(
@@ -201,7 +220,11 @@ impl ProviderOwner {
             return Err(files::invalid("VM provider root ownership changed"));
         }
         files::check_file(&self.supervisor, config.service_uid)?;
-        let current = files::supervisor_file(&guard.runtime, false, config.service_uid)?;
+        let current = if self.pinned_roots.is_some() {
+            configured::readonly_supervisor(&guard.runtime, config.service_uid)?
+        } else {
+            files::supervisor_file(&guard.runtime, false, config.service_uid)?
+        };
         if FileIdentity::read(&self.supervisor)? != self.marker.supervisor
             || FileIdentity::read(&current)? != self.marker.supervisor
         {

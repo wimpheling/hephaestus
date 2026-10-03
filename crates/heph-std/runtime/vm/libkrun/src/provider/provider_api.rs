@@ -1,3 +1,6 @@
+#[path = "managed_owner.rs"]
+mod managed_owner;
+
 use super::common::{
     Arc, AtomicU64, Cgroup, Duration, EVENT_CAPACITY, HashMap, HashSet, LibkrunConfig,
     LibkrunInstance, Lifecycle, Mutex, OwnedResources, PROVIDER_NAME, PreparedSpec,

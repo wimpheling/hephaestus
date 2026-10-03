@@ -119,3 +119,21 @@ worker executable, never inside the supervisor process.
 The owned constructor is not yet wired into application startup or run cleanup.
 No existing runtime path layout changes in this slice. Unit tests cover ownership
 and emulated cleanup; native scoped VM destruction remains separate evidence.
+
+## Configured managed VM ownership
+
+`LibkrunProvider::bootstrap_owned(config, &scope)` is a separate explicit
+prospective bootstrap for an empty dedicated runtime root and delegated cgroup
+without prior VM children. Trusted operator configuration supplies the exact
+host and canonical nonnil UUID namespace. The constructor never generates that
+namespace or treats absence of database history as bootstrap authorization.
+Incomplete bootstrap metadata requires operator resolution, not automatic repair.
+
+`LibkrunProvider::open_owned(config, &expected_scope)` opens existing metadata
+with read-only descriptors and no creation or repair. The exact host, namespace,
+runtime and cgroup identities and version 2 supervisor identity must match. It
+retains the pinned root descriptors and lifetime supervisor lock through provider
+clones and VM handles. Missing, copied, redirected or contradictory metadata
+fails closed without content writes. Existing `new` and `new_owned` behavior is
+unchanged. App composition, database history discovery and legacy run placement
+are separate integration tasks; these constructors grant no run admission.
