@@ -57,7 +57,10 @@ where
         run: &Run,
     ) -> Result<Option<SecretDispatchInput>, RunSecretError> {
         if run.kind == RunKind::Invocation {
-            return Err(secret_error("Invocation secret dispatch is unsupported"));
+            self.metadata
+                .verify_qualified_invocation_empty_bindings(run)
+                .await?;
+            return Ok(None);
         }
         let row = self
             .metadata
@@ -214,3 +217,7 @@ fn secret_runtime_error(_error: SecretRuntimeError) -> RunSecretError {
 fn secret_serialization(_error: serde_json::Error) -> RunSecretError {
     secret_error("stored secret binding provenance is invalid")
 }
+
+#[cfg(test)]
+#[path = "manager/invocation_tests.rs"]
+mod invocation_tests;
