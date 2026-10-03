@@ -9,7 +9,7 @@ pub async fn complete_started_run(
     guest_cleanup: Option<&super::plural_monitor::GuestCleanupPhase>,
 ) -> Result<run_domain::Run, OrchestratorError> {
     let StartedRun {
-        run: _run,
+        run,
         attachment: _attachment,
         workspace_enabled,
         instance,
@@ -20,7 +20,7 @@ pub async fn complete_started_run(
     } = started;
     let completion_result = async {
         orchestrator
-            .wait_and_persist_events(run_id, &instance, &mut events, lease.as_mut())
+            .wait_and_persist_events(run_id, run.kind, &instance, &mut events, lease.as_mut())
             .await
     };
     let completion = match execution_timeout {
@@ -140,25 +140,28 @@ async fn finish_completed_guest(
     orchestrator.secrets.destroy_after_guest(run_id).await?;
     let current = orchestrator.repository.get(run_id).await?;
     let mut result_failure = None;
-    if current.cancel_requested_at.is_some() {
-        orchestrator.workspaces.abandon(run_id).await?;
-    } else if workspace_enabled {
-        if let Some(message) = completion.finalize_message.as_deref() {
-            if let Err(error) = orchestrator.workspaces.finalize(&current, message).await {
-                result_failure = Some(error.to_string());
-            }
-        } else {
-            result_failure = Some(String::from(
-                "guest exited without finalizing its repository workspace",
-            ));
+    if current.kind != run_domain::RunKind::Invocation {
+        if current.cancel_requested_at.is_some() {
             orchestrator.workspaces.abandon(run_id).await?;
+        } else if workspace_enabled {
+            if let Some(message) = completion.finalize_message.as_deref() {
+                if let Err(error) = orchestrator.workspaces.finalize(&current, message).await {
+                    result_failure = Some(error.to_string());
+                }
+            } else {
+                result_failure = Some(String::from(
+                    "guest exited without finalizing its repository workspace",
+                ));
+                orchestrator.workspaces.abandon(run_id).await?;
+            }
         }
     }
     let outcome = if current.cancel_requested_at.is_some() {
         RunState::Cancelled
     } else if result_failure.is_some() {
         RunState::Failed
-    } else if completion.finalize_message.is_some()
+    } else if (current.kind != run_domain::RunKind::Invocation
+        && completion.finalize_message.is_some())
         || (completion.exit.code == Some(0) && completion.exit.signal.is_none())
     {
         RunState::Succeeded

@@ -11,7 +11,7 @@ impl RunOrchestrator {
     /// Cleanup failures deliberately retain the volume lease for recovery.
     pub async fn start_run(&self, command: &StartRun) -> Result<Run, OrchestratorError> {
         if command.kind == RunKind::Invocation {
-            return Err(OrchestratorError::InvocationUnsupported);
+            self.require_invocation_configuration(command)?;
         }
         if self.plural_volumes && self.canonical_cleanup.is_none() {
             return Err(volume_trait::VolumeError::InvalidState(

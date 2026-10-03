@@ -6,6 +6,7 @@ mod cleanup;
 mod complete;
 mod errors;
 mod events;
+mod invocation;
 mod legacy_cleanup;
 mod legacy_placement;
 mod legacy_recovery;

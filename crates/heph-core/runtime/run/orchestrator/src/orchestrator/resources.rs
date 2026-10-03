@@ -23,23 +23,27 @@ pub async fn prepare_resources(
         mut mounts,
         authority,
     } = base;
-    let runtime_git_workspace = match orchestrator
-        .runtime_git_workspace
-        .prepare_runtime_git(&bound.run)
-        .await
-    {
-        Ok(workspace) => workspace,
-        Err(error) => {
-            return terminal(
-                orchestrator
-                    .fail_with_resources(
-                        run_id,
-                        bound.attachment.as_ref().map(|value| &value.lease),
-                        None,
-                        &error.to_string(),
-                    )
-                    .await,
-            );
+    let runtime_git_workspace = if bound.run.kind == run_domain::RunKind::Invocation {
+        None
+    } else {
+        match orchestrator
+            .runtime_git_workspace
+            .prepare_runtime_git(&bound.run)
+            .await
+        {
+            Ok(workspace) => workspace,
+            Err(error) => {
+                return terminal(
+                    orchestrator
+                        .fail_with_resources(
+                            run_id,
+                            bound.attachment.as_ref().map(|value| &value.lease),
+                            None,
+                            &error.to_string(),
+                        )
+                        .await,
+                );
+            }
         }
     };
     if let Some(workspace) = &runtime_git_workspace {
@@ -76,19 +80,23 @@ async fn prepare_base(
     run_id: runtime_types::RunId,
     bound: &BoundStart,
 ) -> Result<Stage<BaseResources>, OrchestratorError> {
-    let workspace = match orchestrator.workspaces.prepare(&bound.run).await {
-        Ok(workspace) => workspace,
-        Err(error) => {
-            return terminal(
-                orchestrator
-                    .fail_with_resources(
-                        run_id,
-                        bound.attachment.as_ref().map(|value| &value.lease),
-                        None,
-                        &error.to_string(),
-                    )
-                    .await,
-            );
+    let workspace = if bound.run.kind == run_domain::RunKind::Invocation {
+        workspace_domain::PreparedWorkspace::disabled()
+    } else {
+        match orchestrator.workspaces.prepare(&bound.run).await {
+            Ok(workspace) => workspace,
+            Err(error) => {
+                return terminal(
+                    orchestrator
+                        .fail_with_resources(
+                            run_id,
+                            bound.attachment.as_ref().map(|value| &value.lease),
+                            None,
+                            &error.to_string(),
+                        )
+                        .await,
+                );
+            }
         }
     };
     let workspace_enabled = workspace.id.is_some();

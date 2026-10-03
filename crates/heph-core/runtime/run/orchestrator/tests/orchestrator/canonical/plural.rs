@@ -1,6 +1,8 @@
 //! Complete-set core semantics with fake trusted ports; no native dispatch claim.
 #[path = "plural/drain.rs"]
 mod drain;
+#[path = "plural/invocation.rs"]
+mod invocation;
 #[path = "plural/monitor.rs"]
 mod monitor;
 #[path = "plural/ports.rs"]

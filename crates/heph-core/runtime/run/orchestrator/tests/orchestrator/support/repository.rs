@@ -24,6 +24,8 @@ pub struct MemoryRepository {
     pub hang_events: AtomicBool,
     pub hang_get: AtomicBool,
     pub event_entered: tokio::sync::Notify,
+    /// Controlled test evidence only; no real SQL admission is claimed.
+    pub invocation_admitted: AtomicBool,
     pub planned_vm: Mutex<Option<(run_domain::RunCleanupHostId, vm_trait::VmId)>>,
 }
 
@@ -58,6 +60,7 @@ impl MemoryRepository {
             events: Mutex::new(Vec::new()),
             pause_running_transition: Mutex::new(None),
             planned_vm: Mutex::new(None),
+            invocation_admitted: AtomicBool::new(false),
             hang_events: AtomicBool::new(false),
             hang_get: AtomicBool::new(false),
             event_entered: tokio::sync::Notify::new(),
@@ -88,6 +91,21 @@ impl RunRepository for MemoryRepository {
             || run.attachment_id != command.attachment_id
         {
             return Err(RepositoryError::InvalidData("immutable run input differs"));
+        }
+        if command.kind == run_domain::RunKind::Invocation {
+            if !self.invocation_admitted.load(Ordering::SeqCst)
+                || !*created
+                || plan.as_ref() != Some(&(scope.clone(), vm_id.clone()))
+                || run.vm_id.as_deref() != Some(vm_id.0.as_str())
+            {
+                return Err(RepositoryError::InvalidData(
+                    "protected Invocation admission is absent or differs",
+                ));
+            }
+            return Ok(CreateRunResult {
+                run: run.clone(),
+                created: false,
+            });
         }
         let was_created = !*created;
         if let Some(existing) = plan.as_ref() {
@@ -128,7 +146,12 @@ impl RunRepository for MemoryRepository {
         })
     }
 
-    async fn ensure_runtime_git_provenance(&self, _run: &Run) -> Result<(), RepositoryError> {
+    async fn ensure_runtime_git_provenance(&self, run: &Run) -> Result<(), RepositoryError> {
+        assert_ne!(
+            run.kind,
+            run_domain::RunKind::Invocation,
+            "Invocation called Git provenance"
+        );
         Ok(())
     }
 

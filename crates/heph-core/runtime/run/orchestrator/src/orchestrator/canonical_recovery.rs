@@ -39,15 +39,27 @@ impl RunOrchestrator {
                 .into_iter()
                 .map(|run| run.id),
         );
+        let mut git_sweep = true;
+        if self.invocation_scope.is_some() && !run_ids.is_empty() {
+            git_sweep = false;
+            for run_id in &run_ids {
+                git_sweep |=
+                    self.repository.get(*run_id).await?.kind != run_domain::RunKind::Invocation;
+            }
+        }
         let mut recovered = self.recover_canonical_runs(run_ids).await?;
         // Global transient sweeps must follow confirmed scoped guest cleanup.
         // Any unresolved historical run stops here while its fences remain held.
-        recovered += self.workspaces.recover().await?;
+        if git_sweep {
+            recovered += self.workspaces.recover().await?;
+        }
         recovered += self.runtimes.recover().await?;
         recovered += self.secrets.recover().await?;
         recovered += self.authority.recover().await?;
         recovered += self.completion.recover().await?;
-        recovered += self.runtime_git_workspace.recover_runtime_git().await?;
+        if git_sweep {
+            recovered += self.runtime_git_workspace.recover_runtime_git().await?;
+        }
         Ok(recovered)
     }
 }

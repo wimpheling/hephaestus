@@ -1,4 +1,4 @@
-use run_domain::Run;
+use run_domain::{Run, RunKind};
 use runtime_types::RunId;
 use serde_json::json;
 use std::{sync::Arc, time::Duration};
@@ -58,6 +58,7 @@ impl RunOrchestrator {
     pub(super) async fn wait_and_persist_events(
         &self,
         run_id: RunId,
+        kind: RunKind,
         instance: &Arc<dyn VmInstance>,
         events: &mut tokio::sync::broadcast::Receiver<VmEvent>,
         mut lease: Option<&mut VolumeLease>,
@@ -81,7 +82,7 @@ impl RunOrchestrator {
             tokio::select! {
                 result = &mut wait => {
                     let exit = result?;
-                    self.drain_vm_events(run_id, events, &mut finalize_message)
+                    self.drain_vm_events(run_id, kind, events, &mut finalize_message)
                         .await?;
                     return Ok(GuestCompletion {
                         exit,
@@ -95,7 +96,9 @@ impl RunOrchestrator {
                 event = events.recv(), if events_open => {
                     match event {
                         Ok(event) => {
-                            capture_finalize(&event, &mut finalize_message);
+                            if kind != RunKind::Invocation {
+                                capture_finalize(&event, &mut finalize_message);
+                            }
                             self.persist_vm_event(run_id, event).await?;
                             if finalize_message.is_some() && !finalize_stop_requested {
                                 finalize_stop_requested = true;
@@ -168,13 +171,16 @@ impl RunOrchestrator {
     async fn drain_vm_events(
         &self,
         run_id: RunId,
+        kind: RunKind,
         events: &mut tokio::sync::broadcast::Receiver<VmEvent>,
         finalize_message: &mut Option<String>,
     ) -> Result<(), OrchestratorError> {
         loop {
             match events.try_recv() {
                 Ok(event) => {
-                    capture_finalize(&event, finalize_message);
+                    if kind != RunKind::Invocation {
+                        capture_finalize(&event, finalize_message);
+                    }
                     self.persist_vm_event(run_id, event).await?;
                 }
                 Err(tokio::sync::broadcast::error::TryRecvError::Lagged(skipped)) => {

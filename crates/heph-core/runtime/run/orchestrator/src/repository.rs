@@ -123,6 +123,12 @@ pub trait RunRepository: Send + Sync + 'static {
     /// Replays must compare the complete command and VM plan. Historical rows
     /// without a plan may not be adopted; a precreated update needs persisted
     /// admission evidence proving that provisioning has not been permitted.
+    /// Invocation may only consume/replay an exact PREEXISTING protected
+    /// admission: full command, immutable pins, explicit owned profile, fresh
+    /// eligibility and the actual provider scope/VM must match atomically. It
+    /// must never insert a Normal/Update alias or admit from a VM tuple alone.
+    /// The returned run is preexisting (`created` is false); absent, foreign or
+    /// unsupported admission fails before provisioning.
     /// The default rejects use so existing adapters cannot imply atomicity.
     async fn create_run_with_vm_plan(
         &self,

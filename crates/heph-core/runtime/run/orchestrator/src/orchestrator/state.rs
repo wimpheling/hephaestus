@@ -42,6 +42,7 @@ pub struct RunOrchestrator {
     pub(crate) canonical_cleanup: Option<CanonicalCleanup>,
     pub(crate) cleanup_timeout: Duration,
     pub(crate) plural_volumes: bool,
+    pub(crate) invocation_scope: Option<vm_trait::VmProviderOwnerScope>,
     pub(crate) operation_guards: Arc<RunOperationGuards>,
     pub(crate) legacy_scope: Option<run_domain::LegacyVmPlacementScope>,
     pub(crate) legacy_plans: Mutex<HashMap<RunId, run_domain::LegacyVmPlacement>>,
@@ -77,6 +78,7 @@ impl RunOrchestrator {
             canonical_cleanup: None,
             cleanup_timeout: Duration::from_secs(30),
             plural_volumes: false,
+            invocation_scope: None,
             operation_guards: Arc::new(RunOperationGuards::default()),
             legacy_scope: None,
             legacy_plans: Mutex::new(HashMap::new()),
@@ -129,6 +131,19 @@ impl RunOrchestrator {
     #[must_use]
     pub const fn with_volume_preparation(mut self) -> Self {
         self.plural_volumes = true;
+        self
+    }
+
+    /// Enables no-Git Invocation for this exact trusted provider owner.
+    ///
+    /// Requires canonical cleanup, plural preparation and a repository that
+    /// consumes only an existing protected Invocation admission. This option
+    /// supplies no caller, source, mount or database admission authority. The
+    /// expected scope comes from validated server/provider startup, never a
+    /// client command or archived identity.
+    #[must_use]
+    pub fn with_qualified_invocation(mut self, scope: vm_trait::VmProviderOwnerScope) -> Self {
+        self.invocation_scope = Some(scope);
         self
     }
 

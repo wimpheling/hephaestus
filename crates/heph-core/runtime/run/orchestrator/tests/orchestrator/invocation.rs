@@ -90,8 +90,23 @@ async fn invocation_is_rejected_before_any_repository_or_runtime_port() {
         assert!(lock(&log).is_empty(), "Invocation reached a runtime port");
         assert!(provider.spec().is_none());
         // Rejection precedes even invalid configured complete-set mode checks.
+        let orchestrator = orchestrator.with_volume_preparation();
+        let result = orchestrator.start_run(&command).await;
+        assert!(matches!(
+            result,
+            Err(OrchestratorError::InvocationUnsupported)
+        ));
+        assert!(lock(&log).is_empty());
+        // Explicit opt-in still cannot turn scalar/noncanonical composition
+        // into Invocation admission, and must reject before even owner lookup.
         let result = orchestrator
-            .with_volume_preparation()
+            .with_qualified_invocation(
+                vm_trait::VmProviderOwnerScope::new(
+                    "expected-owner".into(),
+                    "expected-host".into(),
+                )
+                .unwrap(),
+            )
             .start_run(&command)
             .await;
         assert!(matches!(

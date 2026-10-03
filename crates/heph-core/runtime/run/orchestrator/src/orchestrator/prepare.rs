@@ -190,10 +190,11 @@ async fn bind_start(
                 .await,
         );
     }
-    if let Err(error) = orchestrator
-        .repository
-        .ensure_runtime_git_provenance(&run)
-        .await
+    if run.kind != run_domain::RunKind::Invocation
+        && let Err(error) = orchestrator
+            .repository
+            .ensure_runtime_git_provenance(&run)
+            .await
     {
         return terminal(
             orchestrator
@@ -253,6 +254,14 @@ async fn assemble_start(
             );
         }
     };
+    if bound.run.kind == run_domain::RunKind::Invocation
+        && (spec.runtime_git_bridge.is_some() || spec.command.working_dir.is_some())
+    {
+        return Err(VmError::InvalidState(
+            "Invocation workload contains Git or working-directory overrides",
+        )
+        .into());
+    }
     let expected_authority_ack = authority
         .bootstrap
         .as_ref()

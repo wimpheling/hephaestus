@@ -36,10 +36,12 @@ impl RunOrchestrator {
     ) -> Result<crate::CreateRunResult, OrchestratorError> {
         let scope = self.provider.owner_scope()?;
         let vm_id = VmId(command.run_id.to_string());
-        self.repository
+        let created = self
+            .repository
             .create_run_with_vm_plan(command, &host(&scope)?, &vm_id)
-            .await
-            .map_err(Into::into)
+            .await?;
+        self.validate_invocation_admission(command, &scope, &created)?;
+        Ok(created)
     }
 
     pub(super) async fn bind_planned_vm(&self, run: &Run) -> Result<(), OrchestratorError> {
@@ -93,7 +95,7 @@ impl RunOrchestrator {
                 .transition(run_id, RunState::CleaningUp, None, None)
                 .await?;
         }
-        self.cleanup_transient_resources(run_id).await?;
+        self.cleanup_transient_resources(&current).await?;
         let cleaned = cleanup.repository.finish_cleanup(&receipt).await?;
         self.completion.after_cleanup(&cleaned).await?;
         Ok(cleaned)
@@ -124,14 +126,19 @@ impl RunOrchestrator {
         Ok(cleaned)
     }
 
-    async fn cleanup_transient_resources(&self, run_id: RunId) -> Result<(), OrchestratorError> {
-        self.runtime_git_workspace
-            .abandon_runtime_git(run_id)
-            .await?;
+    async fn cleanup_transient_resources(&self, run: &Run) -> Result<(), OrchestratorError> {
+        let run_id = run.id;
+        if run.kind != run_domain::RunKind::Invocation {
+            self.runtime_git_workspace
+                .abandon_runtime_git(run_id)
+                .await?;
+        }
         self.authority.revoke_after_guest(run_id).await?;
         self.secrets.destroy_after_guest(run_id).await?;
         self.runtimes.destroy(run_id).await?;
-        self.workspaces.abandon(run_id).await?;
+        if run.kind != run_domain::RunKind::Invocation {
+            self.workspaces.abandon(run_id).await?;
+        }
         Ok(())
     }
 

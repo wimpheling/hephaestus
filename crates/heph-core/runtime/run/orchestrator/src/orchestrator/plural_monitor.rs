@@ -136,7 +136,7 @@ impl RunOrchestrator {
         }
         match tokio::time::timeout(
             Duration::from_secs(4),
-            self.fail_claimed_run(run.id, &failure.to_string()),
+            self.finish_monitored_failure(run, &failure.to_string()),
         )
         .await
         {
@@ -147,6 +147,26 @@ impl RunOrchestrator {
                 VolumeError::InvalidState("durable cleanup bookkeeping deadline elapsed").into(),
             )),
         }
+    }
+
+    async fn finish_monitored_failure(
+        &self,
+        run: &Run,
+        failure: &str,
+    ) -> Result<Run, OrchestratorError> {
+        // The caller has already confirmed scoped guest quiescence. Read fresh
+        // cancellation evidence afterward; Finalize and a stale start snapshot
+        // cannot choose the terminal result. Failed cleanup still holds fences.
+        if run.kind == run_domain::RunKind::Invocation {
+            let current = self.repository.get(run.id).await?;
+            if current.cancel_requested_at.is_some() {
+                self.repository
+                    .transition(run.id, run_domain::RunState::Cancelled, None, Some(failure))
+                    .await?;
+                return self.canonical_cleanup(run.id, None).await;
+            }
+        }
+        self.fail_claimed_run(run.id, failure).await
     }
 
     async fn stop_monitored_guest(
