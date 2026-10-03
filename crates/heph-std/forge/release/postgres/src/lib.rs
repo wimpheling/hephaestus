@@ -48,6 +48,8 @@ use release_domain::{
     ReleaseCommandKey, ReleaseId, RuntimePolicy,
 };
 pub use release_errors::ReleaseServiceError;
+mod instance_execution;
+pub use instance_execution::{InstanceExecutionConfiguration, PostgresInstanceExecutionService};
 use release_revision_persistence::{
     clone_revision_binding, insert_revision, insert_revision_with_binding_ids,
     insert_update_candidate_revision,

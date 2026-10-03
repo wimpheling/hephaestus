@@ -4150,6 +4150,7 @@ dependencies = [
  "toml",
  "tracing",
  "uuid",
+ "vm-trait",
  "volume-domain",
  "volume-trait",
 ]

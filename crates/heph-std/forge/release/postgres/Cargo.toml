@@ -28,6 +28,7 @@ time.workspace = true
 toml.workspace = true
 tracing.workspace = true
 uuid.workspace = true
+vm-trait.workspace = true
 volume-domain = { path = "../../../../heph-core/runtime/volume/domain" }
 volume-trait = { path = "../../../../heph-core/runtime/volume/trait" }
 

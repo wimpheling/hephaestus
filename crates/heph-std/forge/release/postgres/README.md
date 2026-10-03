@@ -74,3 +74,28 @@ lease fences, revisions, and external volume references remain retained. Update
 recovery cannot reopen the permanent gate. This method records admission only;
 trusted VM destruction and complete fenced lease cleanup must be proved before
 terminal tombstoning or physical volume deletion is implemented.
+
+### Qualified instance activation
+
+`PostgresInstanceExecutionService` is a separate, explicitly configured actor
+adapter. It activates only an exact recipe113 birth whose original protected106
+Instance/Create completed successfully. It checks current active caller Manage
+and Source Use, the complete immutable107 import, current declared bindings,
+grants and Ready metadata, and trusted provider/platform configuration.
+
+The qualified activation adapter requires the private114 qualified activation
+schema. Ordinary public107 does not provide these SQL functions, and the
+existing default composition is unchanged.
+
+Activation is one-time version1/gatefalse to version2/gatetrue. Exact replay
+requires fresh authority and current eligibility; it returns the original
+receipt without reopening, updating or importing. Late instance/volume/grant
+lock contention is held/transient. Legacy producer configuration and globally
+unsupported named Normal/mailbox/update dispatch remain unchanged. Invocation
+returns Unsupported without writes in this first adapter group.
+
+Configuration and SQL readiness are not physical provider proofs. Composition
+must validate the actual existing VM provider scope and volume root namespace.
+Native bound fixtures use real owned registration, Local mkfs/readonly fsck,
+first-Ready custody held through original106 completion, and the real107 import;
+this proves filesystem prerequisites, not a VM execution or runtime lease.
