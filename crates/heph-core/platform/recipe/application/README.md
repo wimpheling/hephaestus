@@ -35,3 +35,27 @@ Logical command identity is actor/operation/idempotency scoped. Attempt provenan
 records a distinct request and attempt ID. Changed input under either a logical
 command or project-local deployment key is a conflict. Receipts identify committed
 project events; provider errors are represented by closed safe diagnostic codes.
+
+
+`DeploymentExecutionPreparation` freezes every typed instance import before any
+registration, provider or instance effect. It includes the original Install
+command, unchanged v1 intent hash, the closed server-selected `RuntimeNamedV1`
+profile, and configured platform policy/version even for a zero-instance graph.
+Imports retain authoritative source pins, authored runtime-contract hashes,
+pinned images, exact released policy, resolved ordinary parameters, full volume
+selections, names and stable command/grant IDs. Construction creates no grants
+and performs no authorization or IO.
+
+Canonical bytes are bounded to one MiB. Stored input is decoded through private
+wire types, reconstructed against the exact historical intent/command, and
+compared field-for-field and byte-for-byte, including rederived stable IDs.
+`CommandIdentity::from_recorded` reconstructs historical data identity without
+synthesizing authentication. An adapter must check real fresh middleware
+identity, current target/source/external rights before replay or effects, and
+hold execution on any configured policy/version/profile drift. Historical
+inspection and removal retain the original bytes without requiring SourceCanUse.
+The preparation fingerprint is distinct from the release import inbox hash.
+
+The versioned storage proposal remains private; this core contract supplies no
+PostgreSQL adapter, import conversion, engine, dispatch activation or provider
+completion proof. Existing per-claim owned-volume preparation remains separate.

@@ -31,19 +31,31 @@ impl CommandIdentity {
         identity: &AuthenticatedIdentity,
         operation: DeploymentOperation,
     ) -> Result<Self, DeploymentError> {
-        if identity.user_id.as_uuid().is_nil() || identity.idempotency_id.as_uuid().is_nil() {
+        Self::from_recorded(identity.user_id, identity.idempotency_id, operation)
+    }
+
+    /// Reconstructs actor-scoped data identity from immutable recorded fields.
+    ///
+    /// This pure derivation supplies no authenticated identity or authorization.
+    /// Effects must validate a real fresh middleware identity and live authority.
+    ///
+    /// # Errors
+    /// Rejects nil recorded actor or logical idempotency identity.
+    pub fn from_recorded(
+        actor_id: UserId,
+        idempotency_id: RequestId,
+        operation: DeploymentOperation,
+    ) -> Result<Self, DeploymentError> {
+        if actor_id.as_uuid().is_nil() || idempotency_id.as_uuid().is_nil() {
             return Err(DeploymentError::InvalidIdentifier);
         }
         let mut bytes = b"hephaestus-recipe-command-v1\0".to_vec();
-        bytes.extend_from_slice(identity.user_id.as_uuid().as_bytes());
+        bytes.extend_from_slice(actor_id.as_uuid().as_bytes());
         bytes.extend_from_slice(operation.as_str().as_bytes());
         Ok(Self {
-            id: DeploymentCommandId::from_uuid(Uuid::new_v5(
-                &identity.idempotency_id.as_uuid(),
-                &bytes,
-            ))?,
-            actor_id: identity.user_id,
-            idempotency_id: identity.idempotency_id,
+            id: DeploymentCommandId::from_uuid(Uuid::new_v5(&idempotency_id.as_uuid(), &bytes))?,
+            actor_id,
+            idempotency_id,
             operation,
         })
     }
