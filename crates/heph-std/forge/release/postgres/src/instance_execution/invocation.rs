@@ -27,7 +27,7 @@ pub async fn invoke(
     // Fresh owned transaction: ordered original107 and invocation reservations
     // precede Project/Deployment/Resource/late consumer locks in the writer.
     invocation_reservation::reserve(&mut tx, &context, command.command_key()).await?;
-    let config = serde_json::to_vec(&service.configuration.json())
+    let config = serde_json::to_vec(&service.configuration.canonical_json())
         .map_err(|_| InstanceExecutionError::ConfigurationConflict)?;
     let row: InvocationResult = sqlx::query_as(
         "SELECT * FROM write_qualified_instance_invocation($1,$2,$3,$4,$5,$6,$7,$8)",

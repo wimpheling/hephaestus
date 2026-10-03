@@ -4167,9 +4167,11 @@ dependencies = [
  "identity-domain",
  "release-domain",
  "runtime-types",
+ "serde_json",
  "thiserror 2.0.19",
  "time",
  "uuid",
+ "vm-trait",
  "volume-domain",
 ]
 

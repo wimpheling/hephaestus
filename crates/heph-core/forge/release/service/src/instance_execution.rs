@@ -7,10 +7,12 @@
 //! These constructors confer no authority or physical readiness/ownership proof.
 
 mod commands;
+mod configuration;
 mod ids;
 mod results;
 
 pub use commands::{ActivateInstance, InvokeInstance};
+pub use configuration::InstanceExecutionConfiguration;
 pub use ids::{InstanceActivationId, InstanceInvocationId};
 pub use results::{InstanceActivationAdmission, InstanceInvocationAdmission};
 

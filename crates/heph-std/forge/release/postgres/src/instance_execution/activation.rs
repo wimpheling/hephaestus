@@ -48,7 +48,7 @@ pub async fn activate(
     // This is a freshly owned transaction. No rows have been locked; reserving
     // the actual ordered keys here cannot borrow a Project-held caller context.
     reservation::reserve(&mut tx, &context, command).await?;
-    let config = serde_json::to_vec(&service.configuration.json())
+    let config = serde_json::to_vec(&service.configuration.canonical_json())
         .map_err(|_| InstanceExecutionError::ConfigurationConflict)?;
     let result: ActivationResult =
         sqlx::query_as("SELECT * FROM write_qualified_instance_activation($1,$2,$3,$4,$5,$6,$7)")

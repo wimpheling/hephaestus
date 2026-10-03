@@ -99,3 +99,7 @@ must validate the actual existing VM provider scope and volume root namespace.
 Native bound fixtures use real owned registration, Local mkfs/readonly fsck,
 first-Ready custody held through original106 completion, and the real107 import;
 this proves filesystem prerequisites, not a VM execution or runtime lease.
+
+The shared Core `InstanceExecutionConfiguration` remains reexported from this
+adapter. Its checked fields and canonical v1 JSON preserve the existing
+configuration stamp; moving the type does not enable any runtime profile.

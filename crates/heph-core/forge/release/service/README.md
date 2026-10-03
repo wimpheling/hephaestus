@@ -45,3 +45,9 @@ source-use permissions. Exact instance, revision, and command identities preserv
 the original receipt while replay rechecks current permissions. Activation replay
 keeps a subsequently closed gate closed. These interfaces define admission;
 adapters provide the transaction commits and scheduling behind them.
+
+`InstanceExecutionConfiguration` is checked server composition data shared by
+qualified adapters. Its v1 canonical JSON preserves the existing admission
+stamp. Construction, typed getters and encoding perform no IO and grant no
+caller authority or physical ownership/readiness proof; composition must validate
+the actual provider and volume roots separately.
