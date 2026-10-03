@@ -4,6 +4,9 @@ use run_orchestrator::{CompositeRunCompletionObserver, RunCompletionObserver};
 
 use super::support::{CountingCompletion, test_run};
 
+#[path = "completion/destroy_failure.rs"]
+mod destroy_failure;
+
 #[tokio::test]
 async fn composite_completion_runs_every_observer_and_sums_recovery() {
     let first = Arc::new(CountingCompletion::new(2));

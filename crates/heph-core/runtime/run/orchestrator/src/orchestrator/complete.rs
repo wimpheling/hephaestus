@@ -59,7 +59,19 @@ pub async fn complete_started_run(
             .draining
             .store(true, std::sync::atomic::Ordering::SeqCst);
     }
-    cleanup_completed_guest(orchestrator, run_id, instance, guest_cleanup).await?;
+    if let Err(error) =
+        cleanup_completed_guest(orchestrator, run_id, instance.clone(), guest_cleanup).await
+    {
+        return fail_completed_guest_cleanup(
+            orchestrator,
+            run_id,
+            lease.as_ref(),
+            instance,
+            &completion.exit,
+            error,
+        )
+        .await;
+    }
     let finish = finish_completed_guest(
         orchestrator,
         run_id,
@@ -82,6 +94,32 @@ pub async fn complete_started_run(
     } else {
         finish.await
     }
+}
+
+async fn fail_completed_guest_cleanup(
+    orchestrator: &RunOrchestrator,
+    run_id: runtime_types::RunId,
+    lease: Option<&volume_trait::VolumeLease>,
+    instance: std::sync::Arc<dyn vm_trait::VmInstance>,
+    exit: &vm_trait::VmExit,
+    error: OrchestratorError,
+) -> Result<run_domain::Run, OrchestratorError> {
+    if orchestrator.canonical_cleanup.is_some() {
+        return Err(error);
+    }
+    // Completion is known, but physical destruction was not confirmed. Retain
+    // that exit and enter the existing closed failure cleanup before retrying
+    // the same handle. No transient resource or fence is released on failure.
+    orchestrator
+        .repository
+        .transition(
+            run_id,
+            RunState::Failed,
+            Some(exit),
+            Some(&error.to_string()),
+        )
+        .await?;
+    orchestrator.cleanup(run_id, lease, Some(instance)).await
 }
 
 async fn finish_completed_guest(
