@@ -5,3 +5,5 @@ mod identity;
 mod instance_closure;
 mod instance_safety;
 mod observations;
+
+mod remove_resume;

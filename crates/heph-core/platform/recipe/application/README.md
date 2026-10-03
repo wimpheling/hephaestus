@@ -118,3 +118,17 @@ gate, versions and events. Closure is scheduling evidence: the separate safety
 observer must still qualify actual runtime cleanup before Drain, Detach or Retain.
 Adapters that do not implement these ports fail closed. This does not enable an
 application removal driver or a new manager's Remove resume while Removing.
+
+### Continue removal under a new manager
+
+A current manager can continue an interrupted removal using a new admitted
+command. The original claims and permanent instance closure remain immutable;
+the new command carries its own current permissions, version check and audit.
+The repository rejects continuation unless its server configuration explicitly
+supports the checked preparation and actual provider comparison labels.
+
+The returned old claims and closure are data. They do not authenticate the old
+manager, grant provider ownership, prove physical cleanup, or reopen an instance.
+This boundary supports original owned Drain, Detach and Retain work. Delete and
+terminal Removed inspection remain held in this first adapter slice. A genuine
+worker observation is still required before recording a successful outcome.

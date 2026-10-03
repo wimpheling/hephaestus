@@ -123,6 +123,21 @@ pub trait DeploymentRepository: Send + Sync + 'static {
         command: RemoveDeployment,
     ) -> Result<DeploymentAdmission, DeploymentError>;
 
+    /// Admits a new current manager command while preserving old removal work.
+    ///
+    /// Requires explicit configured support, current ALL-owned cleanup rights and
+    /// exact immutable old claims/closures. Removed terminal inspection is separate.
+    ///
+    /// # Errors
+    /// Rejects unsupported adapters, missing history, denied access or stale CAS.
+    async fn admit_remove_resume(
+        &self,
+        _identity: &AuthenticatedIdentity,
+        _command: RemoveDeployment,
+    ) -> Result<crate::RemoveResumeAdmission, DeploymentError> {
+        Err(DeploymentError::InvalidAction)
+    }
+
     /// Commits a fresh authorized CAS claim before any resource side effect.
     ///
     /// Rejects dependency/state conflicts and all external mutation; ambiguous

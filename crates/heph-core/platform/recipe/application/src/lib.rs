@@ -23,6 +23,7 @@ mod owned_ready_retention;
 mod planning;
 mod planning_observations;
 mod planning_request;
+mod remove_resume;
 mod repository;
 mod states;
 
@@ -66,3 +67,7 @@ pub use states::*;
 
 #[cfg(test)]
 mod tests;
+
+pub use remove_resume::{
+    OriginalInstanceClosure, RemoveContinuation, RemoveResumeAdmission, RemoveResumeConfiguration,
+};
