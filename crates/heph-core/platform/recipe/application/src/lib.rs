@@ -15,6 +15,7 @@ mod errors;
 mod execution_preparation;
 mod execution_preparation_repository;
 mod ids;
+mod instance_safety;
 mod intent;
 mod owned_partial_retention;
 mod owned_ready_retention;
@@ -37,6 +38,11 @@ pub use execution_preparation_repository::{
 };
 pub use ids::{
     DeploymentAttemptId, DeploymentCommandId, DeploymentId, DeploymentKey, MAX_DEPLOYMENT_KEY_BYTES,
+};
+pub use instance_safety::{
+    InstanceSafetyInventory, InstanceSafetyWork, InstanceSafetyWorkKind,
+    PreparedInstanceSafetyObservation, PreparedInstanceSafetyRepository,
+    PreparedInstanceSafetyState, PreparedInstanceSafetyTarget,
 };
 pub use intent::{DeploymentIntent, PlannedResource, PlannedResourceIdentity, ResourceOwnership};
 pub use owned_partial_retention::{

@@ -86,3 +86,18 @@ This opt-in backend path does not initialize roots, format disks, rewrite origin
 installation receipts, reset lease generations, enable named dispatch, or provide
 physical VM shutdown evidence from database status. The checked scope pins come
 from the configured provider and remain separate from volume-root ownership.
+
+## Observing an instance before removal
+
+A current manager can inspect an installation's exact original instance import
+without replaying the import as its old installer. An independent worker compares
+that original input with committed creation, permanent removal, and all work,
+Run, lease, grant and consumer history. Source withdrawal does not turn a known
+creation into absence or supply the current manager with the installer's rights.
+
+The observer leaves data held when lineage, scope or runtime cleanup cannot be
+proved. Its default port is unsupported. A drained observation requires the
+owning adapters' exact persisted cleanup evidence; a closed gate, terminal status,
+missing VM ID or lease expiry is insufficient. The initial zero-Run database case
+makes no physical VM shutdown claim. Actual runtime drain, guarded removal
+mutation and application orchestration remain separate boundaries.
