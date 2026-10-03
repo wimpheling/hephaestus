@@ -1,8 +1,11 @@
 //! Durable run orchestration over provider-neutral ports.
 
+mod command_executor;
 mod orchestrator;
 mod repository;
 mod runtime_catalog;
+
+pub use command_executor::RunCommandExecutor;
 
 pub use orchestrator::{
     CompositeRunCompletionObserver, OrchestratorError, PreparedRunAuthority, PreparedRunRuntime,

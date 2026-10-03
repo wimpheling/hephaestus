@@ -4354,10 +4354,12 @@ name = "run-nats"
 version = "0.1.0"
 dependencies = [
  "async-nats",
+ "async-trait",
  "futures-util",
  "review-domain",
  "run-domain",
  "run-orchestrator",
+ "runtime-types",
  "serde_json",
  "thiserror 2.0.19",
  "tokio",

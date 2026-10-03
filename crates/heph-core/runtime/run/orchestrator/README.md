@@ -176,3 +176,12 @@ sweeps. Failed closure quarantines local future IO; exact physical-only fallback
 keeps all fences and creates no receipt or terminal proof. Callback replay requires
 qualified persisted terminal evidence and performs no VM IO. No app composition
 or private schema publication is enabled by this builder.
+
+## Durable command execution port
+
+`RunCommandExecutor` exposes asynchronous start/cancel execution to transports.
+The direct `RunOrchestrator` implementation delegates to the existing methods,
+discards only the successful Start result that transports do not consume, and
+preserves every error and cancellation result. A future app router must validate
+exact persisted producer/profile admission and configured ownership before
+choosing an orchestrator; this port supplies no profile or permission evidence.
