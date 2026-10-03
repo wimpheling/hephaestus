@@ -18,6 +18,16 @@ Acknowledging the exact generation deletes the handoff, as does revocation.
 host restart, limiting the lifetime of runtime authority even when normal
 shutdown did not run.
 
+`LiveRunSnapshotResolver` provides a separate read-only check for exact owned
+run pins. Pre-issuance checks carry no session; issued checks carry the stable
+metadata and ceiling of an already persisted session. Fresh acknowledgement can
+change pending to active without changing that ceiling. Issued checks during
+owned drain grant no acquisition, Start, renewal, or credential issuance.
+
+This port checks live released-source use and generic runtime capabilities.
+Caller execution rights, typed volume grants, and secret authorization remain
+separate checks. Request DTOs and immutable snapshots confer no authority alone.
+
 # When
 
 Call the issuer after constructing an immutable `AuthorizationSnapshot` and

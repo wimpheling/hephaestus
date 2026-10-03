@@ -6,10 +6,14 @@
 
 mod error;
 mod issuer;
+mod live_snapshot;
 mod models;
 
 pub use error::RuntimeAuthorityError;
 pub use issuer::{IssuedRuntimeSession, RuntimeSessionIssuer};
+pub use live_snapshot::{
+    LiveRunSessionCeiling, LiveRunSnapshotPins, LiveRunSnapshotRequest, LiveRunSnapshotResolver,
+};
 pub use models::{
     GatewayRuntimeAuthorityIssuer, GatewayRuntimeSessionRequest, NewRuntimeSession,
     RuntimeHandoffStore, RuntimeSessionRepository, StoredRuntimeSession,
