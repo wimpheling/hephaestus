@@ -17,6 +17,7 @@ mod execution_preparation_repository;
 mod ids;
 mod intent;
 mod owned_partial_retention;
+mod owned_ready_retention;
 mod planning;
 mod planning_observations;
 mod planning_request;
@@ -41,6 +42,10 @@ pub use intent::{DeploymentIntent, PlannedResource, PlannedResourceIdentity, Res
 pub use owned_partial_retention::{
     OwnedPartialRetentionRepository, PartialCreationRetentionPlan, PreparedOwnedVolumeCreation,
     RetainPartialCreation,
+};
+pub use owned_ready_retention::{
+    OwnedReadyRemoveResume, OwnedReadyRetentionPlan, OwnedReadyRetentionRepository,
+    ReopenRetainedOwnedVolume, RetainOwnedReady,
 };
 pub use planning::{PlanningCatalog, PlanningCatalogSnapshot, RecipePlan, RecipePlanner};
 pub use planning_observations::{PlatformPolicyObservation, SourceObservation};

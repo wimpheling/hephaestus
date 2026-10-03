@@ -20,5 +20,8 @@ time.workspace = true
 uuid.workspace = true
 volume-domain = { path = "../domain" }
 
+[dev-dependencies]
+serde_json.workspace = true
+
 [lints]
 workspace = true

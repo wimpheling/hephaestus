@@ -12,6 +12,7 @@ mod leases;
 mod mount_grants;
 mod owned_provisioning;
 mod partial_retention;
+mod ready_retention;
 mod resources;
 mod root_history;
 mod run_volumes;
@@ -33,6 +34,10 @@ pub use owned_provisioning::{
 pub use partial_retention::{
     OwnedPartialRetentionContext, OwnedPartialRetentionReceipt, PartialRetentionObservationHead,
     VolumePartialRetentionRepository,
+};
+pub use ready_retention::{
+    OwnedReadyRetentionClosure, OwnedReadyRetentionClosureWire, OwnedReadyRetentionContext,
+    OwnedReadyRetentionFact, VolumeReadyRetentionRepository,
 };
 pub use resources::{
     MAX_REGISTERED_VOLUME_CAPACITY_BYTES, MIN_LOCAL_VOLUME_CAPACITY_BYTES, ProvisioningClaim,

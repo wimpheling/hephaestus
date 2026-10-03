@@ -66,3 +66,23 @@ complete checked input and a preparation event receipt, rather than an Install
 admission or terminal result. A retry must reauthorize the original real actor,
 all source pins and selected external bindings before returning historical input.
 Manager-only inspection returns data after withdrawal and conveys no authority.
+
+## Retaining a ready owned volume
+
+A current project and volume manager can close attachments, let the known run
+owners drain their workloads, verify the original disk without writes, and retain
+its data. Removing an installation does not borrow the original installer's
+identity or require continued access to its old Source.
+
+The service keeps data held when a consumer, lease, owner, original creation, or
+physical disk cannot be checked. Actual journal custody stays owned through the
+worker fact and manager's commit, including caller cancellation. Retention leaves
+attachments closed; a new consumer needs fresh authorization and an explicit
+reopening receipt. The current reopening path requires an originally completed
+installation. An unfinished but physically ready birth retains its distinct
+positive fact and remains held for reuse.
+
+This opt-in backend path does not initialize roots, format disks, rewrite original
+installation receipts, reset lease generations, enable named dispatch, or provide
+physical VM shutdown evidence from database status. The checked scope pins come
+from the configured provider and remain separate from volume-root ownership.

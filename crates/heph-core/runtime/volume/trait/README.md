@@ -89,3 +89,23 @@ completion. Missing, contradictory or inactive claims never open admission.
 This readonly assertion grants no filesystem proof, format permission or actor
 completion authority. Unsupported repositories deny. Completed stale calls
 must use protected progress replay, not another filesystem check.
+
+## Retaining a ready owned volume
+
+A current project and volume manager can close attachments, let the known run
+owners drain their workloads, verify the original disk without writes, and retain
+its data. Removing an installation does not borrow the original installer's
+identity or require continued access to its old Source.
+
+The service keeps data held when a consumer, lease, owner, original creation, or
+physical disk cannot be checked. Actual journal custody stays owned through the
+worker fact and manager's commit, including caller cancellation. Retention leaves
+attachments closed; a new consumer needs fresh authorization and an explicit
+reopening receipt. The current reopening path requires an originally completed
+installation. An unfinished but physically ready birth retains its distinct
+positive fact and remains held for reuse.
+
+This opt-in backend path does not initialize roots, format disks, rewrite original
+installation receipts, reset lease generations, enable named dispatch, or provide
+physical VM shutdown evidence from database status. The checked scope pins come
+from the configured provider and remain separate from volume-root ownership.
