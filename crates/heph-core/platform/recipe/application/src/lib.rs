@@ -9,6 +9,7 @@
 //! let _: recipe_application::DeploymentIntent = serde_json::from_str("{}").unwrap();
 //! ```
 
+mod active_effect;
 mod commands;
 mod errors;
 mod execution_preparation;
@@ -22,6 +23,7 @@ mod planning_request;
 mod repository;
 mod states;
 
+pub use active_effect::ActiveDeploymentEffectRepository;
 pub use commands::*;
 pub use errors::DeploymentError;
 pub use execution_preparation::{
