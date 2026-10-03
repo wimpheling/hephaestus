@@ -1,5 +1,6 @@
 //! Provider-neutral release command DTOs and workflow ports.
 
+mod instance_execution;
 mod types;
 mod ui_browser;
 pub mod ui_browser_host;
@@ -9,6 +10,10 @@ mod ui_installation_navigation;
 mod ui_request_audit;
 mod volume_instances;
 
+pub use instance_execution::{
+    ActivateInstance, InstanceActivationAdmission, InstanceActivationId, InstanceExecutionError,
+    InstanceExecutionService, InstanceInvocationAdmission, InstanceInvocationId, InvokeInstance,
+};
 pub use release_domain::ui::UiCachePolicy;
 pub use types::{
     BeginUpdateHook, BrokeredRuleCopy, CapabilityBindingSelection, CapabilityRevisionDiagnostic,

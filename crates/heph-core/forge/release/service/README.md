@@ -37,3 +37,11 @@ permanent admission identity. It admits cancellation under current management
 without claiming VM cleanup, lease release, volume deletion, or a terminal
 instance tombstone. `InstanceVolumeStatus` reports that live boundary without
 exposing provider handles or encryption material.
+
+Use `InstanceExecutionService` to activate an installed recipe instance once its
+resources are ready, then request runs of its saved revision. Activation checks
+current management and source-use permissions; Invocation checks execution and
+source-use permissions. Exact instance, revision, and command identities preserve
+the original receipt while replay rechecks current permissions. Activation replay
+keeps a subsequently closed gate closed. These interfaces define admission;
+adapters provide the transaction commits and scheduling behind them.
