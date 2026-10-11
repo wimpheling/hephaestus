@@ -9,6 +9,8 @@ use super::{
     plural_evidence::{PreparedRunVolumes, validate_identity},
 };
 
+mod first_acquisition;
+
 const LIVE_CHECK_LIMIT: Duration = Duration::from_secs(2);
 
 impl RunOrchestrator {
@@ -24,7 +26,11 @@ impl RunOrchestrator {
             ))?;
         let selections = cleanup.volumes.load_run_selections(run.id).await?;
         validate_identity(run, &selections)?;
-        self.check_volume_authority(run, &selections).await?;
+        if run.kind == run_domain::RunKind::Invocation {
+            Box::pin(self.check_invocation_first_acquisition(run, &selections)).await?;
+        } else {
+            self.check_volume_authority(run, &selections).await?;
+        }
         let attachments = cleanup.volumes.acquire_run(&selections).await?;
         let scope = self.provider.owner_scope()?;
         Ok(PreparedRunVolumes::new(

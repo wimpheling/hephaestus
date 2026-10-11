@@ -1,4 +1,6 @@
 //! Core-only Invocation tests use controlled admissions and guests, not SQL/VM proof.
+#[path = "invocation/first_acquisition.rs"]
+mod first_acquisition;
 #[path = "invocation/fixture.rs"]
 mod fixture;
 #[path = "invocation/lifecycle.rs"]
