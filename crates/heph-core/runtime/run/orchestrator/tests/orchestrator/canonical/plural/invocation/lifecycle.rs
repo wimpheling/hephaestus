@@ -1,6 +1,8 @@
 //! The production Core lifecycle through controlled durable/guest ports only.
 #[path = "lifecycle/authority.rs"]
 mod authority;
+#[path = "lifecycle/guest_cwd.rs"]
+mod guest_cwd;
 #[path = "lifecycle/races.rs"]
 mod races;
 #[path = "lifecycle/store.rs"]

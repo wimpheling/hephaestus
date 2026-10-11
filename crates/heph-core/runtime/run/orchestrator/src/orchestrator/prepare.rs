@@ -261,10 +261,11 @@ async fn assemble_start(
         }
     };
     if bound.run.kind == run_domain::RunKind::Invocation
-        && (spec.runtime_git_bridge.is_some() || spec.command.working_dir.is_some())
+        && (spec.runtime_git_bridge.is_some()
+            || !super::invocation_guest_path::allowed(spec.command.working_dir.as_deref()))
     {
         return Err(VmError::InvalidState(
-            "Invocation workload contains Git or working-directory overrides",
+            "Invocation workload contains Git or an unsafe guest working directory",
         )
         .into());
     }
