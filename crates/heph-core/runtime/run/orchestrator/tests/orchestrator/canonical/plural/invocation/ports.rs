@@ -4,7 +4,7 @@ use run_domain::Run;
 use runtime_types::RunId;
 use std::sync::{
     Arc, Mutex,
-    atomic::{AtomicBool, Ordering},
+    atomic::{AtomicBool, AtomicU8, Ordering},
 };
 use tokio::sync::{broadcast, watch};
 use vm_trait::{
@@ -56,11 +56,17 @@ pub struct ControlledProvider {
     pub spec: Mutex<Option<VmSpec>>,
     pub events: broadcast::Sender<VmEvent>,
     pub stop_exits: Arc<AtomicBool>,
+    pub acknowledgement: Arc<AtomicU8>,
+    pub fail_wait: Arc<AtomicBool>,
+    pub emit_exit_event: Arc<AtomicBool>,
 }
 impl ControlledProvider {
     pub fn new(owner: Arc<ScopedProvider>) -> Self {
         Self {
             owner,
+            acknowledgement: Arc::new(AtomicU8::new(0)),
+            fail_wait: Arc::new(AtomicBool::new(false)),
+            emit_exit_event: Arc::new(AtomicBool::new(false)),
             stop_exits: Arc::new(AtomicBool::new(true)),
             exit: watch::channel(None).0,
             spec: Mutex::new(None),
@@ -85,9 +91,18 @@ impl VmProvider for ControlledProvider {
     async fn provision(&self, spec: VmSpec) -> Result<Arc<dyn VmInstance>, VmError> {
         lock(&self.owner.inner.log).push("provision");
         let id = spec.id.clone();
+        let authority = spec
+            .runtime_authority
+            .as_ref()
+            .map(|bootstrap| (bootstrap.session_id(), bootstrap.generation()));
         *lock(&self.spec) = Some(spec);
         Ok(Arc::new(ControlledGuest {
             id,
+            authority,
+            acknowledgement: self.acknowledgement.clone(),
+            fail_wait: self.fail_wait.clone(),
+            emit_exit_event: self.emit_exit_event.clone(),
+            pause_start: lock(&self.owner.pause_start).clone(),
             events: self.events.clone(),
             exit: self.exit.clone(),
             log: self.owner.inner.log.clone(),
@@ -107,6 +122,11 @@ impl VmProvider for ControlledProvider {
 }
 struct ControlledGuest {
     id: VmId,
+    authority: Option<(uuid::Uuid, u64)>,
+    acknowledgement: Arc<AtomicU8>,
+    fail_wait: Arc<AtomicBool>,
+    emit_exit_event: Arc<AtomicBool>,
+    pause_start: Option<Arc<crate::canonical::provider::Pause>>,
     events: broadcast::Sender<VmEvent>,
     exit: watch::Sender<Option<VmExit>>,
     log: Arc<Mutex<Vec<&'static str>>>,
@@ -119,6 +139,19 @@ impl VmInstance for ControlledGuest {
     }
     async fn start(&self) -> Result<(), VmError> {
         lock(&self.log).push("start");
+        if let Some(pause) = &self.pause_start {
+            pause.wait().await;
+        }
+        if let Some((session_id, generation)) = self.authority
+            && self.acknowledgement.load(Ordering::SeqCst) != 2
+        {
+            let generation =
+                generation + u64::from(self.acknowledgement.load(Ordering::SeqCst) == 1);
+            let _ = self.events.send(VmEvent::RuntimeAuthorityAcknowledged {
+                session_id,
+                generation,
+            });
+        }
         let _ = self.events.send(VmEvent::Ready);
         let _ = self.events.send(VmEvent::FinalizeResult {
             message: "untrusted Git finalize".into(),
@@ -140,6 +173,12 @@ impl VmInstance for ControlledGuest {
         loop {
             let exit = receiver.borrow_and_update().clone();
             if let Some(exit) = exit {
+                if self.fail_wait.load(Ordering::SeqCst) {
+                    return Err(VmError::InvalidState("controlled actual wait failed"));
+                }
+                if self.emit_exit_event.load(Ordering::SeqCst) {
+                    let _ = self.events.send(VmEvent::Exited(exit.clone()));
+                }
                 return Ok(exit);
             }
             receiver

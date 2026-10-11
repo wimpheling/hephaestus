@@ -62,6 +62,10 @@ pub fn with_authorizer(
         provider,
         factory,
     )
+    .with_authority_manager(Arc::new(crate::support::RecordingAuthorityManager {
+        log: fixture.log.clone(),
+        reject_acknowledgement: false,
+    }))
     .with_qualified_invocation(fixture.provider.owner_scope().unwrap())
     .with_workspace_manager(Arc::new(NoGit))
     .with_runtime_git_workspace_manager(Arc::new(NoGit))

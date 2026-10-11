@@ -8,6 +8,7 @@ mod complete;
 mod errors;
 mod events;
 mod invocation;
+mod invocation_lifecycle;
 mod legacy_cleanup;
 mod legacy_placement;
 mod legacy_recovery;

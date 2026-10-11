@@ -179,10 +179,11 @@ async fn start_vm(
             .check_volume_authority(&context.run, &volumes.selections)
             .await?;
     }
-    if let Err(error) = orchestrator
-        .repository
-        .transition(run_id, RunState::Starting, None, None)
-        .await
+    if context.run.kind != run_domain::RunKind::Invocation
+        && let Err(error) = orchestrator
+            .repository
+            .transition(run_id, RunState::Starting, None, None)
+            .await
     {
         drop(operation);
         orchestrator.abort_vm_keep_lease(run_id, &instance).await;
@@ -302,7 +303,11 @@ async fn finish_started(
             .await
             .map(finished);
     }
-    if let Err(error) = orchestrator
+    if context.run.kind == run_domain::RunKind::Invocation {
+        context.run =
+            super::invocation_lifecycle::enter_running(orchestrator, &context.run, &instance)
+                .await?;
+    } else if let Err(error) = orchestrator
         .repository
         .transition(context.run.id, RunState::Running, None, None)
         .await

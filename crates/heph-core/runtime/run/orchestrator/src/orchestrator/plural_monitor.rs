@@ -16,6 +16,38 @@ use super::{
 pub struct GuestCleanupPhase {
     pub draining: AtomicBool,
     pub confirmed: AtomicBool,
+    invocation: Option<Box<super::invocation_lifecycle::InvocationExecutionPhase>>,
+}
+
+impl GuestCleanupPhase {
+    fn invocation() -> Self {
+        Self {
+            // Invocation alone owns this error/notification storage; ordinary
+            // execution keeps None and allocates no phase.
+            invocation: Some(Box::default()),
+            ..Self::default()
+        }
+    }
+
+    pub fn complete_wait(&self) -> bool {
+        self.invocation
+            .as_deref()
+            .is_none_or(super::invocation_lifecycle::InvocationExecutionPhase::complete_wait)
+    }
+
+    fn take_failure(&self) -> Option<OrchestratorError> {
+        self.invocation
+            .as_deref()
+            .and_then(super::invocation_lifecycle::InvocationExecutionPhase::take_failure)
+    }
+
+    async fn failure_signal(&self) {
+        match self.invocation.as_deref() {
+            // Keep the added Invocation notification wait out of Start frames.
+            Some(phase) => Box::pin(phase.failure_signal()).await,
+            None => std::future::pending().await,
+        }
+    }
 }
 
 impl RunOrchestrator {
@@ -49,16 +81,25 @@ impl RunOrchestrator {
                 &vm,
             )
             .await?;
-        let phase = GuestCleanupPhase::default();
+        let phase = if run.kind == run_domain::RunKind::Invocation {
+            GuestCleanupPhase::invocation()
+        } else {
+            GuestCleanupPhase::default()
+        };
         let failure = {
             let execution = self.execute_prepared_run(run_id, prepared, Some(&phase));
             tokio::pin!(execution);
             tokio::select! {
-                result = &mut execution => match result {
-                    Ok(run) => return Ok(run),
-                    Err(error) => error,
+                result = &mut execution => match phase.take_failure() {
+                    Some(failure) => failure,
+                    None => match result {
+                        Ok(run) => return Ok(run),
+                        Err(error) => error,
+                    },
                 },
-                failure = self.monitor_volume_execution(&run, &mut monitored, &phase) => failure,
+                failure = self.monitor_execution(&run, &mut monitored, &phase) => failure,
+                () = phase.failure_signal() => phase.take_failure()
+                    .expect("only a stored Invocation error signals failure"),
             }
             // Drop the execution future before taking its physical operation guard.
             // No cancelled provision/Start/event future can resume after closure.
@@ -71,6 +112,43 @@ impl RunOrchestrator {
             phase.confirmed.load(Ordering::SeqCst),
         )
         .await
+    }
+
+    async fn monitor_execution(
+        &self,
+        run: &Run,
+        volumes: &mut PreparedRunVolumes,
+        phase: &GuestCleanupPhase,
+    ) -> OrchestratorError {
+        if let Some(invocation) = phase.invocation.as_deref() {
+            let period = Duration::from_secs(1);
+            let mut ticks = tokio::time::interval_at(tokio::time::Instant::now() + period, period);
+            ticks.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+            loop {
+                ticks.tick().await;
+                if invocation.exited() {
+                    // Actual wait completed. Exact owning cleanup still holds
+                    // all fences under its independent physical deadlines.
+                    return std::future::pending().await;
+                }
+                let checked = tokio::select! {
+                    () = invocation.exit_signal() => return std::future::pending().await,
+                    checked = tokio::time::timeout(
+                        Duration::from_secs(2),
+                        self.refresh_run_volumes(run, volumes, false),
+                    ) => checked.unwrap_or_else(|_| Err(VolumeError::InvalidState(
+                        "combined live volume authorization deadline elapsed",
+                    ).into())),
+                };
+                if let Err(error) = checked {
+                    invocation.fail(error);
+                    // The outer select consumes the stored original error. If
+                    // actual exit won, this was a post-exit check and is ignored.
+                    return std::future::pending().await;
+                }
+            }
+        }
+        self.monitor_volume_execution(run, volumes, phase).await
     }
 
     async fn monitor_volume_execution(

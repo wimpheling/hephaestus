@@ -214,3 +214,31 @@ Held/Complete are progress classifications. An application still needs original
 closure correlation, global inventory and action-specific owning cleanup evidence
 before recording Drain/Detach; zero-Run absence or a status alone is insufficient.
 Controlled tests exercise callbacks and lifetime, not physical VM destruction.
+
+## Qualified Invocation lifecycle ordering
+
+The explicit qualified Invocation profile carries the actual Run returned by
+the Provisioning transition into runtime, saved-empty secret and authority
+preparation. A bootstrap session is required, including with zero volume slots.
+The persisted phase remains Provisioning during actual Start, exact guest
+session/generation acknowledgement and complete physical attachment. Only then
+does the worker enter Starting and Running. Current authority checks still run
+immediately before provision and Start; a missing or wrong acknowledgement or
+an incomplete attached set cannot grant either later phase.
+
+Invocation uses a private synchronized execution boundary. Only successful
+`VmInstance::wait` followed by durable event draining can mark execution Exited.
+A live-check failure observed first retains its original owned error, even if a
+ready execution result is selected next. Failed wait, execution timeout, Finalize
+and VM event payloads cannot mark this boundary. After actual exit, execution
+checks and heartbeats remain pending while exact owning cleanup continues; its
+intentional execution-authority closure does not become withdrawal. The full
+Start claim, all fences and independent cleanup deadlines remain held. Cleanup
+confirmation still requires actual destruction, scoped provider recheck and a
+durable receipt; uncertainty releases nothing. Current cancellation still wins
+the terminal outcome. The ordinary profile retains its existing drain checks.
+
+Controlled Core tests exercise these production lifecycle ports and ordering.
+Their memory repository outcomes do not establish PostgreSQL terminal-success
+authority or physical VM evidence. Frozen B1 intentionally still rejects the
+Succeeded transition until a separate terminal guard successor is supplied.

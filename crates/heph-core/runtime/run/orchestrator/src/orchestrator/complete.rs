@@ -54,7 +54,13 @@ pub async fn complete_started_run(
     // Enter an owned drain only after successful authoritative guest completion.
     // The live-start claim still excludes future starts for this run. No fence
     // is released, and live source/caller checks continue until confirmation.
+    // Qualified Invocation retires execution checks at the actual exit boundary.
     if let Some(phase) = guest_cleanup {
+        if !phase.complete_wait() {
+            // The monitor owns the original pre-exit error; the outer select
+            // consumes it. This completion must never race through to success.
+            return std::future::pending().await;
+        }
         phase
             .draining
             .store(true, std::sync::atomic::Ordering::SeqCst);

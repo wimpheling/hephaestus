@@ -161,10 +161,16 @@ async fn bind_start(
             .await
             .map(finished);
     }
-    orchestrator
+    let provisioned = orchestrator
         .repository
         .transition(command.run_id, RunState::Provisioning, None, None)
         .await?;
+    // Qualified adapters compare the supplied Run with the actual stored phase.
+    let run = if run.kind == run_domain::RunKind::Invocation {
+        provisioned
+    } else {
+        run
+    };
     let authorization = if let Some(volumes) = &plural {
         orchestrator
             .check_volume_authority(&run, &volumes.selections)
@@ -266,6 +272,12 @@ async fn assemble_start(
         .bootstrap
         .as_ref()
         .map(|bootstrap| (bootstrap.session_id(), bootstrap.generation()));
+    if bound.run.kind == run_domain::RunKind::Invocation && expected_authority_ack.is_none() {
+        return Err(super::authority::RunAuthorityError::redacted(
+            "qualified Invocation bootstrap is absent",
+        )
+        .into());
+    }
     spec.runtime_authority = authority.bootstrap;
     if let Some(workspace) = runtime_git_workspace {
         spec.runtime_git_bridge = Some(workspace.bridge);
