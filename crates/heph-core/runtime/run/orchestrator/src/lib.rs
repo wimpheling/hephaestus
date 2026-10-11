@@ -1,10 +1,15 @@
 //! Durable run orchestration over provider-neutral ports.
 
+mod cleanup_wake;
 mod command_executor;
 mod orchestrator;
 mod repository;
 mod runtime_catalog;
 
+pub use cleanup_wake::{
+    RunCleanupWakeBinding, RunCleanupWakeOriginal, RunCleanupWakeProgress, RunCleanupWakeRequest,
+    RunCleanupWakeSnapshot,
+};
 pub use command_executor::RunCommandExecutor;
 
 pub use orchestrator::{

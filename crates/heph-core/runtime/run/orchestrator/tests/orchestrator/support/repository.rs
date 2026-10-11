@@ -4,7 +4,7 @@ use run_orchestrator::{CreateRunResult, RepositoryError, RunRepository, StoredVm
 use runtime_types::{LeaseId, RunId, VolumeId};
 use std::sync::{
     Arc,
-    atomic::{AtomicBool, Ordering},
+    atomic::{AtomicBool, AtomicUsize, Ordering},
 };
 use time::OffsetDateTime;
 use tokio::sync::Mutex;
@@ -17,6 +17,26 @@ pub struct TransitionPause {
 }
 
 pub struct MemoryRepository {
+    /// Controlled closed/cancelled qualification only; not real SQL proof.
+    pub wake: Mutex<
+        Option<(
+            run_orchestrator::RunCleanupWakeRequest,
+            run_orchestrator::RunCleanupWakeBinding,
+        )>,
+    >,
+    pub wake_preparation: Mutex<
+        Option<(
+            run_orchestrator::RunCleanupWakeRequest,
+            Arc<dyn run_orchestrator::RunCleanupRepository>,
+        )>,
+    >,
+    pub wake_prepare_calls: AtomicUsize,
+    pub wake_prepare_fail: AtomicBool,
+    pub pause_wake_preparation: Mutex<Option<TransitionPause>>,
+    pub wake_fail: AtomicBool,
+    pub wake_substitute: AtomicBool,
+    pub wake_calls: AtomicUsize,
+    pub wake_entered: tokio::sync::Notify,
     pub run: Mutex<Run>,
     pub created: Mutex<bool>,
     pub events: Mutex<Vec<StoredVmEvent>>,
@@ -33,6 +53,15 @@ impl MemoryRepository {
     pub fn new(command: &StartRun) -> Self {
         let now = OffsetDateTime::now_utc();
         Self {
+            wake: Mutex::new(None),
+            wake_preparation: Mutex::new(None),
+            wake_prepare_calls: AtomicUsize::new(0),
+            wake_prepare_fail: AtomicBool::new(false),
+            pause_wake_preparation: Mutex::new(None),
+            wake_fail: AtomicBool::new(false),
+            wake_substitute: AtomicBool::new(false),
+            wake_calls: AtomicUsize::new(0),
+            wake_entered: tokio::sync::Notify::new(),
             run: Mutex::new(Run {
                 id: command.run_id,
                 instance_id: command.instance_id,
@@ -70,6 +99,70 @@ impl MemoryRepository {
 
 #[async_trait]
 impl RunRepository for MemoryRepository {
+    async fn prepare_cleanup_wake(
+        &self,
+        request: &run_orchestrator::RunCleanupWakeRequest,
+        scope: &run_domain::RunCleanupHostId,
+    ) -> Result<run_orchestrator::RunCleanupWakeSnapshot, RepositoryError> {
+        self.wake_prepare_calls.fetch_add(1, Ordering::SeqCst);
+        if self.wake_prepare_fail.load(Ordering::SeqCst) {
+            return Err(RepositoryError::InvalidData(
+                "controlled preparation DB unknown",
+            ));
+        }
+        let pause = self.pause_wake_preparation.lock().await.clone();
+        if let Some(pause) = pause {
+            pause.entered.notify_one();
+            pause.release.notified().await;
+        }
+        let preparation = self.wake_preparation.lock().await.clone();
+        if let Some((expected, cleanup)) = preparation {
+            if &expected != request {
+                return Err(RepositoryError::InvalidData("wrong preparation closure"));
+            }
+            // Existing controlled target writer only: neither real SQL nor
+            // physical confirmation is established by this test projection.
+            let target = cleanup.begin_cleanup(request.run_id()).await?;
+            *self.wake.lock().await = Some((
+                expected,
+                run_orchestrator::RunCleanupWakeBinding::Owned {
+                    target: Box::new(target),
+                },
+            ));
+        }
+        self.load_cleanup_wake(request, scope).await
+    }
+
+    async fn load_cleanup_wake(
+        &self,
+        request: &run_orchestrator::RunCleanupWakeRequest,
+        _: &run_domain::RunCleanupHostId,
+    ) -> Result<run_orchestrator::RunCleanupWakeSnapshot, RepositoryError> {
+        let call = self.wake_calls.fetch_add(1, Ordering::SeqCst);
+        self.wake_entered.notify_one();
+        if self.wake_fail.load(Ordering::SeqCst) {
+            return Err(RepositoryError::InvalidData("controlled wake DB failure"));
+        }
+        let (expected, binding) = self
+            .wake
+            .lock()
+            .await
+            .clone()
+            .ok_or(RepositoryError::InvalidData("controlled wake unsupported"))?;
+        if request != &expected {
+            return Err(RepositoryError::InvalidData("wrong original closure"));
+        }
+        let mut run = self.run.lock().await.clone();
+        if self.wake_substitute.load(Ordering::SeqCst) && call > 0 {
+            run.release_id = runtime_types::ReleaseId::new();
+        }
+        Ok(run_orchestrator::RunCleanupWakeSnapshot {
+            request: expected,
+            run,
+            binding,
+        })
+    }
+
     async fn create_run_with_vm_plan(
         &self,
         command: &StartRun,

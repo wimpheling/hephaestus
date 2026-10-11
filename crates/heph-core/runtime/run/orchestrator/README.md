@@ -185,3 +185,32 @@ discards only the successful Start result that transports do not consume, and
 preserves every error and cancellation result. A future app router must validate
 exact persisted producer/profile admission and configured ownership before
 choosing an orchestrator; this port supplies no profile or permission evidence.
+
+## Waking interrupted instance cleanup
+
+An internal owning cleanup wake can finish an exact already-cancelled Run after
+command redelivery would otherwise return without retrying cleanup. It keeps the
+same controller, active handles, managed provider family and shared operation
+guards alive in a detached task bounded to 30 seconds. Trusted supervision retains
+the controller across Held/error results, so uncertain active handles remain in
+that same owner map; the wake never substitutes a short-lived controller. A live Start remains held;
+no second cancellation, global sweep, inferred VM identifier or execution grant
+is created. Existing scoped cleanup owns confirmation, fence release and callbacks.
+
+Before repository preparation, the wake claims the shared live-Start token and
+operation mutex. A live Start returns Held without invoking preparation. The
+worker prepares only atomic metadata: it closes acquisition and freezes/replays
+the exact target, without new commands, provider IO, receipts, releases or outcome
+changes. Read-only qualification then reloads and compares the complete snapshot
+under the same guard before existing scoped cleanup begins.
+
+The worker repository must independently qualify the original permanent removal
+and cancellation, complete immutable Run/profile/placement pins, actual configured
+scope and permanently closed acquisition before any IO. The default qualifier is
+unsupported, including metadata preparation; this change implements no
+PostgreSQL admission or startup routing. Preconsumer Invocation and named recipe
+versus Legacy lineage remain held until separate backend contracts exist.
+Held/Complete are progress classifications. An application still needs original
+closure correlation, global inventory and action-specific owning cleanup evidence
+before recording Drain/Detach; zero-Run absence or a status alone is insufficient.
+Controlled tests exercise callbacks and lifetime, not physical VM destruction.

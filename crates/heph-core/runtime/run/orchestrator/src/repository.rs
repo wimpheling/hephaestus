@@ -46,6 +46,43 @@ pub enum RepositoryError {
 /// Persistence boundary required by the orchestrator.
 #[async_trait]
 pub trait RunRepository: Send + Sync + 'static {
+    /// Atomically prepares metadata for exact permanently cancelled owning cleanup.
+    ///
+    /// Worker-only: independently qualify original removal/Cancel, immutable
+    /// producer, prepared creation, profile and actual provider scope. Under the
+    /// existing parent/resource lock order, permanently close acquisition and
+    /// freeze or replay the exact complete canonical target. The owning caller
+    /// holds its live-Start claim and operation mutex before invoking this port.
+    /// No physical IO, receipt, lease release, callback, new command, state or
+    /// outcome change belongs here. Unknown ownership and unsupported preconsumer
+    /// history deny; preparation cannot invent a VM or adopt historical work.
+    /// Defaults unsupported; a returned projection is not physical cleanup proof.
+    async fn prepare_cleanup_wake(
+        &self,
+        _request: &crate::RunCleanupWakeRequest,
+        _scope: &run_domain::RunCleanupHostId,
+    ) -> Result<crate::RunCleanupWakeSnapshot, RepositoryError> {
+        Err(RepositoryError::InvalidData(
+            "owning cleanup wake preparation is unsupported",
+        ))
+    }
+
+    /// Independently qualifies exact original removal and immutable owning history.
+    ///
+    /// Worker-only: match original request/key/hash/creator/CAS and durable Cancel,
+    /// permanent instance and Run acquisition closure, full producer/pins/profile,
+    /// and actual configured scope. Unknown/foreign history is never eligible.
+    /// No new Cancel, receipt, lifecycle write or host-filtered absence belongs here.
+    async fn load_cleanup_wake(
+        &self,
+        _request: &crate::RunCleanupWakeRequest,
+        _scope: &run_domain::RunCleanupHostId,
+    ) -> Result<crate::RunCleanupWakeSnapshot, RepositoryError> {
+        Err(RepositoryError::InvalidData(
+            "owning cleanup wake qualification is unsupported",
+        ))
+    }
+
     /// Commits exact fresh Legacy placement before IO; unsupported by default.
     async fn create_run_with_legacy_placement(
         &self,

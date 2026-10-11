@@ -14,3 +14,6 @@ mod volumes;
 
 #[path = "strict_legacy/deadlines.rs"]
 mod deadlines;
+
+#[path = "strict_legacy/cleanup_wake.rs"]
+mod cleanup_wake;

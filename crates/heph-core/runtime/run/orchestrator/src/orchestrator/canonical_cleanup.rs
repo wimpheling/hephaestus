@@ -76,6 +76,16 @@ impl RunOrchestrator {
         run_id: RunId,
         instance: Option<Arc<dyn VmInstance>>,
     ) -> Result<Run, OrchestratorError> {
+        self.canonical_cleanup_expected(run_id, instance, None)
+            .await
+    }
+
+    pub(super) async fn canonical_cleanup_expected(
+        &self,
+        run_id: RunId,
+        instance: Option<Arc<dyn VmInstance>>,
+        expected: Option<&run_domain::RunCleanupTarget>,
+    ) -> Result<Run, OrchestratorError> {
         let cleanup = self
             .canonical_cleanup
             .as_ref()
@@ -84,10 +94,10 @@ impl RunOrchestrator {
         self.provider.owner_scope()?;
         let run = self.repository.get(run_id).await?;
         if run.state == RunState::CleanedUp {
-            return self.replay_cleaned_run(run, cleanup).await;
+            return self.replay_cleaned_run(run, cleanup, expected).await;
         }
         let receipt = self
-            .confirm_canonical_guest_cleanup(run_id, instance)
+            .confirm_canonical_guest_cleanup_expected(run_id, instance, expected)
             .await?;
         let current = self.repository.get(run_id).await?;
         if current.state != RunState::CleaningUp {
@@ -105,14 +115,21 @@ impl RunOrchestrator {
         &self,
         run: Run,
         cleanup: &CanonicalCleanup,
+        expected: Option<&run_domain::RunCleanupTarget>,
     ) -> Result<Run, OrchestratorError> {
         let cleaned =
             if let Some(receipt) = cleanup.repository.recorded_cleanup_receipt(run.id).await? {
                 self.validate_cleanup_scope(receipt.target())?;
+                if let Some(expected) = expected {
+                    checked(receipt.matches_target(expected))?;
+                }
                 // A completed target can reference resources since reused by a new
                 // run. Its exact completion replay must precede any provider IO.
                 cleanup.repository.finish_cleanup(&receipt).await?
             } else {
+                if expected.is_some() {
+                    return Err(invalid("wake cleanup replay has no exact receipt"));
+                }
                 if !cleanup.volumes.leases_for_run(run.id).await?.is_empty() {
                     return Err(invalid(
                         "cleaned historical run still holds canonical leases",

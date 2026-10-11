@@ -3,7 +3,11 @@
 use async_trait::async_trait;
 use run_domain::{CancelRun, StartRun};
 
-use crate::{OrchestratorError, RunOrchestrator};
+use crate::{
+    OrchestratorError, RepositoryError, RunCleanupWakeProgress, RunCleanupWakeRequest,
+    RunOrchestrator,
+};
+use std::sync::Arc;
 
 /// Executes durable commands after implementation-specific admission checks.
 ///
@@ -12,6 +16,17 @@ use crate::{OrchestratorError, RunOrchestrator};
 /// admission, physical ownership or authority to choose a profile from a payload.
 #[async_trait]
 pub trait RunCommandExecutor: Send + Sync + 'static {
+    /// Wakes exact already-cancelled owning cleanup, creating no command or IO grant.
+    ///
+    /// # Errors
+    /// Default/unknown adapters are unsupported; owning failures remain held.
+    async fn wake_cleanup(
+        self: Arc<Self>,
+        _request: &RunCleanupWakeRequest,
+    ) -> Result<RunCleanupWakeProgress, OrchestratorError> {
+        Err(RepositoryError::InvalidData("owning cleanup wake is unsupported").into())
+    }
+
     /// Executes one exact start command and preserves durable idempotency.
     ///
     /// # Errors
@@ -27,6 +42,13 @@ pub trait RunCommandExecutor: Send + Sync + 'static {
 
 #[async_trait]
 impl RunCommandExecutor for RunOrchestrator {
+    async fn wake_cleanup(
+        self: Arc<Self>,
+        request: &RunCleanupWakeRequest,
+    ) -> Result<RunCleanupWakeProgress, OrchestratorError> {
+        Self::wake_cleanup(self, request).await
+    }
+
     async fn start_run(&self, command: &StartRun) -> Result<(), OrchestratorError> {
         Self::start_run(self, command).await.map(|_| ())
     }

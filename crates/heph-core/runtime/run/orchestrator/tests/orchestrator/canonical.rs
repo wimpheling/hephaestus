@@ -46,3 +46,6 @@ impl Fixture {
         *self.runs.created.lock().await = true;
     }
 }
+
+#[path = "canonical/cleanup_wake.rs"]
+mod cleanup_wake;

@@ -15,6 +15,7 @@ pub struct Repository {
     pub plan: Mutex<Option<LegacyVmPlacement>>,
     pub returned_close: Mutex<Option<LegacyVmPlacement>>,
     pub returned_consume: Mutex<Option<LegacyVmPlacement>>,
+    pub cancel_replay: AtomicBool,
     pub closed: AtomicBool,
     pub fail_close: AtomicBool,
     pub hang_close: AtomicBool,
@@ -30,6 +31,7 @@ impl Repository {
             plan: Mutex::new(None),
             returned_close: Mutex::new(None),
             returned_consume: Mutex::new(None),
+            cancel_replay: AtomicBool::new(false),
             closed: AtomicBool::new(false),
             fail_close: AtomicBool::new(false),
             hang_close: AtomicBool::new(false),
@@ -55,6 +57,40 @@ impl Repository {
 }
 #[async_trait]
 impl RunRepository for Repository {
+    async fn prepare_cleanup_wake(
+        &self,
+        request: &run_orchestrator::RunCleanupWakeRequest,
+        scope: &run_domain::RunCleanupHostId,
+    ) -> Result<run_orchestrator::RunCleanupWakeSnapshot, RepositoryError> {
+        // These Legacy fixtures already have controlled permanent closure.
+        // The real named recipe/Legacy association remains unsupported.
+        if !self.closed.load(Ordering::SeqCst)
+            || scope.provider_namespace() != self.scope.provider_scope().namespace()
+            || scope.host_id() != self.scope.provider_scope().host_id()
+        {
+            return Err(RepositoryError::InvalidData(
+                "controlled Legacy preparation absent",
+            ));
+        }
+        self.inner.prepare_cleanup_wake(request, scope).await
+    }
+
+    async fn load_cleanup_wake(
+        &self,
+        request: &run_orchestrator::RunCleanupWakeRequest,
+        scope: &run_domain::RunCleanupHostId,
+    ) -> Result<run_orchestrator::RunCleanupWakeSnapshot, RepositoryError> {
+        if !self.closed.load(Ordering::SeqCst)
+            || scope.provider_namespace() != self.scope.provider_scope().namespace()
+            || scope.host_id() != self.scope.provider_scope().host_id()
+        {
+            return Err(RepositoryError::InvalidData(
+                "controlled Legacy closure/scope absent",
+            ));
+        }
+        self.inner.load_cleanup_wake(request, scope).await
+    }
+
     async fn create_run_with_legacy_placement(
         &self,
         c: &StartRun,
@@ -248,6 +284,9 @@ impl RunRepository for Repository {
         self.inner.append_vm_event(r, e).await
     }
     async fn request_cancel(&self, c: &CancelRun) -> Result<bool, RepositoryError> {
+        if self.cancel_replay.load(Ordering::SeqCst) {
+            return Ok(false);
+        }
         self.inner.request_cancel(c).await
     }
     async fn recoverable_runs(&self) -> Result<Vec<Run>, RepositoryError> {

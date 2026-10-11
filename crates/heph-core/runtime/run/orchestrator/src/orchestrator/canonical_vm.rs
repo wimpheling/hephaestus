@@ -33,6 +33,16 @@ impl RunOrchestrator {
         run_id: RunId,
         instance: Option<Arc<dyn VmInstance>>,
     ) -> Result<RunCleanupReceipt, OrchestratorError> {
+        self.confirm_canonical_guest_cleanup_expected(run_id, instance, None)
+            .await
+    }
+
+    pub(super) async fn confirm_canonical_guest_cleanup_expected(
+        &self,
+        run_id: RunId,
+        instance: Option<Arc<dyn VmInstance>>,
+        expected: Option<&RunCleanupTarget>,
+    ) -> Result<RunCleanupReceipt, OrchestratorError> {
         let cleanup = self
             .canonical_cleanup
             .as_ref()
@@ -51,6 +61,17 @@ impl RunOrchestrator {
         };
         tokio::time::timeout(self.cleanup_timeout, async {
             let operation = self.lock_run_operation(run_id).await?;
+            let target = if let Some(expected) = expected {
+                // Wake rechecks immutable target under the same reacquired IO lock.
+                let fresh = cleanup.repository.begin_cleanup(run_id).await?;
+                if &fresh != expected || fresh != target {
+                    return Err(invalid("wake cleanup target changed under operation lock"));
+                }
+                self.validate_cleanup_scope(&fresh)?;
+                fresh
+            } else {
+                target
+            };
             let result = self.confirm_quiescent_target(target, instance).await;
             drop(operation);
             result

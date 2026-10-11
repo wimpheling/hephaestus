@@ -3,6 +3,7 @@ mod canonical_cleanup;
 mod canonical_recovery;
 mod canonical_vm;
 mod cleanup;
+mod cleanup_wake;
 mod complete;
 mod errors;
 mod events;
