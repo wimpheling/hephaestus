@@ -49,7 +49,7 @@ impl LibkrunInstance {
     }
 
     pub(super) async fn stop_leader(&self, mode: StopMode) -> Result<(), VmError> {
-        let should_stop = {
+        {
             let mut state = self.state.lock().await;
             match &*state {
                 Lifecycle::Provisioned
@@ -57,15 +57,12 @@ impl LibkrunInstance {
                 | Lifecycle::StartFailed(_)
                 | Lifecycle::Destroyed => return Ok(()),
                 Lifecycle::Destroying { .. } => return Err(VmError::Destroyed),
-                Lifecycle::Stopping => false,
-                Lifecycle::Starting | Lifecycle::Running => {
+                // The operation mutex excludes a still-running stop. A prior
+                // failed kill must be retried with the same actual backend.
+                Lifecycle::Stopping | Lifecycle::Starting | Lifecycle::Running => {
                     *state = Lifecycle::Stopping;
-                    true
                 }
             }
-        };
-        if !should_stop {
-            return self.wait_for_terminal().await.map(|_| ());
         }
 
         match mode {

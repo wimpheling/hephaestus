@@ -1,13 +1,12 @@
 use super::common::{
-    Arc, BoxedPrivateServiceConnection, ErrorSnapshot, LibkrunInstance, Lifecycle, Ordering,
-    PRIVATE_HTTP_TIMEOUT, PROVIDER_NAME, PrivateServiceConnectionMessage, StopMode, VmError,
-    VmEvent, VmExit, VmId, VmInstance, WorkerCommand, async_trait, broadcast, info, oneshot,
-    timeout,
+    Arc, BoxedPrivateServiceConnection, LibkrunInstance, Lifecycle, Ordering, PRIVATE_HTTP_TIMEOUT,
+    PROVIDER_NAME, PrivateServiceConnectionMessage, StopMode, VmError, VmEvent, VmExit, VmId,
+    VmInstance, WorkerCommand, async_trait, broadcast, oneshot, timeout,
 };
 
 use super::{
     helpers::{provider_error, unavailable_error},
-    http::{private_http_request_message, wait_start_result},
+    http::private_http_request_message,
 };
 
 #[async_trait]
@@ -17,123 +16,13 @@ impl VmInstance for LibkrunInstance {
     }
 
     async fn start(&self) -> Result<(), VmError> {
-        // This marker's Drop must run after the operation lock is released.
-        #[allow(clippy::collection_is_never_read)]
-        let _activity;
-        let _operation = self.operation.lock().await;
-        let registry = self.registry.upgrade();
-        _activity = if let Some(registry) = registry {
-            Some(registry.admit_start(&self.provider_ids, self.birth).await?)
-        } else {
-            // Only isolated unit fixtures lack a provider-admitted birth.
-            #[cfg(test)]
-            if self.birth != 0 {
-                return Err(VmError::Destroyed);
-            }
-            #[cfg(not(test))]
-            return Err(VmError::Destroyed);
-            #[cfg(test)]
-            None
-        };
-        let mut result_rx = self.start_result.subscribe();
-        let leader = {
-            let mut state = self.state.lock().await;
-            let leader = match &*state {
-                Lifecycle::Provisioned => {
-                    *state = Lifecycle::Starting;
-                    true
-                }
-                Lifecycle::Starting => false,
-                Lifecycle::Running | Lifecycle::Stopping => return Ok(()),
-                Lifecycle::Exited => {
-                    return Err(VmError::InvalidState("an exited VM cannot be restarted"));
-                }
-                Lifecycle::StartFailed(error) => return Err(error.to_vm_error()),
-                Lifecycle::Destroying { .. } | Lifecycle::Destroyed => {
-                    return Err(VmError::Destroyed);
-                }
-            };
-            drop(state);
-            leader
-        };
-
-        let mut destroying = self.destroy_requested.subscribe();
-        let mut stopping = self.stop_requested.subscribe();
-        if !leader {
-            return tokio::select! {
-                result = wait_start_result(&mut result_rx) => result,
-                _requested = stopping.wait_for(|requested| *requested) => Err(VmError::InvalidState("startup interrupted by stop")),
-                _requested = destroying.wait_for(|requested| *requested) => Err(VmError::Destroyed),
-            };
-        }
-
-        info!(vm_id = %self.id.0, "starting libkrun worker");
-        let mut outcome = tokio::select! {
-            outcome = self.start_leader() => outcome,
-            _requested = stopping.wait_for(|requested| *requested) => Err(VmError::InvalidState("startup interrupted by stop")),
-            _requested = destroying.wait_for(|requested| *requested) => Err(VmError::Destroyed),
-        };
-        let interrupted_during_start = {
-            let mut state = self.state.lock().await;
-            if matches!(*state, Lifecycle::Destroying { .. } | Lifecycle::Destroyed) {
-                outcome = Err(VmError::Destroyed);
-                true
-            } else if *self.stop_requested.borrow() {
-                // Leave Starting for the serialized stop to issue termination.
-                // A stop request is neither startup success nor cleanup proof.
-                outcome = Err(VmError::InvalidState("startup interrupted by stop"));
-                true
-            } else {
-                match &outcome {
-                    Ok(()) => *state = Lifecycle::Running,
-                    Err(error) => {
-                        *state = Lifecycle::StartFailed(ErrorSnapshot::from_vm_error(error));
-                    }
-                }
-                false
-            }
-        };
-        let snapshot = outcome.as_ref().err().map(ErrorSnapshot::from_vm_error);
-        self.start_result
-            .send_replace(Some(snapshot.map_or(Ok(()), Err)));
-        if outcome.is_err() && !interrupted_during_start {
-            let _cleanup_result = self.force_cleanup_locked(true).await;
-        }
-        outcome
+        self.run_lifecycle(super::lifecycle_task::Request::Start)
+            .await
     }
 
     async fn stop(&self, mode: StopMode) -> Result<(), VmError> {
-        {
-            let state = self.state.lock().await;
-            match &*state {
-                Lifecycle::Provisioned
-                | Lifecycle::Exited
-                | Lifecycle::StartFailed(_)
-                | Lifecycle::Destroyed => return Ok(()),
-                Lifecycle::Starting => {
-                    // Wake startup before waiting for its operation guard. The
-                    // guard transfers actual termination to this stop caller.
-                    self.stop_requested.send_replace(true);
-                }
-                Lifecycle::Running | Lifecycle::Stopping | Lifecycle::Destroying { .. } => {}
-            }
-        }
-        // This marker's Drop must run after the operation lock is released.
-        #[allow(clippy::collection_is_never_read)]
-        let _activity;
-        let _operation = self.operation.lock().await;
-        _activity = self
-            .registry
-            .upgrade()
-            .map(|registry| registry.operation(self.birth));
-        if matches!(*self.state.lock().await, Lifecycle::Destroyed) {
-            return Ok(());
-        }
-        let mut destroying = self.destroy_requested.subscribe();
-        tokio::select! {
-            outcome = self.stop_leader(mode) => outcome,
-            _requested = destroying.wait_for(|requested| *requested) => Err(VmError::Destroyed),
-        }
+        self.run_lifecycle(super::lifecycle_task::Request::Stop(mode))
+            .await
     }
 
     async fn wait(&self) -> Result<VmExit, VmError> {
@@ -282,38 +171,7 @@ impl VmInstance for LibkrunInstance {
     }
 
     async fn destroy(&self) -> Result<(), VmError> {
-        let was_started = {
-            let mut state = self.state.lock().await;
-            let was_started = match &*state {
-                Lifecycle::Destroyed => return Ok(()),
-                Lifecycle::Destroying { was_started } => *was_started,
-                Lifecycle::Provisioned | Lifecycle::StartFailed(_) => false,
-                Lifecycle::Starting
-                | Lifecycle::Running
-                | Lifecycle::Stopping
-                | Lifecycle::Exited => true,
-            };
-            // A request blocks further starts, but does not confirm cleanup.
-            *state = Lifecycle::Destroying { was_started };
-            self.destroy_requested.send_replace(true);
-            drop(state);
-            was_started
-        };
-        // This marker's Drop must run after the operation lock is released.
-        #[allow(clippy::collection_is_never_read)]
-        let _activity;
-        let _operation = self.operation.lock().await;
-        _activity = self
-            .registry
-            .upgrade()
-            .map(|registry| registry.operation(self.birth));
-        self.force_cleanup_locked(was_started).await?;
-        *self.state.lock().await = Lifecycle::Destroyed;
-        if !was_started {
-            let _terminal = self.terminal_guard.lock().await;
-            self.terminal
-                .send_replace(Some(super::common::Terminal::Destroyed));
-        }
-        Ok(())
+        self.run_lifecycle(super::lifecycle_task::Request::Destroy)
+            .await
     }
 }

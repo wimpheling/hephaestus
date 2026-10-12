@@ -6,6 +6,7 @@ mod launch;
 mod launch_custody;
 #[path = "lifecycle.rs"]
 mod lifecycle;
+mod lifecycle_cancellation;
 mod managed_configuration;
 mod ownership;
 mod ownership_cleanup_failure;

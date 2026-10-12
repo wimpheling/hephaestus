@@ -4,6 +4,7 @@ mod http;
 mod instance;
 mod launch;
 mod lifecycle;
+mod lifecycle_task;
 mod ownership;
 mod provider_api;
 mod registry;

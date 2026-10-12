@@ -86,7 +86,8 @@ pub(in crate::provider::tests) fn instance_with_options(
         cleanup_roots: None,
         service_broker: Some(broker),
     });
-    let instance = Arc::new(LibkrunInstance {
+    let instance = Arc::new_cyclic(|this| LibkrunInstance {
+        this: this.clone(),
         id: VmId("test".to_owned()),
         config,
         worker,

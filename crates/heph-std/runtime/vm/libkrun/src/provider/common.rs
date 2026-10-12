@@ -70,6 +70,7 @@ impl std::ops::Deref for ProviderInner {
 }
 
 pub(super) struct LibkrunInstance {
+    pub(super) this: std::sync::Weak<Self>,
     pub(super) id: VmId,
     pub(super) config: Arc<LibkrunConfig>,
     pub(super) worker: Arc<dyn WorkerBackend>,

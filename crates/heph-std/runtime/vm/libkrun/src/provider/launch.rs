@@ -288,7 +288,8 @@ impl PendingLaunch {
             cleanup_roots: resources.roots.take(),
         };
         drop(resources);
-        let instance = Arc::new(LibkrunInstance {
+        let instance = Arc::new_cyclic(|this| LibkrunInstance {
+            this: this.clone(),
             id: self.id.clone(),
             config: Arc::clone(&provider.config),
             worker,
