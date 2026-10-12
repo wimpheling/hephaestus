@@ -211,9 +211,27 @@ The routed mailbox executor is published in `d0f3220e`; all eight unit tests and
 focused Rust 1.88 checks pass. Managed application routing remains unconnected.
 Managed production preparation and a daemon-owned supervisor are being
 integrated. Readiness remains denied until recovery and resource checks pass.
-Ordinary application composition still needs
-explicit fresh profiles and compatible adapters before the 0139 application
-version can be accepted.
+The isolated run-orchestrator now passes all 167 tests, strict Rust 1.88 Clippy,
+documentation and formatting checks. These controlled tests cover queued
+cancellation replay, competing deliveries, complete recovery inventory,
+truthful supervisor stop/restart causes and preserving cleanup fences. The
+application's focused Clippy, documentation and formatting checks also pass;
+its library reports 230 passed and 15 ignored. All eleven supervisor and nine
+preparation cases execute, but URL-gated cases with absent URLs and ignored
+integration cases do not prove PostgreSQL, NATS or native application behavior.
+Mixed cancellation/removal SQL and the finite 0140/0141 migration checks are
+authored and reviewed; their coherent database and adapter integration remains
+pending. The scoped expired credential interfaces pass all 17 authorization
+tests and focused Rust checks. Their PostgreSQL and local store implementations
+and application wiring remain pending. New ordinary sessions also need timestamp
+precision repair before their immutable identity can be verified after storage.
+
+Removal still needs an owning instance Drain completion adapter. Existing
+closure and safety observations alone do not complete a recipe resource. The
+local SQLite package specifies instance deletion and volume retention; final
+instance deletion, volume detach/retention and deployment removal must be
+implemented and verified. Retaining a closed instance does not satisfy that
+package's deletion policy.
 
 Provider orchestration and ownership seals, plural runtime attachment and cleanup,
 physical revocation, authenticated project web UI commands, real SQLite

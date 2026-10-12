@@ -1,6 +1,6 @@
 use super::{
-    NewRuntimeSession, RuntimeAuthorityError, RuntimeHandoffStore, RuntimeSessionRepository,
-    StoredRuntimeSession,
+    ExpiredRuntimeHandoff, NewRuntimeSession, RuntimeAuthorityError, RuntimeHandoffStore,
+    RuntimeSessionRepository, StoredRuntimeSession,
 };
 use capability_domain::{
     AuthorizationSnapshot, RuntimeCredential, RuntimeCredentialGeneration, RuntimeSessionId,
@@ -141,6 +141,43 @@ where
             .await?;
         self.handoff.destroy(session_id, session.generation)?;
         Ok(session)
+    }
+
+    /// Observes this exact expired original through the retained repository only.
+    ///
+    /// The caller must qualify both generic and Git observations before either
+    /// deletion. This does not issue authority, delete files or prove guest stop.
+    ///
+    /// # Errors
+    /// Returns the original adapter error or a mismatched comparison result.
+    pub async fn observe_expired_run_handoff(
+        &self,
+        run: Uuid,
+        session: RuntimeSessionId,
+        generation: RuntimeCredentialGeneration,
+    ) -> Result<ExpiredRuntimeHandoff, RuntimeAuthorityError> {
+        let original = self
+            .repository
+            .observe_expired_run_handoff(run, session, generation)
+            .await?;
+        if !original.matches_request(run, session, generation) {
+            return Err(RuntimeAuthorityError::IdentityMismatch);
+        }
+        Ok(original)
+    }
+
+    /// Delegates exact expired deletion to the original retained host store.
+    ///
+    /// Both generic and Git projections must already have been qualified and
+    /// compared by the owning caller. No combined observe-and-delete fallback exists.
+    ///
+    /// # Errors
+    /// Returns the original store error, including unsupported or partial cleanup.
+    pub fn destroy_expired_handoff(
+        &self,
+        original: &ExpiredRuntimeHandoff,
+    ) -> Result<(), RuntimeAuthorityError> {
+        self.handoff.destroy_expired(original)
     }
 
     /// Expires durable sessions and purges elapsed host handoff envelopes.

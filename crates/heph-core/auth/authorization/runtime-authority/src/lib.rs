@@ -5,11 +5,13 @@
 //! credential until the guest acknowledges the exact issuance generation.
 
 mod error;
+mod expired;
 mod issuer;
 mod live_snapshot;
 mod models;
 
 pub use error::RuntimeAuthorityError;
+pub use expired::ExpiredRuntimeHandoff;
 pub use issuer::{IssuedRuntimeSession, RuntimeSessionIssuer};
 pub use live_snapshot::{
     LiveRunSessionCeiling, LiveRunSnapshotPins, LiveRunSnapshotRequest, LiveRunSnapshotResolver,

@@ -2,6 +2,9 @@
 #[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
 #[non_exhaustive]
 pub enum RuntimeGitAuthorityError {
+    /// The configured adapter does not support scoped terminal cleanup.
+    #[error("runtime Git terminal cleanup is unsupported")]
+    Unsupported,
     /// Durable storage or scope reconstruction failed.
     #[error("runtime Git authority persistence failed")]
     Persistence,

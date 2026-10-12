@@ -1,4 +1,4 @@
-use super::RuntimeGitAuthorityError;
+use super::{ExpiredRuntimeGitHandoff, RuntimeGitAuthorityError};
 use async_trait::async_trait;
 use capability_domain::{AuthorizationSnapshotId, RuntimeCredentialGeneration, RuntimeSessionId};
 use git_capability_domain::{GitCapabilityHash, GitCapabilityScope, GitOperation, RepositoryId};
@@ -71,6 +71,23 @@ pub trait RuntimeGitCredentialRepository: Send + Sync {
         credential_hash: super::RuntimeGitCredentialHash,
     ) -> Result<StoredRuntimeGitCredential, RuntimeGitAuthorityError>;
 
+    /// Observes an exact expired generic ceiling and its Git binding or qualified absence.
+    ///
+    /// The adapter must prove the original Run/owner/profile and complete
+    /// generic/Git graph. Absence cannot be inferred from a missing credential
+    /// alone. This method authorizes no Git operation or lifecycle mutation.
+    ///
+    /// # Errors
+    /// Returns unsupported by default; implemented adapters deny unqualified history.
+    async fn observe_expired_run_handoff(
+        &self,
+        _run: Uuid,
+        _session: RuntimeSessionId,
+        _generation: RuntimeCredentialGeneration,
+    ) -> Result<ExpiredRuntimeGitHandoff, RuntimeGitAuthorityError> {
+        Err(RuntimeGitAuthorityError::Unsupported)
+    }
+
     /// Authenticates and resolves complete current authority for one exact
     /// repository operation.
     ///
@@ -122,6 +139,21 @@ pub trait RuntimeGitHandoffStore: Send + Sync {
         session_id: RuntimeSessionId,
         generation: RuntimeCredentialGeneration,
     ) -> Result<(), RuntimeGitAuthorityError>;
+
+    /// Authenticates and deletes only this original expired Git envelope.
+    ///
+    /// Check exact ceiling, binding, generation, expiry and verifier; preserve
+    /// unrelated/newer files and deny corrupt or replaced originals. A qualified
+    /// absent binding requires the exact file absent, not deletion of unknown data.
+    ///
+    /// # Errors
+    /// Returns unsupported by default; never falls back to destroy or bulk purge.
+    fn destroy_expired(
+        &self,
+        _original: &ExpiredRuntimeGitHandoff,
+    ) -> Result<(), RuntimeGitAuthorityError> {
+        Err(RuntimeGitAuthorityError::Unsupported)
+    }
 
     /// Purges elapsed envelopes after host or worker crashes.
     ///

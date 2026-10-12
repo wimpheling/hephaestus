@@ -1,4 +1,4 @@
-use super::RuntimeAuthorityError;
+use super::{ExpiredRuntimeHandoff, RuntimeAuthorityError};
 use async_trait::async_trait;
 use capability_domain::{
     AuthorityHash, AuthorizationSnapshot, RuntimeCredential, RuntimeCredentialGeneration,
@@ -113,6 +113,23 @@ pub trait RuntimeSessionRepository: Send + Sync {
         reason: &str,
     ) -> Result<StoredRuntimeSession, RuntimeAuthorityError>;
 
+    /// Observes one exact expired original, without updating lifecycle or issuing authority.
+    ///
+    /// The adapter must qualify the immutable Run, owner/profile, snapshot,
+    /// session and verifier under its configured worker scope. Missing or
+    /// contradictory originals are errors, not successful absence.
+    ///
+    /// # Errors
+    /// Returns unsupported by default; implemented adapters deny unqualified history.
+    async fn observe_expired_run_handoff(
+        &self,
+        _run: Uuid,
+        _session: RuntimeSessionId,
+        _generation: RuntimeCredentialGeneration,
+    ) -> Result<ExpiredRuntimeHandoff, RuntimeAuthorityError> {
+        Err(RuntimeAuthorityError::Unsupported)
+    }
+
     /// Marks all elapsed pending or active sessions expired.
     async fn expire(&self, now: OffsetDateTime) -> Result<u64, RuntimeAuthorityError>;
 }
@@ -158,6 +175,21 @@ pub trait RuntimeHandoffStore: Send + Sync {
         session_id: RuntimeSessionId,
         generation: RuntimeCredentialGeneration,
     ) -> Result<(), RuntimeAuthorityError>;
+
+    /// Authenticates and deletes only the original expired envelope.
+    ///
+    /// Implementations must check exact identity, generation, expiry and
+    /// durable verifier, preserve other files, and deny replacement/corruption.
+    /// Qualified missing-file replay is allowed; this grants no physical proof.
+    ///
+    /// # Errors
+    /// Returns unsupported by default; never falls back to destroy or bulk purge.
+    fn destroy_expired(
+        &self,
+        _original: &ExpiredRuntimeHandoff,
+    ) -> Result<(), RuntimeAuthorityError> {
+        Err(RuntimeAuthorityError::Unsupported)
+    }
 
     /// Deletes elapsed envelopes after host or worker crashes.
     ///

@@ -6,6 +6,7 @@
 
 mod credential;
 mod error;
+mod expired;
 mod issuer;
 mod repository;
 
@@ -17,6 +18,9 @@ pub const RUNTIME_GIT_CREDENTIAL_BYTES: usize = 32;
 
 pub use credential::{RuntimeGitCredential, RuntimeGitCredentialHash};
 pub use error::RuntimeGitAuthorityError;
+pub use expired::{
+    ExpiredRuntimeGitCeiling, ExpiredRuntimeGitHandoff, ExpiredRuntimeGitSessionMetadata,
+};
 pub use issuer::{IssuedRuntimeGitCredential, RuntimeGitCredentialIssuer};
 pub use repository::{
     AuthenticatedRuntimeGitAuthority, RuntimeGitCredentialRepository, RuntimeGitHandoffStore,
