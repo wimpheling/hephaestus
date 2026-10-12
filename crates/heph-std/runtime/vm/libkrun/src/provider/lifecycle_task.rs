@@ -196,12 +196,12 @@ impl LibkrunInstance {
             .upgrade()
             .map(|registry| registry.operation(self.birth));
         self.force_cleanup_locked(was_started).await?;
-        *self.state.lock().await = Lifecycle::Destroyed;
         if !was_started {
             let _terminal = self.terminal_guard.lock().await;
             self.terminal
                 .send_replace(Some(super::common::Terminal::Destroyed));
         }
+        *self.state.lock().await = Lifecycle::Destroyed;
         Ok(())
     }
 }

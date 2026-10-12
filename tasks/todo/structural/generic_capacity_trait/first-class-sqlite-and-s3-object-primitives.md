@@ -172,12 +172,16 @@ and live authorization withdrawal while preserving backing bytes and inodes.
 These checks do not launch an installed recipe.
 
 The current local VM implementation passes Rust 1.88 Clippy, documentation,
-scoped formatting, and all 174 library tests. A real KVM configured-owner test
+scoped formatting, and all 176 library tests. A real KVM configured-owner test
 also passes bootstrap, start, destruction, worker termination, and readonly
-reopen. The broader networking smoke check currently fails before guest
-readiness because a mount ancestor is rejected as replaceable by the workload;
-its DNS/TCP/UDP and forwarded HTTP assertions have not passed. Managed production
-preparation is being integrated. Ordinary application composition still needs
+reopen. The corrected local smoke fixture preserves OCI-root ownership separately
+from workload UID/GID 10001. Its real guest passes SQLite persistence, secret
+access, DNS/TCP/UDP, forwarded HTTP, and the complete lifecycle conformance
+suite. The concurrent destroy-before-start waiter race is fixed and covered
+by two real-subprocess regressions. The complete default smoke check passes;
+its named-volume opt-in remains unset and the guest-initialization case is
+ignored, so those two cases provide no new native evidence. Managed production preparation is
+being integrated. Ordinary application composition still needs
 explicit fresh profiles and compatible adapters before the 0139 application
 version can be accepted.
 

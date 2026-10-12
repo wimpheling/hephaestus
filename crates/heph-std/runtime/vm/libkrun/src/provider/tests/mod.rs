@@ -22,3 +22,4 @@ mod supervision;
 mod support;
 
 mod admission_inventory;
+mod wait_destroy;

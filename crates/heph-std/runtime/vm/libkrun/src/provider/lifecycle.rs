@@ -286,10 +286,11 @@ impl LibkrunInstance {
         if self.terminal.borrow().is_some() {
             return;
         }
-        self.terminal
-            .send_replace(Some(Terminal::Exited(exit.clone())));
-        {
+        let publish_exit = {
             let mut state = self.state.lock().await;
+            // The worker's actual reap remains available to cleanup, but a VM
+            // destroyed before Start has no guest exit to publish to waiters.
+            let publish_exit = !matches!(*state, Lifecycle::Destroying { was_started: false });
             // Cleanup's process exit must not erase the cached startup failure
             // that callers serialized behind the original start must receive.
             if !matches!(
@@ -298,8 +299,14 @@ impl LibkrunInstance {
             ) {
                 *state = Lifecycle::Exited;
             }
+            drop(state);
+            publish_exit
+        };
+        if publish_exit {
+            self.terminal
+                .send_replace(Some(Terminal::Exited(exit.clone())));
+            send_event(&self.events, VmEvent::Exited(exit));
         }
-        send_event(&self.events, VmEvent::Exited(exit));
         self.shutdown_service_broker().await;
         self.fail_private_http_waiters("guest exited before private HTTP response")
             .await;
