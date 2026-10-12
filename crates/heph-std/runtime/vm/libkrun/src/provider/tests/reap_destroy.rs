@@ -79,8 +79,11 @@ impl WorkerSpawner for QueuedSpawner {
         _spec: crate::validation::PreparedSpec,
         _runtime: &std::path::Path,
         _cgroup: &Cgroup,
+        custody: &LaunchCustody,
     ) -> Result<Arc<dyn WorkerBackend>, VmError> {
-        Ok(self.0.lock().await.pop_front().unwrap())
+        let backend = self.0.lock().await.pop_front().unwrap();
+        custody.record_backend(Arc::clone(&backend))?;
+        Ok(backend)
     }
 }
 

@@ -17,17 +17,20 @@ pub struct Cgroup {
 }
 
 impl Cgroup {
-    pub fn create(config: &LibkrunConfig, id: &str) -> Result<Self, VmError> {
+    pub(crate) fn create_tracked(
+        config: &LibkrunConfig,
+        id: &str,
+        acquired: impl FnOnce(&Self),
+    ) -> Result<Self, VmError> {
         let path = config.cgroup_root.join(id);
         fs::create_dir(&path).map_err(|error| provider("cgroup-create", error))?;
         let cgroup = Self {
             path,
             emulated: !config.enforce_cgroup_v2,
         };
-        if let Err(error) = cgroup.configure(&config.limits) {
-            let _cleanup_result = fs::remove_dir(&cgroup.path);
-            return Err(error);
-        }
+        // Publish exclusive mkdir ownership before configuration can fail.
+        acquired(&cgroup);
+        cgroup.configure(&config.limits)?;
         Ok(cgroup)
     }
 

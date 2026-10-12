@@ -72,6 +72,7 @@ pub(in crate::provider::tests) fn instance_with_options(
         worker_spawner: Arc::new(ProcessWorkerSpawner),
         owner: std::sync::OnceLock::new(),
         failed_cleanup: Mutex::new(HashMap::new()),
+        pending_launches: std::sync::Mutex::new(HashMap::new()),
     });
     let (events, _) = broadcast::channel(32);
     let (terminal, _) = watch::channel(None::<Terminal>);

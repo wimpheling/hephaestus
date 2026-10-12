@@ -3,6 +3,7 @@ mod basic;
 mod cleanup_emptiness;
 #[path = "launch.rs"]
 mod launch;
+mod launch_custody;
 #[path = "lifecycle.rs"]
 mod lifecycle;
 mod managed_configuration;

@@ -15,7 +15,9 @@ impl WorkerSpawner for PausedSpawner {
         _spec: crate::validation::PreparedSpec,
         _runtime: &std::path::Path,
         _cgroup: &Cgroup,
+        custody: &LaunchCustody,
     ) -> Result<Arc<dyn WorkerBackend>, VmError> {
+        custody.record_backend(Arc::clone(&self.worker))?;
         self.entered.notify_one();
         self.release.notified().await;
         Ok(self.worker.clone())

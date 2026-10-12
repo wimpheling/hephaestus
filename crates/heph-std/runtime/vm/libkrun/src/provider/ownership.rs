@@ -113,14 +113,28 @@ impl PinnedCleanupRoots {
     }
 
     pub fn cleanup(&self, config: &LibkrunConfig, id: &vm_trait::VmId) -> Result<(), VmError> {
+        self.cleanup_cgroup(config, id)?;
+        self.cleanup_runtime(id)
+    }
+
+    pub(super) fn cleanup_cgroup(
+        &self,
+        config: &LibkrunConfig,
+        id: &vm_trait::VmId,
+    ) -> Result<(), VmError> {
         use std::os::fd::AsRawFd;
         let mut pinned = config.clone();
         pinned.cgroup_root = format!("/proc/self/fd/{}", self.cgroup.as_raw_fd()).into();
-        crate::cgroup::Cgroup::existing(&pinned, &id.0).cleanup()?;
-        super::helpers::cleanup_runtime(
-            &std::path::PathBuf::from(format!("/proc/self/fd/{}", self.runtime.as_raw_fd()))
-                .join(&id.0),
-        )
+        crate::cgroup::Cgroup::existing(&pinned, &id.0).cleanup()
+    }
+
+    pub(super) fn runtime_path(&self, id: &vm_trait::VmId) -> std::path::PathBuf {
+        use std::os::fd::AsRawFd;
+        std::path::PathBuf::from(format!("/proc/self/fd/{}", self.runtime.as_raw_fd())).join(&id.0)
+    }
+
+    pub(super) fn cleanup_runtime(&self, id: &vm_trait::VmId) -> Result<(), VmError> {
+        super::helpers::cleanup_runtime(&self.runtime_path(id))
     }
 }
 

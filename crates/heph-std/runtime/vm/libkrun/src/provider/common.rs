@@ -1,4 +1,6 @@
 use super::helpers::{ProcessStatus, wire_to_vm_error};
+pub(super) use super::launch::{LaunchCustody, PendingLaunch};
+pub(super) use super::worker_process::WorkerProcess;
 
 pub(super) use crate::{
     cgroup::Cgroup,
@@ -53,6 +55,7 @@ pub(super) struct ProviderInner {
     pub(super) worker_spawner: Arc<dyn WorkerSpawner>,
     pub(super) owner: std::sync::OnceLock<super::ownership::ProviderOwner>,
     pub(super) failed_cleanup: Mutex<HashMap<VmId, Arc<LibkrunInstance>>>,
+    pub(super) pending_launches: std::sync::Mutex<HashMap<VmId, Arc<PendingLaunch>>>,
 }
 pub(super) struct LibkrunInstance {
     pub(super) id: VmId,
@@ -167,10 +170,7 @@ pub(super) struct WorkerClient {
     pub(super) pending: PendingRequests,
     pub(super) next_request: AtomicU64,
     pub(super) events: broadcast::Sender<WorkerEvent>,
-    pub(super) child: Arc<Mutex<Child>>,
-    pub(super) process_exit: watch::Sender<Option<ProcessStatus>>,
-    pub(super) process_error: watch::Sender<Option<ErrorSnapshot>>,
-    pub(super) pid: u32,
+    pub(super) process: Arc<WorkerProcess>,
 }
 
 #[async_trait]
@@ -184,12 +184,15 @@ pub(super) trait WorkerBackend: Send + Sync {
 
 #[async_trait]
 pub(super) trait WorkerSpawner: Send + Sync {
+    // Publish the exact raw process/backend into the supplied owning launch
+    // before any await that can leave effects. Err carries cause, not absence.
     async fn spawn(
         &self,
         config: Arc<LibkrunConfig>,
         spec: PreparedSpec,
         runtime_dir: &Path,
         cgroup: &Cgroup,
+        custody: &LaunchCustody,
     ) -> Result<Arc<dyn WorkerBackend>, VmError>;
 }
 
@@ -203,8 +206,9 @@ impl WorkerSpawner for ProcessWorkerSpawner {
         spec: PreparedSpec,
         runtime_dir: &Path,
         cgroup: &Cgroup,
+        custody: &LaunchCustody,
     ) -> Result<Arc<dyn WorkerBackend>, VmError> {
-        WorkerClient::launch(config, spec, runtime_dir, cgroup)
+        WorkerClient::launch(config, spec, runtime_dir, cgroup, custody)
             .await
             .map(|worker| worker as Arc<dyn WorkerBackend>)
     }

@@ -10,6 +10,7 @@ impl WorkerSpawner for FailingSpawner {
         _spec: crate::validation::PreparedSpec,
         _runtime_dir: &std::path::Path,
         _cgroup: &crate::cgroup::Cgroup,
+        _custody: &LaunchCustody,
     ) -> Result<Arc<dyn WorkerBackend>, VmError> {
         Err(VmError::Unavailable {
             resource: String::from("worker spawn"),

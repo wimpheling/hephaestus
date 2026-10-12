@@ -76,9 +76,9 @@ async fn failed_destroy_retains_worker_and_blocks_id_reuse_until_scoped_recovery
     assert!(
         provider
             .ownership_test_inner()
-            .failed_cleanup
+            .pending_launches
             .lock()
-            .await
+            .unwrap()
             .contains_key(&id)
     );
     assert!(old.join(&id.0).exists());
@@ -101,9 +101,9 @@ async fn failed_destroy_retains_worker_and_blocks_id_reuse_until_scoped_recovery
     assert!(
         !provider
             .ownership_test_inner()
-            .failed_cleanup
+            .pending_launches
             .lock()
-            .await
+            .unwrap()
             .contains_key(&id)
     );
     assert!(

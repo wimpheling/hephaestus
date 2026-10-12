@@ -5,13 +5,11 @@ mod managed_configuration;
 mod managed_owner;
 
 use super::common::{
-    Arc, AtomicBool, AtomicU64, Cgroup, Duration, EVENT_CAPACITY, HashMap, HashSet, LibkrunConfig,
-    LibkrunInstance, Lifecycle, Mutex, OwnedResources, PROVIDER_NAME, PreparedSpec,
-    ProcessWorkerSpawner, ProviderInner, Semaphore, ServiceBroker, VmError, VmId, VmInstance,
-    VmProvider, VmSpec, WorkerSpawner, async_trait, broadcast, fs, info, prepare_spec,
-    validate_config, validate_id, watch,
+    Arc, Cgroup, HashMap, HashSet, LibkrunConfig, Mutex, PROVIDER_NAME, PendingLaunch,
+    ProcessWorkerSpawner, ProviderInner, VmError, VmId, VmInstance, VmProvider, VmSpec,
+    WorkerSpawner, async_trait, oneshot, prepare_spec, validate_config, validate_id,
 };
-use super::helpers::{cleanup_runtime, create_runtime_dir, unavailable_error};
+use super::helpers::{cleanup_runtime, unavailable_error};
 
 /// Fedora/Linux VM provider backed by a dedicated libkrun worker per VM.
 #[derive(Clone)]
@@ -23,6 +21,10 @@ impl LibkrunProvider {
     #[cfg(test)]
     pub(super) fn ownership_test_inner(&self) -> &ProviderInner {
         &self.inner
+    }
+    #[cfg(test)]
+    pub(super) fn launch_test_inner(&self) -> Arc<ProviderInner> {
+        Arc::clone(&self.inner)
     }
     /// Constructs an explicitly owned provider on a fresh or already managed root.
     ///
@@ -76,6 +78,7 @@ impl LibkrunProvider {
                 worker_spawner,
                 owner: std::sync::OnceLock::new(),
                 failed_cleanup: Mutex::new(HashMap::new()),
+                pending_launches: std::sync::Mutex::new(HashMap::new()),
             }),
         })
     }
@@ -111,6 +114,11 @@ impl VmProvider for LibkrunProvider {
             return Err(VmError::InvalidState("VM cleanup owner scope differs"));
         }
         let guard = owner.validate(&self.inner.config)?;
+        if let Some(pending) = self.pending_launch(id) {
+            pending.retry_cleanup().await?;
+            owner.validate_guard(&self.inner.config, &guard)?;
+            return Ok(());
+        }
         if let Some(instance) = {
             let failed_cleanup = self.inner.failed_cleanup.lock().await;
             let retained = failed_cleanup.get(id).cloned();
@@ -163,41 +171,63 @@ impl VmProvider for LibkrunProvider {
         {
             return Err(VmError::AlreadyExists(spec.id));
         }
+        let (entry, retries) =
+            PendingLaunch::new(spec.id.clone(), &self.inner.config, owner_guard.as_ref())?;
+        let (result, receiver) = oneshot::channel();
         {
             let mut ids = self.inner.ids.lock().await;
-            if !ids.insert(spec.id.clone()) {
-                return Err(VmError::AlreadyExists(spec.id));
+            let mut pending = self
+                .inner
+                .pending_launches
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            if pending.contains_key(&entry.id) || !ids.insert(entry.id.clone()) {
+                return Err(VmError::AlreadyExists(entry.id.clone()));
             }
+            pending.insert(entry.id.clone(), Arc::clone(&entry));
+            // Reservation, discoverable custody and owning-task installation
+            // have no await gap. Caller cancellation drops only its receiver.
+            tokio::spawn(super::launch::run_launch(
+                Arc::clone(&self.inner),
+                Arc::clone(&entry),
+                prepared,
+                owner_guard,
+                result,
+                retries,
+            ));
+            drop(pending);
+            drop(ids);
         }
-
-        match self
-            .provision_inner(spec.id.clone(), prepared, owner_guard.as_ref())
+        let super::launch::LaunchHandoff { instance, accepted } = receiver
             .await
+            .map_err(|_| unavailable_error("worker launch", "launch result channel closed"))??;
+        // Cancellation while acquiring this lock still drops the acknowledgement,
+        // leaving the owner task responsible for the same actual instance.
+        let ids = self.inner.ids.lock().await;
+        let mut pending = self
+            .inner
+            .pending_launches
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        if !pending
+            .get(&entry.id)
+            .is_some_and(|current| Arc::ptr_eq(current, &entry))
         {
-            Ok(instance) => {
-                if let Some((owner, guard)) = self.inner.owner.get().zip(owner_guard.as_ref()) {
-                    if let Err(error) = owner.validate_guard(&self.inner.config, guard) {
-                        // The exact worker and pinned allocation roots survive
-                        // until confirmed destruction. A cleanup error remains
-                        // uncertain and must not produce a scoped success.
-                        if let Err(cleanup_error) = instance.destroy().await {
-                            self.inner
-                                .failed_cleanup
-                                .lock()
-                                .await
-                                .insert(spec.id.clone(), instance);
-                            return Err(cleanup_error);
-                        }
-                        return Err(error);
-                    }
-                }
-                Ok(instance)
-            }
-            Err(error) => {
-                self.inner.ids.lock().await.remove(&spec.id);
-                Err(error)
-            }
+            return Err(VmError::InvalidState("launch handoff entry changed"));
         }
+        // Acknowledge before retiring only this entry; preserve the ID reservation.
+        // No await separates acknowledgement, retirement and returning the instance.
+        accepted
+            .send(())
+            .map_err(|()| unavailable_error("worker launch", "launch handoff channel closed"))?;
+        pending.remove(&entry.id);
+        entry
+            .state
+            .send_replace(super::launch::LaunchState::HandedOff);
+        drop(entry);
+        drop(pending);
+        drop(ids);
+        Ok(instance)
     }
 
     async fn cleanup_orphan(&self, id: &VmId) -> Result<(), VmError> {
@@ -206,6 +236,9 @@ impl VmProvider for LibkrunProvider {
         }
         super::ownership::reject_unowned(&self.inner.config)?;
         validate_id(id)?;
+        if let Some(pending) = self.pending_launch(id) {
+            return pending.retry_cleanup().await;
+        }
         if self.inner.ids.lock().await.contains(id) {
             return Err(VmError::InvalidState(
                 "cannot clean an orphan while a live instance handle is registered",
@@ -218,117 +251,12 @@ impl VmProvider for LibkrunProvider {
 }
 
 impl LibkrunProvider {
-    async fn provision_inner(
-        &self,
-        id: VmId,
-        spec: PreparedSpec,
-        owner_guard: Option<&super::ownership::OwnerGuard>,
-    ) -> Result<Arc<LibkrunInstance>, VmError> {
-        let cleanup_roots = owner_guard
-            .map(super::ownership::PinnedCleanupRoots::from_guard)
-            .transpose()?;
-        let runtime_dir = create_runtime_dir(&self.inner.config.runtime_root, &id.0)?;
-        let cgroup = match Cgroup::create(&self.inner.config, &id.0) {
-            Ok(cgroup) => cgroup,
-            Err(error) => {
-                let _cleanup_result = fs::remove_dir_all(&runtime_dir);
-                return Err(error);
-            }
-        };
-
-        info!(
-            vm_id = %id.0,
-            vcpus = spec.vcpus,
-            memory_mib = spec.memory_mib,
-            cpu_quota_micros = ?self.inner.config.limits.cpu_quota_micros,
-            pids_max = self.inner.config.limits.pids_max,
-            writable_disk_max_bytes = self.inner.config.limits.writable_disk_max_bytes,
-            wall_clock_seconds = self.inner.config.limits.wall_clock_timeout.as_secs(),
-            "provisioning VM resources"
-        );
-        let private_http_enabled = spec
-            .labels
-            .get(crate::protocol::GATEWAY_HANDLER_CONTRACT_LABEL)
-            .is_some_and(|value| value == crate::protocol::GATEWAY_HANDLER_CONTRACT_V1);
-        let private_service_timeout = spec
-            .private_http_service
-            .as_ref()
-            .map(|service| Duration::from_millis(service.connect_timeout_ms));
-        let private_service_dispatch = private_service_dispatch(&spec);
-        let service_broker = match spec.private_http_service.as_ref() {
-            Some(service) => match ServiceBroker::bind(
-                &runtime_dir,
-                service.max_connections,
-                private_service_timeout.expect("service timeout is present"),
-            ) {
-                Ok(broker) => Some(Arc::new(broker)),
-                Err(error) => {
-                    let _cgroup_result = cgroup.cleanup();
-                    let _runtime_result = fs::remove_dir_all(&runtime_dir);
-                    return Err(unavailable_error(
-                        "private service broker",
-                        error.to_string(),
-                    ));
-                }
-            },
-            None => None,
-        };
-        let worker = match self
-            .inner
-            .worker_spawner
-            .spawn(Arc::clone(&self.inner.config), spec, &runtime_dir, &cgroup)
-            .await
-        {
-            Ok(worker) => worker,
-            Err(error) => {
-                if let Some(broker) = service_broker.as_ref() {
-                    broker.shutdown().await;
-                }
-                let _cgroup_result = cgroup.cleanup();
-                let _runtime_result = fs::remove_dir_all(&runtime_dir);
-                return Err(error);
-            }
-        };
-
-        let (events, _) = broadcast::channel(EVENT_CAPACITY);
-        let (terminal, _) = watch::channel(None);
-        let (ready, _) = watch::channel(false);
-        let (start_result, _) = watch::channel(None);
-        let instance = Arc::new(LibkrunInstance {
-            id,
-            config: Arc::clone(&self.inner.config),
-            worker,
-            state: Mutex::new(Lifecycle::Provisioned),
-            operation: Mutex::new(()),
-            destroy_requested: watch::channel(false).0,
-            stop_requested: watch::channel(false).0,
-            cleanup_complete: AtomicBool::new(false),
-            terminal,
-            terminal_guard: Mutex::new(()),
-            ready,
-            start_result,
-            events,
-            resources: Mutex::new(Some(OwnedResources {
-                runtime_dir,
-                cgroup,
-                service_broker,
-                cleanup_roots,
-            })),
-            provider_ids: Arc::clone(&self.inner),
-            private_http_enabled,
-            private_service_timeout,
-            private_service_dispatch,
-            private_http_waiters: Mutex::new(HashMap::new()),
-            next_private_http_request: AtomicU64::new(1),
-        });
-        instance.spawn_event_forwarder();
-        instance.spawn_process_monitor();
-        Ok(instance)
+    fn pending_launch(&self, id: &VmId) -> Option<Arc<PendingLaunch>> {
+        self.inner
+            .pending_launches
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .get(id)
+            .cloned()
     }
-}
-
-fn private_service_dispatch(spec: &PreparedSpec) -> Option<Arc<Semaphore>> {
-    spec.private_http_service
-        .as_ref()
-        .map(|service| Arc::new(Semaphore::new(service.max_connections as usize)))
 }
