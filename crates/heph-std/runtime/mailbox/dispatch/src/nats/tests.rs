@@ -15,3 +15,6 @@ fn command_serializes_only_stable_identifiers() {
     assert!(encoded.get("operation_id").is_some());
     assert!(encoded.get("mailbox_event_id").is_some());
 }
+
+#[path = "tests/routed_handler.rs"]
+mod routed_handler;

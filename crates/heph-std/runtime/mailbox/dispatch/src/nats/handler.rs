@@ -3,14 +3,14 @@ use super::{
     contract::{MailboxDispatchCommand, MailboxDispatchStore, MailboxDispatchStoreError},
 };
 use async_nats::jetstream;
-use run_orchestrator::{OrchestratorError, RunOrchestrator};
+use run_orchestrator::{OrchestratorError, RunCommandExecutor, RunOrchestrator};
 use std::sync::Arc;
 
 /// Applies durable mailbox command effects and starts claimed VM runs.
 #[derive(Clone)]
 pub struct MailboxCommandHandler {
     store: Arc<dyn MailboxDispatchStore>,
-    orchestrator: Arc<RunOrchestrator>,
+    executor: Arc<dyn RunCommandExecutor>,
 }
 
 /// `JetStream` adapter that acknowledges only after durable mailbox effects.
@@ -49,10 +49,19 @@ impl MailboxCommandHandler {
     /// Creates a command handler.
     #[must_use]
     pub fn new(store: Arc<dyn MailboxDispatchStore>, orchestrator: Arc<RunOrchestrator>) -> Self {
-        Self {
-            store,
-            orchestrator,
-        }
+        Self::new_routed(store, orchestrator)
+    }
+
+    /// Creates a handler using an executor that qualifies persisted run routing.
+    ///
+    /// The store remains authoritative for the exact claimed command. This
+    /// transport chooses no execution profile or owner from the message payload.
+    #[must_use]
+    pub const fn new_routed(
+        store: Arc<dyn MailboxDispatchStore>,
+        executor: Arc<dyn RunCommandExecutor>,
+    ) -> Self {
+        Self { store, executor }
     }
 
     /// Handles one command after decoding it from a supported subject.
@@ -90,7 +99,7 @@ impl MailboxCommandHandler {
                     instance_revision_id = %run.instance_revision_id,
                     "starting mailbox-dispatched run"
                 );
-                self.orchestrator.start_run(&run).await?;
+                self.executor.start_run(&run).await?;
             }
         }
         Ok(())
