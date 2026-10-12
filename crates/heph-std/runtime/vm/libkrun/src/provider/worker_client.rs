@@ -1,9 +1,9 @@
 use super::common::{
-    Arc, AtomicU64, Cgroup, Command, EVENT_CAPACITY, HashMap, LibkrunConfig, Mutex, Ordering,
-    OwnedReadHalf, PROCESS_POLL_INTERVAL, Path, PreparedSpec, SUPERVISOR_SOCKET_NAME, VmError,
-    WireError, WireErrorKind, WorkerClient, WorkerCommand, WorkerConfiguration, WorkerEvent,
-    WorkerMessage, WorkerRequest, broadcast, error, info, oneshot, read_async, sleep, timeout,
-    watch, write_async,
+    Arc, AtomicU64, Cgroup, Command, EVENT_CAPACITY, ErrorSnapshot, ExitStatus, HashMap,
+    LibkrunConfig, Mutex, Ordering, OwnedReadHalf, PROCESS_POLL_INTERVAL, Path, PreparedSpec,
+    SUPERVISOR_SOCKET_NAME, VmError, WireError, WireErrorKind, WorkerClient, WorkerCommand,
+    WorkerConfiguration, WorkerEvent, WorkerMessage, WorkerRequest, broadcast, error, info,
+    oneshot, read_async, sleep, timeout, watch, write_async,
 };
 use super::helpers::{ProcessStatus, provider_error, unavailable_error, wire_to_vm_error};
 use tokio::net::UnixListener;
@@ -52,6 +52,7 @@ impl WorkerClient {
             events,
             child: Arc::new(Mutex::new(child)),
             process_exit,
+            process_error: watch::channel(None).0,
             pid,
         });
         client.spawn_reader(reader);
@@ -113,9 +114,7 @@ impl WorkerClient {
 
     pub(super) async fn kill(&self) -> Result<(), VmError> {
         let mut child = self.child.lock().await;
-        if child
-            .try_wait()
-            .map_err(|error| provider_error("worker-status", error))?
+        if publish_process_poll(child.try_wait(), &self.process_exit, &self.process_error)?
             .is_none()
         {
             child
@@ -128,14 +127,36 @@ impl WorkerClient {
 
     pub(super) async fn wait_process(&self) -> Result<ProcessStatus, VmError> {
         let mut exit = self.process_exit.subscribe();
+        let mut errors = self.process_error.subscribe();
+        // Retry the retained Child, rather than accepting a past error as exit
+        // or requiring a dead reaper task to manufacture a notification.
+        let process_status = {
+            let mut child = self.child.lock().await;
+            let result =
+                publish_process_poll(child.try_wait(), &self.process_exit, &self.process_error);
+            drop(child);
+            result
+        };
+        if let Some(status) = process_status? {
+            return Ok(status);
+        }
         loop {
-            let current = exit.borrow_and_update().clone();
-            if let Some(status) = current {
+            let status = exit.borrow_and_update().clone();
+            if let Some(status) = status {
                 return Ok(status);
             }
-            exit.changed()
-                .await
-                .map_err(|error| provider_error("worker-exit-channel", error))?;
+            let error = errors.borrow_and_update().clone();
+            if let Some(error) = error {
+                return Err(error.to_vm_error());
+            }
+            tokio::select! {
+                result = exit.changed() => {
+                    result.map_err(|error| provider_error("worker-exit-channel", error))?;
+                }
+                result = errors.changed() => {
+                    result.map_err(|error| provider_error("worker-reap-channel", error))?;
+                }
+            }
         }
     }
 
@@ -179,36 +200,67 @@ impl WorkerClient {
     pub(super) fn spawn_reaper(self: &Arc<Self>) {
         let child = Arc::clone(&self.child);
         let process_exit = self.process_exit.clone();
+        let process_error = self.process_error.clone();
         let pid = self.pid;
         tokio::spawn(async move {
+            let mut last_error = None;
             loop {
                 let status = {
                     let mut child = child.lock().await;
-                    child.try_wait()
+                    publish_process_poll(child.try_wait(), &process_exit, &process_error)
                 };
                 match status {
                     Ok(Some(status)) => {
-                        let status = ProcessStatus::from(status);
                         info!(
                             worker_pid = pid,
                             code = ?status.code,
                             signal = ?status.signal,
                             "worker reaped"
                         );
-                        process_exit.send_replace(Some(status));
                         break;
                     }
-                    Ok(None) => sleep(PROCESS_POLL_INTERVAL).await,
+                    Ok(None) => {
+                        last_error = None;
+                        sleep(PROCESS_POLL_INTERVAL).await;
+                    }
                     Err(error) => {
-                        error!(worker_pid = pid, %error, "failed to reap worker");
-                        process_exit.send_replace(Some(ProcessStatus {
-                            code: None,
-                            signal: None,
-                        }));
-                        break;
+                        let message = error.to_string();
+                        if last_error.as_ref() != Some(&message) {
+                            error!(worker_pid = pid, %error, "failed to reap worker");
+                            last_error = Some(message);
+                        }
+                        // The Child stays retained and is polled again; an
+                        // error notification never becomes an exit observation.
+                        sleep(PROCESS_POLL_INTERVAL).await;
                     }
                 }
             }
         });
+    }
+}
+
+// This is the sole publication boundary for real Child::try_wait results.
+// Err retains unresolved process state; only Ok(Some) confirms actual reap.
+pub(super) fn publish_process_poll(
+    result: std::io::Result<Option<ExitStatus>>,
+    exit: &watch::Sender<Option<ProcessStatus>>,
+    errors: &watch::Sender<Option<ErrorSnapshot>>,
+) -> Result<Option<ProcessStatus>, VmError> {
+    match result {
+        Ok(Some(status)) => {
+            let status = ProcessStatus::from(status);
+            exit.send_replace(Some(status.clone()));
+            errors.send_replace(None);
+            Ok(Some(status))
+        }
+        Ok(None) => {
+            errors.send_replace(None);
+            Ok(None)
+        }
+        Err(error) => {
+            let error = provider_error("worker-reap", error);
+            errors.send_replace(Some(ErrorSnapshot::from_vm_error(&error)));
+            Err(error)
+        }
     }
 }

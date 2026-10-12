@@ -25,7 +25,8 @@ impl WorkerBackend for FailedFirstReap {
         self.worker.subscribe_process_exit()
     }
     async fn kill(&self) -> Result<(), VmError> {
-        self.worker.kill().await
+        // A termination request must not pretend that this failing wait reaped it.
+        Ok(())
     }
     async fn wait_process(&self) -> Result<ProcessStatus, VmError> {
         if self.fail.swap(false, Ordering::Relaxed) {
@@ -34,6 +35,7 @@ impl WorkerBackend for FailedFirstReap {
                 "termination unconfirmed",
             ));
         }
+        self.worker.kill().await?;
         self.worker.wait_process().await
     }
 }

@@ -3,6 +3,7 @@ use crate::{
     validation::PROVIDER_NAME,
 };
 use std::{
+    collections::HashSet,
     fs, io,
     path::{Path, PathBuf},
     thread,
@@ -43,24 +44,59 @@ impl Cgroup {
     }
 
     pub fn cleanup(&self) -> Result<(), VmError> {
-        if !self.path.exists() {
-            return Ok(());
+        match fs::symlink_metadata(&self.path) {
+            Ok(metadata) if metadata.is_dir() => {}
+            Ok(_) => {
+                return Err(provider(
+                    "cgroup-cleanup",
+                    io::Error::other("cgroup path is not a directory"),
+                ));
+            }
+            Err(error) if error.kind() == io::ErrorKind::NotFound => {
+                return confirm_absent(&self.path);
+            }
+            Err(error) => return Err(provider("cgroup-cleanup", error)),
         }
         if self.emulated {
             return remove_directory_tree(&self.path);
         }
         let kill = self.path.join("cgroup.kill");
-        if kill.exists() {
-            write(kill, "1").map_err(|error| provider("cgroup-kill", error))?;
+        match fs::symlink_metadata(&kill) {
+            Ok(metadata) if metadata.is_file() => {
+                write(kill, "1").map_err(|error| provider("cgroup-kill", error))?;
+            }
+            Ok(_) => {
+                return Err(provider(
+                    "cgroup-kill",
+                    io::Error::other("cgroup.kill is not a regular control file"),
+                ));
+            }
+            Err(error) if error.kind() == io::ErrorKind::NotFound => {}
+            Err(error) => return Err(provider("cgroup-kill", error)),
         }
-        let deadline = Instant::now() + Duration::from_secs(2);
-        while self.is_populated()? && Instant::now() < deadline {
-            thread::sleep(Duration::from_millis(10));
-        }
+        self.wait_until_empty(Instant::now() + Duration::from_secs(2))?;
         match fs::remove_dir(&self.path) {
             Ok(()) => Ok(()),
-            Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(()),
+            Err(error) if error.kind() == io::ErrorKind::NotFound => confirm_absent(&self.path),
             Err(error) => Err(provider("cgroup-cleanup", error)),
+        }
+    }
+
+    fn wait_until_empty(&self, deadline: Instant) -> Result<(), VmError> {
+        loop {
+            if !self.is_populated()? {
+                return Ok(());
+            }
+            if Instant::now() >= deadline {
+                return Err(provider(
+                    "cgroup-cleanup",
+                    io::Error::new(
+                        io::ErrorKind::TimedOut,
+                        "cgroup is still populated at cleanup deadline",
+                    ),
+                ));
+            }
+            thread::sleep(Duration::from_millis(10));
         }
     }
 
@@ -114,22 +150,85 @@ impl Cgroup {
     }
 
     fn is_populated(&self) -> Result<bool, VmError> {
-        let events = self.path.join("cgroup.events");
-        if !events.exists() {
-            return Ok(false);
+        let path = self.path.join("cgroup.events");
+        let metadata =
+            fs::symlink_metadata(&path).map_err(|error| provider("cgroup-events", error))?;
+        if !metadata.is_file() {
+            return Err(provider(
+                "cgroup-events",
+                io::Error::other("cgroup.events is not a regular control file"),
+            ));
         }
-        let events =
-            fs::read_to_string(events).map_err(|error| provider("cgroup-events", error))?;
-        Ok(events
-            .lines()
-            .any(|line| line.split_whitespace().eq(["populated", "1"])))
+        let events = fs::read_to_string(path).map_err(|error| provider("cgroup-events", error))?;
+        parse_populated(&events).map_err(|error| provider("cgroup-events", error))
     }
+}
+
+// cgroup.events is flat-keyed. Require one exact populated 0/1 observation;
+// malformed or duplicate fields cannot silently become an empty-cgroup proof.
+fn parse_populated(events: &str) -> io::Result<bool> {
+    let invalid = || {
+        io::Error::new(
+            io::ErrorKind::InvalidData,
+            "malformed cgroup.events populated observation",
+        )
+    };
+    let mut keys = HashSet::new();
+    let mut populated = None;
+    for line in events.lines() {
+        let mut fields = line.split_whitespace();
+        let key = fields.next().ok_or_else(invalid)?;
+        let value = fields.next().ok_or_else(invalid)?;
+        if fields.next().is_some()
+            || !keys.insert(key)
+            || !value.bytes().all(|byte| byte.is_ascii_digit())
+        {
+            return Err(invalid());
+        }
+        if key == "populated" {
+            populated = Some(match value {
+                "0" => false,
+                "1" => true,
+                _ => return Err(invalid()),
+            });
+        }
+    }
+    populated.ok_or_else(invalid)
+}
+
+// Preserve exact known-child idempotence, but a missing or unreadable parent
+// cannot establish that this child was removed. Never infer a root-wide drain.
+fn confirm_absent(path: &Path) -> Result<(), VmError> {
+    match fs::symlink_metadata(path) {
+        Err(error) if error.kind() == io::ErrorKind::NotFound => {}
+        Err(error) => return Err(provider("cgroup-cleanup", error)),
+        Ok(_) => {
+            return Err(provider(
+                "cgroup-cleanup",
+                io::Error::other("cgroup path is still present"),
+            ));
+        }
+    }
+    let parent = path.parent().ok_or_else(|| {
+        provider(
+            "cgroup-cleanup",
+            io::Error::other("cgroup path has no parent"),
+        )
+    })?;
+    let metadata = fs::metadata(parent).map_err(|error| provider("cgroup-cleanup", error))?;
+    if !metadata.is_dir() {
+        return Err(provider(
+            "cgroup-cleanup",
+            io::Error::other("cgroup parent is not a directory"),
+        ));
+    }
+    Ok(())
 }
 
 fn remove_directory_tree(path: &Path) -> Result<(), VmError> {
     match fs::remove_dir_all(path) {
         Ok(()) => Ok(()),
-        Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(()),
+        Err(error) if error.kind() == io::ErrorKind::NotFound => confirm_absent(path),
         Err(error) => Err(provider("cgroup-cleanup", error)),
     }
 }
@@ -198,3 +297,7 @@ mod tests {
         );
     }
 }
+
+#[cfg(test)]
+#[path = "cgroup/cleanup_tests.rs"]
+mod cleanup_tests;

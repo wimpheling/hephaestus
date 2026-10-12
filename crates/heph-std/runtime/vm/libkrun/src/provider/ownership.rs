@@ -1,5 +1,7 @@
 //! Durable owner metadata for explicitly managed libkrun roots.
 
+#[cfg(test)]
+mod cleanup_tests;
 mod configured;
 #[cfg(test)]
 mod configured_provider_tests;
@@ -114,11 +116,11 @@ impl PinnedCleanupRoots {
         use std::os::fd::AsRawFd;
         let mut pinned = config.clone();
         pinned.cgroup_root = format!("/proc/self/fd/{}", self.cgroup.as_raw_fd()).into();
+        crate::cgroup::Cgroup::existing(&pinned, &id.0).cleanup()?;
         super::helpers::cleanup_runtime(
             &std::path::PathBuf::from(format!("/proc/self/fd/{}", self.runtime.as_raw_fd()))
                 .join(&id.0),
-        )?;
-        crate::cgroup::Cgroup::existing(&pinned, &id.0).cleanup()
+        )
     }
 }
 

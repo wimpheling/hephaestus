@@ -5,7 +5,7 @@ mod managed_configuration;
 mod managed_owner;
 
 use super::common::{
-    Arc, AtomicU64, Cgroup, Duration, EVENT_CAPACITY, HashMap, HashSet, LibkrunConfig,
+    Arc, AtomicBool, AtomicU64, Cgroup, Duration, EVENT_CAPACITY, HashMap, HashSet, LibkrunConfig,
     LibkrunInstance, Lifecycle, Mutex, OwnedResources, PROVIDER_NAME, PreparedSpec,
     ProcessWorkerSpawner, ProviderInner, Semaphore, ServiceBroker, VmError, VmId, VmInstance,
     VmProvider, VmSpec, WorkerSpawner, async_trait, broadcast, fs, info, prepare_spec,
@@ -254,10 +254,7 @@ impl LibkrunProvider {
             .private_http_service
             .as_ref()
             .map(|service| Duration::from_millis(service.connect_timeout_ms));
-        let private_service_dispatch = spec
-            .private_http_service
-            .as_ref()
-            .map(|service| Arc::new(Semaphore::new(service.max_connections as usize)));
+        let private_service_dispatch = private_service_dispatch(&spec);
         let service_broker = match spec.private_http_service.as_ref() {
             Some(service) => match ServiceBroker::bind(
                 &runtime_dir,
@@ -302,6 +299,10 @@ impl LibkrunProvider {
             config: Arc::clone(&self.inner.config),
             worker,
             state: Mutex::new(Lifecycle::Provisioned),
+            operation: Mutex::new(()),
+            destroy_requested: watch::channel(false).0,
+            stop_requested: watch::channel(false).0,
+            cleanup_complete: AtomicBool::new(false),
             terminal,
             terminal_guard: Mutex::new(()),
             ready,
@@ -324,4 +325,10 @@ impl LibkrunProvider {
         instance.spawn_process_monitor();
         Ok(instance)
     }
+}
+
+fn private_service_dispatch(spec: &PreparedSpec) -> Option<Arc<Semaphore>> {
+    spec.private_http_service
+        .as_ref()
+        .map(|service| Arc::new(Semaphore::new(service.max_connections as usize)))
 }

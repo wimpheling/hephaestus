@@ -1,6 +1,7 @@
 use super::common::{
-    Arc, LibkrunInstance, Lifecycle, LogStream, Terminal, VmError, VmEvent, VmExit, VmMetric,
-    WireLogStream, WorkerCommand, WorkerEvent, broadcast, error, info, timeout, warn,
+    Arc, LibkrunInstance, Lifecycle, LogStream, Ordering, PROVIDER_NAME, StopMode, Terminal,
+    VmError, VmEvent, VmExit, VmMetric, WireLogStream, WorkerCommand, WorkerEvent, broadcast,
+    error, info, timeout, warn,
 };
 use super::{
     helpers::{cleanup_runtime, provider_error, send_event, to_port_forward, unavailable_error},
@@ -45,6 +46,58 @@ impl LibkrunInstance {
         })
         .await
         .map_err(|_| unavailable_error("guest readiness", "readiness timeout elapsed"))?
+    }
+
+    pub(super) async fn stop_leader(&self, mode: StopMode) -> Result<(), VmError> {
+        let should_stop = {
+            let mut state = self.state.lock().await;
+            match &*state {
+                Lifecycle::Provisioned
+                | Lifecycle::Exited
+                | Lifecycle::StartFailed(_)
+                | Lifecycle::Destroyed => return Ok(()),
+                Lifecycle::Destroying { .. } => return Err(VmError::Destroyed),
+                Lifecycle::Stopping => false,
+                Lifecycle::Starting | Lifecycle::Running => {
+                    *state = Lifecycle::Stopping;
+                    true
+                }
+            }
+        };
+        if !should_stop {
+            return self.wait_for_terminal().await.map(|_| ());
+        }
+
+        match mode {
+            StopMode::Graceful { timeout: grace } => {
+                let timeout_ms = u64::try_from(grace.as_millis()).unwrap_or(u64::MAX);
+                // The grace budget covers the control request as well as
+                // guest exit; a blocked Cancel must still reach kill fallback.
+                let graceful = timeout(grace, async {
+                    let cancel = self
+                        .worker
+                        .request(WorkerCommand::Cancel { timeout_ms })
+                        .await;
+                    if let Err(error) = cancel {
+                        warn!(vm_id = %self.id.0, %error, "guest cancellation request failed");
+                    }
+                    self.wait_for_terminal().await
+                })
+                .await;
+                if graceful.is_err() {
+                    warn!(vm_id = %self.id.0, "graceful stop timed out; killing worker");
+                    self.worker.kill().await?;
+                }
+            }
+            StopMode::Force => self.worker.kill().await?,
+            _ => {
+                return Err(VmError::Unsupported {
+                    feature: "stop mode".to_owned(),
+                    provider: PROVIDER_NAME.to_owned(),
+                });
+            }
+        }
+        self.wait_for_terminal().await.map(|_| ())
     }
 
     pub(super) async fn wait_for_terminal(&self) -> Result<VmExit, VmError> {
@@ -240,7 +293,12 @@ impl LibkrunInstance {
             .send_replace(Some(Terminal::Exited(exit.clone())));
         {
             let mut state = self.state.lock().await;
-            if !matches!(*state, Lifecycle::Destroyed) {
+            // Cleanup's process exit must not erase the cached startup failure
+            // that callers serialized behind the original start must receive.
+            if !matches!(
+                *state,
+                Lifecycle::StartFailed(_) | Lifecycle::Destroying { .. } | Lifecycle::Destroyed
+            ) {
                 *state = Lifecycle::Exited;
             }
         }
@@ -258,24 +316,30 @@ impl LibkrunInstance {
     }
 
     pub(super) async fn force_cleanup(&self, was_started: bool) -> Result<(), VmError> {
-        self.shutdown_service_broker().await;
-        if was_started {
-            self.worker.kill().await?;
-            let _status = timeout(self.config.startup_timeout, self.worker.wait_process())
-                .await
-                .map_err(|_| unavailable_error("worker cleanup", "worker reap timed out"))??;
-        } else {
-            let guard = self.terminal_guard.lock().await;
-            if self.terminal.borrow().is_none() {
-                self.terminal.send_replace(Some(Terminal::Destroyed));
-            }
-            drop(guard);
-            let _destroy_result = self.worker.request(WorkerCommand::Destroy).await;
-            let _status = timeout(self.config.startup_timeout, self.worker.wait_process())
-                .await
-                .map_err(|_| unavailable_error("worker cleanup", "worker reap timed out"))??;
-        }
+        let _operation = self.operation.lock().await;
+        self.force_cleanup_locked(was_started).await
+    }
 
+    // Every caller holds the per-instance operation lock through confirmed reap
+    // and allocation cleanup. An old cleaned handle must not touch a reused ID.
+    pub(super) async fn force_cleanup_locked(&self, was_started: bool) -> Result<(), VmError> {
+        if self.cleanup_complete.load(Ordering::Acquire) {
+            return Ok(());
+        }
+        self.shutdown_service_broker().await;
+        if !was_started {
+            // Graceful protocol destruction is only a hint; kill plus actual
+            // reap below establish the worker's absence even if it fails.
+            let _destroy_result = timeout(
+                self.config.startup_timeout,
+                self.worker.request(WorkerCommand::Destroy),
+            )
+            .await;
+        }
+        self.worker.kill().await?;
+        let _status = timeout(self.config.startup_timeout, self.worker.wait_process())
+            .await
+            .map_err(|_| unavailable_error("worker cleanup", "worker reap timed out"))??;
         self.cleanup_resources().await
     }
 
@@ -283,6 +347,9 @@ impl LibkrunInstance {
     // never spans an await.
     #[allow(clippy::significant_drop_tightening)]
     pub(super) async fn cleanup_resources(&self) -> Result<(), VmError> {
+        if self.cleanup_complete.load(Ordering::Acquire) {
+            return Ok(());
+        }
         let broker = self
             .resources
             .lock()
@@ -298,8 +365,8 @@ impl LibkrunInstance {
             if let Some(roots) = owned.cleanup_roots.as_ref() {
                 roots.cleanup(&self.config, &self.id)?;
             } else {
-                cleanup_runtime(&owned.runtime_dir)?;
                 owned.cgroup.cleanup()?;
+                cleanup_runtime(&owned.runtime_dir)?;
             }
             info!(
                 vm_id = %self.id.0,
@@ -310,6 +377,7 @@ impl LibkrunInstance {
         resources.take();
         drop(resources);
         self.provider_ids.ids.lock().await.remove(&self.id);
+        self.cleanup_complete.store(true, Ordering::Release);
         Ok(())
     }
 

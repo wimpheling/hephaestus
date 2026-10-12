@@ -50,7 +50,7 @@ pub(in crate::provider::tests) fn service_instance_with_wall_clock(
 
 pub(in crate::provider::tests) fn instance_with_options(
     temp: &TempDir,
-    worker: Arc<MockWorker>,
+    worker: Arc<dyn WorkerBackend>,
     wall_clock_timeout: Duration,
     service: Option<(Duration, Arc<ServiceBroker>, PathBuf)>,
 ) -> Arc<LibkrunInstance> {
@@ -92,6 +92,10 @@ pub(in crate::provider::tests) fn instance_with_options(
         config,
         worker,
         state: Mutex::new(Lifecycle::Provisioned),
+        operation: Mutex::new(()),
+        destroy_requested: watch::channel(false).0,
+        stop_requested: watch::channel(false).0,
+        cleanup_complete: AtomicBool::new(false),
         terminal,
         terminal_guard: Mutex::new(()),
         ready,

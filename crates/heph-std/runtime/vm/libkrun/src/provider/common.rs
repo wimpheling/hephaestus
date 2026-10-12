@@ -26,7 +26,7 @@ pub(super) use std::{
     process::ExitStatus,
     sync::{
         Arc,
-        atomic::{AtomicU64, Ordering},
+        atomic::{AtomicBool, AtomicU64, Ordering},
     },
     time::Duration,
 };
@@ -59,6 +59,10 @@ pub(super) struct LibkrunInstance {
     pub(super) config: Arc<LibkrunConfig>,
     pub(super) worker: Arc<dyn WorkerBackend>,
     pub(super) state: Mutex<Lifecycle>,
+    pub(super) operation: Mutex<()>,
+    pub(super) destroy_requested: watch::Sender<bool>,
+    pub(super) stop_requested: watch::Sender<bool>,
+    pub(super) cleanup_complete: AtomicBool,
     pub(super) terminal: watch::Sender<Option<Terminal>>,
     pub(super) terminal_guard: Mutex<()>,
     pub(super) ready: watch::Sender<bool>,
@@ -87,6 +91,7 @@ pub(super) enum Lifecycle {
     Stopping,
     Exited,
     StartFailed(ErrorSnapshot),
+    Destroying { was_started: bool },
     Destroyed,
 }
 
@@ -164,6 +169,7 @@ pub(super) struct WorkerClient {
     pub(super) events: broadcast::Sender<WorkerEvent>,
     pub(super) child: Arc<Mutex<Child>>,
     pub(super) process_exit: watch::Sender<Option<ProcessStatus>>,
+    pub(super) process_error: watch::Sender<Option<ErrorSnapshot>>,
     pub(super) pid: u32,
 }
 
