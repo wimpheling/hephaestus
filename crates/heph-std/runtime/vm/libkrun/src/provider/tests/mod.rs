@@ -17,3 +17,5 @@ mod stop_start;
 mod supervision;
 #[path = "support.rs"]
 mod support;
+
+mod admission_inventory;

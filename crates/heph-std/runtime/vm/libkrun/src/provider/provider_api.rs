@@ -6,8 +6,8 @@ mod managed_owner;
 
 use super::common::{
     Arc, Cgroup, HashMap, HashSet, LibkrunConfig, Mutex, PROVIDER_NAME, PendingLaunch,
-    ProcessWorkerSpawner, ProviderInner, VmError, VmId, VmInstance, VmProvider, VmSpec,
-    WorkerSpawner, async_trait, oneshot, prepare_spec, validate_config, validate_id,
+    ProcessWorkerSpawner, ProviderInner, ProviderLifetime, VmError, VmId, VmInstance, VmProvider,
+    VmSpec, WorkerSpawner, async_trait, oneshot, prepare_spec, validate_config, validate_id,
 };
 use super::helpers::{cleanup_runtime, unavailable_error};
 
@@ -26,6 +26,60 @@ impl LibkrunProvider {
     pub(super) fn launch_test_inner(&self) -> Arc<ProviderInner> {
         Arc::clone(&self.inner)
     }
+    /// Closes provision and guest Start admission for this provider generation.
+    ///
+    /// Already admitted operations retain custody and may finish. Closing does
+    /// not stop workers or prove physical drain, and has no reopen operation.
+    ///
+    /// # Errors
+    ///
+    /// Rejects unowned providers, mismatching scope, or invalid current ownership.
+    pub async fn close_admission(
+        &self,
+        expected: &vm_trait::VmProviderOwnerScope,
+    ) -> Result<(), VmError> {
+        let owner = self.scoped_owner(expected)?;
+        let guard = owner.validate(&self.inner.config)?;
+        let ids = self.inner.ids.lock().await;
+        owner.validate_guard(&self.inner.config, &guard)?;
+        self.inner.registry.close();
+        drop(ids);
+        Ok(())
+    }
+
+    /// Returns diagnostics for every birth admitted in this supervisor generation.
+    ///
+    /// This is not cleanup authority or a native drain receipt. An empty new
+    /// generation does not account for orphans from a prior supervisor process.
+    ///
+    /// # Errors
+    ///
+    /// Rejects unowned providers, mismatching scope, or invalid current ownership.
+    pub async fn attempt_inventory(
+        &self,
+        expected: &vm_trait::VmProviderOwnerScope,
+    ) -> Result<super::registry::VmAttemptInventory, VmError> {
+        let owner = self.scoped_owner(expected)?;
+        let guard = owner.validate(&self.inner.config)?;
+        let inventory = self.inner.registry.inventory().await;
+        owner.validate_guard(&self.inner.config, &guard)?;
+        Ok(inventory)
+    }
+
+    fn scoped_owner(
+        &self,
+        expected: &vm_trait::VmProviderOwnerScope,
+    ) -> Result<&super::ownership::ProviderOwner, VmError> {
+        let owner = self.inner.owner.get().ok_or_else(|| VmError::Unsupported {
+            feature: "scoped VM admission and inventory".into(),
+            provider: PROVIDER_NAME.into(),
+        })?;
+        if owner.scope()?.ne(expected) {
+            return Err(VmError::InvalidState("VM admission owner scope differs"));
+        }
+        Ok(owner)
+    }
+
     /// Constructs an explicitly owned provider on a fresh or already managed root.
     ///
     /// Existing unclassified runtime roots cannot be adopted automatically.
@@ -73,10 +127,13 @@ impl LibkrunProvider {
         validate_config(&config)?;
         Ok(Self {
             inner: Arc::new(ProviderInner {
-                config: Arc::new(config),
-                ids: Mutex::new(HashSet::new()),
-                worker_spawner,
-                owner: std::sync::OnceLock::new(),
+                lifetime: Arc::new(ProviderLifetime {
+                    config: Arc::new(config),
+                    ids: Mutex::new(HashSet::new()),
+                    worker_spawner,
+                    owner: std::sync::OnceLock::new(),
+                }),
+                registry: super::registry::Registry::new(),
                 failed_cleanup: Mutex::new(HashMap::new()),
                 pending_launches: std::sync::Mutex::new(HashMap::new()),
             }),
@@ -181,9 +238,12 @@ impl VmProvider for LibkrunProvider {
                 .pending_launches
                 .lock()
                 .unwrap_or_else(std::sync::PoisonError::into_inner);
-            if pending.contains_key(&entry.id) || !ids.insert(entry.id.clone()) {
+            if pending.contains_key(&entry.id) {
                 return Err(VmError::AlreadyExists(entry.id.clone()));
             }
+            self.inner
+                .registry
+                .admit(&self.inner.lifetime, &mut ids, Arc::clone(&entry))?;
             pending.insert(entry.id.clone(), Arc::clone(&entry));
             // Reservation, discoverable custody and owning-task installation
             // have no await gap. Caller cancellation drops only its receiver.

@@ -316,7 +316,14 @@ impl LibkrunInstance {
     }
 
     pub(super) async fn force_cleanup(&self, was_started: bool) -> Result<(), VmError> {
+        // This marker's Drop must run after the operation lock is released.
+        #[allow(clippy::collection_is_never_read)]
+        let _activity;
         let _operation = self.operation.lock().await;
+        _activity = self
+            .registry
+            .upgrade()
+            .map(|registry| registry.operation(self.birth));
         self.force_cleanup_locked(was_started).await
     }
 
@@ -326,6 +333,16 @@ impl LibkrunInstance {
         if self.cleanup_complete.load(Ordering::Acquire) {
             return Ok(());
         }
+        let result = self.terminate_and_cleanup(was_started).await;
+        if let Err(error) = &result {
+            if let Some(registry) = self.registry.upgrade() {
+                registry.cleanup_failed(self.birth, error);
+            }
+        }
+        result
+    }
+
+    async fn terminate_and_cleanup(&self, was_started: bool) -> Result<(), VmError> {
         self.shutdown_service_broker().await;
         if !was_started {
             // Graceful protocol destruction is only a hint; kill plus actual
@@ -376,8 +393,13 @@ impl LibkrunInstance {
         }
         resources.take();
         drop(resources);
-        self.provider_ids.ids.lock().await.remove(&self.id);
+        let mut ids = self.provider_ids.ids.lock().await;
+        ids.remove(&self.id);
         self.cleanup_complete.store(true, Ordering::Release);
+        if let Some(registry) = self.registry.upgrade() {
+            registry.cleaned(self.birth);
+        }
+        drop(ids);
         Ok(())
     }
 

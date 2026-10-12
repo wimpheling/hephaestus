@@ -66,13 +66,11 @@ pub(in crate::provider::tests) fn instance_with_options(
     config.readiness_timeout = Duration::from_millis(20);
     config.limits.wall_clock_timeout = wall_clock_timeout;
     let config = Arc::new(config);
-    let provider_ids = Arc::new(ProviderInner {
+    let provider_ids = Arc::new(ProviderLifetime {
         config: Arc::clone(&config),
         ids: Mutex::new(HashSet::from([VmId("test".to_owned())])),
         worker_spawner: Arc::new(ProcessWorkerSpawner),
         owner: std::sync::OnceLock::new(),
-        failed_cleanup: Mutex::new(HashMap::new()),
-        pending_launches: std::sync::Mutex::new(HashMap::new()),
     });
     let (events, _) = broadcast::channel(32);
     let (terminal, _) = watch::channel(None::<Terminal>);
@@ -104,6 +102,8 @@ pub(in crate::provider::tests) fn instance_with_options(
         events,
         resources: Mutex::new(resources),
         provider_ids,
+        registry: std::sync::Weak::new(),
+        birth: 0,
         private_http_enabled: true,
         private_service_timeout,
         private_service_dispatch,

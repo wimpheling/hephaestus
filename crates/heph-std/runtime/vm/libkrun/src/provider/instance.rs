@@ -17,7 +17,24 @@ impl VmInstance for LibkrunInstance {
     }
 
     async fn start(&self) -> Result<(), VmError> {
+        // This marker's Drop must run after the operation lock is released.
+        #[allow(clippy::collection_is_never_read)]
+        let _activity;
         let _operation = self.operation.lock().await;
+        let registry = self.registry.upgrade();
+        _activity = if let Some(registry) = registry {
+            Some(registry.admit_start(&self.provider_ids, self.birth).await?)
+        } else {
+            // Only isolated unit fixtures lack a provider-admitted birth.
+            #[cfg(test)]
+            if self.birth != 0 {
+                return Err(VmError::Destroyed);
+            }
+            #[cfg(not(test))]
+            return Err(VmError::Destroyed);
+            #[cfg(test)]
+            None
+        };
         let mut result_rx = self.start_result.subscribe();
         let leader = {
             let mut state = self.state.lock().await;
@@ -101,7 +118,14 @@ impl VmInstance for LibkrunInstance {
                 Lifecycle::Running | Lifecycle::Stopping | Lifecycle::Destroying { .. } => {}
             }
         }
+        // This marker's Drop must run after the operation lock is released.
+        #[allow(clippy::collection_is_never_read)]
+        let _activity;
         let _operation = self.operation.lock().await;
+        _activity = self
+            .registry
+            .upgrade()
+            .map(|registry| registry.operation(self.birth));
         if matches!(*self.state.lock().await, Lifecycle::Destroyed) {
             return Ok(());
         }
@@ -275,7 +299,14 @@ impl VmInstance for LibkrunInstance {
             drop(state);
             was_started
         };
+        // This marker's Drop must run after the operation lock is released.
+        #[allow(clippy::collection_is_never_read)]
+        let _activity;
         let _operation = self.operation.lock().await;
+        _activity = self
+            .registry
+            .upgrade()
+            .map(|registry| registry.operation(self.birth));
         self.force_cleanup_locked(was_started).await?;
         *self.state.lock().await = Lifecycle::Destroyed;
         if !was_started {

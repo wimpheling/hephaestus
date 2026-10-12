@@ -49,14 +49,26 @@ pub(super) const PROCESS_POLL_INTERVAL: Duration = Duration::from_millis(20);
 pub(super) const PRIVATE_HTTP_TIMEOUT: Duration = Duration::from_secs(30);
 
 /// Fedora/Linux VM provider backed by a dedicated libkrun worker per VM.
-pub(super) struct ProviderInner {
+pub(super) struct ProviderLifetime {
     pub(super) config: Arc<LibkrunConfig>,
     pub(super) ids: Mutex<HashSet<VmId>>,
     pub(super) worker_spawner: Arc<dyn WorkerSpawner>,
     pub(super) owner: std::sync::OnceLock<super::ownership::ProviderOwner>,
+}
+
+pub(super) struct ProviderInner {
+    pub(super) lifetime: Arc<ProviderLifetime>,
+    pub(super) registry: Arc<super::registry::Registry>,
     pub(super) failed_cleanup: Mutex<HashMap<VmId, Arc<LibkrunInstance>>>,
     pub(super) pending_launches: std::sync::Mutex<HashMap<VmId, Arc<PendingLaunch>>>,
 }
+impl std::ops::Deref for ProviderInner {
+    type Target = ProviderLifetime;
+    fn deref(&self) -> &Self::Target {
+        &self.lifetime
+    }
+}
+
 pub(super) struct LibkrunInstance {
     pub(super) id: VmId,
     pub(super) config: Arc<LibkrunConfig>,
@@ -72,7 +84,9 @@ pub(super) struct LibkrunInstance {
     pub(super) start_result: watch::Sender<Option<Result<(), ErrorSnapshot>>>,
     pub(super) events: broadcast::Sender<VmEvent>,
     pub(super) resources: Mutex<Option<OwnedResources>>,
-    pub(super) provider_ids: Arc<ProviderInner>,
+    pub(super) provider_ids: Arc<ProviderLifetime>,
+    pub(super) registry: std::sync::Weak<super::registry::Registry>,
+    pub(super) birth: u64,
     pub(super) private_http_enabled: bool,
     pub(super) private_service_timeout: Option<Duration>,
     pub(super) private_service_dispatch: Option<Arc<Semaphore>>,

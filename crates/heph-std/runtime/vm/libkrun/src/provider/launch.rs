@@ -139,6 +139,7 @@ struct LaunchResources {
 
 pub(super) struct PendingLaunch {
     pub(super) id: VmId,
+    pub(super) birth: AtomicU64,
     pub(super) custody: LaunchCustody,
     pub(super) state: watch::Sender<LaunchState>,
     resources: Mutex<LaunchResources>,
@@ -163,6 +164,7 @@ impl PendingLaunch {
             Arc::new(Self {
                 custody: LaunchCustody::new(host_runtime),
                 id,
+                birth: AtomicU64::new(0),
                 state: watch::channel(LaunchState::Working).0,
                 resources: Mutex::new(LaunchResources {
                     runtime: None,
@@ -267,6 +269,7 @@ impl PendingLaunch {
         worker: Arc<dyn WorkerBackend>,
         settings: InstanceSettings,
     ) -> Result<Arc<LibkrunInstance>, VmError> {
+        let pid = self.custody.process()?.and_then(|process| process.pid);
         let mut resources = self.resources.lock().await;
         let runtime_dir = resources
             .runtime
@@ -300,13 +303,18 @@ impl PendingLaunch {
             start_result: watch::channel(None).0,
             events: broadcast::channel(EVENT_CAPACITY).0,
             resources: Mutex::new(Some(owned)),
-            provider_ids: Arc::clone(provider),
+            provider_ids: Arc::clone(&provider.lifetime),
+            registry: Arc::downgrade(&provider.registry),
+            birth: self.birth.load(super::common::Ordering::Acquire),
             private_http_enabled: settings.http_enabled,
             private_service_timeout: settings.service_timeout,
             private_service_dispatch: settings.dispatch,
             private_http_waiters: Mutex::new(HashMap::new()),
             next_private_http_request: AtomicU64::new(1),
         });
+        provider
+            .registry
+            .install(instance.birth, Arc::clone(&instance), pid);
         instance.spawn_event_forwarder();
         instance.spawn_process_monitor();
         Ok(instance)
@@ -450,6 +458,17 @@ async fn retire(provider: &ProviderInner, entry: &PendingLaunch, release_id: boo
         pending.remove(&entry.id);
     }
     drop(pending);
+    let pid = entry
+        .custody
+        .process()
+        .ok()
+        .flatten()
+        .and_then(|process| process.pid);
+    provider.registry.launch_finished(
+        entry.birth.load(super::common::Ordering::Acquire),
+        release_id,
+        pid,
+    );
     drop(ids);
 }
 

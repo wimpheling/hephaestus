@@ -258,7 +258,13 @@ async fn lost_queued_success_requires_instance_cleanup_before_entry_retirement()
     let prepared = prepare_spec(&config, &requested).unwrap();
     let (entry, retries) = PendingLaunch::new(requested.id.clone(), &config, None).unwrap();
     let inner = provider.launch_test_inner();
-    inner.ids.lock().await.insert(entry.id.clone());
+    {
+        let mut ids = inner.ids.lock().await;
+        inner
+            .registry
+            .admit(&inner.lifetime, &mut ids, entry.clone())
+            .unwrap();
+    }
     inner
         .pending_launches
         .lock()

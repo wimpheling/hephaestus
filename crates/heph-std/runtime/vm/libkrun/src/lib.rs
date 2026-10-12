@@ -17,7 +17,7 @@ mod validation;
 mod worker;
 
 pub use config::{CgroupLimits, IoLimit, LibkrunConfig};
-pub use provider::LibkrunProvider;
+pub use provider::{LibkrunProvider, VmAttemptInventory, VmAttemptPhase, VmAttemptSnapshot};
 
 /// Runs the dedicated libkrun worker process.
 ///
