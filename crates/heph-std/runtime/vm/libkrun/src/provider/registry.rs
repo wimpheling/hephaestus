@@ -68,6 +68,7 @@ struct Record {
     snapshot: VmAttemptSnapshot,
     custody: Custody,
     launch_active: bool,
+    lifecycle_tasks: usize,
 }
 struct State {
     closed: bool,
@@ -76,7 +77,19 @@ struct State {
     records: BTreeMap<u64, Record>,
 }
 
+impl State {
+    fn settled(&self) -> bool {
+        self.records.values().all(|record| {
+            matches!(record.custody, Custody::Cleaned)
+                && !record.launch_active
+                && record.snapshot.operations == 0
+                && record.lifecycle_tasks == 0
+        })
+    }
+}
+
 pub(super) struct Registry {
+    pub(super) drain: tokio::sync::Mutex<()>,
     state: std::sync::Mutex<State>,
     changed: Notify,
 }
@@ -84,6 +97,7 @@ pub(super) struct Registry {
 impl Registry {
     pub(super) fn new() -> Arc<Self> {
         Arc::new(Self {
+            drain: tokio::sync::Mutex::new(()),
             state: std::sync::Mutex::new(State {
                 closed: false,
                 next_birth: 0,
@@ -131,6 +145,7 @@ impl Registry {
                 },
                 custody: Custody::Pending(entry),
                 launch_active: true,
+                lifecycle_tasks: 0,
             },
         );
         if !state.keeper {
@@ -178,6 +193,28 @@ impl Registry {
         Ok(Operation {
             registry: Arc::clone(self),
             birth,
+            kind: Activity::Operation,
+        })
+    }
+
+    pub(super) fn lifecycle_task(self: &Arc<Self>, birth: u64) -> Result<Operation, VmError> {
+        let mut state = self
+            .state
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let record = state
+            .records
+            .get_mut(&birth)
+            .ok_or(VmError::InvalidState("VM birth is not registered"))?;
+        record.lifecycle_tasks = record
+            .lifecycle_tasks
+            .checked_add(1)
+            .ok_or(VmError::InvalidState("VM lifecycle task count exhausted"))?;
+        drop(state);
+        Ok(Operation {
+            registry: Arc::clone(self),
+            birth,
+            kind: Activity::LifecycleTask,
         })
     }
 
@@ -193,6 +230,7 @@ impl Registry {
         Operation {
             registry: Arc::clone(self),
             birth,
+            kind: Activity::Operation,
         }
     }
 
@@ -223,7 +261,7 @@ impl Registry {
             }
         }
         drop(state);
-        self.changed.notify_one();
+        self.changed.notify_waiters();
     }
 
     pub(super) fn cleaned(&self, birth: u64) {
@@ -237,7 +275,7 @@ impl Registry {
             record.custody = Custody::Cleaned;
         }
         drop(state);
-        self.changed.notify_one();
+        self.changed.notify_waiters();
     }
 
     pub(super) fn cleanup_failed(&self, birth: u64, error: &VmError) {
@@ -247,6 +285,38 @@ impl Registry {
             .unwrap_or_else(std::sync::PoisonError::into_inner);
         if let Some(record) = state.records.get_mut(&birth) {
             record.snapshot.error = Some(error.to_string());
+        }
+    }
+
+    pub(super) fn instances(&self) -> Vec<Arc<LibkrunInstance>> {
+        let state = self
+            .state
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        state
+            .records
+            .values()
+            .filter_map(|record| match &record.custody {
+                Custody::Instance(instance) => Some(Arc::clone(instance)),
+                Custody::Pending(_) | Custody::Cleaned => None,
+            })
+            .collect()
+    }
+
+    pub(super) async fn wait_settled(&self) {
+        loop {
+            let changed = self.changed.notified();
+            tokio::pin!(changed);
+            changed.as_mut().enable();
+            if self
+                .state
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .settled()
+            {
+                return;
+            }
+            changed.await;
         }
     }
 
@@ -320,11 +390,16 @@ impl Registry {
     }
 }
 
-// An activity marker, NOT another operation lock or cleanup evidence. Drop
-// merely records that the existing operation guard's caller has finished.
+// Activity bookkeeping, not another operation lock or cleanup evidence.
+// LifecycleTask additionally covers tasks queued before the operation mutex.
+enum Activity {
+    Operation,
+    LifecycleTask,
+}
 pub(super) struct Operation {
     registry: Arc<Registry>,
     birth: u64,
+    kind: Activity,
 }
 impl Drop for Operation {
     fn drop(&mut self) {
@@ -334,27 +409,28 @@ impl Drop for Operation {
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
         if let Some(record) = state.records.get_mut(&self.birth) {
-            record.snapshot.operations -= 1;
+            match self.kind {
+                Activity::Operation => record.snapshot.operations -= 1,
+                Activity::LifecycleTask => record.lifecycle_tasks -= 1,
+            }
         }
         drop(state);
-        self.registry.changed.notify_one();
+        self.registry.changed.notify_waiters();
     }
 }
 
 async fn keep_generation(registry: Arc<Registry>, lifetime: Arc<ProviderLifetime>) {
     loop {
         let changed = registry.changed.notified();
+        tokio::pin!(changed);
+        changed.as_mut().enable();
         let complete = {
             let ids = lifetime.ids.lock().await;
             let mut state = registry
                 .state
                 .lock()
                 .unwrap_or_else(std::sync::PoisonError::into_inner);
-            let complete = state.records.values().all(|record| {
-                matches!(record.custody, Custody::Cleaned)
-                    && !record.launch_active
-                    && record.snapshot.operations == 0
-            });
+            let complete = state.settled();
             if complete {
                 state.keeper = false;
             }

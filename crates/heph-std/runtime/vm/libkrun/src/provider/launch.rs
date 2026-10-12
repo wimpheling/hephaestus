@@ -144,6 +144,7 @@ pub(super) struct PendingLaunch {
     pub(super) state: watch::Sender<LaunchState>,
     resources: Mutex<LaunchResources>,
     retry: mpsc::Sender<CleanupReply>,
+    drain: watch::Sender<bool>,
 }
 
 impl PendingLaunch {
@@ -173,9 +174,42 @@ impl PendingLaunch {
                     roots,
                 }),
                 retry,
+                drain: watch::channel(false).0,
             }),
             receiver,
         ))
+    }
+
+    // Called while the provider's admission/acknowledgement IDs lock is held.
+    pub(super) fn request_drain(&self) {
+        self.drain.send_replace(true);
+    }
+
+    pub(super) fn drain_requested(&self) -> bool {
+        *self.drain.borrow()
+    }
+
+    pub(super) async fn drain_cleanup(&self, retry_held: bool) -> Result<(), VmError> {
+        // Only the drain's pre-cancellation snapshot authorizes an explicit
+        // retry. A newly Held failure keeps its first original cause intact.
+        if retry_held {
+            return self.retry_cleanup().await;
+        }
+        let mut state = self.state.subscribe();
+        loop {
+            let current = state.borrow_and_update().clone();
+            match current {
+                LaunchState::Cleaned | LaunchState::HandedOff => return Ok(()),
+                LaunchState::Held(failure) => {
+                    return Err(provider_error("worker-launch-cleanup", failure));
+                }
+                LaunchState::Working | LaunchState::Handoff => {}
+            }
+            state
+                .changed()
+                .await
+                .map_err(|error| provider_error("launch-drain-state", error))?;
+        }
     }
 
     pub(super) async fn retry_cleanup(&self) -> Result<(), VmError> {
@@ -389,13 +423,29 @@ pub(super) async fn run_launch(
     retries: RetryInbox,
 ) {
     let settings = InstanceSettings::from_spec(&spec);
+    let mut draining = entry.drain.subscribe();
     let launched = tokio::select! {
+        biased;
+        _requested = draining.wait_for(|requested| *requested) => Err(unavailable_error("worker launch", "generation drain requested")),
         launched = entry.launch(&provider, spec, guard.as_ref()) => launched,
         () = result.closed() => Err(unavailable_error("worker launch", "provision receiver cancelled")),
     };
     match launched {
         Ok(worker) => match entry.install_instance(&provider, worker, settings).await {
             Ok(instance) => {
+                if entry.drain_requested() {
+                    hold_or_retire(
+                        provider,
+                        entry,
+                        guard,
+                        Some(instance),
+                        unavailable_error("worker launch", "generation drain requested"),
+                        Some(result),
+                        retries,
+                    )
+                    .await;
+                    return;
+                }
                 entry.state.send_replace(LaunchState::Handoff);
                 let (accepted, acknowledgement) = oneshot::channel();
                 let sent = result
@@ -404,21 +454,26 @@ pub(super) async fn run_launch(
                         accepted,
                     }))
                     .is_ok();
-                if sent && acknowledgement.await.is_ok() {
+                let acknowledged = sent
+                    && tokio::select! {
+                        biased;
+                        _requested = draining.wait_for(|requested| *requested) => false,
+                        outcome = acknowledgement => outcome.is_ok(),
+                    };
+                if acknowledged {
                     entry.state.send_replace(LaunchState::HandedOff);
                     retire(&provider, &entry, false).await;
                     return;
                 }
-                hold_or_retire(
-                    provider,
-                    entry,
-                    guard,
-                    Some(instance),
-                    unavailable_error("worker launch", "provision handoff cancelled"),
-                    None,
-                    retries,
-                )
-                .await;
+                let cause = unavailable_error(
+                    "worker launch",
+                    if entry.drain_requested() {
+                        "generation drain requested"
+                    } else {
+                        "provision handoff cancelled"
+                    },
+                );
+                hold_or_retire(provider, entry, guard, Some(instance), cause, None, retries).await;
             }
             Err(cause) => {
                 hold_or_retire(provider, entry, guard, None, cause, Some(result), retries).await;

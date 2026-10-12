@@ -12,6 +12,11 @@ pub(super) enum Request {
 impl LibkrunInstance {
     pub(super) async fn run_lifecycle(&self, request: Request) -> Result<(), VmError> {
         let instance = self.this.upgrade().ok_or(VmError::Destroyed)?;
+        let activity = self
+            .registry
+            .upgrade()
+            .map(|registry| registry.lifecycle_task(self.birth))
+            .transpose()?;
         let (completed, outcome) = oneshot::channel();
         // No await precedes this handoff and no abort handle is exposed. The
         // actual instance retains backend, pinned roots and original lifetime.
@@ -24,6 +29,7 @@ impl LibkrunInstance {
             // A lost receiver is not termination/cleanup evidence. The task
             // reaches the same success or held/error outcome independently.
             drop(instance);
+            drop(activity);
             let _reported = completed.send(result);
         });
         outcome
@@ -31,14 +37,12 @@ impl LibkrunInstance {
             .map_err(|error| provider_error("lifecycle-task", error))?
     }
 
-    async fn start_owned(&self) -> Result<(), VmError> {
-        // This marker's Drop must run after the operation lock is released.
-        #[allow(clippy::collection_is_never_read)]
-        let _activity;
-        let _operation = self.operation.lock().await;
+    async fn start_admission(&self) -> Result<Option<super::registry::Operation>, VmError> {
         let registry = self.registry.upgrade();
-        _activity = if let Some(registry) = registry {
-            Some(registry.admit_start(&self.provider_ids, self.birth).await?)
+        if let Some(registry) = registry {
+            Ok(Some(
+                registry.admit_start(&self.provider_ids, self.birth).await?,
+            ))
         } else {
             // Only isolated unit fixtures lack a provider-admitted birth.
             #[cfg(test)]
@@ -48,8 +52,16 @@ impl LibkrunInstance {
             #[cfg(not(test))]
             return Err(VmError::Destroyed);
             #[cfg(test)]
-            None
-        };
+            Ok(None)
+        }
+    }
+
+    async fn start_owned(&self) -> Result<(), VmError> {
+        // This marker's Drop must run after the operation lock is released.
+        #[allow(clippy::collection_is_never_read)]
+        let _activity;
+        let _operation = self.operation.lock().await;
+        _activity = self.start_admission().await?;
         let mut result_rx = self.start_result.subscribe();
         let leader = {
             let mut state = self.state.lock().await;

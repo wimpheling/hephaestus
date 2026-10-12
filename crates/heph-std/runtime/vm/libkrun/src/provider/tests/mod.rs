@@ -1,6 +1,7 @@
 #[path = "basic.rs"]
 mod basic;
 mod cleanup_emptiness;
+mod generation_drain;
 #[path = "launch.rs"]
 mod launch;
 mod launch_custody;

@@ -66,6 +66,35 @@ impl LibkrunProvider {
         Ok(inventory)
     }
 
+    /// Closes admission and cleans all births known to this live generation.
+    ///
+    /// The owning task continues through caller cancellation. Success requires
+    /// confirmed cleanup of these exact births and completion of their launch
+    /// and lifecycle tasks. It is not a global physical drain receipt: an empty
+    /// reopened generation says nothing about prior-process orphans.
+    ///
+    /// # Errors
+    ///
+    /// Rejects unowned/wrong-scope providers or invalid ownership. Unconfirmed
+    /// cleanup returns an error and retains the original custody for retry.
+    pub async fn drain_generation(
+        &self,
+        expected: &vm_trait::VmProviderOwnerScope,
+    ) -> Result<(), VmError> {
+        let owner = self.scoped_owner(expected)?;
+        let guard = owner.validate(&self.inner.config)?;
+        let provider = Arc::clone(&self.inner);
+        let (completed, outcome) = oneshot::channel();
+        // Original provider/root custody is transferred before the first await.
+        tokio::spawn(async move {
+            let result = super::drain::run(provider, guard).await;
+            let _reported = completed.send(result);
+        });
+        outcome.await.map_err(|_| {
+            unavailable_error("generation drain", "owning drain task channel closed")
+        })?
+    }
+
     fn scoped_owner(
         &self,
         expected: &vm_trait::VmProviderOwnerScope,
@@ -274,6 +303,12 @@ impl VmProvider for LibkrunProvider {
             .is_some_and(|current| Arc::ptr_eq(current, &entry))
         {
             return Err(VmError::InvalidState("launch handoff entry changed"));
+        }
+        if entry.drain_requested() {
+            return Err(unavailable_error(
+                "worker launch",
+                "generation drain requested",
+            ));
         }
         // Acknowledge before retiring only this entry; preserve the ID reservation.
         // No await separates acknowledgement, retirement and returning the instance.
