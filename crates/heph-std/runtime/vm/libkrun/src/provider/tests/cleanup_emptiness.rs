@@ -14,6 +14,7 @@ async fn uncertain_cgroup_retains_runtime_resources_and_id_after_worker_reap() {
     fs::write(&sentinel, b"owned bytes").unwrap();
     *vm.resources.lock().await = Some(OwnedResources {
         runtime_dir: runtime.clone(),
+        runtime_child: None,
         cgroup,
         cleanup_roots: None,
         service_broker: None,

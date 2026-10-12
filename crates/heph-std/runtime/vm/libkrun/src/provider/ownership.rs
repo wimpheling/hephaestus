@@ -3,11 +3,14 @@
 #[cfg(test)]
 mod cleanup_tests;
 mod configured;
+pub(super) use configured::ProspectiveOwner;
 #[cfg(test)]
 mod configured_provider_tests;
 #[cfg(test)]
 mod configured_tests;
 mod files;
+#[cfg(test)]
+mod prospective_tests;
 #[cfg(test)]
 mod supervision_tests;
 #[cfg(test)]
@@ -98,7 +101,7 @@ pub(super) struct OwnerGuard {
 }
 
 /// Retains exact allocated roots for handle destruction without retaining the
-/// metadata flock or changing paths sent to the worker process.
+/// metadata flock. Actual admitted births additionally pin their child entries.
 pub(super) struct PinnedCleanupRoots {
     runtime: File,
     cgroup: File,

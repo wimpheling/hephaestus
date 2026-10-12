@@ -4,6 +4,9 @@ mod runtime;
 mod types;
 
 #[cfg(test)]
+mod path_tests;
+
+#[cfg(test)]
 #[path = "worker/tests.rs"]
 mod tests;
 
@@ -17,6 +20,7 @@ use runtime::WorkerRuntime;
 
 use std::{
     error::Error,
+    fs::File,
     io,
     os::unix::net::UnixStream,
     path::PathBuf,
@@ -24,16 +28,19 @@ use std::{
 };
 
 pub fn main() -> Result<(), Box<dyn Error + Send + Sync>> {
-    let socket_path = parse_socket_argument()?;
+    let (socket_path, runtime_directory) = parse_launch_arguments(std::env::args_os())?;
     let stream = UnixStream::connect(socket_path)?;
     let reader = stream.try_clone()?;
     let writer = Arc::new(Mutex::new(stream));
-    run(reader, &writer)
+    let outcome = run(reader, &writer, runtime_directory.as_ref());
+    drop(runtime_directory);
+    outcome
 }
 
 fn run(
     mut reader: UnixStream,
     writer: &Arc<Mutex<UnixStream>>,
+    runtime_directory: Option<&Arc<File>>,
 ) -> Result<(), Box<dyn Error + Send + Sync>> {
     let mut runtime: Option<WorkerRuntime> = None;
     loop {
@@ -47,7 +54,7 @@ fn run(
                 let result = if runtime.is_some() {
                     Err(WireError::invalid_state("worker is already configured"))
                 } else {
-                    WorkerRuntime::configure(config, *spec, runtime_dir)
+                    WorkerRuntime::configure(config, *spec, runtime_dir, runtime_directory.cloned())
                         .map(|configured| runtime = Some(configured))
                         .map_err(WireError::from)
                 };
@@ -120,10 +127,23 @@ fn send_message(writer: &Arc<Mutex<UnixStream>>, message: &WorkerMessage) -> io:
     write_sync(&mut *lock(writer), message)
 }
 
-fn parse_socket_argument() -> Result<PathBuf, io::Error> {
-    let mut arguments = std::env::args_os();
+fn parse_launch_arguments(
+    mut arguments: impl Iterator<Item = std::ffi::OsString>,
+) -> Result<(PathBuf, Option<Arc<File>>), io::Error> {
     let _binary = arguments.next();
     let flag = arguments.next();
+    if flag.as_deref() == Some(std::ffi::OsStr::new("--runtime-stdin")) {
+        if arguments.next().is_some() {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "unexpected runtime arguments",
+            ));
+        }
+        let runtime = Arc::new(inherited_runtime_directory()?);
+        let socket =
+            crate::directory::fd_path(&runtime).join(crate::protocol::SUPERVISOR_SOCKET_NAME);
+        return Ok((socket, Some(runtime)));
+    }
     let path = arguments.next();
     if flag.as_deref() != Some(std::ffi::OsStr::new("--socket"))
         || path.is_none()
@@ -131,10 +151,26 @@ fn parse_socket_argument() -> Result<PathBuf, io::Error> {
     {
         return Err(io::Error::new(
             io::ErrorKind::InvalidInput,
-            "usage: hephaestus-vm-libkrun-worker --socket PATH",
+            "usage: hephaestus-vm-libkrun-worker --socket PATH | --runtime-stdin",
         ));
     }
-    Ok(PathBuf::from(path.expect("checked above")))
+    Ok((PathBuf::from(path.expect("checked above")), None))
+}
+
+fn inherited_runtime_directory() -> io::Result<File> {
+    use std::os::unix::fs::MetadataExt;
+    let runtime: File = rustix::io::fcntl_dupfd_cloexec(std::io::stdin(), 3)?.into();
+    let metadata = runtime.metadata()?;
+    if !metadata.is_dir()
+        || metadata.uid() != rustix::process::geteuid().as_raw()
+        || metadata.mode() & 0o077 != 0
+    {
+        return Err(io::Error::new(
+            io::ErrorKind::PermissionDenied,
+            "inherited runtime must be an owned private directory",
+        ));
+    }
+    Ok(runtime)
 }
 
 fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {

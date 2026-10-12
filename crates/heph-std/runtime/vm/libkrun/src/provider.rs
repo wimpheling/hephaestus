@@ -13,7 +13,7 @@ mod worker;
 mod worker_client;
 mod worker_process;
 
-pub use provider_api::LibkrunProvider;
+pub use provider_api::{LibkrunProvider, ProspectiveOwnedVmBootstrap};
 pub use registry::{VmAttemptInventory, VmAttemptPhase, VmAttemptSnapshot};
 
 #[cfg(test)]

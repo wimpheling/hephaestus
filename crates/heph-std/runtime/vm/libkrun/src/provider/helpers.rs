@@ -1,8 +1,10 @@
 use super::common::{
-    Error, ExitStatus, ExitStatusExt, PROVIDER_NAME, Path, PathBuf, PermissionsExt, PortForward,
-    PortProtocol, PreparedForward, VmError, VmEvent, VmExit, VmId, WireError, WireErrorKind,
-    broadcast, fmt, fs, io,
+    Error, ExitStatus, ExitStatusExt, PROVIDER_NAME, Path, PortForward, PortProtocol,
+    PreparedForward, VmError, VmEvent, VmExit, WireError, WireErrorKind, broadcast, fmt, fs, io,
 };
+
+#[cfg(test)]
+use super::common::{PathBuf, PermissionsExt, VmId};
 
 #[derive(Debug, Clone)]
 pub(super) struct ProcessStatus {
@@ -33,6 +35,7 @@ pub(super) fn create_runtime_dir(root: &Path, id: &str) -> Result<PathBuf, VmErr
     create_runtime_dir_tracked(root, id, |_| {})
 }
 
+#[cfg(test)]
 pub(super) fn create_runtime_dir_tracked(
     root: &Path,
     id: &str,

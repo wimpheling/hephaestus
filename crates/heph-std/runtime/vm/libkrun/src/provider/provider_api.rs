@@ -3,6 +3,7 @@ mod managed_configuration;
 
 #[path = "managed_owner.rs"]
 mod managed_owner;
+pub use managed_owner::ProspectiveOwnedVmBootstrap;
 
 use super::common::{
     Arc, Cgroup, HashMap, HashSet, LibkrunConfig, Mutex, PROVIDER_NAME, PendingLaunch,

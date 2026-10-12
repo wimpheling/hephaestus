@@ -19,11 +19,13 @@ pub(super) use crate::{
 pub(super) use async_trait::async_trait;
 pub(super) use bytes::Bytes;
 pub(super) use http::{HeaderMap, HeaderName, HeaderValue, StatusCode};
+#[cfg(test)]
+pub(super) use std::os::unix::fs::PermissionsExt;
 pub(super) use std::{
     collections::{HashMap, HashSet},
     error::Error,
     fmt, fs, io,
-    os::unix::{fs::PermissionsExt, process::ExitStatusExt},
+    os::unix::process::ExitStatusExt,
     path::{Path, PathBuf},
     process::ExitStatus,
     sync::{
@@ -115,6 +117,7 @@ pub(super) enum Lifecycle {
 
 pub(super) struct OwnedResources {
     pub(super) runtime_dir: PathBuf,
+    pub(super) runtime_child: Option<crate::directory::ChildDirectory>,
     pub(super) cgroup: Cgroup,
     pub(super) service_broker: Option<Arc<ServiceBroker>>,
     pub(super) cleanup_roots: Option<super::ownership::PinnedCleanupRoots>,

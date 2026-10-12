@@ -315,11 +315,19 @@ async fn raw_child_survives_placement_failure_without_transport_and_is_actually_
     config.worker_binary = worker;
     let requested = spec("raw-placement", root);
     let prepared = prepare_spec(&config, &requested).unwrap();
-    fs::create_dir(runtime.join(&requested.id.0)).unwrap();
     fs::create_dir(cgroups.join(&requested.id.0)).unwrap();
     // A directory cannot accept the placement control write.
     fs::create_dir(cgroups.join(&requested.id.0).join("cgroup.procs")).unwrap();
     let (entry, _retries) = PendingLaunch::new(requested.id.clone(), &config, None).unwrap();
+    drop(
+        crate::directory::ChildDirectory::create(
+            &runtime,
+            &requested.id.0,
+            rustix::fs::Mode::from_bits_truncate(0o700),
+            |allocation| entry.custody.retain_runtime(allocation).unwrap(),
+        )
+        .unwrap(),
+    );
     let error = crate::provider::common::WorkerClient::launch(
         Arc::new(config.clone()),
         prepared,

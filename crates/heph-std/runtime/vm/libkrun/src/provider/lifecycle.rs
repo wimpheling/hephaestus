@@ -376,7 +376,12 @@ impl LibkrunInstance {
         }
         let mut resources = self.resources.lock().await;
         if let Some(owned) = resources.as_ref() {
-            if let Some(roots) = owned.cleanup_roots.as_ref() {
+            if let Some(runtime) = owned.runtime_child.as_ref() {
+                owned.cgroup.cleanup()?;
+                runtime
+                    .remove(true)
+                    .map_err(|error| provider_error("runtime-cleanup", error))?;
+            } else if let Some(roots) = owned.cleanup_roots.as_ref() {
                 roots.cleanup(&self.config, &self.id)?;
             } else {
                 owned.cgroup.cleanup()?;

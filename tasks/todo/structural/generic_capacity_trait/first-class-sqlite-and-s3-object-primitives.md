@@ -163,6 +163,24 @@ runs. Unresolved historical rows stay held. Schema presence must not automatical
 enable owned execution. The private profile foundation passed actual SQL tests;
 scalar release, Run lifecycle and application compatibility remain to be verified.
 
+The current unpublished migration chain now extends through 0139. Ordinary
+PostgreSQL fresh installation, populated 0107→0139 upgrade, and same-database
+replay pass, including catalog/dependency preservation and the three-role
+startup contract. Two PostgreSQL/local-filesystem tests also pass for completed
+retention, independently authorized reopening, transactional rollback/completion,
+and live authorization withdrawal while preserving backing bytes and inodes.
+These checks do not launch an installed recipe.
+
+The current local VM implementation passes Rust 1.88 Clippy, documentation,
+scoped formatting, and all 174 library tests. A real KVM configured-owner test
+also passes bootstrap, start, destruction, worker termination, and readonly
+reopen. The broader networking smoke check currently fails before guest
+readiness because a mount ancestor is rejected as replaceable by the workload;
+its DNS/TCP/UDP and forwarded HTTP assertions have not passed. Managed production
+preparation is being integrated. Ordinary application composition still needs
+explicit fresh profiles and compatible adapters before the 0139 application
+version can be accepted.
+
 Provider orchestration and ownership seals, plural runtime attachment and cleanup,
 physical revocation, authenticated project web UI commands, real SQLite
 publication/install/inspect/remove and retained-data recovery, and the full

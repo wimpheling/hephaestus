@@ -9,6 +9,7 @@ fn strict_cgroup(temp: &TempDir) -> Cgroup {
     Cgroup {
         path,
         emulated: false,
+        child: None,
     }
 }
 
@@ -97,11 +98,13 @@ fn only_exact_child_absence_is_idempotent_and_symlinks_are_denied() {
     let absent = Cgroup {
         path: temp.path().join("absent"),
         emulated: false,
+        child: None,
     };
     absent.cleanup().unwrap();
     let missing_parent = Cgroup {
         path: temp.path().join("missing-parent/vm"),
         emulated: false,
+        child: None,
     };
     assert!(missing_parent.cleanup().is_err());
     let foreign = temp.path().join("foreign");
@@ -148,4 +151,39 @@ fn kill_request_never_turns_persistent_population_into_cleanup_success() {
     assert_eq!(fs::read_to_string(kill).unwrap(), "1");
     assert_eq!(fs::read_to_string(events).unwrap(), "populated 1\n");
     assert!(cgroup.path.is_dir());
+}
+
+#[test]
+fn admitted_cgroup_controls_original_child_and_refuses_observed_replacement_cleanup() {
+    let temp = TempDir::new().unwrap();
+    let mut config = crate::config::LibkrunConfig::new(
+        temp.path(),
+        vec![],
+        vec![],
+        vec![],
+        "/bin/true",
+        temp.path(),
+    );
+    config.enforce_cgroup_v2 = false;
+    let cgroup = Cgroup::create_tracked(&config, "vm", |_| {}).unwrap();
+    let original = temp.path().join("original");
+    fs::rename(temp.path().join("vm"), &original).unwrap();
+    fs::create_dir(temp.path().join("vm")).unwrap();
+    fs::write(temp.path().join("vm/cgroup.procs"), b"foreign").unwrap();
+    cgroup.add_process(12345).unwrap();
+    assert_eq!(fs::read(original.join("cgroup.procs")).unwrap(), b"12345");
+    assert_eq!(
+        fs::read(temp.path().join("vm/cgroup.procs")).unwrap(),
+        b"foreign"
+    );
+    assert!(cgroup.cleanup().is_err());
+    assert!(original.is_dir());
+    fs::rename(temp.path().join("vm"), temp.path().join("foreign")).unwrap();
+    fs::rename(original, temp.path().join("vm")).unwrap();
+    cgroup.cleanup().unwrap();
+    assert!(!temp.path().join("vm").exists());
+    assert_eq!(
+        fs::read(temp.path().join("foreign/cgroup.procs")).unwrap(),
+        b"foreign"
+    );
 }

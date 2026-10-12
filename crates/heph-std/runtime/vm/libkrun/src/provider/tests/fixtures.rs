@@ -82,6 +82,7 @@ pub(in crate::provider::tests) fn instance_with_options(
         .map(|(_, _, _)| Arc::new(Semaphore::new(1)));
     let resources = service.map(|(_, broker, runtime_dir)| OwnedResources {
         runtime_dir,
+        runtime_child: None,
         cgroup: Cgroup::existing(&config, "test"),
         cleanup_roots: None,
         service_broker: Some(broker),

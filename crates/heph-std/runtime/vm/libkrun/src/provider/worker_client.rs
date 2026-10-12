@@ -16,12 +16,19 @@ impl WorkerClient {
         cgroup: &Cgroup,
         custody: &LaunchCustody,
     ) -> Result<Arc<Self>, VmError> {
-        let socket_path = runtime_dir.join(SUPERVISOR_SOCKET_NAME);
-        let host_socket = custody.host_runtime_dir.join(SUPERVISOR_SOCKET_NAME);
+        let runtime = custody.runtime_file()?;
+        let host_socket = custody.host_runtime_dir()?.join(SUPERVISOR_SOCKET_NAME);
         let listener = UnixListener::bind(&host_socket)
             .map_err(|error| provider_error("worker-listener", error))?;
         let mut command = Command::new(&config.worker_binary);
-        command.arg("--socket").arg(&socket_path).kill_on_drop(true);
+        // Stdio performs a child-local dup to FD0 without changing CLOEXEC in
+        // the supervisor or inheriting any ownership lock. IPC uses its socket.
+        command
+            .arg("--runtime-stdin")
+            .stdin(std::process::Stdio::from(runtime.try_clone().map_err(
+                |error| provider_error("worker-runtime-descriptor", error),
+            )?))
+            .kill_on_drop(true);
         // Spawn and publish the retained Child synchronously before placement
         // or the first IPC await. Launch's owning task handles every failure.
         let process = custody.spawn(&mut command)?;
@@ -65,6 +72,8 @@ impl WorkerClient {
             client.request(WorkerCommand::Configure {
                 config: worker_config,
                 spec: Box::new(spec),
+                // Legacy wire field; inherited-mode worker resolves only its
+                // retained child-local descriptor, never this configured path.
                 runtime_dir: runtime_dir.to_path_buf(),
             }),
         )

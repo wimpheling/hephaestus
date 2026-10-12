@@ -15,7 +15,7 @@ use crate::{
     validation::PreparedSpec,
 };
 use std::{
-    fs,
+    fs::{self, File},
     os::unix::{
         fs::PermissionsExt,
         net::{UnixListener, UnixStream},
@@ -32,6 +32,8 @@ pub(super) struct WorkerRuntime {
     control_listener: Option<UnixListener>,
     pub(super) guest: Arc<Mutex<Option<UnixStream>>>,
     passt: Option<PasstProcess>,
+    // Kept after passt so its descriptor paths remain valid through Drop.
+    runtime_directory: Option<Arc<File>>,
     started: bool,
 }
 
@@ -48,12 +50,16 @@ impl WorkerRuntime {
         config: WorkerConfiguration,
         spec: PreparedSpec,
         runtime_dir: PathBuf,
+        runtime_directory: Option<Arc<File>>,
     ) -> Result<Self, WorkerError> {
         if rustix::process::geteuid().as_raw() != config.service_uid
             || rustix::process::getegid().as_raw() != config.service_gid
         {
             return Err(WorkerError::Identity);
         }
+        let runtime_dir = runtime_directory
+            .as_ref()
+            .map_or(runtime_dir, |file| crate::directory::fd_path(file));
         let metadata = fs::metadata(&runtime_dir)?;
         if !metadata.is_dir() || metadata.permissions().mode() & 0o077 != 0 {
             return Err(WorkerError::RuntimePermissions);
@@ -73,6 +79,7 @@ impl WorkerRuntime {
             control_listener: Some(control_listener),
             guest: Arc::new(Mutex::new(None)),
             passt: None,
+            runtime_directory,
             started: false,
         })
     }
@@ -81,8 +88,13 @@ impl WorkerRuntime {
         if self.started {
             return Err(WireError::invalid_state("worker is already running"));
         }
-        let passt = PasstProcess::start(&self.config, &self.spec.network, &self.runtime_dir)
-            .map_err(WireError::from)?;
+        let passt = PasstProcess::start(
+            &self.config,
+            &self.spec.network,
+            &self.runtime_dir,
+            self.runtime_directory.clone(),
+        )
+        .map_err(WireError::from)?;
         let passt_socket = passt.as_ref().map(|_| self.runtime_dir.join("passt.sock"));
         let control_path = self.runtime_dir.join(GUEST_CONTROL_SOCKET_NAME);
         let context = Context::load(&self.config.libkrun_library).map_err(WireError::from)?;

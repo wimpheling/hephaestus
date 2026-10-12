@@ -1,19 +1,23 @@
 use crate::{
     config::{CgroupLimits, LibkrunConfig},
+    directory::ChildDirectory,
     validation::PROVIDER_NAME,
 };
 use std::{
     collections::HashSet,
-    fs, io,
+    fs,
+    io::{self, Read, Write},
     path::{Path, PathBuf},
     thread,
     time::{Duration, Instant},
 };
 use vm_trait::VmError;
 
+#[derive(Clone)]
 pub struct Cgroup {
     path: PathBuf,
     emulated: bool,
+    child: Option<ChildDirectory>,
 }
 
 impl Cgroup {
@@ -23,13 +27,25 @@ impl Cgroup {
         acquired: impl FnOnce(&Self),
     ) -> Result<Self, VmError> {
         let path = config.cgroup_root.join(id);
-        fs::create_dir(&path).map_err(|error| provider("cgroup-create", error))?;
+        let child = ChildDirectory::create(
+            &config.cgroup_root,
+            id,
+            rustix::fs::Mode::from_bits_truncate(0o777),
+            |child| {
+                // Retain even a post-mkdir failure before configuration can run.
+                acquired(&Self {
+                    path: path.clone(),
+                    emulated: !config.enforce_cgroup_v2,
+                    child: Some(child),
+                });
+            },
+        )
+        .map_err(|error| provider("cgroup-create", error))?;
         let cgroup = Self {
             path,
             emulated: !config.enforce_cgroup_v2,
+            child: Some(child),
         };
-        // Publish exclusive mkdir ownership before configuration can fail.
-        acquired(&cgroup);
         cgroup.configure(&config.limits)?;
         Ok(cgroup)
     }
@@ -38,15 +54,34 @@ impl Cgroup {
         Self {
             path: config.cgroup_root.join(id),
             emulated: !config.enforce_cgroup_v2,
+            child: None,
         }
     }
 
+    pub(crate) fn validate_allocation(&self) -> Result<(), VmError> {
+        if let Some(child) = self.child.as_ref() {
+            if !child
+                .validate_named()
+                .map_err(|error| provider("cgroup-identity", error))?
+            {
+                return Err(provider(
+                    "cgroup-identity",
+                    io::Error::other("allocated cgroup was removed"),
+                ));
+            }
+        }
+        Ok(())
+    }
+
     pub fn add_process(&self, pid: u32) -> Result<(), VmError> {
-        write(self.path.join("cgroup.procs"), pid.to_string())
+        self.write_control("cgroup.procs", pid.to_string())
             .map_err(|error| provider("cgroup-place-worker", error))
     }
 
     pub fn cleanup(&self) -> Result<(), VmError> {
+        if let Some(child) = self.child.as_ref() {
+            return self.cleanup_pinned(child);
+        }
         match fs::symlink_metadata(&self.path) {
             Ok(metadata) if metadata.is_dir() => {}
             Ok(_) => {
@@ -85,6 +120,64 @@ impl Cgroup {
         }
     }
 
+    fn cleanup_pinned(&self, child: &ChildDirectory) -> Result<(), VmError> {
+        if !child
+            .validate_named()
+            .map_err(|error| provider("cgroup-cleanup", error))?
+        {
+            return Ok(());
+        }
+        if self.emulated {
+            return child
+                .remove(true)
+                .map_err(|error| provider("cgroup-cleanup", error));
+        }
+        match self.control_file("cgroup.kill", rustix::fs::OFlags::WRONLY) {
+            Ok(mut kill) => kill
+                .write_all(b"1")
+                .map_err(|error| provider("cgroup-kill", error))?,
+            Err(error) if error.kind() == io::ErrorKind::NotFound => {}
+            Err(error) => return Err(provider("cgroup-kill", error)),
+        }
+        self.wait_until_empty(Instant::now() + Duration::from_secs(2))?;
+        child
+            .remove(false)
+            .map_err(|error| provider("cgroup-cleanup", error))
+    }
+
+    fn control_file(&self, name: &str, flags: rustix::fs::OFlags) -> io::Result<fs::File> {
+        let child = self
+            .child
+            .as_ref()
+            .ok_or_else(|| io::Error::other("cgroup child is not pinned"))?;
+        let directory = child.file()?;
+        let file: fs::File = rustix::fs::openat(
+            &*directory,
+            name,
+            flags
+                | rustix::fs::OFlags::NOFOLLOW
+                | rustix::fs::OFlags::CLOEXEC
+                | rustix::fs::OFlags::NONBLOCK,
+            rustix::fs::Mode::from_bits_truncate(0o600),
+        )?
+        .into();
+        if !file.metadata()?.is_file() {
+            return Err(io::Error::other("cgroup control is not a regular file"));
+        }
+        Ok(file)
+    }
+
+    fn write_control(&self, name: &str, value: impl AsRef<[u8]>) -> io::Result<()> {
+        if self.child.is_none() {
+            return write(self.path.join(name), value);
+        }
+        let mut flags = rustix::fs::OFlags::WRONLY | rustix::fs::OFlags::TRUNC;
+        if self.emulated {
+            flags |= rustix::fs::OFlags::CREATE;
+        }
+        self.control_file(name, flags)?.write_all(value.as_ref())
+    }
+
     fn wait_until_empty(&self, deadline: Instant) -> Result<(), VmError> {
         loop {
             if !self.is_populated()? {
@@ -112,14 +205,11 @@ impl Cgroup {
             || format!("max {}", limits.cpu_period_micros),
             |quota| format!("{quota} {}", limits.cpu_period_micros),
         );
-        write(self.path.join("cpu.max"), cpu)
+        self.write_control("cpu.max", cpu)
             .map_err(|error| provider("cgroup-cpu-limit", error))?;
-        write(
-            self.path.join("memory.max"),
-            limits.memory_max_bytes.to_string(),
-        )
-        .map_err(|error| provider("cgroup-memory-limit", error))?;
-        write(self.path.join("pids.max"), limits.pids_max.to_string())
+        self.write_control("memory.max", limits.memory_max_bytes.to_string())
+            .map_err(|error| provider("cgroup-memory-limit", error))?;
+        self.write_control("pids.max", limits.pids_max.to_string())
             .map_err(|error| provider("cgroup-pids-limit", error))?;
 
         if !limits.io.is_empty() {
@@ -146,13 +236,20 @@ impl Cgroup {
                 }
                 lines.push('\n');
             }
-            write(self.path.join("io.max"), lines)
+            self.write_control("io.max", lines)
                 .map_err(|error| provider("cgroup-io-limit", error))?;
         }
         Ok(())
     }
 
     fn is_populated(&self) -> Result<bool, VmError> {
+        if self.child.is_some() {
+            let mut events = String::new();
+            self.control_file("cgroup.events", rustix::fs::OFlags::RDONLY)
+                .and_then(|mut file| file.read_to_string(&mut events))
+                .map_err(|error| provider("cgroup-events", error))?;
+            return parse_populated(&events).map_err(|error| provider("cgroup-events", error));
+        }
         let path = self.path.join("cgroup.events");
         let metadata =
             fs::symlink_metadata(&path).map_err(|error| provider("cgroup-events", error))?;
@@ -286,6 +383,7 @@ mod tests {
         let cgroup = Cgroup {
             path: vm.clone(),
             emulated: true,
+            child: None,
         };
         cgroup.configure(&config.limits).unwrap();
         assert!(

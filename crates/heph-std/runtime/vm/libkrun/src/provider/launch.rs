@@ -5,7 +5,7 @@ use super::common::{
     Semaphore, VmError, VmId, WorkerBackend, WorkerProcess, broadcast, oneshot, timeout, watch,
 };
 use super::{
-    helpers::{cleanup_runtime, create_runtime_dir_tracked, provider_error, unavailable_error},
+    helpers::{provider_error, unavailable_error},
     ownership::{OwnerGuard, PinnedCleanupRoots},
 };
 use std::{fmt, os::fd::AsRawFd};
@@ -15,18 +15,48 @@ type CleanupReply = oneshot::Sender<Result<(), VmError>>;
 pub(super) type RetryInbox = mpsc::Receiver<CleanupReply>;
 
 pub(super) struct LaunchCustody {
-    pub(super) host_runtime_dir: PathBuf,
+    runtime: std::sync::Mutex<Option<crate::directory::ChildDirectory>>,
     process: std::sync::Mutex<Option<Arc<WorkerProcess>>>,
     backend: std::sync::Mutex<Option<Arc<dyn WorkerBackend>>>,
 }
 
 impl LaunchCustody {
-    fn new(host_runtime_dir: PathBuf) -> Self {
+    fn new() -> Self {
         Self {
-            host_runtime_dir,
+            runtime: std::sync::Mutex::new(None),
             process: std::sync::Mutex::new(None),
             backend: std::sync::Mutex::new(None),
         }
+    }
+
+    pub(super) fn retain_runtime(
+        &self,
+        runtime: crate::directory::ChildDirectory,
+    ) -> Result<(), VmError> {
+        let mut slot = self.runtime.lock().map_err(|error| custody_error(&error))?;
+        if slot.is_some() {
+            return Err(VmError::InvalidState(
+                "launch runtime identity already installed",
+            ));
+        }
+        *slot = Some(runtime);
+        drop(slot);
+        Ok(())
+    }
+
+    pub(super) fn runtime_file(&self) -> Result<Arc<std::fs::File>, VmError> {
+        self.runtime
+            .lock()
+            .map_err(|error| custody_error(&error))?
+            .as_ref()
+            .ok_or(VmError::InvalidState("launch runtime descriptor missing"))?
+            .file()
+            .map_err(|error| provider_error("runtime-custody", error))
+    }
+
+    pub(super) fn host_runtime_dir(&self) -> Result<PathBuf, VmError> {
+        let runtime = self.runtime_file()?;
+        Ok(crate::directory::fd_path(&runtime))
     }
 
     pub(super) fn spawn(&self, command: &mut Command) -> Result<Arc<WorkerProcess>, VmError> {
@@ -131,7 +161,7 @@ pub(super) struct LaunchHandoff {
 }
 
 struct LaunchResources {
-    runtime: Option<PathBuf>,
+    runtime: Option<crate::directory::ChildDirectory>,
     cgroup: Option<Cgroup>,
     broker: Option<Arc<crate::service_transport::ServiceBroker>>,
     roots: Option<PinnedCleanupRoots>,
@@ -150,20 +180,14 @@ pub(super) struct PendingLaunch {
 impl PendingLaunch {
     pub(super) fn new(
         id: VmId,
-        config: &LibkrunConfig,
+        _config: &LibkrunConfig,
         guard: Option<&OwnerGuard>,
     ) -> Result<(Arc<Self>, RetryInbox), VmError> {
         let roots = guard.map(PinnedCleanupRoots::from_guard).transpose()?;
-        // The host socket path uses the cloned cleanup descriptor, whose
-        // lifetime continues with the installed instance after OwnerGuard ends.
-        let host_runtime = roots.as_ref().map_or_else(
-            || config.runtime_root.join(&id.0),
-            |roots| roots.runtime_path(&id),
-        );
         let (retry, receiver) = mpsc::channel(1);
         Ok((
             Arc::new(Self {
-                custody: LaunchCustody::new(host_runtime),
+                custody: LaunchCustody::new(),
                 id,
                 birth: AtomicU64::new(0),
                 state: watch::channel(LaunchState::Working).0,
@@ -254,22 +278,40 @@ impl PendingLaunch {
         }
         let mut allocation = provider.config.as_ref().clone();
         if let Some(guard) = guard {
-            allocation.runtime_root = format!("/proc/self/fd/{}", guard.runtime.as_raw_fd()).into();
-            allocation.cgroup_root = format!("/proc/self/fd/{}", guard.cgroup.as_raw_fd()).into();
+            allocation.runtime_root =
+                format!("/proc/self/fd/{}/.", guard.runtime.as_raw_fd()).into();
+            allocation.cgroup_root = format!("/proc/self/fd/{}/.", guard.cgroup.as_raw_fd()).into();
         }
         let mut resources = self.resources.lock().await;
         let runtime = provider.config.runtime_root.join(&self.id.0);
-        create_runtime_dir_tracked(&allocation.runtime_root, &self.id.0, |_| {
-            resources.runtime = Some(runtime.clone());
+        let runtime_child = crate::directory::ChildDirectory::create(
+            &allocation.runtime_root,
+            &self.id.0,
+            rustix::fs::Mode::from_bits_truncate(0o700),
+            |child| resources.runtime = Some(child),
+        )
+        .map_err(|error| match error.kind() {
+            std::io::ErrorKind::AlreadyExists => VmError::AlreadyExists(self.id.clone()),
+            _ => provider_error("runtime-create", error),
         })?;
-        Cgroup::create_tracked(&allocation, &self.id.0, |_| {
-            resources.cgroup = Some(Cgroup::existing(&provider.config, &self.id.0));
+        // chmod targets the acquired inode, retaining exclusive allocation if
+        // permissions fail rather than following a redirected child name.
+        runtime_child
+            .file()
+            .and_then(|file| {
+                use std::os::unix::fs::PermissionsExt;
+                file.set_permissions(std::fs::Permissions::from_mode(0o700))
+            })
+            .map_err(|error| provider_error("runtime-permissions", error))?;
+        self.custody.retain_runtime(runtime_child)?;
+        let placement = Cgroup::create_tracked(&allocation, &self.id.0, |cgroup| {
+            resources.cgroup = Some(cgroup.clone());
         })?;
         if let Some(service) = spec.private_http_service.as_ref() {
             let duration = Duration::from_millis(service.connect_timeout_ms);
             resources.broker = Some(Arc::new(
-                crate::service_transport::ServiceBroker::bind(
-                    &self.custody.host_runtime_dir,
+                crate::service_transport::ServiceBroker::bind_pinned(
+                    self.custody.runtime_file()?,
                     service.max_connections,
                     duration,
                 )
@@ -277,9 +319,8 @@ impl PendingLaunch {
             ));
         }
         drop(resources);
-        // Placement uses the retained host root; worker configuration keeps
-        // its original paths, whose later redirection remains a separate gap.
-        let placement = Cgroup::existing(&allocation, &self.id.0);
+        // Controls and transport use the actual allocated child descriptors,
+        // retained by this owner before the spawner's first asynchronous wait.
         let backend = provider
             .worker_spawner
             .spawn(
@@ -294,6 +335,26 @@ impl PendingLaunch {
         if let Some((owner, guard)) = provider.owner.get().zip(guard) {
             owner.validate_guard(&provider.config, guard)?;
         }
+        let resources = self.resources.lock().await;
+        let runtime = resources
+            .runtime
+            .as_ref()
+            .ok_or(VmError::InvalidState("launch runtime allocation missing"))?;
+        if !runtime
+            .validate_named()
+            .map_err(|error| provider_error("runtime-identity", error))?
+        {
+            return Err(unavailable_error(
+                "runtime identity",
+                "allocated runtime was removed",
+            ));
+        }
+        resources
+            .cgroup
+            .as_ref()
+            .ok_or(VmError::InvalidState("launch cgroup allocation missing"))?
+            .validate_allocation()?;
+        drop(resources);
         Ok(backend)
     }
 
@@ -305,11 +366,12 @@ impl PendingLaunch {
     ) -> Result<Arc<LibkrunInstance>, VmError> {
         let pid = self.custody.process()?.and_then(|process| process.pid);
         let mut resources = self.resources.lock().await;
-        let runtime_dir = resources
+        let runtime_child = resources
             .runtime
             .as_ref()
             .ok_or(VmError::InvalidState("launch runtime allocation missing"))?
             .clone();
+        let runtime_dir = provider.config.runtime_root.join(&self.id.0);
         let cgroup = resources
             .cgroup
             .take()
@@ -317,6 +379,7 @@ impl PendingLaunch {
         resources.runtime = None;
         let owned = OwnedResources {
             runtime_dir,
+            runtime_child: Some(runtime_child),
             cgroup,
             service_broker: resources.broker.take(),
             cleanup_roots: resources.roots.take(),
@@ -364,18 +427,12 @@ impl PendingLaunch {
             broker.shutdown().await;
         }
         if let Some(cgroup) = resources.cgroup.as_ref() {
-            if let Some(roots) = resources.roots.as_ref() {
-                roots.cleanup_cgroup(&provider.config, &self.id)?;
-            } else {
-                cgroup.cleanup()?;
-            }
+            cgroup.cleanup()?;
         }
         if let Some(runtime) = resources.runtime.as_ref() {
-            if let Some(roots) = resources.roots.as_ref() {
-                roots.cleanup_runtime(&self.id)?;
-            } else {
-                cleanup_runtime(runtime)?;
-            }
+            runtime
+                .remove(true)
+                .map_err(|error| provider_error("runtime-cleanup", error))?;
         }
         resources.runtime = None;
         resources.cgroup = None;
