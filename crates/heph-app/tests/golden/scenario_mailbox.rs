@@ -70,6 +70,10 @@ pub async fn run_result_and_mailbox_phase(
     .expect("OIDC profile mapping");
     assert!(mapped_profile);
 
+    // ResultCompleted precedes fenced cleanup. Require the previous stateful
+    // run's persisted cleanup before accepting this sequential mailbox work.
+    wait_for_source_run_cleanup(pool, run_id).await;
+
     // A durable mailbox journey reuses the production daemon, PostgreSQL
     // outbox, JetStream worker, run gate, fenced state volume, runtime
     // authority and configured VM backend. With `HEPHAESTUS_APP_LIBKRUN_E2E`
@@ -223,4 +227,32 @@ pub async fn run_result_and_mailbox_phase(
         "legacy informational signals must never remain pending"
     );
     cleanup_streams(&nats_url).await;
+}
+
+async fn wait_for_source_run_cleanup(pool: &sqlx::PgPool, run_id: runtime_types::RunId) {
+    let mut observed: Option<(String, Option<String>, Option<String>)> = None;
+    let cleanup = tokio::time::timeout(Duration::from_secs(10), async {
+        let mut polling = tokio::time::interval(Duration::from_millis(25));
+        loop {
+            polling.tick().await;
+            let row: (String, Option<String>, Option<String>) =
+                sqlx::query_as("SELECT state, outcome, failure FROM runs WHERE id = $1")
+                    .bind(run_id.as_uuid())
+                    .fetch_one(pool)
+                    .await
+                    .unwrap_or_else(|error| {
+                        panic!("read source run {run_id} cleanup state: {error}")
+                    });
+            let cleaned = row.0 == "cleaned_up";
+            observed = Some(row);
+            if cleaned {
+                return;
+            }
+        }
+    })
+    .await;
+    assert!(
+        cleanup.is_ok(),
+        "source run {run_id} must reach persisted cleaned_up before mailbox acceptance; last state/outcome/failure={observed:?}"
+    );
 }
