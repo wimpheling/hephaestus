@@ -3,6 +3,22 @@ use crate::provider::ownership::{ProspectiveOwner, ProviderOwner};
 use std::{error::Error, fmt};
 
 impl LibkrunProvider {
+    #[cfg(test)]
+    pub(in crate::provider) fn open_owned_with_spawner(
+        config: LibkrunConfig,
+        expected: &vm_trait::VmProviderOwnerScope,
+        spawner: Arc<dyn super::WorkerSpawner>,
+    ) -> Result<Self, VmError> {
+        let provider = Self::construct(config, spawner)?;
+        let owner = ProviderOwner::open_existing(&provider.inner.config, expected)?;
+        provider
+            .inner
+            .owner
+            .set(owner)
+            .map_err(|_| VmError::InvalidState("VM owner is already configured"))?;
+        Ok(provider)
+    }
+
     /// Bootstraps an empty dedicated managed VM root with a configured scope.
     ///
     /// This is explicit prospective authorization, never a discovery fallback.

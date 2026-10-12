@@ -171,7 +171,14 @@ retention, independently authorized reopening, transactional rollback/completion
 and live authorization withdrawal while preserving backing bytes and inodes.
 These checks do not launch an installed recipe.
 
-The current local VM implementation passes Rust 1.88 Clippy, documentation,
+Forward migrations 0140/0141 and their finite startup/catalog checks are authored
+and reviewed, but have not passed the combined fresh-install, populated-upgrade,
+role-permission and replay gates. They cover ordinary queued Invocation
+cancellation and worker access to secret runtime metadata. An actual ordinary
+application test exposed missing worker permissions during secret cleanup;
+that regression still needs a passing run against the forward head.
+
+The earlier published VM foundation passes Rust 1.88 Clippy, documentation,
 scoped formatting, and all 176 library tests. A real KVM configured-owner test
 also passes bootstrap, start, destruction, worker termination, and readonly
 reopen. The corrected local smoke fixture preserves OCI-root ownership separately
@@ -180,8 +187,31 @@ access, DNS/TCP/UDP, forwarded HTTP, and the complete lifecycle conformance
 suite. The concurrent destroy-before-start waiter race is fixed and covered
 by two real-subprocess regressions. The complete default smoke check passes;
 its named-volume opt-in remains unset and the guest-initialization case is
-ignored, so those two cases provide no new native evidence. Managed production preparation is
-being integrated. Ordinary application composition still needs
+ignored, so those two cases provide no new native evidence.
+
+The current protocol-3 containment and resource observation implementation
+passes 192 library tests and focused Rust 1.88 checks against the main worktree.
+Its real crash-before-placement test passes, and a
+separate real owned-VM lifetime test passes provision/start/destroy, clone-owner
+retention, scoped reopen, substitution denials, and cleanup after supervisor
+death. That full lifetime test also passes against the combined observation
+implementation and its rebuilt worker. It initially failed because its
+guest-root fixture was private to the host user; a fresh traversable guest root
+passed with the workload
+UID/GID and product source unchanged. Failed originals remain preserved.
+These native checks prove their scoped lifecycle assertions, not application
+recovery or the installed SQLite workflow. The check for leftover resources
+before runtime admission passes 192 library tests with focused Rust 1.88 checks;
+three native cases remain explicitly ignored in that library run. A separate
+genuine kernel observation/reopen test passes, including refusal of a residual
+record and child cgroup. It spawns no guest and proves a configured-root
+observation rather than global process absence or application readiness.
+
+The routed mailbox executor is published in `d0f3220e`; all eight unit tests and
+focused Rust 1.88 checks pass. Managed application routing remains unconnected.
+Managed production preparation and a daemon-owned supervisor are being
+integrated. Readiness remains denied until recovery and resource checks pass.
+Ordinary application composition still needs
 explicit fresh profiles and compatible adapters before the 0139 application
 version can be accepted.
 

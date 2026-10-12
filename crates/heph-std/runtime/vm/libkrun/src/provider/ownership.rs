@@ -9,6 +9,7 @@ mod configured_provider_tests;
 #[cfg(test)]
 mod configured_tests;
 mod files;
+mod observer;
 #[cfg(test)]
 mod prospective_tests;
 #[cfg(test)]
@@ -18,7 +19,7 @@ mod tests;
 
 use crate::config::LibkrunConfig;
 use serde::{Deserialize, Serialize};
-use std::{fs::File, os::unix::fs::MetadataExt};
+use std::{fs::File, os::unix::fs::MetadataExt, sync::Arc};
 use vm_trait::{VmError, VmProviderOwnerScope};
 
 use files::{locked_root, read_marker, write_marker};
@@ -85,6 +86,9 @@ struct Marker {
 
 pub(super) struct ProviderOwner {
     marker: Marker,
+    // Independent read-only descriptors pin acquisition inodes; neither owns a flock.
+    marker_file: Arc<File>,
+    metadata_lock: Arc<File>,
     // This exact open file description owns the lifetime exclusive flock.
     // Never clone it for workers or convert it to the shared physical IO lock.
     supervisor: File,
@@ -97,7 +101,7 @@ pub(super) struct ProviderOwner {
 pub(super) struct OwnerGuard {
     pub runtime: File,
     pub cgroup: File,
-    _lock: File,
+    lock: File,
 }
 
 /// Retains exact allocated roots for handle destruction without retaining the
@@ -148,7 +152,9 @@ impl ProviderOwner {
         let guard = locked_root(config, !existing)?;
         let runtime = DirectoryIdentity::read(&guard.runtime)?;
         let cgroup = DirectoryIdentity::read(&guard.cgroup)?;
-        let (marker, supervisor) = if let Some(marker) = read_marker(&guard.runtime)? {
+        let (marker, marker_file, supervisor) = if let Some((marker, marker_file)) =
+            files::read_pinned_marker(&guard.runtime)?
+        {
             if marker.host_id != host_id || marker.runtime != runtime || marker.cgroup != cgroup {
                 return Err(files::invalid(
                     "VM owner metadata differs from configured roots/host",
@@ -159,24 +165,24 @@ impl ProviderOwner {
                 return Err(files::invalid("VM supervisor lock identity changed"));
             }
             files::claim_supervisor(&supervisor)?;
-            (marker, supervisor)
+            (marker, marker_file, supervisor)
         } else {
             files::require_empty_runtime(&guard.runtime)?;
             files::require_unclassified_cgroups_absent(&guard.cgroup)?;
             let supervisor = files::supervisor_file(&guard.runtime, true, config.service_uid)?;
             files::claim_supervisor(&supervisor)?;
             let marker = Marker {
-                version: 2,
+                version: 3,
                 namespace: uuid::Uuid::new_v4(),
                 host_id: host_id.to_owned(),
                 runtime: runtime.clone(),
                 cgroup: cgroup.clone(),
                 supervisor: FileIdentity::read(&supervisor)?,
             };
-            write_marker(&guard.runtime, &marker)?;
-            (marker, supervisor)
+            let marker_file = write_marker(&guard.runtime, &marker)?;
+            (marker, marker_file, supervisor)
         };
-        if marker.version != 2
+        if !matches!(marker.version, 2 | 3)
             || marker.namespace.is_nil()
             || marker.host_id != host_id
             || marker.runtime != runtime
@@ -186,11 +192,25 @@ impl ProviderOwner {
                 "VM owner metadata differs from configured host/root/cgroup; automatic adoption is unavailable",
             ));
         }
+        let metadata_lock =
+            files::readonly_original(&guard.runtime, LOCK, &guard.lock, config.service_uid)?;
         Ok(Self {
             marker,
+            marker_file: Arc::new(marker_file),
+            metadata_lock: Arc::new(metadata_lock),
             supervisor,
             pinned_roots: None,
         })
+    }
+
+    pub(super) fn require_containment(&self) -> Result<(), VmError> {
+        if self.marker.version != 3 {
+            return Err(VmError::Unsupported {
+                feature: "prior-process containment requires explicitly bootstrapped owner version 3; old roots cannot be upgraded automatically".into(),
+                provider: "libkrun".into(),
+            });
+        }
+        Ok(())
     }
 
     pub fn scope(&self) -> Result<VmProviderOwnerScope, VmError> {
@@ -238,6 +258,23 @@ impl ProviderOwner {
         {
             return Err(files::invalid("VM provider root ownership changed"));
         }
+        let current_marker = files::readonly_original(
+            &guard.runtime,
+            MARKER,
+            &self.marker_file,
+            config.service_uid,
+        )?;
+        let current_lock = files::readonly_original(
+            &guard.runtime,
+            LOCK,
+            &self.metadata_lock,
+            config.service_uid,
+        )?;
+        if FileIdentity::read(&current_lock)? != FileIdentity::read(&guard.lock)? {
+            return Err(files::invalid("VM metadata lock acquisition changed"));
+        }
+        drop(current_marker);
+        drop(current_lock);
         files::check_file(&self.supervisor, config.service_uid)?;
         let current = if self.pinned_roots.is_some() {
             configured::readonly_supervisor(&guard.runtime, config.service_uid)?

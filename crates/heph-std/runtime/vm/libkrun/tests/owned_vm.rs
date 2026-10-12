@@ -14,6 +14,7 @@ use vm_trait::{VmProvider, VmProviderOwnerScope};
 #[tokio::test(flavor = "multi_thread")]
 #[ignore = "requires fresh guest root, delegated cgroup and actual KVM"]
 async fn real_owned_vm_lifetime_scoped_cleanup_and_supervisor_restart() {
+    fixture::initialize_diagnostics();
     let fixture = fixture::Fixture::new();
     let provider = LibkrunProvider::new_owned(fixture.config.clone(), fixture::HOST)
         .expect("fresh actual owned provider");
@@ -27,7 +28,9 @@ async fn real_owned_vm_lifetime_scoped_cleanup_and_supervisor_restart() {
         .provision(fixture.spec("owned-native-live"))
         .await
         .unwrap();
-    vm.start().await.expect("real protocol10 KVM readiness");
+    vm.start()
+        .await
+        .expect("real current-protocol KVM readiness");
     fixture.assert_live(vm.id());
     assert!(clone.cleanup_orphan_scoped(&scope, vm.id()).await.is_err());
     drop(clone);
@@ -51,7 +54,8 @@ async fn real_owned_vm_lifetime_scoped_cleanup_and_supervisor_restart() {
     drop(reopened);
     process::native_supervisor_death_and_restart(&fixture, &scope).await;
     println!(
-        "REAL_OWNED_VM_KVM=1 protocol=10 actual_provision_start_destroy=1 real_cgroup_worker=1 instance_clone_supervisor_retained=1 separate_supervisor_denied=1 scoped_absence=1 wrong_scope_replaced_root_untouched=1 native_parent_death_restart_cleanup=1 namespace={}",
+        "REAL_OWNED_VM_KVM=1 protocol={} actual_provision_start_destroy=1 real_cgroup_worker=1 instance_clone_supervisor_retained=1 separate_supervisor_denied=1 scoped_absence=1 wrong_scope_replaced_root_untouched=1 native_parent_death_restart_cleanup=1 namespace={}",
+        vm_libkrun::protocol::PROTOCOL_VERSION,
         scope.namespace()
     );
 }
@@ -83,6 +87,7 @@ async fn wrong_scope_and_replaced_root(
 #[tokio::test(flavor = "multi_thread")]
 #[ignore = "subprocess helper; only invoked with task-owned fixture environment"]
 async fn owned_vm_child_session() {
+    fixture::initialize_diagnostics();
     let Some(mode) = std::env::var_os("HEPH_OWNED_VM_CHILD_MODE") else {
         return;
     };

@@ -400,6 +400,12 @@ impl LibkrunInstance {
                 "VM resources cleaned"
             );
         }
+        if let Some(record) = resources
+            .as_ref()
+            .and_then(|owned| owned.birth_record.as_ref())
+        {
+            record.remove_original()?;
+        }
         resources.take();
         drop(resources);
         let mut ids = self.provider_ids.ids.lock().await;

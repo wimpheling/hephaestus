@@ -15,6 +15,7 @@ async fn uncertain_cgroup_retains_runtime_resources_and_id_after_worker_reap() {
     *vm.resources.lock().await = Some(OwnedResources {
         runtime_dir: runtime.clone(),
         runtime_child: None,
+        birth_record: None,
         cgroup,
         cleanup_roots: None,
         service_broker: None,

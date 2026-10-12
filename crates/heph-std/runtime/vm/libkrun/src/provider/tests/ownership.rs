@@ -2,7 +2,7 @@ use super::support::*;
 use crate::provider::ownership::ProviderOwner;
 
 #[tokio::test]
-async fn scoped_cleanup_checks_owner_and_live_workers_before_absence() {
+async fn emulated_scoped_cleanup_denies_absence_and_preserves_evidence() {
     let temp = TempDir::new().unwrap();
     let (config, _root, runtime, cgroups) = emulated_config(&temp);
     let provider =
@@ -15,7 +15,10 @@ async fn scoped_cleanup_checks_owner_and_live_workers_before_absence() {
     let wrong =
         vm_trait::VmProviderOwnerScope::new("another-owner".into(), "test-host".into()).unwrap();
     assert!(provider.cleanup_orphan_scoped(&wrong, &id).await.is_err());
-    provider.cleanup_orphan_scoped(&scope, &id).await.unwrap();
+    assert!(matches!(
+        provider.cleanup_orphan_scoped(&scope, &id).await,
+        Err(VmError::Unsupported { .. })
+    ));
     fs::create_dir(runtime.join("orphan")).unwrap();
     fs::write(runtime.join("orphan").join("owned"), "owned runtime").unwrap();
     fs::create_dir(cgroups.join("orphan")).unwrap();
@@ -28,9 +31,9 @@ async fn scoped_cleanup_checks_owner_and_live_workers_before_absence() {
     assert!(provider.cleanup_orphan_scoped(&scope, &id).await.is_err());
     assert!(runtime.join("orphan").is_dir());
     provider.ownership_test_inner().ids.lock().await.remove(&id);
-    provider.cleanup_orphan_scoped(&scope, &id).await.unwrap();
-    assert!(!runtime.join("orphan").exists());
-    assert!(!cgroups.join("orphan").exists());
+    assert!(provider.cleanup_orphan_scoped(&scope, &id).await.is_err());
+    assert!(runtime.join("orphan").exists());
+    assert!(cgroups.join("orphan").exists());
     fs::rename(&runtime, temp.path().join("old-runtime")).unwrap();
     fs::create_dir(&runtime).unwrap();
     assert!(

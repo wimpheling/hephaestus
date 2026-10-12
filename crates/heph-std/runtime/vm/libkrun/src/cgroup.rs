@@ -58,6 +58,20 @@ impl Cgroup {
         }
     }
 
+    pub(super) fn allocated_directory(&self) -> Result<ChildDirectory, VmError> {
+        self.child
+            .clone()
+            .ok_or(VmError::InvalidState("original cgroup allocation missing"))
+    }
+
+    pub(super) fn recorded(config: &LibkrunConfig, id: &str, child: ChildDirectory) -> Self {
+        Self {
+            path: config.cgroup_root.join(id),
+            emulated: !config.enforce_cgroup_v2,
+            child: Some(child),
+        }
+    }
+
     pub(crate) fn validate_allocation(&self) -> Result<(), VmError> {
         if let Some(child) = self.child.as_ref() {
             if !child

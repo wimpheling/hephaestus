@@ -19,6 +19,24 @@ pub struct Fixture {
     rootfs: PathBuf,
 }
 
+pub fn initialize_diagnostics() {
+    let _initialized = tracing_subscriber::fmt()
+        .with_max_level(tracing::Level::WARN)
+        .with_test_writer()
+        .with_ansi(false)
+        .try_init();
+}
+
+impl Drop for Fixture {
+    fn drop(&mut self) {
+        if std::thread::panicking() {
+            // Keep this exact directory; success still uses TempDir's normal cleanup.
+            self.directory.disable_cleanup(true);
+            eprintln!("OWNED_VM_HELD_FIXTURE={}", self.directory.path().display());
+        }
+    }
+}
+
 impl Fixture {
     pub fn new() -> Self {
         assert_ne!(
@@ -98,10 +116,10 @@ impl Fixture {
             &fs::read(self.config.runtime_root.join(".heph-vm-owner.json")).unwrap(),
         )
         .unwrap();
-        assert_eq!(marker["version"], 2);
+        assert_eq!(marker["version"], 3);
         assert_eq!(marker["namespace"], scope.namespace());
         println!(
-            "OWNED_VM_PHYSICAL_ROOT=1 path={} device={} inode={} cgroup_root={} marker_version=2 worker_sha256={}",
+            "OWNED_VM_PHYSICAL_ROOT=1 path={} device={} inode={} cgroup_root={} marker_version=3 worker_sha256={}",
             self.config.runtime_root.display(),
             fs::metadata(&self.config.runtime_root).unwrap().dev(),
             fs::metadata(&self.config.runtime_root).unwrap().ino(),

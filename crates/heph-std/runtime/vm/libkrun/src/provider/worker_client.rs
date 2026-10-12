@@ -16,6 +16,17 @@ impl WorkerClient {
         cgroup: &Cgroup,
         custody: &LaunchCustody,
     ) -> Result<Arc<Self>, VmError> {
+        Self::launch_with_after_spawn(config, spec, runtime_dir, cgroup, custody, |_| Ok(())).await
+    }
+
+    pub(super) async fn launch_with_after_spawn(
+        config: Arc<LibkrunConfig>,
+        spec: PreparedSpec,
+        runtime_dir: &Path,
+        cgroup: &Cgroup,
+        custody: &LaunchCustody,
+        after_spawn: impl FnOnce(&Arc<super::worker_process::WorkerProcess>) -> Result<(), VmError>,
+    ) -> Result<Arc<Self>, VmError> {
         let runtime = custody.runtime_file()?;
         let host_socket = custody.host_runtime_dir()?.join(SUPERVISOR_SOCKET_NAME);
         let listener = UnixListener::bind(&host_socket)
@@ -25,13 +36,16 @@ impl WorkerClient {
         // the supervisor or inheriting any ownership lock. IPC uses its socket.
         command
             .arg("--runtime-stdin")
-            .stdin(std::process::Stdio::from(runtime.try_clone().map_err(
-                |error| provider_error("worker-runtime-descriptor", error),
-            )?))
+            .stdin(super::containment::worker_stdin(&runtime)?)
             .kill_on_drop(true);
         // Spawn and publish the retained Child synchronously before placement
         // or the first IPC await. Launch's owning task handles every failure.
-        let process = custody.spawn(&mut command)?;
+        let process = custody.spawn(&mut command);
+        // Command/Stdio own the last parent gate duplicate. Drop, never LOCK_UN:
+        // unlocking its OFD would also unlock the child's inherited description.
+        drop(command);
+        let process = process?;
+        after_spawn(&process)?;
         let pid = process
             .pid
             .ok_or_else(|| unavailable_error("worker process", "worker has no PID"))?;

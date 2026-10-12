@@ -6,7 +6,7 @@ use super::{
 };
 use crate::config::LibkrunConfig;
 use rustix::fs::{FlockOperation, Mode, OFlags};
-use std::{fs::File, os::fd::AsRawFd};
+use std::{fs::File, os::fd::AsRawFd, sync::Arc};
 use vm_trait::{VmError, VmProviderOwnerScope};
 
 fn namespace(scope: &VmProviderOwnerScope) -> Result<uuid::Uuid, VmError> {
@@ -31,8 +31,8 @@ fn exact_marker(
     runtime: &File,
     cgroup: &File,
     scope: &VmProviderOwnerScope,
-) -> Result<Marker, VmError> {
-    let marker = files::read_marker(runtime)?.ok_or_else(|| {
+) -> Result<(Marker, File), VmError> {
+    let (marker, file) = files::read_pinned_marker(runtime)?.ok_or_else(|| {
         files::invalid("configured VM owner marker is missing; reopen never bootstraps")
     })?;
     if marker.namespace != namespace(scope)?
@@ -44,20 +44,26 @@ fn exact_marker(
             "configured VM owner scope or root identity differs",
         ));
     }
-    Ok(marker)
+    Ok((marker, file))
 }
 
 fn finish(
     config: &LibkrunConfig,
     guard: &OwnerGuard,
     marker: Marker,
+    marker_file: File,
     supervisor: File,
 ) -> Result<ProviderOwner, VmError> {
+    let metadata_lock =
+        files::readonly_original(&guard.runtime, LOCK, &guard.lock, config.service_uid)?;
     let owner = ProviderOwner {
         marker,
+        marker_file: Arc::new(marker_file),
+        metadata_lock: Arc::new(metadata_lock),
         supervisor,
         pinned_roots: Some(PinnedCleanupRoots::from_guard(guard)?),
     };
+    owner.require_containment()?;
     owner.validate_guard(config, guard)?;
     Ok(owner)
 }
@@ -202,7 +208,7 @@ impl ProspectiveOwner {
         files::claim_supervisor(supervisor)?;
         after_reservation()?;
         let marker = Marker {
-            version: 2,
+            version: 3,
             namespace: self.namespace,
             host_id: self.host_id.clone(),
             runtime: self.runtime_identity.clone(),
@@ -210,16 +216,17 @@ impl ProspectiveOwner {
             supervisor: FileIdentity::read(supervisor)?,
         };
         self.validate_roots(config)?;
-        files::write_marker(&self.runtime, &marker)?;
+        let marker_file = files::write_marker(&self.runtime, &marker)?;
         let guard = OwnerGuard {
             runtime: self.runtime.try_clone().map_err(files::io_error)?,
             cgroup: self.cgroup.try_clone().map_err(files::io_error)?,
-            _lock: lock.try_clone().map_err(files::io_error)?,
+            lock: lock.try_clone().map_err(files::io_error)?,
         };
         finish(
             config,
             &guard,
             marker,
+            marker_file,
             supervisor.try_clone().map_err(files::io_error)?,
         )
     }
@@ -255,10 +262,11 @@ impl ProviderOwner {
         let guard = OwnerGuard {
             runtime,
             cgroup,
-            _lock: lock,
+            lock,
         };
-        let marker = exact_marker(&guard.runtime, &guard.cgroup, scope)?;
-        if marker != before {
+        let (marker, marker_file) = exact_marker(&guard.runtime, &guard.cgroup, scope)?;
+        if marker != before.0 || FileIdentity::read(&marker_file)? != FileIdentity::read(&before.1)?
+        {
             return Err(files::invalid(
                 "configured VM metadata changed during reopen",
             ));
@@ -268,6 +276,6 @@ impl ProviderOwner {
             return Err(files::invalid("configured VM supervisor identity differs"));
         }
         files::claim_supervisor(&supervisor)?;
-        finish(config, &guard, marker, supervisor)
+        finish(config, &guard, marker, marker_file, supervisor)
     }
 }

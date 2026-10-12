@@ -67,6 +67,33 @@ impl LibkrunProvider {
         Ok(inventory)
     }
 
+    /// Observes no residual VM births under this original configured owner.
+    ///
+    /// Call after qualified durable per-Run recovery and before command admission.
+    /// This one-time read-only cooperative observation neither closes admission
+    /// nor proves host-wide absence, database cleanup, or a physical drain receipt.
+    ///
+    /// # Errors
+    /// Rejects unconfigured/old owners, emulated cgroups, live generation activity,
+    /// residual or unknown allocations, and changed original roots or metadata.
+    pub async fn assert_no_prior_births(
+        &self,
+        expected: &vm_trait::VmProviderOwnerScope,
+    ) -> Result<(), VmError> {
+        let owner = self.scoped_owner(expected)?;
+        validate_config(&self.inner.config)?;
+        let guard = owner.validate(&self.inner.config)?;
+        let ids = self.inner.ids.lock().await;
+        let result = self.inner.registry.observe_settled(|| {
+            if !ids.is_empty() {
+                return Err(VmError::InvalidState("VM identities remain admitted"));
+            }
+            owner.assert_no_prior_births(&self.inner.config, &guard)
+        });
+        drop(ids);
+        result
+    }
+
     /// Closes admission and cleans all births known to this live generation.
     ///
     /// The owning task continues through caller cancellation. Success requires
@@ -191,7 +218,6 @@ impl VmProvider for LibkrunProvider {
         scope: &vm_trait::VmProviderOwnerScope,
         id: &VmId,
     ) -> Result<(), VmError> {
-        use std::os::fd::AsRawFd;
         validate_id(id)?;
         let owner = self.inner.owner.get().ok_or_else(|| VmError::Unsupported {
             feature: "scoped VM orphan cleanup".into(),
@@ -200,6 +226,7 @@ impl VmProvider for LibkrunProvider {
         if owner.scope()?.ne(scope) {
             return Err(VmError::InvalidState("VM cleanup owner scope differs"));
         }
+        owner.require_containment()?;
         let guard = owner.validate(&self.inner.config)?;
         if let Some(pending) = self.pending_launch(id) {
             pending.retry_cleanup().await?;
@@ -226,15 +253,16 @@ impl VmProvider for LibkrunProvider {
                 "cannot clean an orphan while a live instance handle is registered",
             ));
         }
-        // Pin both roots through cleanup, so path replacement cannot redirect IO
-        // into another owner. Revalidate configured paths before confirming it.
-        let mut pinned = self.inner.config.as_ref().clone();
-        pinned.runtime_root = format!("/proc/self/fd/{}", guard.runtime.as_raw_fd()).into();
-        pinned.cgroup_root = format!("/proc/self/fd/{}", guard.cgroup.as_raw_fd()).into();
-        Cgroup::existing(&pinned, &id.0).cleanup()?;
-        cleanup_runtime(&pinned.runtime_root.join(&id.0))?;
+        if !self.inner.config.enforce_cgroup_v2 {
+            return Err(VmError::Unsupported {
+                feature: "prior-process containment requires actual cgroup-v2 controls".into(),
+                provider: PROVIDER_NAME.into(),
+            });
+        }
+        let gate = super::containment::recover(&self.inner.config, &guard, scope, id)?;
         owner.validate_guard(&self.inner.config, &guard)?;
         drop(ids);
+        drop(gate);
         Ok(())
     }
 

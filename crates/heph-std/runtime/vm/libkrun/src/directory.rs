@@ -56,6 +56,39 @@ impl ChildDirectory {
         Ok(allocation)
     }
 
+    pub(super) fn open_recorded(
+        root: &File,
+        name: &str,
+        device: u64,
+        inode: u64,
+        uid: u32,
+    ) -> io::Result<Option<Self>> {
+        let file: File = match rustix::fs::openat(
+            root,
+            name,
+            OFlags::RDONLY | OFlags::DIRECTORY | OFlags::NOFOLLOW | OFlags::CLOEXEC,
+            Mode::empty(),
+        ) {
+            Ok(file) => file.into(),
+            Err(rustix::io::Errno::NOENT) => return Ok(None),
+            Err(error) => return Err(error.into()),
+        };
+        let metadata = file.metadata()?;
+        if metadata.dev() != device || metadata.ino() != inode || metadata.uid() != uid {
+            return Err(io::Error::other(
+                "recorded original directory identity differs",
+            ));
+        }
+        let child = Self {
+            parent: Arc::new(root.try_clone()?),
+            name: name.into(),
+            child: Arc::new(Mutex::new(Some(Arc::new(file)))),
+            removed: Arc::new(AtomicBool::new(false)),
+        };
+        child.validate_named()?;
+        Ok(Some(child))
+    }
+
     pub fn file(&self) -> io::Result<Arc<File>> {
         let file = self
             .child

@@ -118,6 +118,7 @@ pub(super) enum Lifecycle {
 pub(super) struct OwnedResources {
     pub(super) runtime_dir: PathBuf,
     pub(super) runtime_child: Option<crate::directory::ChildDirectory>,
+    pub(super) birth_record: Option<Arc<super::containment::BirthRecord>>,
     pub(super) cgroup: Cgroup,
     pub(super) service_broker: Option<Arc<ServiceBroker>>,
     pub(super) cleanup_roots: Option<super::ownership::PinnedCleanupRoots>,

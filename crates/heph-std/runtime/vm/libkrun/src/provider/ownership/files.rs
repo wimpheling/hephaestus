@@ -1,4 +1,4 @@
-use super::{DirectoryIdentity, LOCK, MARKER, Marker, OwnerGuard, SUPERVISOR};
+use super::{DirectoryIdentity, FileIdentity, LOCK, MARKER, Marker, OwnerGuard, SUPERVISOR};
 use crate::config::LibkrunConfig;
 use rustix::fs::{FlockOperation, Mode, OFlags};
 use std::{
@@ -87,11 +87,37 @@ pub(super) fn locked_root(
     Ok(OwnerGuard {
         runtime,
         cgroup,
-        _lock: lock,
+        lock,
     })
 }
 
+pub(super) fn readonly_original(
+    root: &File,
+    name: &str,
+    original: &File,
+    uid: u32,
+) -> Result<File, VmError> {
+    let file: File = rustix::fs::openat(
+        root,
+        name,
+        OFlags::RDONLY | OFlags::NOFOLLOW | OFlags::NONBLOCK | OFlags::CLOEXEC,
+        Mode::empty(),
+    )
+    .map_err(io_error)?
+    .into();
+    check_file(original, uid)?;
+    check_file(&file, uid)?;
+    if FileIdentity::read(original)? != FileIdentity::read(&file)? {
+        return Err(invalid("original VM metadata inode changed"));
+    }
+    Ok(file)
+}
+
 pub(super) fn read_marker(root: &File) -> Result<Option<Marker>, VmError> {
+    read_pinned_marker(root).map(|value| value.map(|(marker, _file)| marker))
+}
+
+pub(super) fn read_pinned_marker(root: &File) -> Result<Option<(Marker, File)>, VmError> {
     let file = match rustix::fs::openat(
         root,
         MARKER,
@@ -104,17 +130,25 @@ pub(super) fn read_marker(root: &File) -> Result<Option<Marker>, VmError> {
     };
     check_file(&file, root.metadata().map_err(io_error)?.uid())?;
     let mut bytes = Vec::new();
-    file.take(4097).read_to_end(&mut bytes).map_err(io_error)?;
+    (&file)
+        .take(4097)
+        .read_to_end(&mut bytes)
+        .map_err(io_error)?;
     if bytes.len() > 4096 {
         return Err(invalid("VM owner metadata exceeds its bounded format"));
     }
     let value: serde_json::Value = serde_json::from_slice(&bytes).map_err(io_error)?;
-    if value.get("version").and_then(serde_json::Value::as_u64) != Some(2) {
+    if !matches!(
+        value.get("version").and_then(serde_json::Value::as_u64),
+        Some(2 | 3)
+    ) {
         return Err(invalid(
             "VM owner lacks version 2 supervisor proof; automatic adoption is unavailable",
         ));
     }
-    serde_json::from_value(value).map(Some).map_err(io_error)
+    serde_json::from_value(value)
+        .map(|marker| Some((marker, file)))
+        .map_err(io_error)
 }
 
 pub(super) fn preflight_owner(config: &LibkrunConfig, host: &str) -> Result<bool, VmError> {
@@ -172,7 +206,7 @@ pub(super) fn reject_marked_root(config: &LibkrunConfig) -> Result<(), VmError> 
     Ok(())
 }
 
-pub(super) fn write_marker(root: &File, marker: &Marker) -> Result<(), VmError> {
+pub(super) fn write_marker(root: &File, marker: &Marker) -> Result<File, VmError> {
     let mut file: File = rustix::fs::openat(
         root,
         MARKER,
@@ -184,7 +218,8 @@ pub(super) fn write_marker(root: &File, marker: &Marker) -> Result<(), VmError> 
     file.write_all(&serde_json::to_vec(marker).map_err(io_error)?)
         .map_err(io_error)?;
     file.sync_all().map_err(io_error)?;
-    root.sync_all().map_err(io_error)
+    root.sync_all().map_err(io_error)?;
+    readonly_original(root, MARKER, &file, marker.runtime.uid)
 }
 
 pub(super) fn require_empty_runtime(root: &File) -> Result<(), VmError> {

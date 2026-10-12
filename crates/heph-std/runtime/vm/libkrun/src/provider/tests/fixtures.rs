@@ -83,6 +83,7 @@ pub(in crate::provider::tests) fn instance_with_options(
     let resources = service.map(|(_, broker, runtime_dir)| OwnedResources {
         runtime_dir,
         runtime_child: None,
+        birth_record: None,
         cgroup: Cgroup::existing(&config, "test"),
         cleanup_roots: None,
         service_broker: Some(broker),

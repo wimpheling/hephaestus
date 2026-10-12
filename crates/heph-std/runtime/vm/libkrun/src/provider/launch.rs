@@ -164,6 +164,7 @@ struct LaunchResources {
     runtime: Option<crate::directory::ChildDirectory>,
     cgroup: Option<Cgroup>,
     broker: Option<Arc<crate::service_transport::ServiceBroker>>,
+    birth_record: Option<Arc<super::containment::BirthRecord>>,
     roots: Option<PinnedCleanupRoots>,
 }
 
@@ -195,6 +196,7 @@ impl PendingLaunch {
                     runtime: None,
                     cgroup: None,
                     broker: None,
+                    birth_record: None,
                     roots,
                 }),
                 retry,
@@ -274,6 +276,7 @@ impl PendingLaunch {
         guard: Option<&OwnerGuard>,
     ) -> Result<Arc<dyn WorkerBackend>, VmError> {
         if let Some((owner, guard)) = provider.owner.get().zip(guard) {
+            owner.require_containment()?;
             owner.validate_guard(&provider.config, guard)?;
         }
         let mut allocation = provider.config.as_ref().clone();
@@ -307,6 +310,21 @@ impl PendingLaunch {
         let placement = Cgroup::create_tracked(&allocation, &self.id.0, |cgroup| {
             resources.cgroup = Some(cgroup.clone());
         })?;
+        if let Some((owner, guard)) = provider.owner.get().zip(guard) {
+            super::containment::BirthRecord::publish(
+                (&guard.runtime, &guard.cgroup),
+                &owner.scope()?,
+                &self.id,
+                (
+                    &*self.custody.runtime_file()?,
+                    &*placement
+                        .allocated_directory()?
+                        .file()
+                        .map_err(|error| provider_error("birth-cgroup-identity", error))?,
+                ),
+                |record| resources.birth_record = Some(record),
+            )?;
+        }
         if let Some(service) = spec.private_http_service.as_ref() {
             let duration = Duration::from_millis(service.connect_timeout_ms);
             resources.broker = Some(Arc::new(
@@ -380,6 +398,7 @@ impl PendingLaunch {
         let owned = OwnedResources {
             runtime_dir,
             runtime_child: Some(runtime_child),
+            birth_record: resources.birth_record.take(),
             cgroup,
             service_broker: resources.broker.take(),
             cleanup_roots: resources.roots.take(),
@@ -434,6 +453,10 @@ impl PendingLaunch {
                 .remove(true)
                 .map_err(|error| provider_error("runtime-cleanup", error))?;
         }
+        if let Some(record) = resources.birth_record.as_ref() {
+            record.remove_original()?;
+        }
+        resources.birth_record = None;
         resources.runtime = None;
         resources.cgroup = None;
         resources.broker = None;

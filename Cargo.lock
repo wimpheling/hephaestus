@@ -5953,6 +5953,7 @@ dependencies = [
  "tokio",
  "tokio-util",
  "tracing",
+ "tracing-subscriber",
  "uuid",
  "vm-conformance",
  "vm-trait",

@@ -303,6 +303,26 @@ impl Registry {
             .collect()
     }
 
+    // Caller holds lifetime.ids, preserving the existing ids -> state order.
+    // The synchronous observer must never reenter registry/ids or perform cleanup.
+    pub(super) fn observe_settled<T>(
+        &self,
+        inspect: impl FnOnce() -> Result<T, VmError>,
+    ) -> Result<T, VmError> {
+        let state = self
+            .state
+            .lock()
+            .map_err(|_| VmError::InvalidState("VM birth registry is poisoned"))?;
+        if !state.settled() {
+            return Err(VmError::InvalidState(
+                "live VM generation remains unsettled",
+            ));
+        }
+        let result = inspect();
+        drop(state);
+        result
+    }
+
     pub(super) async fn wait_settled(&self) {
         loop {
             let changed = self.changed.notified();
