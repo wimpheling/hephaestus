@@ -1,3 +1,6 @@
+#[path = "managed_configuration.rs"]
+mod managed_configuration;
+
 #[path = "managed_owner.rs"]
 mod managed_owner;
 
