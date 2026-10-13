@@ -32,7 +32,8 @@ defmodule HephaestusWebWeb.DesignSystem.Pages.OrganizationNewSecretPageTest do
           state: presentation.status,
           organization: presentation.organization,
           form: presentation.form,
-          create_secret_event: "create-secret"
+          create_secret_event: "create-secret",
+          write_only_hook: "OrganizationSecretWriteOnly"
         )
 
       assert html != ""
@@ -57,9 +58,12 @@ defmodule HephaestusWebWeb.DesignSystem.Pages.OrganizationNewSecretPageTest do
         state: presentation.status,
         organization: presentation.organization,
         form: presentation.form,
-        create_secret_event: "create-secret"
+        create_secret_event: "create-secret",
+        write_only_hook: "OrganizationSecretWriteOnly"
       )
 
+    assert html =~ ~s(id="organization-secret-write-only")
+    assert html =~ ~s(phx-hook="OrganizationSecretWriteOnly")
     assert html =~ ~s(id="create-organization-secret")
     assert html =~ "Secret name"
     assert html =~ "New value"

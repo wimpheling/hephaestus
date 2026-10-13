@@ -98,7 +98,7 @@ pub(super) async fn resolve_owner(
                     .bind(id.as_uuid())
                     .fetch_one(&mut **tx)
                     .await
-                    .map_err(|_| SecretServiceError::Persistence)?;
+                    .map_err(|error| diagnostics::persistence("resolve_owner", &error))?;
             if !exists {
                 return Err(SecretServiceError::Unavailable);
             }
@@ -116,7 +116,7 @@ pub(super) async fn resolve_owner(
                     .bind(id.as_uuid())
                     .fetch_optional(&mut **tx)
                     .await
-                    .map_err(|_| SecretServiceError::Persistence)?
+                    .map_err(|error| diagnostics::persistence("resolve_owner", &error))?
                     .ok_or(SecretServiceError::Unavailable)?;
             Ok((
                 ObjectType::Project,
@@ -185,7 +185,7 @@ pub(super) async fn insert_encrypted_version(
     .bind(creator_id)
     .execute(&mut **tx)
     .await
-    .map_err(|_| SecretServiceError::Persistence)?;
+    .map_err(|error| diagnostics::persistence("insert_version", &error))?;
     Ok(())
 }
 
@@ -201,7 +201,7 @@ pub(super) async fn existing_command(
     .bind(command_key.as_bytes().as_slice())
     .fetch_optional(&mut **tx)
     .await
-    .map_err(|_| SecretServiceError::Persistence)?;
+    .map_err(|error| diagnostics::persistence("existing_command", &error))?;
     match row {
         Some((stored_operation, aggregate_id, secondary_id)) if stored_operation == operation => {
             Ok(Some((aggregate_id, secondary_id)))
@@ -233,7 +233,7 @@ pub(super) async fn record_command(
     .bind(identity.request_id.as_uuid())
     .execute(&mut **tx)
     .await
-    .map_err(|_| SecretServiceError::Persistence)?;
+    .map_err(|error| diagnostics::persistence("record_command", &error))?;
     Ok(())
 }
 
@@ -284,6 +284,6 @@ pub(super) async fn audit(
     .bind(AUTHORIZATION_MODEL_VERSION)
     .execute(&mut **tx)
     .await
-    .map_err(|_| SecretServiceError::Persistence)?;
+    .map_err(|error| diagnostics::persistence("audit", &error))?;
     Ok(())
 }

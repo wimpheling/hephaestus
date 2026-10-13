@@ -395,6 +395,18 @@ the projection and invalidates late responses. Actual authenticated database/RPC
 and browser behavior remain to be verified. Install, resume, remove and invoke
 controls and the complete SQLite workflow remain unfinished.
 
+The next browser checkpoint clears the write-only secret form after submission,
+while the command task retains the submitted value. Seven focused Phoenix tests,
+four JavaScript controls, compilation, formatting and all 19 web architecture
+rules pass. Safe error diagnostics for Secret creation and ImportAgent also pass
+scoped Rust strict/fmt/docs and six metadata/error-preservation controls. They
+report only static operation/step, validated SQLSTATE and known catalog names;
+raw database messages and values remain excluded. These diagnostics do not repair
+persistence. The selected actual browser journey still needs a fresh run against
+the published sources and rebuilt browser assets. Hosted run `38409004553` for
+`7c35e8e2` passes Cooking but fails Rust tests and the browser journey; no complete
+hosted CI pass or installed SQLite acceptance is established.
+
 Provider orchestration and ownership seals, plural runtime attachment and cleanup,
 physical revocation, authenticated project web UI commands, real SQLite
 publication/install/inspect/remove and retained-data recovery, and the full

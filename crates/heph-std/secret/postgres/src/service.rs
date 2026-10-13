@@ -95,6 +95,9 @@ use runtime_versions::{
     BrokeredSecretDenialContextRow, GatewayEncryptedVersionRow, RuntimeLeaseAuthorizationRow,
     RuntimeSessionRow, gateway_encrypted_version, load_runtime_version,
 };
+#[path = "service/diagnostics.rs"]
+mod diagnostics;
+
 #[path = "service/secret_commands.rs"]
 mod secret_commands;
 
