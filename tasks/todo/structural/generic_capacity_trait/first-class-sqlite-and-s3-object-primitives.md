@@ -389,6 +389,17 @@ the additive variant correction. The actual repository check remains red with
 The existing directory exclusions remain unchanged. This qualification covers
 the scanner and does not establish runtime, database or complete recipe acceptance.
 
+The 11 files exceeding the architecture length limit are now split into private
+modules across VM ownership, recipe preparation, Runtime Git row decoding and
+App scenarios. Scoped strict Clippy, formatting and docs pass for the 28 affected
+files; 36 existing controlled tests pass. All 165 original function bodies are
+preserved, with three borrowed assertion helpers recomposed for comparison.
+Original test names, attributes, SQL and owning-resource lifetimes remain intact.
+The validation checkout's actual architecture check reports 22 SQL/DDL diagnostics,
+including five in its unpublished two-front Secret144 repair; none concern file
+length or these 28 files. Native VM and the affected App database scenarios remain
+unrun for this split; full repository quality and recipe acceptance remain open.
+
 The three hosted Capability Audit PostgreSQL failures were caused by a fixture
 inserting an unclassified Run directly as running. The fixture now inserts a
 queued `historical_unproven` identity without claiming VM startup or ownership.

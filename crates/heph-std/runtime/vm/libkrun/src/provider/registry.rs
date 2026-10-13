@@ -1,8 +1,13 @@
 //! Supervisor-generation inventory; observations never authorize physical cleanup.
 use super::common::{
-    Arc, LibkrunInstance, Lifecycle, Ordering, PendingLaunch, ProviderLifetime, VmError, VmId,
+    Arc, LibkrunInstance, Ordering, PendingLaunch, ProviderLifetime, VmError, VmId,
 };
-use super::launch::LaunchState;
+#[path = "registry/activity.rs"]
+mod activity;
+#[path = "registry/inventory.rs"]
+mod inventory;
+pub(super) use activity::Operation;
+use activity::keep_generation;
 use std::collections::{BTreeMap, HashSet};
 use tokio::sync::Notify;
 
@@ -167,73 +172,6 @@ impl Registry {
             .closed = true;
     }
 
-    pub(super) async fn admit_start(
-        self: &Arc<Self>,
-        lifetime: &ProviderLifetime,
-        birth: u64,
-    ) -> Result<Operation, VmError> {
-        let ids = lifetime.ids.lock().await;
-        let mut state = self
-            .state
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
-        if state.closed {
-            return Err(VmError::InvalidState("VM provider admission is closed"));
-        }
-        let record = state
-            .records
-            .get_mut(&birth)
-            .ok_or(VmError::InvalidState("VM birth is not registered"))?;
-        if matches!(record.custody, Custody::Cleaned) {
-            return Err(VmError::Destroyed);
-        }
-        record.snapshot.operations += 1;
-        drop(state);
-        drop(ids);
-        Ok(Operation {
-            registry: Arc::clone(self),
-            birth,
-            kind: Activity::Operation,
-        })
-    }
-
-    pub(super) fn lifecycle_task(self: &Arc<Self>, birth: u64) -> Result<Operation, VmError> {
-        let mut state = self
-            .state
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
-        let record = state
-            .records
-            .get_mut(&birth)
-            .ok_or(VmError::InvalidState("VM birth is not registered"))?;
-        record.lifecycle_tasks = record
-            .lifecycle_tasks
-            .checked_add(1)
-            .ok_or(VmError::InvalidState("VM lifecycle task count exhausted"))?;
-        drop(state);
-        Ok(Operation {
-            registry: Arc::clone(self),
-            birth,
-            kind: Activity::LifecycleTask,
-        })
-    }
-
-    pub(super) fn operation(self: &Arc<Self>, birth: u64) -> Operation {
-        let mut state = self
-            .state
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
-        if let Some(record) = state.records.get_mut(&birth) {
-            record.snapshot.operations += 1;
-        }
-        drop(state);
-        Operation {
-            registry: Arc::clone(self),
-            birth,
-            kind: Activity::Operation,
-        }
-    }
-
     pub(super) fn install(&self, birth: u64, instance: Arc<LibkrunInstance>, pid: Option<u32>) {
         let mut state = self
             .state
@@ -338,129 +276,5 @@ impl Registry {
             }
             changed.await;
         }
-    }
-
-    pub(super) async fn inventory(&self) -> VmAttemptInventory {
-        let (closed, records) = {
-            let state = self
-                .state
-                .lock()
-                .unwrap_or_else(std::sync::PoisonError::into_inner);
-            let records = state
-                .records
-                .values()
-                .map(|record| {
-                    let custody = match &record.custody {
-                        Custody::Pending(entry) => Custody::Pending(Arc::clone(entry)),
-                        Custody::Instance(instance) => Custody::Instance(Arc::clone(instance)),
-                        Custody::Cleaned => Custody::Cleaned,
-                    };
-                    (record.snapshot.clone(), custody, record.launch_active)
-                })
-                .collect::<Vec<_>>();
-            (state.closed, records)
-        };
-        let mut attempts = Vec::with_capacity(records.len());
-        for (mut snapshot, custody, launch_active) in records {
-            match custody {
-                Custody::Pending(entry) => {
-                    match entry.custody.process() {
-                        Ok(process) => {
-                            snapshot.worker_pid = process.and_then(|process| process.pid);
-                        }
-                        Err(error) => snapshot.error = Some(error.to_string()),
-                    }
-                    let launch_state = entry.state.borrow().clone();
-                    match launch_state {
-                        LaunchState::Held(error) => {
-                            snapshot.phase = VmAttemptPhase::CleanupPending;
-                            snapshot.error = Some(error.to_string());
-                        }
-                        LaunchState::Cleaned => snapshot.phase = VmAttemptPhase::Cleaned,
-                        LaunchState::Handoff => snapshot.phase = VmAttemptPhase::Handoff,
-                        LaunchState::Working | LaunchState::HandedOff => {}
-                    }
-                }
-                Custody::Instance(instance) => {
-                    snapshot.phase = if instance.cleanup_complete.load(Ordering::Acquire) {
-                        VmAttemptPhase::Cleaned
-                    } else {
-                        match &*instance.state.lock().await {
-                            Lifecycle::Provisioned if launch_active => VmAttemptPhase::Handoff,
-                            Lifecycle::Provisioned => VmAttemptPhase::Provisioned,
-                            Lifecycle::Starting => VmAttemptPhase::Starting,
-                            Lifecycle::Running => VmAttemptPhase::Running,
-                            Lifecycle::Stopping => VmAttemptPhase::Stopping,
-                            Lifecycle::Exited => VmAttemptPhase::ExitObserved,
-                            Lifecycle::StartFailed(_) => VmAttemptPhase::StartFailed,
-                            Lifecycle::Destroying { .. } | Lifecycle::Destroyed => {
-                                VmAttemptPhase::CleanupPending
-                            }
-                        }
-                    };
-                }
-                Custody::Cleaned => {}
-            }
-            attempts.push(snapshot);
-        }
-        VmAttemptInventory {
-            admission_closed: closed,
-            attempts,
-        }
-    }
-}
-
-// Activity bookkeeping, not another operation lock or cleanup evidence.
-// LifecycleTask additionally covers tasks queued before the operation mutex.
-enum Activity {
-    Operation,
-    LifecycleTask,
-}
-pub(super) struct Operation {
-    registry: Arc<Registry>,
-    birth: u64,
-    kind: Activity,
-}
-impl Drop for Operation {
-    fn drop(&mut self) {
-        let mut state = self
-            .registry
-            .state
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
-        if let Some(record) = state.records.get_mut(&self.birth) {
-            match self.kind {
-                Activity::Operation => record.snapshot.operations -= 1,
-                Activity::LifecycleTask => record.lifecycle_tasks -= 1,
-            }
-        }
-        drop(state);
-        self.registry.changed.notify_waiters();
-    }
-}
-
-async fn keep_generation(registry: Arc<Registry>, lifetime: Arc<ProviderLifetime>) {
-    loop {
-        let changed = registry.changed.notified();
-        tokio::pin!(changed);
-        changed.as_mut().enable();
-        let complete = {
-            let ids = lifetime.ids.lock().await;
-            let mut state = registry
-                .state
-                .lock()
-                .unwrap_or_else(std::sync::PoisonError::into_inner);
-            let complete = state.settled();
-            if complete {
-                state.keeper = false;
-            }
-            drop(state);
-            drop(ids);
-            complete
-        };
-        if complete {
-            return;
-        }
-        changed.await;
     }
 }
