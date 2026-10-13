@@ -6,7 +6,7 @@ use super::{
     BuildRequestId, ClaimedBuild, CompleteBuild, FinalizationBuild, GuestCommand, NetworkMode,
     NetworkProfile, OUTPUT_GUEST_PATH, PathBuf, PreparedBuildWorkspace, ReleaseArtifactInput,
     ReleaseCommandKey, SOURCE_GUEST_PATH, VmId, VmMount, VmResources, VmSpec, artifact_manifest,
-    cleanup_workspace, release_inputs, stored_release_inputs, validate_declared_outputs,
+    release_inputs, stored_release_inputs, validate_declared_outputs,
 };
 
 impl BuildExecutor {
@@ -39,7 +39,14 @@ impl BuildExecutor {
     pub(super) async fn resume_finalization(
         &self,
         id: BuildRequestId,
+        node: &std::sync::Arc<super::owner::Node>,
     ) -> Result<Option<BuildExecutionResult>, BuildExecutionError> {
+        if let Some(result) = self.completed(id).await? {
+            node.completed_result(&result)?;
+            node.finalized();
+            node.remove_workspace()?;
+            return Ok(Some(result));
+        }
         let Some(finalization) = self.repository.finalization(id).await? else {
             return Ok(None);
         };
@@ -48,6 +55,13 @@ impl BuildExecutor {
             claimed,
             artifact_manifest,
         } = finalization;
+        if !matches!(state.as_str(), "sealed" | "imported") {
+            return Err(BuildExecutionError::StoredState);
+        }
+        node.claim(&claimed)?;
+        node.require_detached()?;
+        node.acquire_finalization_workspace(&self.active_path(id), &self.workspace_root)?;
+        node.preserve_finalization();
         let artifacts = if state == "sealed" {
             let output = self.active_path(id).join("output");
             let imported = self.artifacts.import_for(id.as_uuid(), &output)?;
@@ -58,14 +72,20 @@ impl BuildExecutor {
         } else {
             stored_release_inputs(artifact_manifest.ok_or(BuildExecutionError::StoredState)?)?
         };
-        self.finish_release(claimed, artifacts).await.map(Some)
+        self.finish_release(claimed, artifacts, node)
+            .await
+            .map(Some)
     }
 
     pub(super) async fn finish_release(
         &self,
         claimed: ClaimedBuild,
         artifacts: Vec<ReleaseArtifactInput>,
+        node: &std::sync::Arc<super::owner::Node>,
     ) -> Result<BuildExecutionResult, BuildExecutionError> {
+        node.require_detached()?;
+        node.original_workspace()?.recheck()?;
+        node.claim(&claimed)?;
         let id = claimed.input.id;
         let artifact_count = artifacts.len();
         self.releases
@@ -81,9 +101,13 @@ impl BuildExecutor {
                 artifacts,
             })
             .await
-            .map_err(|_| BuildExecutionError::Release)?;
+            .map_err(|error| {
+                node.error(std::sync::Arc::new(error));
+                BuildExecutionError::Release
+            })?;
         self.mark_drafted(id).await?;
-        cleanup_workspace(&self.active_path(id))?;
+        node.finalized();
+        node.remove_workspace()?;
         Ok(BuildExecutionResult {
             build_request_id: id,
             release_id: claimed.release_id,

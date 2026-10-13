@@ -89,6 +89,13 @@ impl VmProvider for FakeProvider {
         self.cleanup_orphan(id).await
     }
 
+    fn prepare_provision_attempt(
+        &self,
+        spec: VmSpec,
+    ) -> Result<Arc<dyn vm_trait::VmProvisionAttempt>, VmError> {
+        Ok(crate::provision_attempt::prepare(self.clone(), spec))
+    }
+
     async fn provision(&self, spec: VmSpec) -> Result<Arc<dyn VmInstance>, VmError> {
         validate_spec(&spec)?;
 

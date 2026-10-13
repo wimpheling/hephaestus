@@ -365,9 +365,17 @@ ignored tests and missing-database early returns are excluded from integration
 evidence. These checks exercise emulated workers and controlled ownership, rather
 than a complete physical VM or running service.
 The shutdown barrier requires actual task joins, including commands that finish
-during shutdown. Ordinary Build cleanup ownership is being implemented; full
-shutdown and native lifecycle acceptance remain unfinished. Retaining a closed
-instance does not satisfy the package's deletion policy.
+during shutdown. Ordinary Build now retains its original requests, preparation,
+Git children, workspace descriptors and VM attempts through caller cancellation.
+Cleanup starts before waiting for stalled execution, and genuine task joins and
+positive original cleanup precede settlement. The two affected libraries pass
+scoped strict Clippy, formatting, docs and all 30 tests, including 13 new ownership
+controls. These tests exercise actual local subprocess/task/descriptor behavior
+and fake VMs; they do not prove production shutdown or prior-process absence.
+The repository architecture check remains red with 39 diagnostics outside this
+36-file change. Ordinary OCI/Gateway ownership, complete shutdown and native
+lifecycle acceptance remain unfinished. Retaining a closed instance does not
+satisfy the package's deletion policy.
 
 Published checkpoint `9dc2392d` replaces workstation SQL references with
 byte-identical committed fixtures and accepts PostgreSQL 17 patch releases while

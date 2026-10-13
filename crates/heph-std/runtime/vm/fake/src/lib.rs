@@ -115,3 +115,9 @@ fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
         .lock()
         .unwrap_or_else(std::sync::PoisonError::into_inner)
 }
+
+#[path = "fake/provision_attempt.rs"]
+mod provision_attempt;
+#[cfg(test)]
+#[path = "fake/provision_attempt_tests.rs"]
+mod provision_attempt_tests;

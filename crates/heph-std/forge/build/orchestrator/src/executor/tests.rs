@@ -3,7 +3,7 @@ use crate::BuildInput;
 use std::os::unix::fs::{PermissionsExt, symlink};
 use std::{fs, process::Command};
 
-const CONFIG: &str = r#"
+pub(super) const CONFIG: &str = r#"
 version = 2
 [agent]
 name = "builder"
