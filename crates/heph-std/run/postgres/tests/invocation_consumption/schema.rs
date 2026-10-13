@@ -7,7 +7,8 @@ pub fn checkpoint(version: i64) -> Migrator {
     let mut migrator = crate::prior_schema::checkpoint(version);
     let mut rows = migrator.iter().cloned().collect::<Vec<_>>();
     let source = rows.iter_mut().find(|row| row.version == 108).unwrap();
-    let placement = std::fs::read_to_string("/var/tmp/0108_legacy_vm_placement.sql").unwrap();
+    let placement =
+        include_str!("../../../../../../migrations/0112_legacy_vm_placement.sql").to_owned();
     *source = Migration::new(
         108,
         source.description.clone(),

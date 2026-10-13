@@ -122,19 +122,34 @@ async fn upgrade(pool: &PgPool, target: i64) {
     for (version, paths) in [
         (
             114,
-            vec!["/var/tmp/0114_qualified_instance_activation.corrected.sql"],
+            vec![include_str!(
+                "../../../../../../migrations/0119_qualified_instance_activation.sql"
+            )],
         ),
-        (115, vec!["/var/tmp/0115_qualified_instance_invocation.sql"]),
-        (116, vec!["/var/tmp/0116_owned_ready_retention.sql"]),
+        (
+            115,
+            vec![include_str!(
+                "../../../../../../migrations/0120_qualified_instance_invocation.sql"
+            )],
+        ),
+        (
+            116,
+            vec![include_str!(
+                "../../../../../../migrations/0121_owned_ready_retention.sql"
+            )],
+        ),
         (
             117,
-            vec!["/var/tmp/0117_qualified_invocation_consumption.nowait.sql"],
+            vec![include_str!(
+                "../../../../../../migrations/0122_qualified_invocation_consumption.sql"
+            )],
         ),
     ] {
         if version <= target {
             let sql = paths
                 .iter()
-                .map(|path| std::fs::read_to_string(path).unwrap())
+                .copied()
+                .map(str::to_owned)
                 .collect::<Vec<_>>()
                 .join("\n");
             all.push(sqlx::migrate::Migration::new(

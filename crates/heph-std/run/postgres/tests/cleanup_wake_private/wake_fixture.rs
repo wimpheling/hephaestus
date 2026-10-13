@@ -70,13 +70,17 @@ impl Wake {
     pub async fn upgrade(&self) {
         // Historical23 assertions precede this one canonical24-to28 upgrade.
         for path in [
-            "/var/tmp/0119_qualified_invocation_remove_resume.sql",
-            "/var/tmp/0119_queued_invocation_cleanup.sql",
-            "/var/tmp/0119_queued_invocation_cancel_delivery.sql",
-            "/var/tmp/0119_queued_invocation_cleanup_context.sql",
-            "/var/tmp/0119_queued_invocation_cleanup_transaction.sql",
+            include_str!(
+                "../../../../../../migrations/0132_qualified_invocation_remove_resume.sql"
+            ),
+            include_str!("../../../../../../migrations/0133_queued_invocation_cleanup.sql"),
+            include_str!("../../../../../../migrations/0134_queued_invocation_cancel_delivery.sql"),
+            include_str!("../../../../../../migrations/0135_queued_invocation_cleanup_context.sql"),
+            include_str!(
+                "../../../../../../migrations/0136_queued_invocation_cleanup_transaction.sql"
+            ),
         ] {
-            sqlx::raw_sql(&std::fs::read_to_string(path).unwrap())
+            sqlx::raw_sql(path)
                 .execute(&self.fixture.pool)
                 .await
                 .unwrap();
@@ -157,23 +161,20 @@ pub async fn acquire(f: &Fixture) {
 }
 async fn load_closure(pool: &PgPool) {
     for path in [
-        "/var/tmp/0119_qualified_invocation_authority.sql",
-        "/var/tmp/0119_qualified_invocation_empty_secret.sql",
-        "/var/tmp/0118_prepared_instance_safety.sql",
-        "/var/tmp/0118_prepared_instance_closure.sql",
-        "/var/tmp/0118_qualified_remove_resume.sql",
-        "/var/tmp/0118_existing_instance_closure.sql",
+        include_str!("../../../../../../migrations/0124_qualified_invocation_authority.sql"),
+        include_str!("../../../../../../migrations/0125_qualified_invocation_empty_secret.sql"),
+        include_str!("../../../../../../migrations/0127_prepared_instance_safety.sql"),
+        include_str!("../../../../../../migrations/0128_prepared_instance_closure.sql"),
+        include_str!("../../../../../../migrations/0129_qualified_remove_resume.sql"),
+        include_str!("../../../../../../migrations/0130_existing_instance_closure.sql"),
     ] {
-        sqlx::raw_sql(&std::fs::read_to_string(path).unwrap())
-            .execute(pool)
-            .await
-            .unwrap();
+        sqlx::raw_sql(path).execute(pool).await.unwrap();
     }
 }
 async fn load_wake(pool: &PgPool) {
-    sqlx::raw_sql(
-        &std::fs::read_to_string("/var/tmp/0118_run_cleanup_wake_qualification.sql").unwrap(),
-    )
+    sqlx::raw_sql(include_str!(
+        "../../../../../../migrations/0131_run_cleanup_wake_qualification.sql"
+    ))
     .execute(pool)
     .await
     .unwrap();

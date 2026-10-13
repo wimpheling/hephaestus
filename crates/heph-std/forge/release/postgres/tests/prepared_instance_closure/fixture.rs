@@ -15,9 +15,9 @@ pub struct Closure {
 impl Closure {
     pub async fn new(pool: &PgPool, completed: bool) -> Self {
         let original = Fixture::new(pool, true, completed).await;
-        sqlx::raw_sql(
-            &std::fs::read_to_string("/var/tmp/0118_prepared_instance_closure.sql").unwrap(),
-        )
+        sqlx::raw_sql(include_str!(
+            "../../../../../../../migrations/0128_prepared_instance_closure.sql"
+        ))
         .execute(pool)
         .await
         .unwrap();

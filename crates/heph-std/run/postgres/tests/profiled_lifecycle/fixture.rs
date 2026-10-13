@@ -20,26 +20,30 @@ pub async fn schema(pool: &PgPool) {
         .run(pool)
         .await
         .unwrap();
-    sqlx::raw_sql(include_str!("/var/tmp/0108_run_volume_leases.profile.sql"))
-        .execute(pool)
-        .await
-        .unwrap();
     sqlx::raw_sql(include_str!(
-        "/var/tmp/0108_run_cleanup_fragment.profile.sql"
+        "../../../../../../migrations/0108_run_volume_leases.sql"
     ))
     .execute(pool)
     .await
     .unwrap();
     sqlx::raw_sql(include_str!(
-        "/var/tmp/0108_legacy_scalar_compatibility.sql"
+        "../../../../../../migrations/0109_run_cleanup.sql"
     ))
     .execute(pool)
     .await
     .unwrap();
-    sqlx::raw_sql(include_str!("/var/tmp/0108_run_profile_lifecycle.sql"))
-        .execute(pool)
-        .await
-        .unwrap();
+    sqlx::raw_sql(include_str!(
+        "../../../../../../migrations/0110_legacy_scalar_compatibility.sql"
+    ))
+    .execute(pool)
+    .await
+    .unwrap();
+    sqlx::raw_sql(include_str!(
+        "../../../../../../migrations/0111_run_profile_lifecycle.sql"
+    ))
+    .execute(pool)
+    .await
+    .unwrap();
 }
 
 pub struct Fixture {

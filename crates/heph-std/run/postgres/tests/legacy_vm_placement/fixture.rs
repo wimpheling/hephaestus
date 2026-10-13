@@ -13,10 +13,12 @@ pub use super::base::command;
 
 pub async fn schema(pool: &PgPool) {
     super::base::schema(pool).await;
-    sqlx::raw_sql(include_str!("/var/tmp/0108_legacy_vm_placement.sql"))
-        .execute(pool)
-        .await
-        .unwrap();
+    sqlx::raw_sql(include_str!(
+        "../../../../../../migrations/0112_legacy_vm_placement.sql"
+    ))
+    .execute(pool)
+    .await
+    .unwrap();
 }
 
 pub fn scope() -> LegacyVmPlacementScope {

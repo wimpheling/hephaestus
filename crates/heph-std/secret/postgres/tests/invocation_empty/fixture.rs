@@ -12,10 +12,9 @@ pub struct Fixture {
 impl Fixture {
     pub async fn new(pool: &PgPool, count: usize) -> Self {
         let authority = Box::pin(Harness::new(pool, count)).await;
-        sqlx::raw_sql(
-            &std::fs::read_to_string("/var/tmp/0119_qualified_invocation_empty_secret.sql")
-                .unwrap(),
-        )
+        sqlx::raw_sql(include_str!(
+            "../../../../../../migrations/0125_qualified_invocation_empty_secret.sql"
+        ))
         .execute(pool)
         .await
         .unwrap();

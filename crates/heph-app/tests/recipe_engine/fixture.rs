@@ -32,7 +32,7 @@ impl Fixture {
     pub async fn new(pool: &PgPool) -> Self {
         let base = volume_fixture::Fixture::new(pool).await;
         sqlx::raw_sql(include_str!(
-            "/var/tmp/0114_qualified_instance_activation.corrected.sql"
+            "../../../../migrations/0119_qualified_instance_activation.sql"
         ))
         .execute(pool)
         .await

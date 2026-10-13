@@ -27,12 +27,12 @@ pub fn checkpoint(version: i64) -> Migrator {
             Ok("1")
         );
         let sql = [
-            "/var/tmp/0108_run_volume_leases.profile.sql",
-            "/var/tmp/0108_run_cleanup_fragment.profile.sql",
-            "/var/tmp/0108_legacy_scalar_compatibility.sql",
+            include_str!("../../../../../../../migrations/0108_run_volume_leases.sql"),
+            include_str!("../../../../../../../migrations/0109_run_cleanup.sql"),
+            include_str!("../../../../../../../migrations/0110_legacy_scalar_compatibility.sql"),
         ]
         .into_iter()
-        .map(|path| std::fs::read_to_string(path).unwrap())
+        .map(str::to_owned)
         .collect::<Vec<_>>()
         .join("\n");
         migrations.push(Migration::new(

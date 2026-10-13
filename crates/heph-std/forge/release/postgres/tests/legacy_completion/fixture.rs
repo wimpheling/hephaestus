@@ -42,11 +42,11 @@ pub async fn schema(pool: &PgPool) {
     );
     public_schema(pool).await;
     for sql in [
-        include_str!("/var/tmp/0108_run_volume_leases.profile.sql"),
-        include_str!("/var/tmp/0108_run_cleanup_fragment.profile.sql"),
-        include_str!("/var/tmp/0108_legacy_scalar_compatibility.sql"),
-        include_str!("/var/tmp/0108_run_profile_lifecycle.sql"),
-        include_str!("/var/tmp/0108_legacy_vm_placement.sql"),
+        include_str!("../../../../../../../migrations/0108_run_volume_leases.sql"),
+        include_str!("../../../../../../../migrations/0109_run_cleanup.sql"),
+        include_str!("../../../../../../../migrations/0110_legacy_scalar_compatibility.sql"),
+        include_str!("../../../../../../../migrations/0111_run_profile_lifecycle.sql"),
+        include_str!("../../../../../../../migrations/0112_legacy_vm_placement.sql"),
     ] {
         sqlx::raw_sql(sql).execute(pool).await.unwrap();
     }

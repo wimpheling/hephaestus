@@ -25,9 +25,9 @@ impl Fixture {
             .close_for_remove(&closure.manager, &request)
             .await
             .unwrap();
-        sqlx::raw_sql(
-            &std::fs::read_to_string("/var/tmp/0118_qualified_remove_resume.sql").unwrap(),
-        )
+        sqlx::raw_sql(include_str!(
+            "../../../../../../../migrations/0129_qualified_remove_resume.sql"
+        ))
         .execute(pool)
         .await
         .unwrap();

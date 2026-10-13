@@ -9,8 +9,8 @@ pub fn checkpoint(version: i64) -> Migrator {
     let mut migrator = crate::base_schema::checkpoint(version);
     let mut migrations = migrator.iter().cloned().collect::<Vec<_>>();
     let prerequisite =
-        std::fs::read_to_string("/var/tmp/0113_owned_first_ready_lease_exclusion.sql")
-            .expect("frozen actual first-birth custody prerequisite");
+        include_str!("../../../../../../../migrations/0118_owned_first_ready_lease_exclusion.sql")
+            .to_owned();
     let source = migrations
         .iter_mut()
         .find(|migration| migration.version == 113)

@@ -24,19 +24,23 @@ async fn setup(pool: &PgPool) -> mailbox_dispatch::MailboxDispatchCommand {
     );
     let command = support::setup(pool, true).await;
     sqlx::raw_sql(include_str!(
-        "/var/tmp/0108_legacy_scalar_compatibility.sql"
+        "../../../../../../../migrations/0110_legacy_scalar_compatibility.sql"
     ))
     .execute(pool)
     .await
     .unwrap();
-    sqlx::raw_sql(include_str!("/var/tmp/0108_run_profile_lifecycle.sql"))
-        .execute(pool)
-        .await
-        .unwrap();
-    sqlx::raw_sql(include_str!("/var/tmp/0108_legacy_vm_placement.sql"))
-        .execute(pool)
-        .await
-        .unwrap();
+    sqlx::raw_sql(include_str!(
+        "../../../../../../../migrations/0111_run_profile_lifecycle.sql"
+    ))
+    .execute(pool)
+    .await
+    .unwrap();
+    sqlx::raw_sql(include_str!(
+        "../../../../../../../migrations/0112_legacy_vm_placement.sql"
+    ))
+    .execute(pool)
+    .await
+    .unwrap();
     command
 }
 

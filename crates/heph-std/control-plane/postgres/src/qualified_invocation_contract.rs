@@ -9,7 +9,7 @@ use sqlx::{PgPool, Postgres, Transaction};
 
 /// Checks three held connections before qualified Invocation filesystem effects.
 ///
-/// Requires the supported `PostgreSQL` 17.10 `postgres` owner login, its unselected
+/// Requires the supported `PostgreSQL` major 17 `postgres` owner login, its unselected
 /// administrator role, and distinct worker/application pools selecting the roles
 /// installed by the canonical 143-migration source. A random transaction-local
 /// application name binds each actual backend to the administrator's activity

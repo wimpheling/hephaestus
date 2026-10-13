@@ -96,8 +96,8 @@ impl Harness {
             114,
             "private_qualified_activation".into(),
             sqlx::migrate::MigrationType::Simple,
-            std::fs::read_to_string("/var/tmp/0114_qualified_instance_activation.corrected.sql")
-                .unwrap()
+            include_str!("../../../../../../../migrations/0119_qualified_instance_activation.sql")
+                .to_owned()
                 .into(),
             false,
         ));

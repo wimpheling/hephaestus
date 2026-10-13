@@ -39,13 +39,10 @@ async fn genuine_leasing_fullset_and_bound_vm_cannot_claim_provisioning_empty_pe
         .await
         .unwrap();
     for path in [
-        "/var/tmp/0119_qualified_invocation_authority.sql",
-        "/var/tmp/0119_qualified_invocation_empty_secret.sql",
+        include_str!("../../../../../../migrations/0124_qualified_invocation_authority.sql"),
+        include_str!("../../../../../../migrations/0125_qualified_invocation_empty_secret.sql"),
     ] {
-        sqlx::raw_sql(&std::fs::read_to_string(path).unwrap())
-            .execute(&pool)
-            .await
-            .unwrap();
+        sqlx::raw_sql(path).execute(&pool).await.unwrap();
     }
     let metadata = PostgresSecretMountMetadata::new(birth.birth.worker.clone())
         .with_qualified_invocation_configuration(birth.config.clone());

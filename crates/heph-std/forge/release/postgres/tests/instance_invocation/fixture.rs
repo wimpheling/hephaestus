@@ -44,15 +44,22 @@ impl Invocation {
         for (version, path) in [
             (
                 114,
-                "/var/tmp/0114_qualified_instance_activation.corrected.sql",
+                include_str!(
+                    "../../../../../../../migrations/0119_qualified_instance_activation.sql"
+                ),
             ),
-            (115, "/var/tmp/0115_qualified_instance_invocation.sql"),
+            (
+                115,
+                include_str!(
+                    "../../../../../../../migrations/0120_qualified_instance_invocation.sql"
+                ),
+            ),
         ] {
             all.push(sqlx::migrate::Migration::new(
                 version,
                 "private_instance_execution".into(),
                 sqlx::migrate::MigrationType::Simple,
-                std::fs::read_to_string(path).unwrap().into(),
+                path.to_owned().into(),
                 false,
             ));
         }

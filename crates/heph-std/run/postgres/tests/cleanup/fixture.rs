@@ -14,11 +14,11 @@ const MIGRATIONS: Migrator = sqlx::migrate!("../../../../migrations");
 // Private proof only: replace these includes with checkpoint(108) after ordered
 // publication. Applied historical migration sources remain byte-identical.
 pub async fn apply_private_checkpoint(pool: &PgPool) {
-    sqlx::raw_sql(include_str!("/var/tmp/0108_run_volume_leases.sql"))
+    sqlx::raw_sql(include_str!("../../../../../../migrations/test_fixtures/recipe_private_history/0108_run_volume_leases.sql"))
         .execute(pool)
         .await
         .expect("private metadata checkpoint");
-    sqlx::raw_sql(include_str!("/var/tmp/0108_run_cleanup_fragment.sql"))
+    sqlx::raw_sql(include_str!("../../../../../../migrations/test_fixtures/recipe_private_history/0108_run_cleanup_fragment.sql"))
         .execute(pool)
         .await
         .expect("private cleanup checkpoint");

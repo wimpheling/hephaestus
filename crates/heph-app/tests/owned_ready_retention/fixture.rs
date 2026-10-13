@@ -27,14 +27,18 @@ impl Fixture {
     pub async fn new(pool: &PgPool, completed: bool) -> Self {
         let birth = birth::Fixture::new(pool).await;
         // Target-local successors only; no changes to published bookkeeping.
-        sqlx::raw_sql(include_str!("/var/tmp/0108_legacy_vm_placement.sql"))
-            .execute(pool)
-            .await
-            .unwrap();
-        sqlx::raw_sql(include_str!("/var/tmp/0116_owned_ready_retention.sql"))
-            .execute(pool)
-            .await
-            .unwrap();
+        sqlx::raw_sql(include_str!(
+            "../../../../migrations/0112_legacy_vm_placement.sql"
+        ))
+        .execute(pool)
+        .await
+        .unwrap();
+        sqlx::raw_sql(include_str!(
+            "../../../../migrations/0121_owned_ready_retention.sql"
+        ))
+        .execute(pool)
+        .await
+        .unwrap();
         let (target, request) = birth.request().await;
         let ready = birth
             .local

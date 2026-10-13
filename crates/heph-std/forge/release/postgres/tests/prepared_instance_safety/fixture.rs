@@ -34,15 +34,12 @@ impl Fixture {
             }
         }
         for file in [
-            "/var/tmp/0108_legacy_vm_placement.sql",
-            "/var/tmp/0114_qualified_instance_activation.corrected.sql",
-            "/var/tmp/0116_owned_ready_retention.sql",
-            "/var/tmp/0118_prepared_instance_safety.sql",
+            include_str!("../../../../../../../migrations/0112_legacy_vm_placement.sql"),
+            include_str!("../../../../../../../migrations/0119_qualified_instance_activation.sql"),
+            include_str!("../../../../../../../migrations/0121_owned_ready_retention.sql"),
+            include_str!("../../../../../../../migrations/0127_prepared_instance_safety.sql"),
         ] {
-            sqlx::raw_sql(&std::fs::read_to_string(file).unwrap())
-                .execute(pool)
-                .await
-                .unwrap();
+            sqlx::raw_sql(file).execute(pool).await.unwrap();
         }
         let historical: Vec<(i64, Vec<u8>)> = sqlx::query_as(
             "SELECT version,checksum FROM _sqlx_migrations WHERE version<=107 ORDER BY version",

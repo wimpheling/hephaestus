@@ -34,7 +34,7 @@ impl Fixture {
         .unwrap();
         assert_eq!(public_catalog.len(), 107);
         sqlx::raw_sql(include_str!(
-            "/var/tmp/0113_owned_first_ready_lease_exclusion.sql"
+            "../../../../migrations/0118_owned_first_ready_lease_exclusion.sql"
         ))
         .execute(pool)
         .await

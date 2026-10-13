@@ -32,9 +32,9 @@ async fn required_git_actual_catalog_is_refused_by_checked_planning_before_prepa
 async fn optional_git_original_producer_cannot_issue119_session_or_copy_authority(pool: PgPool) {
     let (birth, physical, config, start) = Box::pin(prepared_optional_git(&pool)).await;
     let repo = provision_optional_git(&pool, &birth, &config, &start).await;
-    sqlx::raw_sql(
-        &std::fs::read_to_string("/var/tmp/0119_qualified_invocation_authority.sql").unwrap(),
-    )
+    sqlx::raw_sql(include_str!(
+        "../../../../../../migrations/0124_qualified_invocation_authority.sql"
+    ))
     .execute(&pool)
     .await
     .unwrap();

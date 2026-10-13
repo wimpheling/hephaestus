@@ -27,35 +27,48 @@ pub fn checkpoint(version: i64) -> Migrator {
                 108,
                 "private_run_volumes_and_cleanup",
                 &[
-                    "/var/tmp/0108_run_volume_leases.sql",
-                    "/var/tmp/0108_run_cleanup_fragment.sql",
+                    include_str!(
+                        "../../../../../../../migrations/test_fixtures/recipe_private_history/0108_run_volume_leases.sql"
+                    ),
+                    include_str!(
+                        "../../../../../../../migrations/test_fixtures/recipe_private_history/0108_run_cleanup_fragment.sql"
+                    ),
                 ][..],
             ),
             (
                 109,
                 "private_external_observation_retirement",
-                &["/var/tmp/heph-recipe-0109_external_observation_retirement.sql"][..],
+                &[include_str!(
+                    "../../../../../../../migrations/0113_external_observation_retirement.sql"
+                )][..],
             ),
             (
                 110,
                 "private_owned_volume_registration",
-                &["/var/tmp/0110_owned_volume_registration.sql"][..],
+                &[include_str!(
+                    "../../../../../../../migrations/0114_owned_volume_registration.sql"
+                )][..],
             ),
             (
                 111,
                 "private_owned_volume_backing",
-                &["/var/tmp/0111_owned_volume_backing.sql"][..],
+                &[include_str!(
+                    "../../../../../../../migrations/0115_owned_volume_backing.sql"
+                )][..],
             ),
             (
                 112,
                 "private_owned_partial_retention",
-                &["/var/tmp/0112_owned_partial_retention.sql"][..],
+                &[include_str!(
+                    "../../../../../../../migrations/test_fixtures/recipe_private_history/0112_owned_partial_retention.sql"
+                )][..],
             ),
         ] {
             if number <= version && !migrations.iter().any(|entry| entry.version == number) {
                 let sql = files
                     .iter()
-                    .map(|path| std::fs::read_to_string(path).expect("task-authored private SQL"))
+                    .copied()
+                    .map(str::to_owned)
                     .collect::<Vec<_>>()
                     .join("\n");
                 migrations.push(Migration::new(

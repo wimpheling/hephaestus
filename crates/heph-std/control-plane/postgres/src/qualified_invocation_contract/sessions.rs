@@ -80,27 +80,7 @@ pub(super) async fn observe(
     )
     .fetch_one(&mut **transaction)
     .await?;
-    if context.pid <= 0
-        || context.datid <= 0
-        || context.login != "postgres"
-        || context.current_role != expected_role
-        || context.selected_role != selected_role
-        || context.owner != "postgres"
-        || context.superuser != (expected_role == "postgres")
-        || context.can_login != (expected_role == "postgres")
-        || context.bypass_rls != (expected_role != "hephaestus_app")
-        || context.version_number != 170_010
-        || context.isolation != "repeatable read"
-        || context.read_only != "on"
-        || context.search_path != "pg_catalog, public, pg_temp"
-        || context.timezone != "UTC"
-        || context.event_context != [None, None, None, None]
-        || context.nonce != nonce
-    {
-        return Err(invalid(&format!(
-            "held {expected_role} connection role, owner, server version or context differs",
-        )));
-    }
+    validate(&context, expected_role, selected_role, &nonce)?;
     Ok(context)
 }
 
@@ -166,3 +146,42 @@ pub(super) async fn same_service(
     }
     Ok(())
 }
+
+fn validate(
+    context: &SessionObservation,
+    expected_role: &str,
+    selected_role: &str,
+    nonce: &str,
+) -> Result<(), sqlx::Error> {
+    if context.version_number / 10_000 != 17 {
+        return Err(invalid(&format!(
+            "held {expected_role} connection requires PostgreSQL major 17; observed server_version_num {}",
+            context.version_number,
+        )));
+    }
+    if context.pid <= 0
+        || context.datid <= 0
+        || context.login != "postgres"
+        || context.current_role != expected_role
+        || context.selected_role != selected_role
+        || context.owner != "postgres"
+        || context.superuser != (expected_role == "postgres")
+        || context.can_login != (expected_role == "postgres")
+        || context.bypass_rls != (expected_role != "hephaestus_app")
+        || context.isolation != "repeatable read"
+        || context.read_only != "on"
+        || context.search_path != "pg_catalog, public, pg_temp"
+        || context.timezone != "UTC"
+        || context.event_context != [None, None, None, None]
+        || context.nonce != nonce
+    {
+        return Err(invalid(&format!(
+            "held {expected_role} connection role, owner, server version or context differs",
+        )));
+    }
+    Ok(())
+}
+
+#[cfg(test)]
+#[path = "sessions/tests.rs"]
+mod tests;

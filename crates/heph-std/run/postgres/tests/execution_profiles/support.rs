@@ -3,12 +3,14 @@ use sqlx::PgPool;
 
 pub async fn profile_schema(pool: &PgPool) {
     super::fixture::checkpoint(107).run(pool).await.unwrap();
-    sqlx::raw_sql(include_str!("/var/tmp/0108_run_volume_leases.profile.sql"))
-        .execute(pool)
-        .await
-        .unwrap();
     sqlx::raw_sql(include_str!(
-        "/var/tmp/0108_run_cleanup_fragment.profile.sql"
+        "../../../../../../migrations/0108_run_volume_leases.sql"
+    ))
+    .execute(pool)
+    .await
+    .unwrap();
+    sqlx::raw_sql(include_str!(
+        "../../../../../../migrations/0109_run_cleanup.sql"
     ))
     .execute(pool)
     .await

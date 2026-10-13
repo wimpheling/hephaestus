@@ -25,9 +25,9 @@ impl Fixture {
             closure,
         )
         .unwrap();
-        sqlx::raw_sql(
-            &std::fs::read_to_string("/var/tmp/0118_existing_instance_closure.sql").unwrap(),
-        )
+        sqlx::raw_sql(include_str!(
+            "../../../../../../../migrations/0130_existing_instance_closure.sql"
+        ))
         .execute(pool)
         .await
         .unwrap();

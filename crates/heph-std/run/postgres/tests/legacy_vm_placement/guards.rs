@@ -19,10 +19,12 @@ async fn preexisting_profile_and_public_history_cannot_acquire_birth_eligibility
     f.to_running(Some(&lease)).await;
     let before = super::base::evidence(&pool, f.command.run_id).await;
     let checksums = super::public_fixture::checksums(&pool).await;
-    sqlx::raw_sql(include_str!("/var/tmp/0108_legacy_vm_placement.sql"))
-        .execute(&pool)
-        .await
-        .unwrap();
+    sqlx::raw_sql(include_str!(
+        "../../../../../../migrations/0112_legacy_vm_placement.sql"
+    ))
+    .execute(&pool)
+    .await
+    .unwrap();
     let owner = fixture::scope();
     let configured = f.runs.clone().with_legacy_vm_placement(owner.clone());
     assert!(

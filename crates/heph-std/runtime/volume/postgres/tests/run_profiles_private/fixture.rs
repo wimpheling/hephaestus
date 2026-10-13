@@ -22,11 +22,11 @@ pub fn checkpoint(version: i64) -> Migrator {
             Ok("1")
         );
         let sql = [
-            "/var/tmp/0108_run_volume_leases.profile.sql",
-            "/var/tmp/0108_run_cleanup_fragment.profile.sql",
+            include_str!("../../../../../../../migrations/0108_run_volume_leases.sql"),
+            include_str!("../../../../../../../migrations/0109_run_cleanup.sql"),
         ]
         .into_iter()
-        .map(|p| std::fs::read_to_string(p).unwrap())
+        .map(str::to_owned)
         .collect::<Vec<_>>()
         .join("\n");
         migrations.push(Migration::new(

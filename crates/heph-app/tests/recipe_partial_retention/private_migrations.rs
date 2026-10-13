@@ -14,8 +14,7 @@ pub fn checkpoint(version: i64) -> Migrator {
         Cow::Borrowed("private_atomic_partial_retention"),
         MigrationType::Simple,
         Cow::Owned(
-            std::fs::read_to_string("/var/tmp/0112_owned_partial_retention.atomic.sql")
-                .expect("task-authored isolated atomic SQL"),
+            include_str!("../../../../migrations/0116_owned_partial_retention.sql").to_owned(),
         ),
         false,
     ));

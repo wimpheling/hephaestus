@@ -53,9 +53,9 @@ impl Harness {
             .transition(birth.start.run_id, RunState::Provisioning, None, None)
             .await
             .unwrap();
-        sqlx::raw_sql(
-            &std::fs::read_to_string("/var/tmp/0119_qualified_invocation_authority.sql").unwrap(),
-        )
+        sqlx::raw_sql(include_str!(
+            "../../../../../../migrations/0124_qualified_invocation_authority.sql"
+        ))
         .execute(pool)
         .await
         .unwrap();

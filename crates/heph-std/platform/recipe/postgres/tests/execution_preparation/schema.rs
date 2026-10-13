@@ -12,13 +12,13 @@ pub fn checkpoint(version: i64) -> Migrator {
     let base = crate::fixtures::private_migrations::checkpoint(107);
     let mut migrations = base.iter().cloned().collect::<Vec<_>>();
     let profile = [
-        "/var/tmp/0108_run_volume_leases.profile.sql",
-        "/var/tmp/0108_run_cleanup_fragment.profile.sql",
-        "/var/tmp/0108_legacy_scalar_compatibility.sql",
-        "/var/tmp/0108_run_profile_lifecycle.sql",
+        include_str!("../../../../../../../migrations/0108_run_volume_leases.sql"),
+        include_str!("../../../../../../../migrations/0109_run_cleanup.sql"),
+        include_str!("../../../../../../../migrations/0110_legacy_scalar_compatibility.sql"),
+        include_str!("../../../../../../../migrations/0111_run_profile_lifecycle.sql"),
     ]
     .into_iter()
-    .map(|path| std::fs::read_to_string(path).expect("frozen private profile SQL"))
+    .map(str::to_owned)
     .collect::<Vec<_>>()
     .join("\n");
     migrations.push(Migration::new(
@@ -32,27 +32,31 @@ pub fn checkpoint(version: i64) -> Migrator {
         (
             109,
             "private_external_retirement",
-            "/var/tmp/heph-recipe-0109_external_observation_retirement.sql",
+            include_str!(
+                "../../../../../../../migrations/0113_external_observation_retirement.sql"
+            ),
         ),
         (
             110,
             "private_owned_registration",
-            "/var/tmp/0110_owned_volume_registration.sql",
+            include_str!("../../../../../../../migrations/0114_owned_volume_registration.sql"),
         ),
         (
             111,
             "private_owned_backing",
-            "/var/tmp/0111_owned_volume_backing.sql",
+            include_str!("../../../../../../../migrations/0115_owned_volume_backing.sql"),
         ),
         (
             112,
             "private_atomic_retention",
-            "/var/tmp/0112_owned_partial_retention.atomic.sql",
+            include_str!("../../../../../../../migrations/0116_owned_partial_retention.sql"),
         ),
         (
             113,
             "private_execution_preparation",
-            "/var/tmp/0113_deployment_execution_preparation.sql",
+            include_str!(
+                "../../../../../../../migrations/0117_deployment_execution_preparation.sql"
+            ),
         ),
     ] {
         if number <= version {
@@ -60,7 +64,7 @@ pub fn checkpoint(version: i64) -> Migrator {
                 number,
                 Cow::Borrowed(name),
                 MigrationType::Simple,
-                Cow::Owned(std::fs::read_to_string(file).expect("frozen private proposal")),
+                Cow::Owned(file.to_owned()),
                 false,
             ));
         }

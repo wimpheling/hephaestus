@@ -166,27 +166,27 @@ pub async fn upgrade(pool: &PgPool, version: i64) {
             .unwrap();
     if version == 114 {
         sqlx::raw_sql(include_str!(
-            "/var/tmp/0114_qualified_instance_activation.corrected.sql"
+            "../../../../migrations/0119_qualified_instance_activation.sql"
         ))
         .execute(pool)
         .await
         .unwrap();
     } else if version == 115 {
         sqlx::raw_sql(include_str!(
-            "/var/tmp/0115_qualified_instance_invocation.sql"
+            "../../../../migrations/0120_qualified_instance_invocation.sql"
         ))
         .execute(pool)
         .await
         .unwrap();
     } else if version == 119 {
         sqlx::raw_sql(include_str!(
-            "/var/tmp/0117_qualified_invocation_consumption.nowait.sql"
+            "../../../../migrations/0122_qualified_invocation_consumption.sql"
         ))
         .execute(pool)
         .await
         .unwrap();
         sqlx::raw_sql(include_str!(
-            "/var/tmp/0119_qualified_invocation_leases.sql"
+            "../../../../migrations/0123_qualified_invocation_leases.sql"
         ))
         .execute(pool)
         .await
