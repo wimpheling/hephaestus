@@ -134,6 +134,7 @@ pub fn service(
     let router = project::register(
         router,
         pool.clone(),
+        applications.application_pool.clone(),
         Arc::clone(&applications.forge),
         MediatorAuthenticator::new(mediator_signing_key),
         mutation_receipts.clone(),

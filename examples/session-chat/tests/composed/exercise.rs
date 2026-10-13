@@ -76,22 +76,21 @@ pub async fn exercise<'a>(
     } else {
         (None, None)
     };
-    let build_context = crate::golden_modules::cooking_builds::CookingBuildContext {
-        pool,
-        running,
-        root,
-        source_root,
-        project_id: project,
-        repositories,
-        identity: crate::golden_modules::cooking_builds::CookingIdentity {
-            actor: identity,
-            git_token,
-            rpc_token,
-        },
-        timeout,
-    };
     let built = crate::golden_modules::cooking_builds::build_one(
-        &build_context,
+        &crate::golden_modules::cooking_builds::CookingBuildContext {
+            pool,
+            running,
+            root,
+            source_root,
+            project_id: project,
+            repositories,
+            identity: crate::golden_modules::cooking_builds::CookingIdentity {
+                actor: identity,
+                git_token,
+                rpc_token,
+            },
+            timeout,
+        },
         "session-chat",
         denial_source_root
             .clone()

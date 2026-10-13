@@ -3,6 +3,7 @@
 mod create_project;
 mod get_project;
 mod get_project_repository_image;
+mod get_recipe_deployment;
 mod list_importable_release_agents;
 mod list_project_instances;
 mod list_project_repositories;
@@ -23,6 +24,7 @@ use rpc_proto::{
         project::v1::{
             CreateProjectRequest, CreateProjectResponse, GetProjectRepositoryImageRequest,
             GetProjectRepositoryImageResponse, GetProjectRequest, GetProjectResponse,
+            GetRecipeDeploymentRequest, GetRecipeDeploymentResponse,
             ListImportableReleaseAgentsRequest, ListImportableReleaseAgentsResponse,
             ListProjectInstancesRequest, ListProjectInstancesResponse,
             ListProjectRepositoriesRequest, ListProjectRepositoriesResponse,
@@ -39,6 +41,7 @@ const MAX_PAGE_SIZE: u32 = 200;
 
 pub struct ProjectRpc {
     application: ProjectApplication,
+    recipes: recipe_postgres::PostgresDeploymentRepository,
     forge: std::sync::Arc<PgForgeRepository>,
     authenticator: MediatorAuthenticator,
     receipts: MutationReceipts,
@@ -47,12 +50,14 @@ pub struct ProjectRpc {
 impl ProjectRpc {
     const fn new(
         pool: PgPool,
+        application_pool: PgPool,
         forge: std::sync::Arc<PgForgeRepository>,
         authenticator: MediatorAuthenticator,
         receipts: MutationReceipts,
     ) -> Self {
         Self {
             application: ProjectApplication::new(pool),
+            recipes: recipe_postgres::PostgresDeploymentRepository::new(application_pool),
             forge,
             authenticator,
             receipts,
@@ -64,12 +69,19 @@ impl ProjectRpc {
 pub fn register(
     router: Router,
     pool: PgPool,
+    application_pool: PgPool,
     forge: std::sync::Arc<PgForgeRepository>,
     authenticator: MediatorAuthenticator,
     receipts: MutationReceipts,
 ) -> Router {
     ProjectServiceExt::register(
-        std::sync::Arc::new(ProjectRpc::new(pool, forge, authenticator, receipts)),
+        std::sync::Arc::new(ProjectRpc::new(
+            pool,
+            application_pool,
+            forge,
+            authenticator,
+            receipts,
+        )),
         router,
     )
 }
@@ -90,6 +102,14 @@ impl ProjectService for ProjectRpc {
         request: ServiceRequest<'_, GetProjectRequest>,
     ) -> ServiceResult<GetProjectResponse> {
         get_project::handle(self, ctx, request).await
+    }
+
+    async fn get_recipe_deployment(
+        &self,
+        ctx: RequestContext,
+        request: ServiceRequest<'_, GetRecipeDeploymentRequest>,
+    ) -> ServiceResult<GetRecipeDeploymentResponse> {
+        get_recipe_deployment::handle(self, ctx, request).await
     }
 
     async fn list_project_repositories(

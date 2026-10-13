@@ -46,12 +46,49 @@ pub async fn run(pool: &PgPool, fixture: &Fixture) {
     .await
     .expect("forced binding RLS");
     assert!(protected);
-    let legacy_index: bool =
-        sqlx::query_scalar("SELECT to_regclass('one_active_instance_run_lease') IS NOT NULL")
-            .fetch_one(pool)
-            .await
-            .expect("legacy single-run lease ceiling remains");
-    assert!(legacy_index);
+    lease_index_catalog(pool).await;
+}
+
+async fn lease_index_catalog(pool: &PgPool) {
+    let named_slot_index: bool = sqlx::query_scalar(
+        "SELECT count(*) = 1 AND COALESCE(bool_and(
+             index_namespace.nspname = 'public' AND index_class.relkind = 'i'
+             AND lease_index.indrelid = 'public.agent_instance_volume_leases'::regclass
+             AND access_method.amname = 'btree'
+             AND lease_index.indisunique AND lease_index.indisvalid
+             AND lease_index.indisready AND lease_index.indislive
+             AND NOT lease_index.indisprimary AND NOT lease_index.indisexclusion
+             AND lease_index.indnatts = 2 AND lease_index.indnkeyatts = 2
+             AND lease_index.indexprs IS NULL
+             AND ARRAY(SELECT attribute.attname::text
+                 FROM unnest(lease_index.indkey) WITH ORDINALITY AS key(attribute_number, position)
+                 JOIN pg_catalog.pg_attribute attribute
+                     ON attribute.attrelid = lease_index.indrelid
+                     AND attribute.attnum = key.attribute_number
+                 ORDER BY key.position) = ARRAY['run_id', 'slot_key']::text[]
+             AND pg_catalog.pg_get_expr(lease_index.indpred, lease_index.indrelid) =
+                 '((released_at IS NULL) AND (selection_origin <> ''historical_unproven''::text))'
+         ), false)
+         FROM pg_catalog.pg_index lease_index
+         JOIN pg_catalog.pg_class index_class ON index_class.oid = lease_index.indexrelid
+         JOIN pg_catalog.pg_namespace index_namespace ON index_namespace.oid = index_class.relnamespace
+         JOIN pg_catalog.pg_am access_method ON access_method.oid = index_class.relam
+         WHERE index_class.oid = pg_catalog.to_regclass('public.one_active_run_volume_slot')",
+    )
+    .fetch_one(pool)
+    .await
+    .expect("exact migration 0108 named-slot index catalog");
+    assert!(named_slot_index, "named-slot lease index differs from 0108");
+    let obsolete_index: bool = sqlx::query_scalar(
+        "SELECT pg_catalog.to_regclass('public.one_active_instance_run_lease') IS NOT NULL",
+    )
+    .fetch_one(pool)
+    .await
+    .expect("obsolete lease index catalog");
+    assert!(
+        !obsolete_index,
+        "0108 removes the old single-run lease index"
+    );
 }
 
 async fn create_as_manager(pool: &PgPool, fixture: &Fixture, volume: Uuid, occurrence: Uuid) {

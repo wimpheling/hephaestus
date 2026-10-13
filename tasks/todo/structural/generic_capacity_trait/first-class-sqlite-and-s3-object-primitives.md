@@ -375,9 +375,25 @@ preserving role, context and schema checks. All nine affected fixture packages
 pass scoped strict checks. Three actual PostgreSQL 17.9-Alpine cases pass with
 workstation SQL hidden: startup/role qualification, ext4 Ready custody, and
 original recipe install/import/activation/replay. They launch no guest VM.
-Hosted run `38401292260` passes Cooking but fails Rust and browser checks;
-the remaining failures are being investigated. The published checkpoint has
-not passed CI.
+Hosted run `38404246227` for the later managed-lifecycle checkpoint passes
+Cooking but fails Clippy in two example fixture context lifetimes and fails the
+browser Secret-create/ImportAgent journey. The two lifetime fixes and narrowly
+scoped migration-snapshot SQL exceptions are now reconciled with the qualified
+source. The earlier Rust test failure required replacing an obsolete lease-index
+expectation with the complete migration 0108 named-slot index contract. That
+correction now passes the actual authorization/RLS perimeter test on a fresh
+database with all 143 migrations. Browser persistence errors still lack a causal
+SQL diagnosis; the plaintext evidence scanner remains enabled. No complete
+hosted CI pass is established.
+
+Authenticated deployment inspection has generated Rust/Elixir query contracts
+and a panel on the existing project page. Scoped Rust strict, formatting,
+documentation and five focused controls pass. Normal Phoenix compilation,
+ten focused tests, formatting and all 19 web architecture rules pass. Inspection
+state follows the standard page layout; project/watch/session revocation clears
+the projection and invalidates late responses. Actual authenticated database/RPC
+and browser behavior remain to be verified. Install, resume, remove and invoke
+controls and the complete SQLite workflow remain unfinished.
 
 Provider orchestration and ownership seals, plural runtime attachment and cleanup,
 physical revocation, authenticated project web UI commands, real SQLite
