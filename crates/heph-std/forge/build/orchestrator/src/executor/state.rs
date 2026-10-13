@@ -60,9 +60,9 @@ impl BuildExecutor {
         }
         node.claim(&claimed)?;
         node.require_detached()?;
-        node.acquire_finalization_workspace(&self.active_path(id), &self.workspace_root)?;
         node.preserve_finalization();
         let artifacts = if state == "sealed" {
+            node.require_original_finalization()?;
             let output = self.active_path(id).join("output");
             let imported = self.artifacts.import_for(id.as_uuid(), &output)?;
             validate_declared_outputs(&claimed.input.build, &imported)?;
@@ -70,7 +70,10 @@ impl BuildExecutor {
             self.mark_imported(id, &artifacts).await?;
             artifacts
         } else {
-            stored_release_inputs(artifact_manifest.ok_or(BuildExecutionError::StoredState)?)?
+            let artifacts =
+                stored_release_inputs(artifact_manifest.ok_or(BuildExecutionError::StoredState)?)?;
+            node.prepare_imported_completion(&claimed, &artifacts)?;
+            artifacts
         };
         self.finish_release(claimed, artifacts, node)
             .await
@@ -84,8 +87,7 @@ impl BuildExecutor {
         node: &std::sync::Arc<super::owner::Node>,
     ) -> Result<BuildExecutionResult, BuildExecutionError> {
         node.require_detached()?;
-        node.original_workspace()?.recheck()?;
-        node.claim(&claimed)?;
+        node.prepare_completion(&claimed, &artifacts)?;
         let id = claimed.input.id;
         let artifact_count = artifacts.len();
         self.releases

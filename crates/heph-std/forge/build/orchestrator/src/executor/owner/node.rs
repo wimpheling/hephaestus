@@ -34,6 +34,7 @@ pub(super) struct State {
     pub(super) cleanup_error: Option<Arc<BuildExecutionError>>,
     pub(super) errors: Vec<Arc<dyn std::error::Error + Send + Sync>>,
     pub(super) claim: Option<ClaimPins>,
+    pub(super) completion: Option<Arc<super::context::Completion>>,
     pub(super) git_children: Vec<Arc<super::super::workspace::git_child::GitChild>>,
 }
 pub(in super::super) struct Node {
@@ -70,6 +71,7 @@ impl Node {
                 cleanup_error: None,
                 errors: Vec::new(),
                 claim: None,
+                completion: None,
                 git_children: Vec::new(),
             }),
             changed: tokio::sync::Notify::new(),
@@ -213,9 +215,19 @@ impl Node {
             return Err(BuildExecutionError::FinalizationRequired);
         }
         let workspace = {
-            let state = lock(&self.state);
+            let mut state = lock(&self.state);
             match &state.workspace {
-                Workspace::Untouched => return Ok(()),
+                Workspace::Untouched => {
+                    if state
+                        .completion
+                        .as_ref()
+                        .is_some_and(|completion| completion.clears_finalized_hold(&state))
+                    {
+                        state.cleanup_error = None;
+                    }
+                    drop(state);
+                    return Ok(());
+                }
                 Workspace::Acquiring { .. } => return Err(BuildExecutionError::UnsafeWorkspace),
                 Workspace::Original(pin) => pin.clone(),
             }

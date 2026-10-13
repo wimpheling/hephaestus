@@ -1,11 +1,12 @@
 //! Full original build/finalization comparison; saved input is never authority.
-use super::super::workspace::pin::WorkspacePin;
+#[path = "context/completion.rs"]
+mod completion;
 use super::{
     BuildExecutionError, lock,
     node::{ClaimPins, Node, Workspace},
 };
 use crate::ClaimedBuild;
-use std::sync::Arc;
+pub(super) use completion::Completion;
 impl Node {
     pub(in super::super) fn claim(
         &self,
@@ -40,22 +41,14 @@ impl Node {
         drop(state);
         Ok(())
     }
-    pub(in super::super) fn acquire_finalization_workspace(
-        &self,
-        path: &std::path::Path,
-        root: &Arc<WorkspacePin>,
-    ) -> Result<(), BuildExecutionError> {
-        if matches!(lock(&self.state).workspace, Workspace::Untouched) {
-            self.begin_workspace(path.to_path_buf())?;
-            self.workspace(WorkspacePin::open(path, Some(root.clone()))?);
-        }
-        self.original_workspace()?.recheck()
-    }
     pub(in super::super) fn completed_result(
         &self,
         result: &super::BuildExecutionResult,
     ) -> Result<(), BuildExecutionError> {
         let state = lock(&self.state);
+        if let Some(completion) = &state.completion {
+            completion.check_result(&state, result)?;
+        }
         let Some(claim) = &state.claim else {
             return if result.build_request_id == self.id
                 && !state.finalization

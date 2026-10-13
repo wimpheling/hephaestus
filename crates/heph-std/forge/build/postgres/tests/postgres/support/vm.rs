@@ -1,5 +1,8 @@
 //! Deterministic VM provider fixture for isolated builds.
 
+#[path = "vm/attempt.rs"]
+mod attempt;
+
 use async_trait::async_trait;
 use std::{
     collections::BTreeMap,
@@ -13,9 +16,11 @@ use std::{
 };
 use tokio::sync::{broadcast, watch};
 use vm_trait::{
-    LogStream, StopMode, VmError, VmEvent, VmExit, VmInstance, VmMetric, VmProvider, VmSpec,
+    LogStream, StopMode, VmError, VmEvent, VmExit, VmInstance, VmMetric, VmProvider,
+    VmProvisionAttempt, VmSpec,
 };
 
+#[derive(Clone)]
 pub struct OutputProvider {
     pub provisions: Arc<AtomicUsize>,
     pub fail_next_provision: Arc<AtomicBool>,
@@ -25,6 +30,13 @@ pub struct OutputProvider {
 impl VmProvider for OutputProvider {
     fn name(&self) -> &'static str {
         "isolated-build-test"
+    }
+
+    fn prepare_provision_attempt(
+        &self,
+        spec: VmSpec,
+    ) -> Result<Arc<dyn VmProvisionAttempt>, VmError> {
+        Ok(attempt::prepare(self.clone(), spec))
     }
 
     async fn provision(&self, spec: VmSpec) -> Result<Arc<dyn VmInstance>, VmError> {

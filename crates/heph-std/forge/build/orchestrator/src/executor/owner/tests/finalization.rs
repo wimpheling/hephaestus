@@ -1,3 +1,6 @@
+#[path = "finalization/imported.rs"]
+mod imported;
+
 use super::*;
 use crate::{BuildInput, ClaimedBuild};
 use release_domain::{ReleaseAgentId, ReleaseId, ReleaseVersion};

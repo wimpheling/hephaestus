@@ -484,7 +484,29 @@ completion/read/audit integration remain unfinished. The complete Secret
 lifecycle and populated 0107→0144 upgrade have not passed. Published `c8edd006`
 CI passes Cooking, formatting and Clippy but fails a Build scenario and the
 browser journey. The Build fixture lacks the new provisioning-attempt method;
-a fixture correction is source-reviewed and awaits actual PostgreSQL testing.
+the fixture correction and imported-finalization repair now pass the unchanged
+PostgreSQL scenario against the feature branch. Imported artifacts resume from
+the saved claim and complete manifest without acquiring a local workspace or
+provisioning another VM. A successful retry clears only its protected finalization
+hold; unrelated cleanup failures and their original evidence remain retained.
+
+This Build checkpoint passes Rust 1.88 locked strict Clippy, formatting and docs
+for Build Orchestrator and Build PostgreSQL, all 21 Build library controls and
+three fixture controls, with none failed or ignored. The unchanged PostgreSQL
+immutable-draft/recovery scenario passes once, including its original artifact,
+replay, failure and authorization-denial assertions. All 143 installed migration
+checksums match the branch. The scenario uses an owner database pool and a
+controlled provider. Guest execution, three-pool RLS qualification, SQLite data
+and full shutdown remain separate acceptance requirements.
+
+Hosted run `38457048753` for `6ca5c816` completes with Cooking, workspace formatting
+and Clippy passing, and Rust/browser failures. Rust fails at the stale Build
+fixture's initial provisioning step; browser publication also fails because its
+fixture provider lacks the required attempt method. The browser fixture
+correction is reviewed source with its focused and actual browser checks pending.
+Secret completion/read/audit SQL and its finite catalog additions are privately
+reviewed after preserving the existing audit SELECT policy and standalone Grant
+expiry behavior. Rust adapter wiring and native qualification remain unfinished.
 
 Provider orchestration and ownership seals, plural runtime attachment and cleanup,
 physical revocation, authenticated project web UI commands, real SQLite
