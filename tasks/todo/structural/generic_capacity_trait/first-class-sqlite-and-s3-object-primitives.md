@@ -402,10 +402,15 @@ rules pass. Safe error diagnostics for Secret creation and ImportAgent also pass
 scoped Rust strict/fmt/docs and six metadata/error-preservation controls. They
 report only static operation/step, validated SQLSTATE and known catalog names;
 raw database messages and values remain excluded. These diagnostics do not repair
-persistence. The selected actual browser journey still needs a fresh run against
-the published sources and rebuilt browser assets. Hosted run `38409004553` for
-`7c35e8e2` passes Cooking but fails Rust tests and the browser journey; no complete
-hosted CI pass or installed SQLite acceptance is established.
+persistence. An actual browser probe against `3500fef7` passes the existing UI
+release-publication prerequisite, imports and attaches an instance, then fails
+Secret creation. The dedicated PostgreSQL log reports permission denial on
+`INSERT INTO secret_versions`; numeric SQLSTATE is not yet observed. The runner
+filtered out the safe adapter diagnostics. Its logging filter now includes only
+the two specific adapter error targets; shell syntax passes and an actual rerun
+remains required. Hosted run `38417742007` passes Cooking but fails Rust tests
+and the browser journey. No complete hosted CI pass or installed SQLite acceptance
+is established.
 
 Provider orchestration and ownership seals, plural runtime attachment and cleanup,
 physical revocation, authenticated project web UI commands, real SQLite
