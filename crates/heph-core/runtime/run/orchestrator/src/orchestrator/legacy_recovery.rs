@@ -1,5 +1,7 @@
 //! Strict Legacy inventory reconciliation never performs global resource sweeps.
-use super::{OrchestratorError, RunOrchestrator, canonical_cleanup::invalid};
+use super::{
+    OrchestratorError, RunOrchestrator, SupervisorReconciliationCause, canonical_cleanup::invalid,
+};
 use run_domain::{LegacyVmPlacement, LegacyVmPlacementInventory, RunState};
 use std::collections::BTreeSet;
 use time::OffsetDateTime;
@@ -47,7 +49,15 @@ impl RunOrchestrator {
                 Err(error) => return Err(error),
             };
             let closed = inventory.closed_runs.contains(&plan.command().run_id);
-            if self.recover_legacy_plan(plan, closed, stale_only).await? {
+            if self
+                .recover_legacy_plan(
+                    plan,
+                    closed,
+                    stale_only,
+                    SupervisorReconciliationCause::Restart,
+                )
+                .await?
+            {
                 count += 1;
             }
             drop(claim);
@@ -56,11 +66,46 @@ impl RunOrchestrator {
         // No global recover() callback is invoked, even when inventory is empty.
         Ok(count)
     }
+    pub(super) async fn reconcile_legacy_runs(
+        &self,
+        cause: SupervisorReconciliationCause,
+    ) -> Result<(), OrchestratorError> {
+        let scope = self.legacy_owner()?;
+        let inventory = self.repository.legacy_vm_placement_inventory(scope).await?;
+        check_inventory(&inventory)?;
+        if !inventory.held.is_empty() {
+            return Err(invalid("managed Legacy inventory contains Held originals"));
+        }
+        if inventory
+            .placements
+            .iter()
+            .any(|plan| plan.scope() != scope)
+        {
+            return Err(invalid(
+                "managed Legacy inventory contains foreign placements",
+            ));
+        }
+        // Claim the complete qualified set before any cleanup. An occupied later
+        // Start cannot permit earlier effects or become successful partial recovery.
+        let claims = inventory
+            .placements
+            .iter()
+            .map(|plan| self.operation_guards.claim_start(plan.command().run_id))
+            .collect::<Result<Vec<_>, _>>()?;
+        for plan in &inventory.placements {
+            let closed = inventory.closed_runs.contains(&plan.command().run_id);
+            self.recover_legacy_plan(plan, closed, false, cause).await?;
+        }
+        drop(claims);
+        Ok(())
+    }
+
     async fn recover_legacy_plan(
         &self,
         plan: &LegacyVmPlacement,
         closed: bool,
         stale_only: bool,
+        cause: SupervisorReconciliationCause,
     ) -> Result<bool, OrchestratorError> {
         if plan.scope() != self.legacy_owner()? {
             return Err(invalid("foreign Legacy placement appeared as actionable"));
@@ -116,12 +161,8 @@ impl RunOrchestrator {
                 return Ok(false);
             }
         }
-        self.cleanup_legacy(
-            run.id,
-            None,
-            Some(("supervisor restarted while resources were active", None)),
-        )
-        .await?;
+        self.cleanup_legacy(run.id, None, Some((cause.legacy_failure(), None)))
+            .await?;
         Ok(true)
     }
 }

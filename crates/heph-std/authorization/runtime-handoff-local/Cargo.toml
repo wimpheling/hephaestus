@@ -14,6 +14,7 @@ aes-gcm.workspace = true
 capability-domain = { path = "../../../heph-core/auth/authorization/capability-domain" }
 runtime-authority = { path = "../../../heph-core/auth/authorization/runtime-authority" }
 runtime-git-authority = { path = "../../../heph-core/auth/authorization/runtime-git-authority" }
+rustix.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 time.workspace = true
@@ -21,6 +22,7 @@ uuid.workspace = true
 zeroize.workspace = true
 
 [dev-dependencies]
+git-capability-domain = { path = "../../../heph-core/forge/git-capability" }
 tempfile = "3"
 
 [lints]

@@ -83,6 +83,34 @@ impl TryFrom<RunRow> for Run {
     type Error = RepositoryError;
 
     fn try_from(row: RunRow) -> Result<Self, Self::Error> {
+        let kind = parse_run_kind(&row.run_kind)?;
+        row.into_run(kind)
+    }
+}
+
+impl RunRow {
+    pub(crate) fn is_invocation(&self) -> bool {
+        self.run_kind == "invocation"
+    }
+
+    pub(crate) const fn run_id(&self) -> RunId {
+        RunId::from_uuid(self.id)
+    }
+
+    pub(crate) const fn instance_id(&self) -> Uuid {
+        self.instance_id
+    }
+
+    // Called only after explicit consumed117 lineage or prepared115 cleanup proof.
+    pub(crate) fn into_checked_invocation(self) -> Result<Run, RepositoryError> {
+        if !self.is_invocation() {
+            return Err(RepositoryError::InvalidData("expected Invocation row"));
+        }
+        self.into_run(RunKind::Invocation)
+    }
+
+    fn into_run(self, kind: RunKind) -> Result<Run, RepositoryError> {
+        let row = self;
         let exit = if row.exit_code.is_some() || row.exit_signal.is_some() {
             Some(VmExit {
                 code: row.exit_code,
@@ -91,14 +119,14 @@ impl TryFrom<RunRow> for Run {
         } else {
             None
         };
-        Ok(Self {
+        Ok(Run {
             id: RunId::from_uuid(row.id),
             instance_id: AgentInstanceId::from_uuid(row.instance_id),
             instance_revision_id: AgentInstanceRevisionId::from_uuid(row.instance_revision_id),
             release_id: ReleaseId::from_uuid(row.release_id),
             release_agent_id: ReleaseAgentId::from_uuid(row.release_agent_id),
             attachment_id: row.attachment_id.map(AgentAttachmentId::from_uuid),
-            kind: parse_run_kind(&row.run_kind)?,
+            kind,
             requires_state: row.requires_state,
             command_id: row.command_id.into(),
             volume_id: row.volume_id.map(Into::into),
@@ -125,7 +153,7 @@ pub const fn run_kind_name(kind: RunKind) -> &'static str {
     }
 }
 
-fn parse_run_kind(value: &str) -> Result<RunKind, RepositoryError> {
+pub fn parse_run_kind(value: &str) -> Result<RunKind, RepositoryError> {
     match value {
         "normal" => Ok(RunKind::Normal),
         "update" => Ok(RunKind::Update),

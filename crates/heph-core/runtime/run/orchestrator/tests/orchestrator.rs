@@ -11,6 +11,8 @@ mod invocation;
 mod launch;
 #[path = "orchestrator/legacy_placement.rs"]
 mod legacy_placement;
+#[path = "orchestrator/managed_reconciliation/sweeps.rs"]
+mod managed_reconciliation_sweeps;
 #[path = "orchestrator/recovery.rs"]
 mod recovery;
 #[path = "orchestrator/resource.rs"]

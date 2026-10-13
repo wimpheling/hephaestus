@@ -1,5 +1,7 @@
 //! `PostgreSQL` persistence and live authentication for runtime Git bearers.
 
+mod expired;
+
 use async_trait::async_trait;
 use capability_domain::{AuthorizationSnapshotId, RuntimeCredentialGeneration, RuntimeSessionId};
 use git_capability_domain::{
@@ -21,13 +23,50 @@ use uuid::Uuid;
 #[derive(Clone)]
 pub struct PgRuntimeGitCredentialRepository {
     pool: PgPool,
+    expired_original: Option<runtime_authority_postgres::PgRuntimeSessionRepository>,
 }
 
 impl PgRuntimeGitCredentialRepository {
     /// Creates an adapter using a control-plane connection pool.
     #[must_use]
     pub const fn new(pool: PgPool) -> Self {
-        Self { pool }
+        Self {
+            pool,
+            expired_original: None,
+        }
+    }
+
+    /// Retains the trusted Legacy scope for exact expired observation only.
+    ///
+    /// The observer is derived from this adapter's original pool. This selects
+    /// no live profile, issuance, provider ownership or dispatch authority.
+    #[must_use]
+    pub fn with_expired_legacy_vm_placement_scope(
+        mut self,
+        scope: run_domain::LegacyVmPlacementScope,
+    ) -> Self {
+        let observer = self.expired_original.take().unwrap_or_else(|| {
+            runtime_authority_postgres::PgRuntimeSessionRepository::new(self.pool.clone())
+        });
+        self.expired_original = Some(observer.with_expired_legacy_vm_placement_scope(scope));
+        self
+    }
+
+    /// Retains checked Invocation configuration for expired observation only.
+    ///
+    /// Actual provider ownership is qualified by trusted startup separately.
+    /// No independent repository or pool can be supplied for this operation.
+    #[must_use]
+    pub fn with_qualified_invocation_configuration(
+        mut self,
+        configuration: release_service::InstanceExecutionConfiguration,
+    ) -> Self {
+        let observer = self.expired_original.take().unwrap_or_else(|| {
+            runtime_authority_postgres::PgRuntimeSessionRepository::new(self.pool.clone())
+        });
+        self.expired_original =
+            Some(observer.with_qualified_invocation_configuration(configuration));
+        self
     }
 }
 
@@ -84,6 +123,16 @@ impl RuntimeGitCredentialRepository for PgRuntimeGitCredentialRepository {
         .map_err(storage)?
         .ok_or(RuntimeGitAuthorityError::NotFound)?
         .try_into()
+    }
+
+    async fn observe_expired_run_handoff(
+        &self,
+        run: Uuid,
+        session: RuntimeSessionId,
+        generation: RuntimeCredentialGeneration,
+    ) -> Result<runtime_git_authority::ExpiredRuntimeGitHandoff, RuntimeGitAuthorityError> {
+        self.observe_expired_original(run, session, generation)
+            .await
     }
 
     async fn authenticate(

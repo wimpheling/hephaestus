@@ -21,6 +21,8 @@ pub struct CleanupState {
     pub target: Option<RunCleanupTarget>,
     pub receipt: Option<RunCleanupReceipt>,
     pub completed: bool,
+    // Explicit one-Run test inventory; unsupported by default.
+    pub invocation_inventory: Option<vm_trait::VmProviderOwnerScope>,
 }
 
 pub struct CleanupRepository {
@@ -34,6 +36,57 @@ pub struct CleanupRepository {
 
 #[async_trait]
 impl RunCleanupRepository for CleanupRepository {
+    async fn qualified_invocation_recovery_inventory(
+        &self,
+        scope: &vm_trait::VmProviderOwnerScope,
+        _cutoff: Option<time::OffsetDateTime>,
+    ) -> Result<Vec<RunId>, RepositoryError> {
+        let (expected, binding, target, receipt) = {
+            let state = self.state.lock().await;
+            (
+                state.invocation_inventory.clone(),
+                state.binding.clone(),
+                state.target.clone(),
+                state.receipt.clone(),
+            )
+        };
+        if expected.as_ref() != Some(scope) {
+            return Err(RepositoryError::InvalidData(
+                "controlled Invocation inventory is unsupported",
+            ));
+        }
+        let run = self.runs.run.lock().await.clone();
+        self.runs.classify_invocation_cancel(run.id, scope).await?;
+        let host = RunCleanupHostId::new(scope.namespace().into(), scope.host_id().into())
+            .map_err(|_| RepositoryError::InvalidData("controlled inventory owner differs"))?;
+        let exact_target = |target: &RunCleanupTarget| {
+            target.run_id() == run.id
+                && target.instance_id() == run.instance_id
+                && target.revision_id() == run.instance_revision_id
+                && target.vm_target().host() == Some(&host)
+                && target.vm_target().vm_id() == Some(&VmId(run.id.to_string()))
+                && target
+                    .leases()
+                    .iter()
+                    .all(|lease| lease.run_id() == run.id && lease.host_id() == scope.host_id())
+        };
+        if binding
+            .as_ref()
+            .is_some_and(|value| value != &(host.clone(), VmId(run.id.to_string())))
+            || target.as_ref().is_some_and(|target| !exact_target(target))
+            || receipt.as_ref().is_some_and(|receipt| {
+                !exact_target(receipt.target()) || target.as_ref() != Some(receipt.target())
+            })
+            || lock(&self.volumes.stale)
+                .iter()
+                .any(|lease| lease.run_id != run.id || lease.host_id != scope.host_id())
+        {
+            return Err(RepositoryError::InvalidData(
+                "controlled inventory has foreign associations",
+            ));
+        }
+        Ok(vec![run.id])
+    }
     async fn bind_vm_before_provision(
         &self,
         run_id: RunId,

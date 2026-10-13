@@ -4,5 +4,6 @@
 mod runtime_authority;
 
 pub use runtime_authority::{
-    PgGatewayRuntimeAuthorityIssuer, PgGatewayRuntimeSessionRepository, PgRuntimeSessionRepository,
+    LiveRunSourceContext, PgGatewayRuntimeAuthorityIssuer, PgGatewayRuntimeSessionRepository,
+    PgRuntimeSessionRepository,
 };

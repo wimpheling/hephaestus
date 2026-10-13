@@ -8,7 +8,7 @@ use crate::{
     AttemptProvenance, CommandIdentity, CommandReceipt, DeploymentAttemptId, DeploymentError,
     DeploymentId, DeploymentIntent, DeploymentLifecycle, DiagnosticCode, EffectClaim,
     EffectEvidence, InstallDeployment, InstallProgress, ReconciledOutcome, RemovalProgress,
-    RemoveDeployment, ResourceAction, ResourceEffect,
+    RemoveDeployment, ResourceAction, ResourceEffect, RetireExternalObservation,
 };
 
 /// Mutable progress, separate from the immutable resource plan.
@@ -191,6 +191,21 @@ pub trait DeploymentRepository: Send + Sync + 'static {
         claim: &EffectClaim,
         provenance: AttemptProvenance,
         outcome: ReconciledOutcome,
+    ) -> Result<ResourceProgress, DeploymentError>;
+
+    /// Retires an external read-only observation under the current removal command.
+    ///
+    /// Requires an exact active external `VerifyExternal` installation claim.
+    /// Clears its active fence without asserting a provider result or requiring
+    /// continued external access. Installation state stays unverified and removal
+    /// remains retained. Replays recheck current cleanup authority first.
+    ///
+    /// # Errors
+    /// Rejects denied cleanup, changed input, stale CAS, or any other target/action.
+    async fn retire_external_observation(
+        &self,
+        identity: &AuthenticatedIdentity,
+        retirement: &RetireExternalObservation,
     ) -> Result<ResourceProgress, DeploymentError>;
 
     /// Completes only after all resource states satisfy install or safe removal policy.

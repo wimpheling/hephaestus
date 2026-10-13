@@ -14,6 +14,7 @@ mod owned_provisioning;
 mod partial_retention;
 mod ready_retention;
 mod resources;
+mod retained_reuse;
 mod root_history;
 mod run_volumes;
 mod store;
@@ -43,6 +44,7 @@ pub use resources::{
     MAX_REGISTERED_VOLUME_CAPACITY_BYTES, MIN_LOCAL_VOLUME_CAPACITY_BYTES, ProvisioningClaim,
     VolumeInspection, VolumeProvisioningState, VolumeRegistration, VolumeResourceRepository,
 };
+pub use retained_reuse::{OwnedRetainedReuseContext, VolumeRetainedReuseRepository};
 pub use root_history::{
     OwnedVolumeRootHistory, OwnedVolumeRootHistoryConflict, VolumeRootHistoryRepository,
 };

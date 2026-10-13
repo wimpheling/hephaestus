@@ -171,12 +171,24 @@ retention, independently authorized reopening, transactional rollback/completion
 and live authorization withdrawal while preserving backing bytes and inodes.
 These checks do not launch an installed recipe.
 
-Forward migrations 0140/0141 and their finite startup/catalog checks are authored
-and reviewed, but have not passed the combined fresh-install, populated-upgrade,
-role-permission and replay gates. They cover ordinary queued Invocation
+The current forward migrations 0140/0141 pass actual fresh-install,
+populated-upgrade, role-permission and replay checks, including their finite
+19-routine startup/catalog contract. They cover ordinary queued Invocation
 cancellation and worker access to secret runtime metadata. An actual ordinary
 application test exposed missing worker permissions during secret cleanup;
 that regression still needs a passing run against the forward head.
+
+The first actual forward installation exposed a PL/pgSQL `CASE` parsing error
+in 0140. The reviewed parentheses fix passes migration parsing. The next fresh
+installation reaches startup but links a cached adapter compiled for 0139,
+while the current adapter source requires 0141. Its exact dependency fingerprint,
+library and tracked inputs identify the stale artifact. A targeted adapter
+rebuild corrects that linkage. The real fresh-0141 installation, startup and
+same-database replay now pass. The populated 0107→0141 upgrade, independent
+fresh reference, complete catalog/dependency comparisons and replay also pass.
+Both actual secret-metadata permission cases pass, including startup denial
+when the worker lacks UPDATE. A later 42-routine recovery successor is authored
+but remains unqualified; these results cover the current 19-routine version.
 
 The earlier published VM foundation passes Rust 1.88 Clippy, documentation,
 scoped formatting, and all 176 library tests. A real KVM configured-owner test
@@ -219,19 +231,134 @@ application's focused Clippy, documentation and formatting checks also pass;
 its library reports 230 passed and 15 ignored. All eleven supervisor and nine
 preparation cases execute, but URL-gated cases with absent URLs and ignored
 integration cases do not prove PostgreSQL, NATS or native application behavior.
-Mixed cancellation/removal SQL and the finite 0140/0141 migration checks are
-authored and reviewed; their coherent database and adapter integration remains
-pending. The scoped expired credential interfaces pass all 17 authorization
-tests and focused Rust checks. Their PostgreSQL and local store implementations
-and application wiring remain pending. New ordinary sessions also need timestamp
-precision repair before their immutable identity can be verified after storage.
+The combined isolated App, Run PostgreSQL, control-plane PostgreSQL and runtime
+authority PostgreSQL library checks now report 279 passed, zero failed and
+16 ignored, with strict Clippy, documentation and scoped formatting passing.
+Missing-URL early returns are excluded from integration evidence. These checks
+execute the ordinary-session precision repair and generic expired-observation
+helpers; a real producer/storage round trip remains required. Mixed
+cancellation/removal SQL and the current finite 0140/0141 migration checks pass
+their scoped database gate; complete application integration remains pending.
+The scoped expired credential interfaces pass all 17 authorization tests and
+focused Rust checks. The Git PostgreSQL, local encrypted-store and application
+cleanup successors are reviewed and applied to the validation checkout.
+After correcting compiler and lint errors, the seven-package Rust 1.88 locked
+Clippy, scoped formatting, library tests and documentation checks pass. The
+suite reports 338 passes and 16 ignored cases; 21 missing-URL early returns are
+excluded from integration evidence. All 40 new cleanup, reader and durable
+Drain cases execute, including local encrypted-store and inode checks. Actual
+credential production, PostgreSQL qualification and the complete cleanup
+workflow still require integration checks.
 
-Removal still needs an owning instance Drain completion adapter. Existing
-closure and safety observations alone do not complete a recipe resource. The
-local SQLite package specifies instance deletion and volume retention; final
-instance deletion, volume detach/retention and deployment removal must be
-implemented and verified. Retaining a closed instance does not satisfy that
-package's deletion policy.
+An audit of the authenticated project UI confirms that existing release
+publication and Run controls do not expose recipe deployment operations. A
+project-scoped deployment inspection query and page have reviewed source;
+cross-language generation, compilation and authenticated runtime checks remain.
+Recipe engine production assembly, install/resume/invoke/remove commands and
+managed readiness still require implementation and actual authenticated checks.
+
+The owning instance Drain completion adapter passes scoped Rust 1.88 Clippy,
+formatting, library tests and documentation checks. All eleven new custody and
+retry cases execute. The two-package suite reports 265 passes and 15 ignored;
+21 missing-URL returns are excluded from integration evidence. It preserves
+custody through interrupted requests and records genuine reconciliation for
+fresh requests; actual PostgreSQL/VM execution and supervisor wiring remain.
+Resuming before closure publication under a newly authorized manager also
+needs a protected native publication path; the comparison types and
+default-deny port pass scoped Rust checks and all eight new controlled cases,
+but that database path is unfinished. The terminal Detach/Delete contracts
+also pass scoped checks and all seven new controlled cases. Neither set of
+comparison types authorizes database or physical effects by itself.
+The next recovery changes distinguish the original Drain actor from the
+manager who publishes its closure and a later manager who continues cleanup.
+Their comparison types pass scoped Rust checks and all six new controlled
+cases. The four-package library run reports 353 passes and 15 ignored;
+22 missing-URL returns are excluded from database evidence. The cancellation
+and migration test binaries compile. The current 42-routine schema now passes
+the actual PostgreSQL fresh-install, startup-role and same-database replay test.
+The populated107→141 upgrade also passes against an independent fresh reference,
+including row/history preservation, exact journal, complete catalog/dependency
+comparisons, startup roles and final replay. The first real cancellation run
+exposed a fixture using the application pool where production uses the owner
+pool to consume control requests. That fixture is corrected; malformed delivery
+rejection, control completion and replay now pass. The next failure showed that
+a queued Invocation has no runtime session but cleanup always tried to revoke
+one. The production repair accepts absence only after the existing configured
+database classifier positively verifies queued cancellation and zero execution
+history; consumed or unknown history still fails. Focused Rust checks and three
+new controls pass. The real cancellation now passes authority cleanup, then
+fails in secret cleanup with a redacted persistence error. A read-only database
+probe identified the cause: the consumed-session verifier rejects the queued
+run, which has no consumed session. An additive verifier now requires the actual
+queued cancellation, prepared cleanup target, saved empty secret bindings, and
+complete absence of secret history. Its reviewed source is integrated in the
+validation checkout, with scoped formatting, strict Clippy, and 44 focused
+removal/resume tests passing. The actual fresh-0142 installation, three-role
+startup validation, and same-database replay now pass. The real cancellation
+rerun also passes, including the additive secret verifier's positive case and
+ten denial checks. That test creates actual local ext4 backing but launches no
+guest VM. The first queued-removal case fails when committing the closure
+transaction, with SQLSTATE `42501` mapped to `AuthorizationDenied`. Focused
+diagnostics confirm that the preceding qualification and write calls succeed.
+The deferred ordinary-cancellation guard rejects the application-owned closure
+update because it requires the worker role before distinguishing cancellation
+origins. The reviewed correction positively qualifies the manager's actual
+closure, current permissions, cancellation message, and timestamp-only run
+update while preserving the worker cancellation path. The corrected source passes
+scoped formatting, strict Clippy, relinking, and actual fresh-0142 installation,
+three-role startup qualification and same-database replay. The first rerun exposed
+an ambiguous `child.instance_id` reference at COMMIT inside
+`prepared_resume_inventory142`; its relation aliases collided with PL/pgSQL row
+variables. The identifier correction now passes those same static/fresh checks.
+The first queued-removal rerun then exposed a negative fixture setup error:
+changing only a configuration hash violated an existing table CHECK (`23514`).
+The corrected contradictory fixture preserves that CHECK and reaches the actual
+actor denial. Both the completed-ordinary-plus-pending-queued recovery case and
+the empty-instance/orphan case now pass, including complete rollback, history and
+backing preservation. The mixed ordinary-control case exposed a further closure
+COMMIT failure: its inventory helper required already processed ordinary
+cancellation history. The corrected manager closure checks the complete original
+queued inventory independently while preserving strict worker cancellation checks.
+Scoped formatting, strict Clippy, both integration-target builds, actual fresh-0142
+startup/replay, and all three queued-removal cases now pass. The mixed case executes
+its typed replay, late-update and identity denials. An additional pending/unknown
+Control negative has not been executed. Temporary diagnostic changes have been
+removed from production source. Populated-0142 upgrade remains unrun, and these
+fixtures launch no guest VM.
+The forward migration permits a truthful `recovery_required` receipt while
+preserving historical receipts and claims. Its fresh-schema checks pass;
+complete native recovery scenarios remain to be verified.
+The reviewed migration also covers recovery after a closure has been published:
+a newly authorized manager can qualify the original active Drain history without
+acting as the previous manager. The adapters pass scoped Rust checks; complete
+native publication and recovery checks remain pending.
+Existing closure and safety observations alone do not complete a recipe
+resource. The local SQLite package specifies instance deletion and volume
+retention. Its required order is instance Drain, Detach and Delete, followed by
+volume retention and final deployment removal. Reviewed migration 0143 adds
+the protected transition to Removed and the historical readers needed after
+deletion. Its schema/startup checks and core comparison models have reviewed
+source. The deletion-history adapters, initial closure/version preparation
+bridge, instance terminal coordinator and original owned-volume reader are now
+combined in the working tree. Scoped strict Clippy, formatting, documentation
+and all 86 selected controls pass. The first actual fresh-0143 migration exposed
+an ungrouped CASE expression in a PL/pgSQL condition. The reviewed syntax repair
+preserves its predicates. Two startup ACL expectations also omitted application
+grants already present in historical migrations; the corrected expectations
+preserve the installed grants and function bodies. Actual fresh-0143 installation,
+startup qualification and same-database replay now pass. The populated 0107→0143
+upgrade initially failed a stale type inventory count: 62 actual types versus 60
+expected. The new terminal table contributes the intended row and array types.
+After correcting that finite expectation, the complete populated 0107→0143
+upgrade now passes: independent fresh reference, full type/catalog/dependency
+and finite routine comparisons, preserved rows and history, startup roles,
+journal checks and same-database replay. No physical VM workflow is established
+by this migration test.
+The completed-removal receipt reader and retention custody owner have
+reviewed source but await combined qualification. Deployment removal orchestration
+and actual managed startup, command routing, recovery and shutdown remain in
+progress. Retaining a closed instance does not satisfy the package's deletion
+policy.
 
 Provider orchestration and ownership seals, plural runtime attachment and cleanup,
 physical revocation, authenticated project web UI commands, real SQLite

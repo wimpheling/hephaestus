@@ -205,6 +205,24 @@ pub struct EffectClaim {
     pub provenance: AttemptProvenance,
 }
 
+/// Retires a read-only external observation during an admitted removal.
+///
+/// This input conveys no authority or provider fact. Retirement never asserts
+/// verification success, resource absence, detach safety, or deletion.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RetireExternalObservation {
+    /// Current actor's admitted removal command, independent of the target actor.
+    pub command: CommandIdentity,
+    /// Exact immutable external-volume installation verification being retired.
+    pub target: EffectClaim,
+    /// Fresh actor/request/operation provenance; never a provider invocation.
+    pub provenance: AttemptProvenance,
+    /// Expected current deployment progress version.
+    pub expected_deployment_version: u64,
+    /// Expected current resource progress version.
+    pub expected_resource_version: u64,
+}
+
 /// Definite effect outcome after the exact provider identity was checked.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum EffectOutcome {

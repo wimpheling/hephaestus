@@ -13,11 +13,13 @@ use tokio_util::sync::CancellationToken;
 
 /// Running daemon handle.
 pub struct RunningHephaestus {
+    pub(super) managed_backend: Option<crate::managed_backend::NodeLease>,
     pub(super) http_addr: SocketAddr,
     pub(super) cancellation: CancellationToken,
     pub(super) tasks: Vec<JoinHandle<Result<(), String>>>,
     pub(super) pool: PgPool,
     pub(super) application_pool: PgPool,
+    pub(super) worker_pool: PgPool,
     pub(super) service_log_pool: PgPool,
     pub(super) nats_client: async_nats::Client,
     pub(super) jetstream: async_nats::jetstream::Context,
@@ -91,6 +93,14 @@ impl RunningHephaestus {
     ///
     /// Returns the first task or resource-shutdown failure.
     pub async fn shutdown(mut self) -> Result<(), AppError> {
+        if let Some(managed) = &self.managed_backend {
+            // Until real reconciliation is wired, never enter scalar Cancel,
+            // task abort, NATS drain or shared pool close for a managed node.
+            managed.close();
+            return Err(AppError::Readiness(
+                "managed shutdown remains held pending qualified reconciliation".into(),
+            ));
+        }
         self.cancellation.cancel();
         for run in self
             .run_repository
@@ -137,6 +147,7 @@ impl RunningHephaestus {
         }
         self.pool.close().await;
         self.application_pool.close().await;
+        self.worker_pool.close().await;
         self.service_log_pool.close().await;
         first_error.map_or(Ok(()), Err)
     }

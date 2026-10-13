@@ -1,0 +1,4424 @@
+{
+  "source_sha256": {
+    "0108_run_volume_leases.sql": "359f2192a87cbcab91576c260c6c043c263f0d9c43aaaefee3e4f77423e0224b",
+    "0109_run_cleanup.sql": "1783cc49e81b0ed042829df640e1f7092f5830dc77b0d2edb4693d708c73be8a",
+    "0110_legacy_scalar_compatibility.sql": "0f91300933fe4a15ba4e6fa509ec66d9a43839c3f3881094a83788961c3f15f0",
+    "0111_run_profile_lifecycle.sql": "d3232b6bf068376ca39fe4abd6de1b46941ff36d9d67edff8971a8a076f9f320",
+    "0112_legacy_vm_placement.sql": "891a8a08079bfc033d5360ca07a894619f86a6bd91ef9c3af10f72d6b34ed795",
+    "0113_external_observation_retirement.sql": "831ce0fde3f50006f41eef546513954b807c3657174827f4e3f56c774a562f1f",
+    "0114_owned_volume_registration.sql": "17d8779d5a714d3dee760ea6313f91fe5389e0db9306dc8fa215094b216f4e40",
+    "0115_owned_volume_backing.sql": "d70f9a4b4f13a311edc1e1683f7964998b83553111e8449401d59fb5edd2a2a9",
+    "0116_owned_partial_retention.sql": "b237fe5f5aadd2c1c8e66d6b0da9a38d0de3bef8cfdb999a1ef365f80040270e",
+    "0117_deployment_execution_preparation.sql": "168064715f3a40297acd324b322a937f1acad2834345e4906ddd20b48afcda25",
+    "0118_owned_first_ready_lease_exclusion.sql": "1ea5bffa139bdcf2d906b730ad02177b530806f34974e106d0e779e0cc687088",
+    "0119_qualified_instance_activation.sql": "6c70cc50ba4894845eb1b69d540aef91826e2541c76f9badce1b3c8304d3bd61",
+    "0120_qualified_instance_invocation.sql": "57a1e5cdb68b7dfae3b3e7e09bea48ea894ec26dcfc41aa40b3c40648b0a9193",
+    "0121_owned_ready_retention.sql": "e15aff0c14d9ae5e2e585f4b781acc7c0259224ebbc6f6332c1510961aa054d9",
+    "0122_qualified_invocation_consumption.sql": "4d6fb43f06737ec28b8a078aac896387ae9462b4601d9668e8f85a7ac92b0183",
+    "0123_qualified_invocation_leases.sql": "1e8cfbdb81b9eede747442434ee96103e33ed18641d6ea1d35b50f9fd5eaf0f4",
+    "0124_qualified_invocation_authority.sql": "0d116862074139fd0de88518e4952bb0a70fb5167259c55625e0c09752555bc9",
+    "0125_qualified_invocation_empty_secret.sql": "ead5c2814cddf4c59045e1223b20da1e35bc41396231e13c4518deab6fd9acf3",
+    "0126_qualified_invocation_pre_acquisition.sql": "3f38c3ce7e384d42c04c2ce922820025d02025283ce579900a64b748d928743b",
+    "0127_prepared_instance_safety.sql": "9d3012d3c716743f43d9e8ed98c68d6f67ecda89ecb61a7869bea7cd9b10abb9",
+    "0128_prepared_instance_closure.sql": "19e731c25e71b148c487f01222948d41c9cc57b60e3f93baaca7265ae80d553e",
+    "0129_qualified_remove_resume.sql": "a262644ec57b5096cd02fd720d96f85fa74a3f7ccae2393cf062a2b1e843f6c9",
+    "0130_existing_instance_closure.sql": "991a24e80494f9aaac0a70fdfee68174657808001e478d69ee2131bc89e0e71c",
+    "0131_run_cleanup_wake_qualification.sql": "fb699a684129798319b333c1ec0a31a100f395818edb2cf9055a5cf73b2f375f",
+    "0132_qualified_invocation_remove_resume.sql": "0fea3368d4fe7d7312b7886d7de45ba5bc4be23a80021dad0ab6a518cc694671",
+    "0133_queued_invocation_cleanup.sql": "14e83b1746041802a923eb9698b036f0dcf5439db150f405e530695c0152eb8d",
+    "0134_queued_invocation_cancel_delivery.sql": "931f675e922b14b796282733c316adc11e9dbb5332a144413843cd49c5773077",
+    "0135_queued_invocation_cleanup_context.sql": "c2b827cc14e776b07dbec223f4c8ccc8eaa610ec12176c417336724b37c0fdb3",
+    "0136_queued_invocation_cleanup_transaction.sql": "ff4d9809d0915e036e4043eb639da06e7608060e3a3776d8ab49662b6a573db5",
+    "0137_qualified_invocation_terminal_success.sql": "b4a2ea18e5d3df68cb63a16a5e8aca964480c98a9d39680da477271b7306ef8e",
+    "0138_private_recipe_trigger_helpers.sql": "cc50a054a89179d730d5e8d53f78498abbb73d6575294d3789dff6c090dbde9d",
+    "0139_retained_owned_reuse_context.sql": "d4ebcbbe8a7c6cdef4e2f6ee41af04d5bef122aff0f634b934fd52ce3611a3a3",
+    "0140_ordinary_queued_invocation_cancel.sql": "3e4b7736b95abfeca59a3396edaf31cc003e704a2ebdb9e964d704987aca0244",
+    "0141_worker_secret_runtime_mount_metadata.sql": "4b34e83ddb3b972103f49fcdb138c13e69b05ab6385f8c91b4b679b532fce77c",
+    "0142_qualified_preclosure_drain_resume.sql": "f27bb76d051b33aecf906a9ad5d01b5f02ae9e03b960ec29b5cf79fa25fd5407",
+    "0143_prepared_instance_terminal.sql": "3ac73caf3e624b4fb0ba1d024e977db2e9be6a312ca6d4d2c34eec898669ea3b"
+  },
+  "native_sha256": {
+    "pgcrypto.so": "a89f9cad3ce2d98336259ef99266271de0f9c00530bbb1e96ed1f7e659c398e4",
+    "pgcrypto--1.0--1.1.sql": "530abf4709c3010f600312b513cafd2c169b8d8810b59f54ad4da5e576689ec3",
+    "pgcrypto--1.1--1.2.sql": "d33b87d052730a764df864d59f16f09686c0f6c8883184d60784c02702ab1af3",
+    "pgcrypto--1.2--1.3.sql": "dfc2f4de2ca4eef79c4b24e25562b8d1948f5a6571a916b6b4c81b07d14dfbc6",
+    "pgcrypto--1.3.sql": "84f8eee1d6b03982fac596988b46bf89d5d5d8790d3133783eedad38bc7d8d38",
+    "pgcrypto.control": "2a6c81eef34ae6cee9ff5b557f3b6285db7fdd7bc76ee57798e82c945c61c939"
+  },
+  "declared": [
+    {
+      "name": "acknowledge_invocation119_session",
+      "input_types": [
+        "pg_catalog.uuid",
+        "pg_catalog.bytea",
+        "pg_catalog.int8",
+        "pg_catalog.timestamptz"
+      ],
+      "body_sha256": "44190d5c3630ae1f9300c139e7fb4f1d661102e518c79cdad60ca67114ab2d60",
+      "replaced": false,
+      "config_extended": false,
+      "public_revoked": false,
+      "hardened": false
+    },
+    {
+      "name": "acquire_qualified_invocation119",
+      "input_types": [
+        "pg_catalog.uuid",
+        "pg_catalog.bytea",
+        "pg_catalog.jsonb",
+        "pg_catalog.text",
+        "pg_catalog.timestamptz",
+        "pg_catalog.timestamptz"
+      ],
+      "body_sha256": "ac8534c9acae9a47d314fb76d3965e937f87bc4b4238e568f827914e9b6bee2c",
+      "replaced": false,
+      "config_extended": false,
+      "public_revoked": false,
+      "hardened": false
+    },
+    {
+      "name": "advance_owned_observation_head",
+      "input_types": [],
+      "body_sha256": "b378d955165f1516aea628eb3c7d86a264e23230e5baee43cdfa3d37ebb0b433",
+      "replaced": false,
+      "config_extended": false,
+      "public_revoked": true,
+      "hardened": true
+    },
+    {
+      "name": "apply_ready_retention_closure",
+      "input_types": [],
+      "body_sha256": "f01eae0fecb5435c231440fb5bdf57884a3715d17e06fa3124cedbc6d53ad7d7",
+      "replaced": false,
+      "config_extended": false,
+      "public_revoked": false,
+      "hardened": false
+    },
+    {
+      "name": "apply_recipe_ready_reopening",
+      "input_types": [],
+      "body_sha256": "fd4ae4d48f86edc0814a756a5d467c4d3a86fdb7f1e5ea96960d586303a82683",
+      "replaced": false,
+      "config_extended": false,
+      "public_revoked": false,
+      "hardened": false
+    },
+    {
+      "name": "assert_invocation119_queued_cleanup_transition",
+      "input_types": [
+        "pg_catalog.uuid",
+        "pg_catalog.text"
+      ],
+      "body_sha256": "04013516dd059879cfe8fd72278ad3c7748d1b837c8579c85d28f76809774b14",
+      "replaced": false,
+      "config_extended": false,
+      "public_revoked": false,
+      "hardened": false
+    },
+    {
+      "name": "assert_invocation119_terminal_row",
+      "input_types": [
+        "public.runs",
+        "public.runs"
+      ],
+      "body_sha256": "b6f7c432f5c7e5fbd86547453e107742b8e8077b3fd0b8c93fd05fa5e9e340e2",
+      "replaced": false,
+      "config_extended": false,
+      "public_revoked": false,
+      "hardened": false
+    },
+    {
+      "name": "assert_invocation119_transition",
+      "input_types": [
+        "pg_catalog.uuid",
+        "pg_catalog.text"
+      ],
+      "body_sha256": "e74a92d4823c04b70f2c6e3c47b6d4603a0de045fad9120dc6192c7b596dec5c",
+      "replaced": false,
+      "config_extended": false,
+      "public_revoked": false,
+      "hardened": false
+    },
+    {
+      "name": "assert_legacy_scalar_current_fence",
+      "input_types": [
+        "public.agent_instance_volume_leases"
+      ],
+      "body_sha256": "d1e1e308a393c6ad99357fe23611defe4e53f3620bfdef5265a3ce6448f98306",
+      "replaced": false,
+      "config_extended": false,
+      "public_revoked": false,
+      "hardened": false
+    },
+    {
+      "name": "assert_owned_ready_retention",
+      "input_types": [
+        "pg_catalog.uuid",
+        "pg_catalog.uuid",
+        "pg_catalog.int8",
+        "pg_catalog.bytea",
+        "pg_catalog.text",
+        "pg_catalog.text"
+      ],
+      "body_sha256": "40456a002c4adce617d4caab1f6caa52349b080b5ce96a20a39b6fc856e0fde1",
+      "replaced": false,
+      "config_extended": false,
+      "public_revoked": false,
+      "hardened": false
+    },
+    {
+      "name": "assert_profiled_run_bind",
+      "input_types": [
+        "pg_catalog.uuid",
+        "pg_catalog.uuid",
+        "pg_catalog.uuid",
+        "pg_catalog.int8",
+        "pg_catalog.text"
+      ],
+      "body_sha256": "e9f81bfdca4fddefd3197dcad00950bb5db4e4b3379ad875697aee4d747e4d33",
+      "replaced": false,
+      "config_extended": false,
+      "public_revoked": false,
+      "hardened": false
+    },
+    {
+      "name": "assert_profiled_run_transition",
+      "input_types": [
+        "pg_catalog.uuid",
+        "pg_catalog.text"
+      ],
+      "body_sha256": "2d431bea62fdea9cd100143500aae5d2a3d25c8bd53c39076092fcc07fa2b69d",
+      "replaced": false,
+      "config_extended": false,
+      "public_revoked": false,
+      "hardened": false
+    },
+    {
+      "name": "assert_ready_retention_transition",
+      "input_types": [
+        "public.recipe_execution_transitions"
+      ],
+      "body_sha256": "96e3fd670b12fdca046cfc024363c5971bfa266bf917a4380697f71655695ede",
+      "replaced": false,
+      "config_extended": false,
+      "public_revoked": false,
+      "hardened": false
+    },
+    {
+      "name": "assert_recipe_owned_first_ready",
+      "input_types": [
+        "pg_catalog.uuid",
+        "pg_catalog.uuid",
+        "pg_catalog.int8",
+        "pg_catalog.bytea"
+      ],
+      "body_sha256": "590a7c839d1330cd082adbf475988806b47dd846cb211229da8106cfef03cf65",
+      "replaced": false,
+      "config_extended": false,
+      "public_revoked": false,
+      "hardened": false
+    },
+    {
+      "name": "assert_retained_owned_reuse_context",
+      "input_types": [
+        "pg_catalog.uuid",
+        "pg_catalog.uuid",
+        "pg_catalog.int8",
+        "pg_catalog.bytea",
+        "pg_catalog.text",
+        "pg_catalog.text",
+        "pg_catalog.uuid"
+      ],
+      "body_sha256": "96aa39b91cd3f2ebd560f81856491f595876524664a5045273a16efe38209eff",
+      "replaced": false,
+      "config_extended": false,
+      "public_revoked": false,
+      "hardened": true
+    },
+    {
+      "name": "authenticate_runtime_authority",
+      "input_types": [
+        "pg_catalog.bytea"
+      ],
+      "body_sha256": "401356973f7b7de470342824b38bdb6a6b22e32023b9ed4a4f954a68abda3dd1",
+      "replaced": true,
+      "config_extended": false,
+      "public_revoked": false,
+      "hardened": false
+    },
+    {
+      "name": "close_legacy_vm_acquisition",
+      "input_types": [
+        "pg_catalog.uuid",
+        "pg_catalog.uuid",
+        "pg_catalog.text"
+      ],
+      "body_sha256": "aea6ec75b830ffc4459be6f22e9e96c9137a570ca5c27ce79ebcc562a2c6cee9",
+      "replaced": false,
+      "config_extended": false,
+      "public_revoked": false,
+      "hardened": false
+    },
+    {
+      "name": "consume_legacy_vm_placement",
+      "input_types": [
+        "pg_catalog.uuid",
+        "pg_catalog.uuid",
+        "pg_catalog.uuid",
+        "pg_catalog.text",
+        "pg_catalog.text"
+      ],
+      "body_sha256": "b5b936024835fe12caaa79050021da09f6996d3d992556a3ed3a970f8dc2086f",
+      "replaced": false,
+      "config_extended": false,
+      "public_revoked": false,
+      "hardened": false
+    },
+    {
+      "name": "consume_qualified_invocation117",
+      "input_types": [
+        "pg_catalog.uuid",
+        "pg_catalog.jsonb",
+        "pg_catalog.bytea",
+        "pg_catalog.text",
+        "pg_catalog.text",
+        "pg_catalog.text"
+      ],
+      "body_sha256": "9803df00e93b7c1ef3daad4f1c5ffe68ffd418e7f9a572ed6280ba2eede770b1",
+      "replaced": false,
+      "config_extended": false,
+      "public_revoked": false,
+      "hardened": false
+    },
+    {
+      "name": "consume_qualified_invocation119",
+      "input_types": [
+        "pg_catalog.uuid",
+        "pg_catalog.jsonb",
+        "pg_catalog.bytea",
+        "pg_catalog.text",
+        "pg_catalog.text",
+        "pg_catalog.text"
+      ],
+      "body_sha256": "79b6c82ed8fa80536986d86f696f44946472632335a6a5cea795e8035d67f103",
+      "replaced": false,
+      "config_extended": false,
+      "public_revoked": false,
+      "hardened": false
+    },
+    {
+      "name": "deny_invocation119_git_copy",
+      "input_types": [],
+      "body_sha256": "e33318edf745d04a7fa69dbb3a7ef67a1ba84feea3a7631685d8bf63e4fc3d88",
+      "replaced": false,
+      "config_extended": false,
+      "public_revoked": false,
+      "hardened": false
+    },
+    {
+      "name": "discover_ordinary_queued_cancel_context140",
+      "input_types": [
+        "pg_catalog.uuid",
+        "pg_catalog.text",
+        "pg_catalog.text",
+        "pg_catalog.bytea"
+      ],
+      "body_sha256": "52b0ce35aa04e40699d11fe3da953d5076c90f11bd201ecb84e870ea2156c2c1",
+      "replaced": false,
+      "config_extended": false,
+      "public_revoked": false,
+      "hardened": false
+    },
+    {
+      "name": "discover_queued_run_cleanup_context119",
+      "input_types": [
+        "pg_catalog.uuid",
+        "pg_catalog.text",
+        "pg_catalog.text",
+        "pg_catalog.bytea"
+      ],
+      "body_sha256": "0320c31605d2a31a120a157dcc6ee6b643a2d56653e1172866d856bc95c308b5",
+      "replaced": false,
+      "config_extended": false,
+      "public_revoked": false,
+      "hardened": false
+    },
+    {
+      "name": "enforce_canonical_lease_release",
+      "input_types": [],
+      "body_sha256": "013babeaa882f4123745a5f6a324379cf04ea69dee20ea433fabf1b997abd2df",
+      "replaced": false,
+      "config_extended": false,
+      "public_revoked": false,
+      "hardened": false
+    },
+    {
+      "name": "enforce_canonical_run_cleanup",
+      "input_types": [],
+      "body_sha256": "3d4b701b322cc6087af8758a738c360598fb2348270127ea97a0ea11dab4199d",
+      "replaced": false,
+      "config_extended": false,
+      "public_revoked": false,
+      "hardened": false
+    },
+    {
+      "name": "enforce_exact_run_volume_lease",
+      "input_types": [],
+      "body_sha256": "c68df460950f7c69bc9696ea44c9271a6ad33028482377e5e854f1689c86c9da",
+      "replaced": false,
+      "config_extended": false,
+      "public_revoked": false,
+      "hardened": false
+    },
+    {
+      "name": "enforce_instance_run_progress",
+      "input_types": [],
+      "body_sha256": "e8f9b6a96d54f60b21e511e03ba6e1083816b6470777ef4a803aa1cb20de5700",
+      "replaced": true,
+      "config_extended": false,
+      "public_revoked": false,
+      "hardened": false
+    },
+    {
+      "name": "enforce_instance_volume_lifecycle",
+      "input_types": [],
+      "body_sha256": "3946b582342e3eda6a59d83684a4817f51e601d0827ca658a9c955e19fb46d4d",
+      "replaced": true,
+      "config_extended": true,
+      "public_revoked": false,
+      "hardened": false
+    },
+    {
+      "name": "enforce_instance_work_admission",
+      "input_types": [],
+      "body_sha256": "7b8f40788997c66eea092f765d957e4035c45ea6067fe545d7d80375cd1f7b62",
+      "replaced": true,
+      "config_extended": true,
+      "public_revoked": false,
+      "hardened": false
+    },
+    {
+      "name": "enforce_legacy_vm_placement",
+      "input_types": [],
+      "body_sha256": "1855e5b2895fa06057d6fb6ede34ca565aebf6ee79004038f1b333963b8cd12d",
+      "replaced": false,
+      "config_extended": false,
+      "public_revoked": false,
+      "hardened": false
+    },
+    {
+      "name": "enforce_private_volume_intent",
+      "input_types": [],
+      "body_sha256": "db55ac170d0cad2776a7a848341fa0d25de4a7f4593493e0fbbbec546d97c287",
+      "replaced": true,
+      "config_extended": false,
+      "public_revoked": false,
+      "hardened": false
+    },
+    {
+      "name": "enforce_run_cleanup_completion",
+      "input_types": [],
+      "body_sha256": "5e0e0d73d18662db2a5e13280f07c8f133d83d064045b3c7bc140860cc0376dd",
+      "replaced": false,
+      "config_extended": false,
+      "public_revoked": false,
+      "hardened": false
+    },
+    {
+      "name": "enforce_run_cleanup_receipt",
+      "input_types": [],
+      "body_sha256": "6c05e9d5e80910500cc27e3a3abc5c0a21b8355350aa58455d52866476b78f11",
+      "replaced": false,
+      "config_extended": false,
+      "public_revoked": false,
+      "hardened": false
+    },
+    {
+      "name": "enforce_run_cleanup_target",
+      "input_types": [],
+      "body_sha256": "c5a3f45fa865d6f686b9bf46dedcb8a783623013b2ffd1eb620b069e1cbb74bf",
+      "replaced": false,
+      "config_extended": false,
+      "public_revoked": false,
+      "hardened": false
+    },
+    {
+      "name": "enforce_run_cleanup_target_lease",
+      "input_types": [],
+      "body_sha256": "7f1deb8afaf8e8e5cb0a8d50a8816ff650adb7c613f92f21efdc7b4d49c5cfea",
+      "replaced": false,
+      "config_extended": false,
+      "public_revoked": false,
+      "hardened": false
+    },
+    {
+      "name": "enforce_run_execution_profile",
+      "input_types": [],
+      "body_sha256": "de750125efe9b26bdee7b0eb237f9246f9121887f443bc5597479f6597514d6c",
+      "replaced": false,
+      "config_extended": false,
+      "public_revoked": false,
+      "hardened": false
+    },
+    {
+      "name": "enforce_run_vm_io_admission",
+      "input_types": [],
+      "body_sha256": "7f01d4d904b9ab97658bf2bd94246d6fede17d9fa6c6fbabcd4d99ce0e7aa084",
+      "replaced": false,
+      "config_extended": false,
+      "public_revoked": false,
+      "hardened": false
+    },
+    {
+      "name": "enforce_run_vm_owner_scope",
+      "input_types": [],
+      "body_sha256": "48415123c723c35b7e8e2f4dbd025f57467a404a77d74c00d8120a3c57d99bf1",
+      "replaced": false,
+      "config_extended": false,
+      "public_revoked": false,
+      "hardened": false
+    },
+    {
+      "name": "enforce_run_vm_plan_admission",
+      "input_types": [],
+      "body_sha256": "324b948240d8751d6b0a04e08daed982d3b5f8c66e8b19520015254192745e23",
+      "replaced": false,
+      "config_extended": false,
+      "public_revoked": false,
+      "hardened": false
+    },
+    {
+      "name": "enforce_run_volume_acquisition_closure",
+      "input_types": [],
+      "body_sha256": "384da8049c8f8ae0014019718dbcf1745d69c1ed4cc89a3061d374d975a37c99",
+      "replaced": false,
+      "config_extended": false,
+      "public_revoked": false,
+      "hardened": false
+    },
+    {
+      "name": "find_invocation119_session",
+      "input_types": [
+        "pg_catalog.uuid",
+        "pg_catalog.bytea"
+      ],
+      "body_sha256": "1f9492e54f95a901a4aca2506d1dceacbc851d834563b493491dde72417f8db0",
+      "replaced": false,
+      "config_extended": false,
+      "public_revoked": false,
+      "hardened": false
+    },
+    {
+      "name": "guard_closed_ready_birth_progress",
+      "input_types": [],
+      "body_sha256": "3b31d6cef3aa15ace36384eb237fdda56f3386eef16de7c37b93a07eb83dd86e",
+      "replaced": false,
+      "config_extended": false,
+      "public_revoked": false,
+      "hardened": false
+    },
+    {
+      "name": "guard_invocation119_authority_birth",
+      "input_types": [],
+      "body_sha256": "d1bc459c5b28b3f88275fd7bb7d86ac62af08d6635c85bb1a7882b4800078217",
+      "replaced": false,
+      "config_extended": false,
+      "public_revoked": false,
+      "hardened": false
+    },
+    {
+      "name": "guard_invocation119_session_update",
+      "input_types": [],
+      "body_sha256": "beee6175ef3d4a862cb1b2e2df145f68645109d6dcf541bdc7ea252a52ad5507",
+      "replaced": false,
+      "config_extended": false,
+      "public_revoked": false,
+      "hardened": false
+    },
+    {
+      "name": "guard_invocation119_snapshot",
+      "input_types": [],
+      "body_sha256": "c6b41a89e6de6a0ac9ce0e92914650b82fb2324985f9b10e749746cdc79ea0cd",
+      "replaced": false,
+      "config_extended": false,
+      "public_revoked": false,
+      "hardened": false
+    },
+    {
+      "name": "guard_invocation119_terminal_cancel_inbox",
+      "input_types": [],
+      "body_sha256": "cd99f3b8f7c3e9973987301c94a6217f1471b737a1a3ac13305144376cfc0bca",
+      "replaced": false,
+      "config_extended": false,
+      "public_revoked": false,
+      "hardened": false
+    },
+    {
+      "name": "guard_invocation119_terminal_graph",
+      "input_types": [],
+      "body_sha256": "46aa47f4d190fd2176f5ee27a5331e8f97b7ba90ab42a98d4adb7bfd753d09b0",
+      "replaced": false,
+      "config_extended": false,
+      "public_revoked": false,
+      "hardened": false
+    },
+    {
+      "name": "guard_invocation119_terminal_marker",
+      "input_types": [],
+      "body_sha256": "83a27bec657ea32112c32bb09bb35e5ec40e4235e51f9687e876eeb068c5ee2c",
+      "replaced": false,
+      "config_extended": false,
+      "public_revoked": false,
+      "hardened": false
+    },
+    {
+      "name": "guard_invocation119_terminal_result",
+      "input_types": [],
+      "body_sha256": "1172cea34a2a0f65c1cc801f3799252f822ad2e5ec829003609154aced2ca21b",
+      "replaced": false,
+      "config_extended": false,
+      "public_revoked": false,
+      "hardened": false
+    },
+    {
+      "name": "guard_legacy_placement_lease",
+      "input_types": [],
+      "body_sha256": "75b08871303c9a99f95b7e7618074ea214747751c161b332ed056796e44c8415",
+      "replaced": false,
+      "config_extended": false,
+      "public_revoked": false,
+      "hardened": false
+    },
+    {
+      "name": "guard_legacy_scalar_lease_progress",
+      "input_types": [],
+      "body_sha256": "c27b1098d9f243be1e5d6a4f56736ae0cb5607b8df6b6ee400c98178421b786f",
+      "replaced": false,
+      "config_extended": false,
+      "public_revoked": false,
+      "hardened": false
+    },
+    {
+      "name": "guard_legacy_scalar_run_binding",
+      "input_types": [],
+      "body_sha256": "44114596985d02a0a29d61b4d1c64ea3ac7ae329c05e03c559104044c3f756f2",
+      "replaced": false,
+      "config_extended": false,
+      "public_revoked": false,
+      "hardened": false
+    },
+    {
+      "name": "guard_legacy_vm_placement_run",
+      "input_types": [],
+      "body_sha256": "19c39e10a8ccb4aefd79ec085b29ffe907239a5d9883f0e85de41a6b5928e460",
+      "replaced": false,
+      "config_extended": false,
+      "public_revoked": false,
+      "hardened": false
+    },
+    {
+      "name": "guard_owned_backing_purpose",
+      "input_types": [],
+      "body_sha256": "2a9611e7dcb549d4ae498103d2e7d9e2bc822c90880d65c4138648df366f88b3",
+      "replaced": false,
+      "config_extended": false,
+      "public_revoked": false,
+      "hardened": false
+    },
+    {
+      "name": "guard_owned_observation",
+      "input_types": [],
+      "body_sha256": "5fe0d43cd46eaf62af54a30d3db50d665fa3c6009239a58ae97891c59e3c770f",
+      "replaced": false,
+      "config_extended": false,
+      "public_revoked": false,
+      "hardened": false
+    },
+    {
+      "name": "guard_owned_observation_head",
+      "input_types": [],
+      "body_sha256": "42cc597cb8f50f679f12ca9f2766878199aebd09c416f2d992e7ffd1be462cca",
+      "replaced": false,
+      "config_extended": false,
+      "public_revoked": true,
+      "hardened": true
+    },
+    {
+      "name": "guard_owned_operation",
+      "input_types": [],
+      "body_sha256": "bb8fbf8501b4dd5178e1b67c2eff944545619ba75cfcb514f2e97e70d907e220",
+      "replaced": false,
+      "config_extended": false,
+      "public_revoked": false,
+      "hardened": false
+    },
+    {
+      "name": "guard_owned_partial_receipt",
+      "input_types": [],
+      "body_sha256": "c6f1a3e5d2151a5ed72dfef3091b8b29a30004b055ddd4facd4d838ea1cf3634",
+      "replaced": false,
+      "config_extended": false,
+      "public_revoked": true,
+      "hardened": true
+    },
+    {
+      "name": "guard_owned_ready_retention_fact",
+      "input_types": [],
+      "body_sha256": "fde82c952e1b3adf77cd97e3367ca130feb4ca292f81e1048bd43b97bafcbdbd",
+      "replaced": false,
+      "config_extended": false,
+      "public_revoked": false,
+      "hardened": false
+    },
+    {
+      "name": "guard_owned_transition_proof",
+      "input_types": [],
+      "body_sha256": "f0371ffb828ff2dcbea46b850a5cb138d09a5375c61772979bcb230bff5e56f5",
+      "replaced": false,
+      "config_extended": false,
+      "public_revoked": false,
+      "hardened": false
+    },
+    {
+      "name": "guard_owned_volume_change",
+      "input_types": [],
+      "body_sha256": "9ee4b369b9e819d4ff238c586180ee877d74329f42ee7f33a8a9be46789c6efc",
+      "replaced": false,
+      "config_extended": false,
+      "public_revoked": false,
+      "hardened": false
+    },
+    {
+      "name": "guard_prepared_instance_removal_order118",
+      "input_types": [],
+      "body_sha256": "c2d700b78a3811a2c932c13e4377cb820a72e0daafd5647d98fe32134a0e81be",
+      "replaced": false,
+      "config_extended": false,
+      "public_revoked": false,
+      "hardened": false
+    },
+    {
+      "name": "guard_profiled_run_lifecycle",
+      "input_types": [],
+      "body_sha256": "e52d57d2a9b7568bc6a41db55a0faf08d434dafcd3e0576e4380e441c7c2b9ee",
+      "replaced": false,
+      "config_extended": false,
+      "public_revoked": false,
+      "hardened": false
+    },
+    {
+      "name": "guard_queued_invocation_cancel_inbox140",
+      "input_types": [],
+      "body_sha256": "01123019f2794bc2bd6667b04136c26c7a852cd0841b59a67bc3bfa931064931",
+      "replaced": false,
+      "config_extended": false,
+      "public_revoked": false,
+      "hardened": false
+    },
+    {
+      "name": "guard_ready_retention_closure",
+      "input_types": [],
+      "body_sha256": "c56e7d2fbce7b1fc79c2aed7eb383b4d6753d7c9d246ac7aacbc714cc6d6ece3",
+      "replaced": false,
+      "config_extended": false,
+      "public_revoked": false,
+      "hardened": false
+    },
+    {
+      "name": "guard_ready_retention_lease",
+      "input_types": [],
+      "body_sha256": "3087b3d4f3d7aad1951eff46d7fa0f6b6be852f94dd19462a19d66190e79e520",
+      "replaced": false,
+      "config_extended": false,
+      "public_revoked": false,
+      "hardened": false
+    },
+    {
+      "name": "guard_ready_retention_remove_admission",
+      "input_types": [],
+      "body_sha256": "5f51cd5c650090b46f7941b67cd013da4d6edc235a454fc6f970fac887d14bcc",
+      "replaced": false,
+      "config_extended": false,
+      "public_revoked": false,
+      "hardened": false
+    },
+    {
+      "name": "guard_ready_retention_volume_head",
+      "input_types": [],
+      "body_sha256": "abfea04466a60865f273cc3539d85834c6e4ee42ef0d16058c13482cef418c5e",
+      "replaced": false,
+      "config_extended": false,
+      "public_revoked": false,
+      "hardened": false
+    },
+    {
+      "name": "guard_recipe_execution_preparation",
+      "input_types": [],
+      "body_sha256": "9a678627b4afcae97feb7326eb6f2720f79b8e451109afc5888cdd29b59730fc",
+      "replaced": false,
+      "config_extended": false,
+      "public_revoked": false,
+      "hardened": false
+    },
+    {
+      "name": "guard_recipe_instance_birth",
+      "input_types": [],
+      "body_sha256": "61557948e255499eedcc16a10b8c226241a53bcd8b09166c81abc0d687b9cf5c",
+      "replaced": false,
+      "config_extended": false,
+      "public_revoked": false,
+      "hardened": false
+    },
+    {
+      "name": "guard_recipe_instance_command",
+      "input_types": [],
+      "body_sha256": "40b9ab297c7204fb2b6c49c10e4ff41efdfb0f903d9b3fe513ad0d7c137891df",
+      "replaced": false,
+      "config_extended": false,
+      "public_revoked": false,
+      "hardened": false
+    },
+    {
+      "name": "guard_recipe_owned_first_birth_lease",
+      "input_types": [],
+      "body_sha256": "12c7be23a12e073b42281dd873885cbda45271b447fa8ad2f1bf19351773dc88",
+      "replaced": false,
+      "config_extended": false,
+      "public_revoked": false,
+      "hardened": false
+    },
+    {
+      "name": "guard_recipe_owned_volume_preparation",
+      "input_types": [],
+      "body_sha256": "84f1f9a5e0323abe7544af976abc3e7ad98aa7f8529be4566e3616150efc7e43",
+      "replaced": false,
+      "config_extended": false,
+      "public_revoked": true,
+      "hardened": true
+    },
+    {
+      "name": "guard_recipe_prepared_import",
+      "input_types": [],
+      "body_sha256": "815d853aaa9bb8414a434ffb5d122a03efa41cfdf6756d44cb376eac6658359d",
+      "replaced": false,
+      "config_extended": false,
+      "public_revoked": false,
+      "hardened": false
+    },
+    {
+      "name": "guard_recipe_ready_reopening",
+      "input_types": [],
+      "body_sha256": "310f0f77250afb2cdcb2c2d0669d02902f0de0aefeed20758b957c6991bb8108",
+      "replaced": false,
+      "config_extended": false,
+      "public_revoked": false,
+      "hardened": false
+    },
+    {
+      "name": "guard_recipe_ready_retention_link",
+      "input_types": [],
+      "body_sha256": "6d70607b1395637e38d99c5122141a84da83708e65909895a44a55290e3a430d",
+      "replaced": false,
+      "config_extended": false,
+      "public_revoked": false,
+      "hardened": false
+    },
+    {
+      "name": "guard_remove_resume_admission118",
+      "input_types": [],
+      "body_sha256": "e03c8b1a21d792b93fde22cb96e929bfcb9189c9ffb244fa3b6d7fa621ec8d45",
+      "replaced": false,
+      "config_extended": false,
+      "public_revoked": false,
+      "hardened": false
+    },
+    {
+      "name": "guard_scalar_or_canonical_ready_reset",
+      "input_types": [],
+      "body_sha256": "18303e7d35848a9f50738807febd105beae38bc11c052ac5500dcb8f67e298ff",
+      "replaced": false,
+      "config_extended": false,
+      "public_revoked": false,
+      "hardened": false
+    },
+    {
+      "name": "guard_volume_creation_birth",
+      "input_types": [],
+      "body_sha256": "09818369d4a1a153874234cb169849d1cbcb3a5d3a5cc588dd31f89ac7758308",
+      "replaced": false,
+      "config_extended": false,
+      "public_revoked": false,
+      "hardened": false
+    },
+    {
+      "name": "guard_volume_creation_seal",
+      "input_types": [],
+      "body_sha256": "08fb11bbcae6f22b857bb04fa352a70efcee0602238af274866d151a4e65eec1",
+      "replaced": false,
+      "config_extended": false,
+      "public_revoked": false,
+      "hardened": false
+    },
+    {
+      "name": "inspect_prepared_instance_safety118",
+      "input_types": [
+        "pg_catalog.uuid",
+        "pg_catalog.uuid",
+        "pg_catalog.jsonb",
+        "pg_catalog.jsonb",
+        "pg_catalog.text",
+        "pg_catalog.text"
+      ],
+      "body_sha256": "e321abc614450ac11e2bccd18222f940c172a90e8aef2c50a7101bfc065efc81",
+      "replaced": false,
+      "config_extended": false,
+      "public_revoked": false,
+      "hardened": false
+    },
+    {
+      "name": "inspect_qualified_invocation117",
+      "input_types": [
+        "pg_catalog.uuid"
+      ],
+      "body_sha256": "28b3b28ba62078f4e81464bf0e7e5c494c59bcefe84d7cc18eba2a9ea428335f",
+      "replaced": false,
+      "config_extended": false,
+      "public_revoked": false,
+      "hardened": false
+    },
+    {
+      "name": "invocation117_consumption_matches",
+      "input_types": [
+        "pg_catalog.uuid"
+      ],
+      "body_sha256": "b4e66ea3cad3d66091e1ff657cb6bbea1c9c08d80cffa9c5a9f3e1b2e0b78656",
+      "replaced": false,
+      "config_extended": false,
+      "public_revoked": false,
+      "hardened": false
+    },
+    {
+      "name": "invocation117_current_eligible",
+      "input_types": [
+        "pg_catalog.uuid",
+        "pg_catalog.jsonb",
+        "pg_catalog.bytea"
+      ],
+      "body_sha256": "12a3192599e03710701873477a2f263d8554546f689bb1b2cc8b3f05e8c25262",
+      "replaced": false,
+      "config_extended": false,
+      "public_revoked": false,
+      "hardened": false
+    },
+    {
+      "name": "invocation117_reservation_context",
+      "input_types": [
+        "pg_catalog.uuid"
+      ],
+      "body_sha256": "aa653bb883ee8a62c1df39e84925139279d67c1b011cf589c1176e48b36d8251",
+      "replaced": false,
+      "config_extended": false,
+      "public_revoked": false,
+      "hardened": false
+    },
+    {
+      "name": "invocation119_acknowledged_set",
+      "input_types": [
+        "pg_catalog.uuid"
+      ],
+      "body_sha256": "da0ef4d3592dc045f9747e94d7b78e420ee91cd747ae0b253c70f5f6a04c3121",
+      "replaced": false,
+      "config_extended": false,
+      "public_revoked": false,
+      "hardened": false
+    },
+    {
+      "name": "invocation119_authority_eligible",
+      "input_types": [
+        "pg_catalog.uuid",
+        "pg_catalog.bytea",
+        "pg_catalog.bool"
+      ],
+      "body_sha256": "596047498222cfb553e59fa8205d4566be5209828e310729c9ebfabcfdaefc9c",
+      "replaced": false,
+      "config_extended": false,
+      "public_revoked": false,
+      "hardened": false
+    },
+    {
+      "name": "invocation119_binding_hash_matches",
+      "input_types": [
+        "public.agent_capability_bindings"
+      ],
+      "body_sha256": "103d938040afc6f1a8c3d02eedfbcc3a8ecbe1889fed69e04ef7a79ef31b326f",
+      "replaced": false,
+      "config_extended": false,
+      "public_revoked": false,
+      "hardened": false
+    },
+    {
+      "name": "invocation119_bindings_live",
+      "input_types": [
+        "pg_catalog.uuid",
+        "pg_catalog.uuid",
+        "pg_catalog.uuid",
+        "pg_catalog.jsonb"
+      ],
+      "body_sha256": "090837871b80be3e8fbbb2824d5806accd115c0207ea939f769d1f50c94158ec",
+      "replaced": false,
+      "config_extended": false,
+      "public_revoked": false,
+      "hardened": false
+    },
+    {
+      "name": "invocation119_cancel_closure",
+      "input_types": [
+        "pg_catalog.uuid",
+        "pg_catalog.uuid",
+        "pg_catalog.jsonb",
+        "pg_catalog.jsonb"
+      ],
+      "body_sha256": "28ad6d8c56559bc1139bdb0eed16bfe4cf668ed3e801bad11e4468abf3bdc8f9",
+      "replaced": false,
+      "config_extended": false,
+      "public_revoked": false,
+      "hardened": false
+    },
+    {
+      "name": "invocation119_cancel_first",
+      "input_types": [
+        "pg_catalog.uuid",
+        "pg_catalog.uuid",
+        "pg_catalog.jsonb",
+        "pg_catalog.jsonb",
+        "pg_catalog.text",
+        "pg_catalog.text",
+        "pg_catalog.bytea"
+      ],
+      "body_sha256": "69950ec688957e7f0ec99fe43c5a7e5328c3c4269faf1c82c15bb49eb71081c9",
+      "replaced": false,
+      "config_extended": false,
+      "public_revoked": false,
+      "hardened": false
+    },
+    {
+      "name": "invocation119_cancel_original",
+      "input_types": [
+        "pg_catalog.uuid",
+        "pg_catalog.jsonb"
+      ],
+      "body_sha256": "4df251c8aac88f12f7017d22e2379b3e5a46ddd5f389d0c73f8d5bd100afe0ba",
+      "replaced": false,
+      "config_extended": false,
+      "public_revoked": false,
+      "hardened": false
+    },
+    {
+      "name": "invocation119_cancel_qualify",
+      "input_types": [
+        "pg_catalog.uuid",
+        "pg_catalog.jsonb",
+        "pg_catalog.text",
+        "pg_catalog.text",
+        "pg_catalog.bytea"
+      ],
+      "body_sha256": "c1e445c86b4a1a0d0d0d9d707b0590baf1af3f800455c6e7661883753c7b641e",
+      "replaced": false,
+      "config_extended": false,
+      "public_revoked": false,
+      "hardened": false
+    },
+    {
+      "name": "invocation119_capabilities_live",
+      "input_types": [
+        "pg_catalog.uuid"
+      ],
+      "body_sha256": "c98d1664dda8bade7cb08727ebe8c0f68adf0dc52efc6777201ab0c0add90f2b",
+      "replaced": false,
+      "config_extended": false,
+      "public_revoked": false,
+      "hardened": false
+    },
+    {
+      "name": "invocation119_cleanup_only_matches",
+      "input_types": [
+        "pg_catalog.uuid",
+        "pg_catalog.uuid",
+        "pg_catalog.jsonb",
+        "pg_catalog.text",
+        "pg_catalog.text",
+        "pg_catalog.bytea",
+        "pg_catalog.bool"
+      ],
+      "body_sha256": "e8143c01c593fa92a22679356c4015491af20c79927364cd657a6caf1af859eb",
+      "replaced": false,
+      "config_extended": false,
+      "public_revoked": false,
+      "hardened": false
+    },
+    {
+      "name": "invocation119_cleanup_secret_history_empty",
+      "input_types": [
+        "pg_catalog.uuid",
+        "pg_catalog.uuid",
+        "pg_catalog.uuid"
+      ],
+      "body_sha256": "4d6a62c1ca4c2e6f33ac1d05f7a079a29e7b8cc4e2ec70b95e05287b7bd09583",
+      "replaced": false,
+      "config_extended": false,
+      "public_revoked": false,
+      "hardened": false
+    },
+    {
+      "name": "invocation119_frozen_set",
+      "input_types": [
+        "pg_catalog.uuid"
+      ],
+      "body_sha256": "e2108da0cda908ca2e07a3458c41e76b3149128a4ed281e6007075d2d8257f0d",
+      "replaced": false,
+      "config_extended": false,
+      "public_revoked": false,
+      "hardened": false
+    },
+    {
+      "name": "invocation119_hash_frame",
+      "input_types": [
+        "pg_catalog.bytea"
+      ],
+      "body_sha256": "511ef863141707cb09688b52eebc07b4c5a0597b6be8108eb92fe36108888ebb",
+      "replaced": false,
+      "config_extended": false,
+      "public_revoked": false,
+      "hardened": false
+    },
+    {
+      "name": "invocation119_i128",
+      "input_types": [
+        "pg_catalog.\"numeric\""
+      ],
+      "body_sha256": "014cbece4eb2b77143f9e2ea6e8992062daf0dc89c2bcccbb37e32b452e3bbe1",
+      "replaced": false,
+      "config_extended": false,
+      "public_revoked": false,
+      "hardened": false
+    },
+    {
+      "name": "invocation119_identity_hash",
+      "input_types": [
+        "pg_catalog.uuid",
+        "pg_catalog.bytea",
+        "pg_catalog.\"numeric\"",
+        "pg_catalog.\"numeric\""
+      ],
+      "body_sha256": "b668198d3875cf3a37dbb780d1a3269b320f9fd6fd1084f59b09e64cd0ffc9cc",
+      "replaced": false,
+      "config_extended": false,
+      "public_revoked": false,
+      "hardened": false
+    },
+    {
+      "name": "invocation119_immutable",
+      "input_types": [
+        "pg_catalog.uuid"
+      ],
+      "body_sha256": "7a12fee1edc79bf1caed60081bd7a9a5627e7ad47fe0e89e7e6dbb33ee15c096",
+      "replaced": false,
+      "config_extended": false,
+      "public_revoked": false,
+      "hardened": false
+    },
+    {
+      "name": "invocation119_live",
+      "input_types": [
+        "pg_catalog.uuid"
+      ],
+      "body_sha256": "74ef21e681dc5d0d192fc6a7d7e6669f8aaed9fcddee850d84436a71acb2c21c",
+      "replaced": false,
+      "config_extended": false,
+      "public_revoked": false,
+      "hardened": false
+    },
+    {
+      "name": "invocation119_no_git",
+      "input_types": [
+        "pg_catalog.uuid"
+      ],
+      "body_sha256": "e500719ba0d6e573ff59463a657814a0a53c0bbbfdfaa18cc68dd3061ce7392a",
+      "replaced": false,
+      "config_extended": false,
+      "public_revoked": false,
+      "hardened": false
+    },
+    {
+      "name": "invocation119_open_set",
+      "input_types": [
+        "pg_catalog.uuid"
+      ],
+      "body_sha256": "7a3af9cbccf380567232339e25117988efc03ed95b4b5e2d070fe07833b6b1ab",
+      "replaced": false,
+      "config_extended": false,
+      "public_revoked": false,
+      "hardened": false
+    },
+    {
+      "name": "invocation119_operations_frame",
+      "input_types": [
+        "pg_catalog._text"
+      ],
+      "body_sha256": "8cf1771de2fc89e10385e308c3ed4213e81879a6ccfca8855d554b0e12713721",
+      "replaced": false,
+      "config_extended": false,
+      "public_revoked": false,
+      "hardened": false
+    },
+    {
+      "name": "invocation119_queued_cleanup_base",
+      "input_types": [
+        "pg_catalog.uuid",
+        "pg_catalog.uuid",
+        "pg_catalog.jsonb",
+        "pg_catalog.text",
+        "pg_catalog.text",
+        "pg_catalog.bytea"
+      ],
+      "body_sha256": "1fcec42e1c989f3bb3fbfc1591907b6d98ad2915e8b2d46484868b252e66926d",
+      "replaced": false,
+      "config_extended": false,
+      "public_revoked": false,
+      "hardened": false
+    },
+    {
+      "name": "invocation119_queued_cleanup_candidate",
+      "input_types": [
+        "pg_catalog.uuid",
+        "pg_catalog.uuid",
+        "pg_catalog.jsonb",
+        "pg_catalog.text",
+        "pg_catalog.text",
+        "pg_catalog.bytea"
+      ],
+      "body_sha256": "3da2db219782089cce06f701213b63735c2c5ae2a8abd8a3ab7fbfd3987706c8",
+      "replaced": false,
+      "config_extended": false,
+      "public_revoked": false,
+      "hardened": false
+    },
+    {
+      "name": "invocation119_queued_cleanup_events",
+      "input_types": [
+        "public.runs",
+        "pg_catalog.bool"
+      ],
+      "body_sha256": "a5af463392ae47a93d8563b1b340937242a3f372c0b8b0e2d5fb916f00d9bd89",
+      "replaced": false,
+      "config_extended": false,
+      "public_revoked": false,
+      "hardened": false
+    },
+    {
+      "name": "invocation119_queued_cleanup_original",
+      "input_types": [
+        "pg_catalog.uuid"
+      ],
+      "body_sha256": "c971e629a723b258a56da45ddbf01694042c1144dfaba30ca919e80da80b1719",
+      "replaced": false,
+      "config_extended": false,
+      "public_revoked": false,
+      "hardened": false
+    },
+    {
+      "name": "invocation119_queued_cleanup_reservations",
+      "input_types": [
+        "pg_catalog.uuid",
+        "pg_catalog.uuid",
+        "pg_catalog.jsonb",
+        "pg_catalog.text",
+        "pg_catalog.text",
+        "pg_catalog.bytea",
+        "pg_catalog.bool",
+        "pg_catalog.bool"
+      ],
+      "body_sha256": "b691c32f959c90cf8a365ebdb9f4170edc87c920b52cef7726edd451c434cdd3",
+      "replaced": false,
+      "config_extended": false,
+      "public_revoked": false,
+      "hardened": false
+    },
+    {
+      "name": "invocation119_queued_cleanup_zero_history",
+      "input_types": [
+        "public.runs"
+      ],
+      "body_sha256": "21930652ad83b1a8646bb52dda2e27e80c7fe587577268a7cd378c48e2d5a6aa",
+      "replaced": false,
+      "config_extended": false,
+      "public_revoked": false,
+      "hardened": false
+    },
+    {
+      "name": "invocation119_remove_resume_matches",
+      "input_types": [
+        "pg_catalog.uuid",
+        "pg_catalog.text",
+        "pg_catalog.text",
+        "pg_catalog.jsonb"
+      ],
+      "body_sha256": "f271a08f0b77a61f75e325f8706363d10c6054875483c9138a3efa814d1050b1",
+      "replaced": false,
+      "config_extended": false,
+      "public_revoked": false,
+      "hardened": false
+    },
+    {
+      "name": "invocation119_reservation_context",
+      "input_types": [
+        "pg_catalog.uuid"
+      ],
+      "body_sha256": "4c386c94745e9abbf6068aa9c70f4dbb6d6758689b246d2ebfce0eec8a941023",
+      "replaced": false,
+      "config_extended": false,
+      "public_revoked": false,
+      "hardened": false
+    },
+    {
+      "name": "invocation119_selections",
+      "input_types": [
+        "pg_catalog.uuid"
+      ],
+      "body_sha256": "6ab3eeaa5b53365480050df934b45b1e0cae73d2c17b678a44a84113d8558cae",
+      "replaced": false,
+      "config_extended": false,
+      "public_revoked": false,
+      "hardened": false
+    },
+    {
+      "name": "invocation119_session_graph",
+      "input_types": [
+        "pg_catalog.uuid",
+        "pg_catalog.bool"
+      ],
+      "body_sha256": "8a4ad420b6563a2a58c97a1cca1be749656fb36c368a2ac0656263d43e0a2351",
+      "replaced": false,
+      "config_extended": false,
+      "public_revoked": false,
+      "hardened": false
+    },
+    {
+      "name": "invocation119_snapshot_hash",
+      "input_types": [
+        "pg_catalog.uuid",
+        "pg_catalog.text"
+      ],
+      "body_sha256": "c141118be0717d55dc82627ba26f9022afe828991c7611f1f0b84bc30c3a5002",
+      "replaced": false,
+      "config_extended": false,
+      "public_revoked": false,
+      "hardened": false
+    },
+    {
+      "name": "invocation119_terminal_cancelled",
+      "input_types": [
+        "pg_catalog.uuid"
+      ],
+      "body_sha256": "54748ccd3ef52c672105550fb935553e4d1eaec2be8e9eb928ba11ef106c095c",
+      "replaced": false,
+      "config_extended": false,
+      "public_revoked": false,
+      "hardened": false
+    },
+    {
+      "name": "invocation119_terminal_context",
+      "input_types": [
+        "pg_catalog.uuid"
+      ],
+      "body_sha256": "63a44efaca901bc4fa7be6f65e8b24591f23de06200fe83e00a7e3985ef001b9",
+      "replaced": false,
+      "config_extended": false,
+      "public_revoked": false,
+      "hardened": false
+    },
+    {
+      "name": "invocation119_terminal_marker",
+      "input_types": [
+        "public.runs"
+      ],
+      "body_sha256": "a9ecfc7ed2a4c5f135694b8dbdcc49482e5297d6de3975424bae525662e94221",
+      "replaced": false,
+      "config_extended": false,
+      "public_revoked": false,
+      "hardened": false
+    },
+    {
+      "name": "invocation119_typed_mount_authorized",
+      "input_types": [
+        "pg_catalog.uuid",
+        "pg_catalog.bytea",
+        "pg_catalog.uuid",
+        "pg_catalog.uuid",
+        "pg_catalog.uuid",
+        "pg_catalog.text",
+        "pg_catalog.uuid",
+        "pg_catalog.text",
+        "pg_catalog.bytea"
+      ],
+      "body_sha256": "22b25bf7b7a4445a13b3a9084b4db33c3bd1a4b9d469cb05dae49a0f44848f43",
+      "replaced": false,
+      "config_extended": false,
+      "public_revoked": false,
+      "hardened": false
+    },
+    {
+      "name": "invocation119_valid_interval",
+      "input_types": [
+        "pg_catalog.uuid",
+        "pg_catalog.timestamptz",
+        "pg_catalog.timestamptz"
+      ],
+      "body_sha256": "95052bd9c0beabd7b9132c368f8641a1ace341bdbf7cc77abe9c5bed9fc1deac",
+      "replaced": false,
+      "config_extended": false,
+      "public_revoked": false,
+      "hardened": false
+    },
+    {
+      "name": "legacy_scalar_acquire",
+      "input_types": [
+        "pg_catalog.uuid",
+        "pg_catalog.uuid",
+        "pg_catalog.text",
+        "pg_catalog.timestamptz",
+        "pg_catalog.timestamptz"
+      ],
+      "body_sha256": "1b88bef592d769b675f73c0ef4cf9f12be74585ec99de09420ca76c803713f9f",
+      "replaced": false,
+      "config_extended": false,
+      "public_revoked": false,
+      "hardened": false
+    },
+    {
+      "name": "legacy_scalar_active",
+      "input_types": [
+        "pg_catalog.uuid",
+        "pg_catalog.text"
+      ],
+      "body_sha256": "fff535c9b7b95fe73d286d6c58d776c3ba6151abeeb337a7c8ec56f8acc110f6",
+      "replaced": false,
+      "config_extended": false,
+      "public_revoked": false,
+      "hardened": false
+    },
+    {
+      "name": "legacy_scalar_begin_recovery",
+      "input_types": [
+        "pg_catalog.uuid",
+        "pg_catalog.uuid",
+        "pg_catalog.uuid",
+        "pg_catalog.text",
+        "pg_catalog.int8"
+      ],
+      "body_sha256": "84dbd32ef247e3d04169d09d326e7e0b6e172be3acb41799700194a59adb4809",
+      "replaced": false,
+      "config_extended": false,
+      "public_revoked": false,
+      "hardened": false
+    },
+    {
+      "name": "legacy_scalar_lease_matches",
+      "input_types": [
+        "public.agent_instance_volume_leases"
+      ],
+      "body_sha256": "69da477421193149587103b9e0b66bc4bd63fc711210a25b37892584e7d7b577",
+      "replaced": false,
+      "config_extended": false,
+      "public_revoked": false,
+      "hardened": false
+    },
+    {
+      "name": "legacy_scalar_lease_was_released",
+      "input_types": [
+        "pg_catalog.uuid",
+        "pg_catalog.uuid",
+        "pg_catalog.uuid",
+        "pg_catalog.text",
+        "pg_catalog.int8"
+      ],
+      "body_sha256": "79dfc2cd34afbf44b0af3cf30f8e8349d0237d860147d7cdca81bc261f5222dd",
+      "replaced": false,
+      "config_extended": false,
+      "public_revoked": false,
+      "hardened": false
+    },
+    {
+      "name": "legacy_scalar_locked_lease",
+      "input_types": [
+        "pg_catalog.uuid",
+        "pg_catalog.uuid",
+        "pg_catalog.uuid",
+        "pg_catalog.text",
+        "pg_catalog.int8"
+      ],
+      "body_sha256": "c0d26fa8a6e6805d9786792c3b0ab0f3e83025abe967f7470d8f90b5d3fce095",
+      "replaced": false,
+      "config_extended": false,
+      "public_revoked": false,
+      "hardened": false
+    },
+    {
+      "name": "legacy_scalar_refresh",
+      "input_types": [
+        "pg_catalog.uuid",
+        "pg_catalog.uuid",
+        "pg_catalog.uuid",
+        "pg_catalog.text",
+        "pg_catalog.int8",
+        "pg_catalog.timestamptz",
+        "pg_catalog.timestamptz",
+        "pg_catalog.bool"
+      ],
+      "body_sha256": "8e0ce4cd262d4069d22022a6293c085d33f4ed0e974bd5cd662273e0a1514bb5",
+      "replaced": false,
+      "config_extended": false,
+      "public_revoked": false,
+      "hardened": false
+    },
+    {
+      "name": "legacy_scalar_run_matches",
+      "input_types": [
+        "public.runs"
+      ],
+      "body_sha256": "76c4236f7e63ab6ec9eab1a1daba444a297986646933756d117e9a07d508eca4",
+      "replaced": false,
+      "config_extended": false,
+      "public_revoked": false,
+      "hardened": false
+    },
+    {
+      "name": "legacy_scalar_stale",
+      "input_types": [
+        "pg_catalog.timestamptz"
+      ],
+      "body_sha256": "c05453867c17dab3b805a1c53856812a6f187f5b8e6d2a3ea526a26c35b05db6",
+      "replaced": false,
+      "config_extended": false,
+      "public_revoked": false,
+      "hardened": false
+    },
+    {
+      "name": "legacy_scalar_terminal_matches",
+      "input_types": [
+        "public.runs"
+      ],
+      "body_sha256": "dbafcbf8ce1b475d3e61161b634db136dd7aace34b7cde48d075da97bd9e566b",
+      "replaced": false,
+      "config_extended": false,
+      "public_revoked": false,
+      "hardened": false
+    },
+    {
+      "name": "legacy_vm_placement_cleanup_eligible",
+      "input_types": [
+        "public.runs"
+      ],
+      "body_sha256": "82fb4067d1c43081d4185db4850e6bacdf3dd0521e0ef8967d72d9c8103831b8",
+      "replaced": false,
+      "config_extended": false,
+      "public_revoked": false,
+      "hardened": false
+    },
+    {
+      "name": "legacy_vm_placement_matches",
+      "input_types": [
+        "public.runs",
+        "public.run_legacy_vm_placements"
+      ],
+      "body_sha256": "fd48a447d521b2b2a87a6b04b33fa0d66d209781c176a7b7987551ae3496cacf",
+      "replaced": false,
+      "config_extended": false,
+      "public_revoked": false,
+      "hardened": false
+    },
+    {
+      "name": "legacy_vm_placement_producer_matches",
+      "input_types": [
+        "public.run_legacy_vm_placements"
+      ],
+      "body_sha256": "7c48a1a9eee37b7a59143e6ba910f11eddf872ba5d78190d19833211e8fe986c",
+      "replaced": false,
+      "config_extended": false,
+      "public_revoked": false,
+      "hardened": false
+    },
+    {
+      "name": "load_existing_instance_closure118",
+      "input_types": [
+        "pg_catalog.uuid",
+        "pg_catalog.uuid",
+        "pg_catalog.uuid",
+        "pg_catalog.bytea",
+        "pg_catalog.uuid",
+        "pg_catalog.jsonb",
+        "pg_catalog.jsonb",
+        "pg_catalog.text",
+        "pg_catalog.text",
+        "pg_catalog.jsonb"
+      ],
+      "body_sha256": "b0f58c16e2daf35d11662a0749f6daf90741d263d6dd2dc50d4b9d380028bd98",
+      "replaced": false,
+      "config_extended": false,
+      "public_revoked": false,
+      "hardened": false
+    },
+    {
+      "name": "load_invocation119_cleanup_only",
+      "input_types": [
+        "pg_catalog.uuid",
+        "pg_catalog.uuid",
+        "pg_catalog.jsonb",
+        "pg_catalog.text",
+        "pg_catalog.text",
+        "pg_catalog.bytea"
+      ],
+      "body_sha256": "3416dd07f8ce250214f5d15515c367162403a1f6d32e7eda9d0738c9c4921e73",
+      "replaced": false,
+      "config_extended": false,
+      "public_revoked": false,
+      "hardened": false
+    },
+    {
+      "name": "load_ordinary_queued_cancel_prepared140",
+      "input_types": [
+        "pg_catalog.uuid",
+        "pg_catalog.jsonb",
+        "pg_catalog.text",
+        "pg_catalog.text",
+        "pg_catalog.bytea"
+      ],
+      "body_sha256": "cf8badce34df99b5dafdb00025ef0f62668e471c08f4a2ff76b2e69d93f0ad12",
+      "replaced": false,
+      "config_extended": false,
+      "public_revoked": false,
+      "hardened": false
+    },
+    {
+      "name": "load_prepared_original_target118",
+      "input_types": [
+        "pg_catalog.uuid",
+        "pg_catalog.uuid",
+        "pg_catalog.text",
+        "pg_catalog.uuid",
+        "pg_catalog.bytea"
+      ],
+      "body_sha256": "dce25de97fdec3c6e22940c794ff5427700e4739b93333f172207b2a8390bf67",
+      "replaced": false,
+      "config_extended": false,
+      "public_revoked": false,
+      "hardened": false
+    },
+    {
+      "name": "load_qualified_invocation119_selections",
+      "input_types": [
+        "pg_catalog.uuid",
+        "pg_catalog.bytea"
+      ],
+      "body_sha256": "195c539f0aee4e6dde9980b3b43672170d852b72583f01488577125e92b26fbd",
+      "replaced": false,
+      "config_extended": false,
+      "public_revoked": false,
+      "hardened": false
+    },
+    {
+      "name": "load_queued_run_cleanup_candidate119",
+      "input_types": [
+        "pg_catalog.uuid",
+        "pg_catalog.uuid",
+        "pg_catalog.jsonb",
+        "pg_catalog.text",
+        "pg_catalog.text",
+        "pg_catalog.bytea"
+      ],
+      "body_sha256": "3ac57be2a30979f93f6260ad44c328f194dc487847e15f9d684e5809d338d93e",
+      "replaced": false,
+      "config_extended": false,
+      "public_revoked": false,
+      "hardened": false
+    },
+    {
+      "name": "load_run_cleanup_wake118",
+      "input_types": [
+        "pg_catalog.uuid",
+        "pg_catalog.uuid",
+        "pg_catalog.jsonb",
+        "pg_catalog.text",
+        "pg_catalog.text",
+        "pg_catalog.bytea"
+      ],
+      "body_sha256": "584cc38ec7933a80bb3ef130ea6f79ec3319b5bb9ad9d7786c05e220b4f53736",
+      "replaced": false,
+      "config_extended": false,
+      "public_revoked": false,
+      "hardened": false
+    },
+    {
+      "name": "lock_invocation117",
+      "input_types": [
+        "pg_catalog.uuid"
+      ],
+      "body_sha256": "f9ddfc55412b97923c4fc77efcf1b633b032f855110bdd9ae1066478a7b20b9f",
+      "replaced": false,
+      "config_extended": false,
+      "public_revoked": false,
+      "hardened": false
+    },
+    {
+      "name": "lock_invocation119_authority",
+      "input_types": [
+        "pg_catalog.uuid",
+        "pg_catalog.bytea"
+      ],
+      "body_sha256": "806b98cc2873e22c29259ff2f89b84cd158e417bdd88e72889a5e28694a7aaad",
+      "replaced": false,
+      "config_extended": false,
+      "public_revoked": false,
+      "hardened": false
+    },
+    {
+      "name": "lock_invocation119_cleanup_only",
+      "input_types": [
+        "pg_catalog.uuid",
+        "pg_catalog.uuid",
+        "pg_catalog.jsonb",
+        "pg_catalog.text",
+        "pg_catalog.text",
+        "pg_catalog.bytea"
+      ],
+      "body_sha256": "5b0211e4ac2f9c916917eabf4f1ca4dc46a567c0962175ad8df62cd70255f66b",
+      "replaced": false,
+      "config_extended": false,
+      "public_revoked": false,
+      "hardened": false
+    },
+    {
+      "name": "lock_invocation119_queued_cleanup",
+      "input_types": [
+        "pg_catalog.uuid",
+        "pg_catalog.uuid",
+        "pg_catalog.jsonb",
+        "pg_catalog.text",
+        "pg_catalog.text",
+        "pg_catalog.bytea",
+        "pg_catalog.bool",
+        "pg_catalog.bool"
+      ],
+      "body_sha256": "03ff04512f9a472319ffc19e36789582bb4a64841a91cd61f48364da00e6a5d6",
+      "replaced": false,
+      "config_extended": false,
+      "public_revoked": false,
+      "hardened": false
+    },
+    {
+      "name": "lock_legacy_scalar_context",
+      "input_types": [
+        "pg_catalog.uuid",
+        "pg_catalog.uuid",
+        "pg_catalog.text",
+        "pg_catalog.bool"
+      ],
+      "body_sha256": "9f85b96d1d9833f4bf0404fb00ce415beac19f45faf361ec699506eac74e65c2",
+      "replaced": false,
+      "config_extended": false,
+      "public_revoked": false,
+      "hardened": false
+    },
+    {
+      "name": "lock_legacy_vm_placement_scope",
+      "input_types": [
+        "pg_catalog.uuid",
+        "pg_catalog.uuid",
+        "pg_catalog.text"
+      ],
+      "body_sha256": "2eedbca655b4934c3c9ffa45c5e001fc7da201e8c03aff3bfc97984edb4ba055",
+      "replaced": false,
+      "config_extended": false,
+      "public_revoked": false,
+      "hardened": false
+    },
+    {
+      "name": "lock_ordinary_cancel_delivery140",
+      "input_types": [
+        "pg_catalog.uuid",
+        "pg_catalog.jsonb",
+        "pg_catalog.text",
+        "pg_catalog.text",
+        "pg_catalog.bytea"
+      ],
+      "body_sha256": "a54e5b091dd7924ff13d3450dbd8a4b9a6d587d65336198fa5dd10549400050a",
+      "replaced": false,
+      "config_extended": false,
+      "public_revoked": false,
+      "hardened": false
+    },
+    {
+      "name": "lock_ordinary_queued_cancel140",
+      "input_types": [
+        "pg_catalog.uuid",
+        "pg_catalog.jsonb",
+        "pg_catalog.text",
+        "pg_catalog.text",
+        "pg_catalog.bytea",
+        "pg_catalog.text"
+      ],
+      "body_sha256": "1cca578f99b1fccc3c5fad2746202ca1a3324d9ff8f28240e9807c6655ebbd6e",
+      "replaced": false,
+      "config_extended": false,
+      "public_revoked": false,
+      "hardened": false
+    },
+    {
+      "name": "lock_prepare_queued_run_cleanup_wake119",
+      "input_types": [
+        "pg_catalog.uuid",
+        "pg_catalog.uuid",
+        "pg_catalog.jsonb",
+        "pg_catalog.text",
+        "pg_catalog.text",
+        "pg_catalog.bytea"
+      ],
+      "body_sha256": "3e7dd77981085f5fd7443d6fb4a15be438168282306eb82f8110a316d1f05f1e",
+      "replaced": false,
+      "config_extended": false,
+      "public_revoked": false,
+      "hardened": false
+    },
+    {
+      "name": "lock_prepared_closure_parents118",
+      "input_types": [
+        "pg_catalog.uuid",
+        "pg_catalog.bytea"
+      ],
+      "body_sha256": "8df3db6bba00d5f3e0fa35637fa44cd904e5193173f2720f316919432dc0ced7",
+      "replaced": false,
+      "config_extended": false,
+      "public_revoked": false,
+      "hardened": false
+    },
+    {
+      "name": "lock_prepared_closure_participants118",
+      "input_types": [
+        "pg_catalog.uuid",
+        "pg_catalog.uuid"
+      ],
+      "body_sha256": "5b4d6f05484288a0bdd13b83c6a83687eeb96219599c9cea21229b793f2fd606",
+      "replaced": false,
+      "config_extended": false,
+      "public_revoked": false,
+      "hardened": false
+    },
+    {
+      "name": "lock_qualified_invocation119",
+      "input_types": [
+        "pg_catalog.uuid",
+        "pg_catalog.bytea"
+      ],
+      "body_sha256": "4463b3e568d97ae835b247846a165fdc2fe886abd75b8673df38fe63fa8f4160",
+      "replaced": false,
+      "config_extended": false,
+      "public_revoked": false,
+      "hardened": false
+    },
+    {
+      "name": "lock_queued_cancel_delivery119",
+      "input_types": [
+        "pg_catalog.uuid",
+        "pg_catalog.jsonb",
+        "pg_catalog.text",
+        "pg_catalog.text",
+        "pg_catalog.bytea"
+      ],
+      "body_sha256": "eb4b5e56e0d119595def3791e722e62aa7367fa3c27dfa0470951a7ba09a54e3",
+      "replaced": false,
+      "config_extended": false,
+      "public_revoked": false,
+      "hardened": false
+    },
+    {
+      "name": "lock_ready_retention_consumers",
+      "input_types": [
+        "pg_catalog.uuid"
+      ],
+      "body_sha256": "18c9e68029615f1609dc2c325cb24387409fff0c40b5653cf012e6695d7907d5",
+      "replaced": false,
+      "config_extended": false,
+      "public_revoked": false,
+      "hardened": false
+    },
+    {
+      "name": "lock_recipe_partial_retention_volume",
+      "input_types": [
+        "pg_catalog.uuid",
+        "pg_catalog.uuid"
+      ],
+      "body_sha256": "1fa93790e16d2a1b9de84fae4bc41687c5123ddc1a47a50c42e4fa9b0eb816f9",
+      "replaced": false,
+      "config_extended": false,
+      "public_revoked": false,
+      "hardened": false
+    },
+    {
+      "name": "lock_remove_resume118",
+      "input_types": [
+        "pg_catalog.uuid"
+      ],
+      "body_sha256": "7adce620fa3827640f7a32bb699248d53352f6033f968eecf413de6da7ff6399",
+      "replaced": false,
+      "config_extended": false,
+      "public_revoked": false,
+      "hardened": false
+    },
+    {
+      "name": "lock_run_cleanup_wake118",
+      "input_types": [
+        "pg_catalog.uuid",
+        "pg_catalog.uuid",
+        "pg_catalog.jsonb",
+        "pg_catalog.text",
+        "pg_catalog.text",
+        "pg_catalog.bytea"
+      ],
+      "body_sha256": "febfb63410c38ed7ff826d8a8107f51267d69c7fad627b164933e6653f5761f5",
+      "replaced": false,
+      "config_extended": false,
+      "public_revoked": false,
+      "hardened": false
+    },
+    {
+      "name": "observe_prepared_instance_drain140",
+      "input_types": [
+        "pg_catalog.uuid",
+        "pg_catalog.uuid",
+        "pg_catalog.jsonb",
+        "pg_catalog.uuid",
+        "pg_catalog.jsonb",
+        "pg_catalog.jsonb",
+        "pg_catalog.text",
+        "pg_catalog.text",
+        "pg_catalog.bytea"
+      ],
+      "body_sha256": "ec09bacc71b5bdd29e9f6124a25e3c4b77b268626b968f0aefab90222b30225f",
+      "replaced": false,
+      "config_extended": false,
+      "public_revoked": false,
+      "hardened": false
+    },
+    {
+      "name": "observe_prepared_instance_safety118",
+      "input_types": [
+        "pg_catalog.uuid",
+        "pg_catalog.jsonb",
+        "pg_catalog.jsonb",
+        "pg_catalog.text",
+        "pg_catalog.text"
+      ],
+      "body_sha256": "29f4f12453589f134ff46168f6e6f157d65825c94d432f96590834934b00fe06",
+      "replaced": false,
+      "config_extended": false,
+      "public_revoked": false,
+      "hardened": false
+    },
+    {
+      "name": "ordinary_cancel_delivery_reservations140",
+      "input_types": [
+        "pg_catalog.uuid",
+        "pg_catalog.jsonb",
+        "pg_catalog.text",
+        "pg_catalog.text",
+        "pg_catalog.bytea"
+      ],
+      "body_sha256": "0b9ac9abcdb6826a29adbae48e9148e0ff98ce419410a03de1956e084a4ad7e7",
+      "replaced": false,
+      "config_extended": false,
+      "public_revoked": false,
+      "hardened": false
+    },
+    {
+      "name": "ordinary_queued_cancel_events140",
+      "input_types": [
+        "public.runs",
+        "pg_catalog.jsonb",
+        "pg_catalog.bool"
+      ],
+      "body_sha256": "d08286e7c6778e21c6eb02a558b273ab1c2dd0bac9d0751db578e2ac8b0140ae",
+      "replaced": false,
+      "config_extended": false,
+      "public_revoked": false,
+      "hardened": false
+    },
+    {
+      "name": "ordinary_queued_cancel_original140",
+      "input_types": [
+        "pg_catalog.uuid",
+        "pg_catalog.jsonb"
+      ],
+      "body_sha256": "3ea061b89f4ca3f2e8d10bc5c486f172e2bdc7316a9d10ac57fa8f9f85f841f4",
+      "replaced": false,
+      "config_extended": false,
+      "public_revoked": false,
+      "hardened": false
+    },
+    {
+      "name": "ordinary_queued_cancel_qualify140",
+      "input_types": [
+        "pg_catalog.uuid",
+        "pg_catalog.jsonb",
+        "pg_catalog.text",
+        "pg_catalog.text",
+        "pg_catalog.bytea",
+        "pg_catalog.text"
+      ],
+      "body_sha256": "85a2ad7e1d0a2487c5d28e9fd34016dee02553f58a25dc9dd03d741a40acbdf2",
+      "replaced": false,
+      "config_extended": false,
+      "public_revoked": false,
+      "hardened": false
+    },
+    {
+      "name": "ordinary_queued_cancel_removal_origin140",
+      "input_types": [
+        "pg_catalog.uuid"
+      ],
+      "body_sha256": "a9893ae771f552f2648610cabde03f01ba7e2e37813e182c7dffe9950c36871a",
+      "replaced": false,
+      "config_extended": false,
+      "public_revoked": false,
+      "hardened": false
+    },
+    {
+      "name": "ordinary_queued_cancel_reservations140",
+      "input_types": [
+        "pg_catalog.uuid",
+        "pg_catalog.jsonb",
+        "pg_catalog.text",
+        "pg_catalog.text",
+        "pg_catalog.bytea",
+        "pg_catalog.text"
+      ],
+      "body_sha256": "039414668bb53607438dd64f5a8c8d87239972b4818762879dd49786b2a172ec",
+      "replaced": false,
+      "config_extended": false,
+      "public_revoked": false,
+      "hardened": false
+    },
+    {
+      "name": "ordinary_queued_cancel_selected140",
+      "input_types": [
+        "pg_catalog.uuid"
+      ],
+      "body_sha256": "353d73c84858e33aa4f7c0755d4e352f1e47061408309272e430d858ccbb0aa7",
+      "replaced": false,
+      "config_extended": false,
+      "public_revoked": false,
+      "hardened": false
+    },
+    {
+      "name": "ordinary_queued_cancel_zero_history140",
+      "input_types": [
+        "public.runs"
+      ],
+      "body_sha256": "9b4f2b88efe9cb12d9728137acc231c376f1f054767e85c87aaf726d2b1b9f97",
+      "replaced": false,
+      "config_extended": false,
+      "public_revoked": false,
+      "hardened": false
+    },
+    {
+      "name": "original_drain_command_key118",
+      "input_types": [
+        "pg_catalog.uuid",
+        "pg_catalog.uuid"
+      ],
+      "body_sha256": "529900c34eadca4d4da693513333df20a1eb25fc43949938f9594b2dc11b486f",
+      "replaced": false,
+      "config_extended": false,
+      "public_revoked": false,
+      "hardened": false
+    },
+    {
+      "name": "original_drain_removal118",
+      "input_types": [
+        "pg_catalog.uuid",
+        "pg_catalog.uuid"
+      ],
+      "body_sha256": "8242e90fb42553c3ac95bdf706370cc3f4c27a6a1240b06e3901d6ebccf70eb8",
+      "replaced": false,
+      "config_extended": false,
+      "public_revoked": false,
+      "hardened": false
+    },
+    {
+      "name": "owned_backing_actor_transition",
+      "input_types": [
+        "public.agent_instance_state_volumes",
+        "public.agent_instance_state_volumes"
+      ],
+      "body_sha256": "62f0159fe60a892f2d6965d8c32e425f0118a4251bfe6c2b89093e908a61124a",
+      "replaced": false,
+      "config_extended": false,
+      "public_revoked": false,
+      "hardened": false
+    },
+    {
+      "name": "owned_backing_identity",
+      "input_types": [
+        "pg_catalog.jsonb"
+      ],
+      "body_sha256": "a60be8ce061aaed3f831910eebae3ee9b2b686ccbae4673f1c3a1478872fbf37",
+      "replaced": false,
+      "config_extended": false,
+      "public_revoked": false,
+      "hardened": false
+    },
+    {
+      "name": "owned_birth_is_live",
+      "input_types": [
+        "pg_catalog.uuid"
+      ],
+      "body_sha256": "2a3c4420f45d3da189d893443790ba1edbd22310ddd925fbdeb2ee912005e8c6",
+      "replaced": false,
+      "config_extended": false,
+      "public_revoked": false,
+      "hardened": false
+    },
+    {
+      "name": "prepare_prepared_instance_closure118",
+      "input_types": [
+        "pg_catalog.uuid",
+        "pg_catalog.jsonb",
+        "pg_catalog.jsonb",
+        "pg_catalog.bytea",
+        "pg_catalog.jsonb",
+        "pg_catalog.bytea",
+        "pg_catalog.uuid",
+        "pg_catalog.int8",
+        "pg_catalog.bytea"
+      ],
+      "body_sha256": "2404be5c5eaa0975714bb340d275929e29c151b60fd5703e8cd8f638ffa791c9",
+      "replaced": false,
+      "config_extended": false,
+      "public_revoked": false,
+      "hardened": false
+    },
+    {
+      "name": "prepared_instance_actor118",
+      "input_types": [
+        "pg_catalog.uuid",
+        "pg_catalog.uuid"
+      ],
+      "body_sha256": "bcefe0d2c2762151356ca5258b1a1926a0089bed8bbee896cfaea894f115b6c8",
+      "replaced": false,
+      "config_extended": false,
+      "public_revoked": false,
+      "hardened": false
+    },
+    {
+      "name": "prepared_instance_created118",
+      "input_types": [
+        "pg_catalog.uuid",
+        "pg_catalog.uuid"
+      ],
+      "body_sha256": "060b1045563569fdd2d41525bb004a2c89a8fd160032e4d96e57355cc8af59a3",
+      "replaced": false,
+      "config_extended": false,
+      "public_revoked": false,
+      "hardened": false
+    },
+    {
+      "name": "prepared_instance_drained118",
+      "input_types": [
+        "pg_catalog.uuid",
+        "pg_catalog.uuid",
+        "pg_catalog.text",
+        "pg_catalog.text"
+      ],
+      "body_sha256": "cc68cc7a0ba5d95a45757e246ce3d36571ea42ff019137f869e175bfea9a7d71",
+      "replaced": false,
+      "config_extended": false,
+      "public_revoked": false,
+      "hardened": false
+    },
+    {
+      "name": "prepared_instance_inventory118",
+      "input_types": [
+        "pg_catalog.uuid"
+      ],
+      "body_sha256": "ee97ced8a258e4090eb95ffa0ab4383c1f963106c29a4954e6abb7c2b7261fe9",
+      "replaced": false,
+      "config_extended": false,
+      "public_revoked": false,
+      "hardened": false
+    },
+    {
+      "name": "prepared_instance_removal118",
+      "input_types": [
+        "pg_catalog.uuid"
+      ],
+      "body_sha256": "31e0de41f9533bb118a31e5579013c3523730706233ffca514c3f43c68f2dc09",
+      "replaced": false,
+      "config_extended": false,
+      "public_revoked": false,
+      "hardened": false
+    },
+    {
+      "name": "prepared_instance_target118",
+      "input_types": [
+        "pg_catalog.uuid",
+        "pg_catalog.jsonb",
+        "pg_catalog.jsonb"
+      ],
+      "body_sha256": "c41eb79144b60b9beef613768deddb0d6637c1bd811c25b16ee59edf099d265f",
+      "replaced": false,
+      "config_extended": false,
+      "public_revoked": false,
+      "hardened": false
+    },
+    {
+      "name": "prepared_original_attempt118",
+      "input_types": [
+        "pg_catalog.uuid",
+        "pg_catalog.text"
+      ],
+      "body_sha256": "de2c1999debdd6218f25006eeb430717e4a1a64d121be07b63859ce439d6c099",
+      "replaced": false,
+      "config_extended": false,
+      "public_revoked": false,
+      "hardened": false
+    },
+    {
+      "name": "profiled_run_binding_matches",
+      "input_types": [
+        "public.runs"
+      ],
+      "body_sha256": "f311bc9a43bdb3ef81ac5b49e183ceb4fc32acc47590ec38bab279f4f4fc9235",
+      "replaced": false,
+      "config_extended": false,
+      "public_revoked": false,
+      "hardened": false
+    },
+    {
+      "name": "profiled_run_locked",
+      "input_types": [
+        "pg_catalog.uuid"
+      ],
+      "body_sha256": "4d58913081a09ae84692fbb2814c94e9e54611a093a907cf3544d00d50933000",
+      "replaced": false,
+      "config_extended": false,
+      "public_revoked": false,
+      "hardened": false
+    },
+    {
+      "name": "profiled_run_pins_match",
+      "input_types": [
+        "public.runs",
+        "pg_catalog.bool"
+      ],
+      "body_sha256": "b3583a221bef8d5c6cd5fb4e422a82708f0303f790e9558c7a7938ce5fd0a72b",
+      "replaced": false,
+      "config_extended": false,
+      "public_revoked": false,
+      "hardened": false
+    },
+    {
+      "name": "profiled_run_snapshot_matches",
+      "input_types": [
+        "public.runs"
+      ],
+      "body_sha256": "63f836de09575f14a8428e47b7c5ae068da6f46eb81c16bc247681a10c0df63c",
+      "replaced": false,
+      "config_extended": false,
+      "public_revoked": false,
+      "hardened": false
+    },
+    {
+      "name": "protect_planned_start_inbox",
+      "input_types": [],
+      "body_sha256": "31d7b083fc06a2d7e764156225232a0ba6387b88cb6b7f9912def37cd02de75a",
+      "replaced": false,
+      "config_extended": false,
+      "public_revoked": false,
+      "hardened": false
+    },
+    {
+      "name": "protect_profiled_hook_command",
+      "input_types": [],
+      "body_sha256": "b94085a7f38e91cdca00ea5f71b2d7fa43c4c89d01de84c0c1ace229cacf0ff6",
+      "replaced": false,
+      "config_extended": false,
+      "public_revoked": false,
+      "hardened": false
+    },
+    {
+      "name": "protect_profiled_mailbox_attempt",
+      "input_types": [],
+      "body_sha256": "d94201feb9cd55792ec263770792662d6c7d32d53dd5a7daeeb70d2fd099f71f",
+      "replaced": false,
+      "config_extended": false,
+      "public_revoked": false,
+      "hardened": false
+    },
+    {
+      "name": "protect_profiled_run_request",
+      "input_types": [],
+      "body_sha256": "e6b6105c1a47b16146e4078c1849fd81ac9b5b6233a66d6c95adf43cd432abad",
+      "replaced": false,
+      "config_extended": false,
+      "public_revoked": false,
+      "hardened": false
+    },
+    {
+      "name": "qualified_activation_readiness",
+      "input_types": [
+        "pg_catalog.uuid",
+        "pg_catalog.uuid",
+        "pg_catalog.jsonb"
+      ],
+      "body_sha256": "7b89565d63297d44d896510b79e1bda442f013c8ecae36d5bb31c40c17307a03",
+      "replaced": false,
+      "config_extended": false,
+      "public_revoked": false,
+      "hardened": false
+    },
+    {
+      "name": "qualified_instance_activation_context",
+      "input_types": [
+        "pg_catalog.uuid"
+      ],
+      "body_sha256": "ba58c0f2a99fe1ddfbbc02a71dfdeb67efe2b0864b70de2d2168226597d3ec25",
+      "replaced": false,
+      "config_extended": false,
+      "public_revoked": false,
+      "hardened": false
+    },
+    {
+      "name": "qualified_instance_activation_record_matches",
+      "input_types": [
+        "public.agent_instance_execution_activations"
+      ],
+      "body_sha256": "957af6def5b642a5125b7f44734ebc57040b53eb50d748dac76d738faaeb2a3c",
+      "replaced": false,
+      "config_extended": false,
+      "public_revoked": false,
+      "hardened": false
+    },
+    {
+      "name": "qualified_instance_invocation_context",
+      "input_types": [
+        "pg_catalog.uuid"
+      ],
+      "body_sha256": "f6d905a72ea891af4c430ee7032c099539b51dd5c4950d9ae35f1a659f5fd802",
+      "replaced": false,
+      "config_extended": false,
+      "public_revoked": false,
+      "hardened": false
+    },
+    {
+      "name": "qualified_invocation_activation_lineage_matches",
+      "input_types": [
+        "public.agent_instance_execution_activations"
+      ],
+      "body_sha256": "d79bcc60451ec71d70ec5606e1cbe463229cc5f11735060f0c24468fc7ba435e",
+      "replaced": false,
+      "config_extended": false,
+      "public_revoked": false,
+      "hardened": false
+    },
+    {
+      "name": "qualified_invocation_creation_lineage_matches",
+      "input_types": [
+        "pg_catalog.uuid"
+      ],
+      "body_sha256": "a08b548bafeb4dda9003ea5346d33a2358fa5a5ce365a814a5bbb18bab367b3a",
+      "replaced": false,
+      "config_extended": false,
+      "public_revoked": false,
+      "hardened": false
+    },
+    {
+      "name": "qualified_invocation_current_eligible",
+      "input_types": [
+        "pg_catalog.uuid",
+        "pg_catalog.uuid",
+        "pg_catalog.jsonb"
+      ],
+      "body_sha256": "cbd3bb988c26f9dc1fd82462fa33df9f729202edc283b10a5ee177cd012ab7fe",
+      "replaced": false,
+      "config_extended": false,
+      "public_revoked": false,
+      "hardened": false
+    },
+    {
+      "name": "qualified_invocation_graph_matches",
+      "input_types": [
+        "public.agent_instance_execution_invocations"
+      ],
+      "body_sha256": "2d646ce73195264a106dd64d37c9abb7dfb64b7e6bc9c61c8407bb422c976e2f",
+      "replaced": false,
+      "config_extended": false,
+      "public_revoked": false,
+      "hardened": false
+    },
+    {
+      "name": "qualified_invocation_import_lineage_matches",
+      "input_types": [
+        "pg_catalog.uuid"
+      ],
+      "body_sha256": "01925dfd83f436c42bb86dfeb35d74ddecaf839af9574c38601dc7c673e7a557",
+      "replaced": false,
+      "config_extended": false,
+      "public_revoked": false,
+      "hardened": false
+    },
+    {
+      "name": "qualified_invocation_input_hash",
+      "input_types": [
+        "public.agent_instance_execution_invocations"
+      ],
+      "body_sha256": "c6ed6bcde3e0da7305aa79341527725cb2f96188434d1ee78bda0d0a0ce06d22",
+      "replaced": false,
+      "config_extended": false,
+      "public_revoked": false,
+      "hardened": false
+    },
+    {
+      "name": "qualified_invocation_queued_birth_matches",
+      "input_types": [
+        "public.runs"
+      ],
+      "body_sha256": "f28f2347b94db74ba9b39bd5eb838c803b95baf737cc77ef6160907e5c43c49b",
+      "replaced": false,
+      "config_extended": false,
+      "public_revoked": false,
+      "hardened": false
+    },
+    {
+      "name": "qualified_invocation_run_matches",
+      "input_types": [
+        "public.agent_instance_execution_invocations",
+        "public.runs"
+      ],
+      "body_sha256": "d82590d6c15a9c084445572406c204a2eb0c2990031ba8131eeef88c8cf7f6d1",
+      "replaced": false,
+      "config_extended": false,
+      "public_revoked": false,
+      "hardened": false
+    },
+    {
+      "name": "qualified_invocation_start_json",
+      "input_types": [
+        "public.agent_instance_execution_invocations"
+      ],
+      "body_sha256": "d133902fbdbead13719e822034d3c7b2fd23e1a6b014bcb1a91d08a31e5fe69d",
+      "replaced": false,
+      "config_extended": false,
+      "public_revoked": false,
+      "hardened": false
+    },
+    {
+      "name": "qualified_recipe_instance_birth_matches",
+      "input_types": [
+        "pg_catalog.uuid"
+      ],
+      "body_sha256": "5dd9bc9318efea1253899c20f35f3beef160ab8527ba8b044dd1f359cdc8bf22",
+      "replaced": false,
+      "config_extended": false,
+      "public_revoked": false,
+      "hardened": false
+    },
+    {
+      "name": "qualified_recipe_instance_creation_completed",
+      "input_types": [
+        "pg_catalog.uuid"
+      ],
+      "body_sha256": "32b15b1e362cb8cf262ff725aea0f0c795e3ed9a81764428d0d9d0f1ec7535c6",
+      "replaced": false,
+      "config_extended": false,
+      "public_revoked": false,
+      "hardened": false
+    },
+    {
+      "name": "qualified_remove_resume_claim118",
+      "input_types": [
+        "pg_catalog.uuid",
+        "pg_catalog.jsonb",
+        "pg_catalog.text",
+        "pg_catalog.text",
+        "pg_catalog.jsonb"
+      ],
+      "body_sha256": "361178fd6f7518b2f0c3f8a0bcf02feb8cfc69854aeec00dd95041e01ba88fae",
+      "replaced": false,
+      "config_extended": false,
+      "public_revoked": false,
+      "hardened": false
+    },
+    {
+      "name": "qualify_invocation119_queued_cleanup",
+      "input_types": [
+        "pg_catalog.uuid",
+        "pg_catalog.uuid",
+        "pg_catalog.jsonb",
+        "pg_catalog.text",
+        "pg_catalog.text",
+        "pg_catalog.bytea",
+        "pg_catalog.bool",
+        "pg_catalog.bool"
+      ],
+      "body_sha256": "dc6d9eecfae8660d2d0c48ece334564f53d2685f304711bc6f1232b26e84e7d0",
+      "replaced": false,
+      "config_extended": false,
+      "public_revoked": false,
+      "hardened": false
+    },
+    {
+      "name": "qualify_invocation119_terminal_result",
+      "input_types": [
+        "pg_catalog.uuid",
+        "pg_catalog.bytea",
+        "pg_catalog.text",
+        "pg_catalog.text",
+        "pg_catalog.bool",
+        "pg_catalog.int4",
+        "pg_catalog.int4",
+        "pg_catalog.text"
+      ],
+      "body_sha256": "0d9eb9961590271313e32f29ac3514272a68447988288cfe7162fe713f9f642f",
+      "replaced": false,
+      "config_extended": false,
+      "public_revoked": false,
+      "hardened": false
+    },
+    {
+      "name": "qualify_run_cleanup_wake118",
+      "input_types": [
+        "pg_catalog.uuid",
+        "pg_catalog.uuid",
+        "pg_catalog.jsonb",
+        "pg_catalog.text",
+        "pg_catalog.text",
+        "pg_catalog.bytea",
+        "pg_catalog.bool"
+      ],
+      "body_sha256": "f276c7de2d66fd8f2ce7e2448651bfa418187e833444359ee59a6946bf3dc3da",
+      "replaced": false,
+      "config_extended": false,
+      "public_revoked": false,
+      "hardened": false
+    },
+    {
+      "name": "queued_cancel_closure140",
+      "input_types": [
+        "pg_catalog.uuid",
+        "pg_catalog.uuid",
+        "pg_catalog.jsonb",
+        "pg_catalog.jsonb"
+      ],
+      "body_sha256": "a308ad014de437a13ec126337a592af6d34c3bae943448e802d8e0546cbdc04f",
+      "replaced": false,
+      "config_extended": false,
+      "public_revoked": false,
+      "hardened": false
+    },
+    {
+      "name": "queued_cancel_original140",
+      "input_types": [
+        "pg_catalog.uuid",
+        "pg_catalog.jsonb"
+      ],
+      "body_sha256": "805897482bd1fa538b96a025dacfb0e9308f27196e508cc617049178912b49ca",
+      "replaced": false,
+      "config_extended": false,
+      "public_revoked": false,
+      "hardened": false
+    },
+    {
+      "name": "queued_cancel_reservations119",
+      "input_types": [
+        "pg_catalog.uuid",
+        "pg_catalog.jsonb",
+        "pg_catalog.text",
+        "pg_catalog.text",
+        "pg_catalog.bytea"
+      ],
+      "body_sha256": "c748a50bd94be8a48c9b5ab6576c309f2046974a48145709449959b573ef3016",
+      "replaced": false,
+      "config_extended": false,
+      "public_revoked": false,
+      "hardened": false
+    },
+    {
+      "name": "queued_cleanup_target140",
+      "input_types": [
+        "public.runs",
+        "pg_catalog.bool",
+        "pg_catalog.bool",
+        "pg_catalog.bool"
+      ],
+      "body_sha256": "b82f37b27289c8f57b354a55d059fd552ced6d916801a293d969f787d0854f84",
+      "replaced": false,
+      "config_extended": false,
+      "public_revoked": false,
+      "hardened": false
+    },
+    {
+      "name": "queued_create_original140",
+      "input_types": [
+        "pg_catalog.uuid"
+      ],
+      "body_sha256": "d702408255586ba49862ce665616ea1134be479b3c784fd02a9999c52f2a9cae",
+      "replaced": false,
+      "config_extended": false,
+      "public_revoked": false,
+      "hardened": false
+    },
+    {
+      "name": "queued_drain_events140",
+      "input_types": [
+        "public.runs",
+        "pg_catalog.bool"
+      ],
+      "body_sha256": "6b78bcff16f51081946d73265649e6ed1a15f23275653e7adfb833847e7c1157",
+      "replaced": false,
+      "config_extended": false,
+      "public_revoked": false,
+      "hardened": false
+    },
+    {
+      "name": "queued_drain_zero140",
+      "input_types": [
+        "public.runs"
+      ],
+      "body_sha256": "61c9c1005f3be3e99ca6db4727db1699705f91df0ce38abfd1925d76175272bb",
+      "replaced": false,
+      "config_extended": false,
+      "public_revoked": false,
+      "hardened": false
+    },
+    {
+      "name": "queued_invocation_resume140",
+      "input_types": [
+        "pg_catalog.uuid",
+        "pg_catalog.text",
+        "pg_catalog.text",
+        "pg_catalog.jsonb"
+      ],
+      "body_sha256": "093f7cc01b4ea966e17885f839264cf710c06a26f98145b724064fdfc1e3b0eb",
+      "replaced": false,
+      "config_extended": false,
+      "public_revoked": false,
+      "hardened": false
+    },
+    {
+      "name": "queued_ordinary_events140",
+      "input_types": [
+        "public.runs",
+        "pg_catalog.jsonb",
+        "pg_catalog.bool"
+      ],
+      "body_sha256": "4592b839d19ff7883f99a5420b35a18f8d022ffd448b729e4bf504e1d6e6bece",
+      "replaced": false,
+      "config_extended": false,
+      "public_revoked": false,
+      "hardened": false
+    },
+    {
+      "name": "queued_ordinary_original140",
+      "input_types": [
+        "pg_catalog.uuid",
+        "pg_catalog.jsonb"
+      ],
+      "body_sha256": "59f656c41fb399ca1a2950b2f1e49deed22303866f76896cc5c037d5681807f3",
+      "replaced": false,
+      "config_extended": false,
+      "public_revoked": false,
+      "hardened": false
+    },
+    {
+      "name": "queued_ordinary_qualify140",
+      "input_types": [
+        "pg_catalog.uuid",
+        "pg_catalog.jsonb",
+        "pg_catalog.text",
+        "pg_catalog.text",
+        "pg_catalog.bytea",
+        "pg_catalog.text"
+      ],
+      "body_sha256": "5e3dcba15bbe95126e2dae71d94a9d50f8544d7d1b577d96c99a113f9dd1b311",
+      "replaced": false,
+      "config_extended": false,
+      "public_revoked": false,
+      "hardened": false
+    },
+    {
+      "name": "queued_ordinary_zero140",
+      "input_types": [
+        "public.runs"
+      ],
+      "body_sha256": "34ec6a82eca71f1f8c12f81fabfb1c0ae2fea731e9be2595cefca8198c03e49b",
+      "replaced": false,
+      "config_extended": false,
+      "public_revoked": false,
+      "hardened": false
+    },
+    {
+      "name": "queued_processed_closure140",
+      "input_types": [
+        "pg_catalog.uuid",
+        "pg_catalog.uuid",
+        "pg_catalog.jsonb"
+      ],
+      "body_sha256": "672196f24e2ee66645d696a0aa6778e75732fa0bc574cbe67f173167cc9558c5",
+      "replaced": false,
+      "config_extended": false,
+      "public_revoked": false,
+      "hardened": false
+    },
+    {
+      "name": "queued_removal_origin140",
+      "input_types": [
+        "pg_catalog.uuid"
+      ],
+      "body_sha256": "0e7bbdd0095bfe4c62707475f4dc3692803cff97082e311d4b9d64292ad13e1c",
+      "replaced": false,
+      "config_extended": false,
+      "public_revoked": false,
+      "hardened": false
+    },
+    {
+      "name": "queued_resume_associations140",
+      "input_types": [
+        "pg_catalog.uuid"
+      ],
+      "body_sha256": "1c5ce3f96b2817d79710684b6fd20d68369e33c4dab61c76d73a01afdc22c8c8",
+      "replaced": false,
+      "config_extended": false,
+      "public_revoked": false,
+      "hardened": false
+    },
+    {
+      "name": "queued_run_cleanup_reservations119",
+      "input_types": [
+        "pg_catalog.uuid",
+        "pg_catalog.uuid",
+        "pg_catalog.jsonb",
+        "pg_catalog.text",
+        "pg_catalog.text",
+        "pg_catalog.bytea"
+      ],
+      "body_sha256": "ea69fbbf2ca434306265fa66fca6dbbfb8640251ccb55cf23b0add1b08bff5aa",
+      "replaced": false,
+      "config_extended": false,
+      "public_revoked": false,
+      "hardened": false
+    },
+    {
+      "name": "read_invocation119_authority_context",
+      "input_types": [
+        "pg_catalog.uuid",
+        "pg_catalog.bytea",
+        "pg_catalog.bool"
+      ],
+      "body_sha256": "73bfe2b63b738ff35d43b95a9b321263dc02a6246ca5e2024f7880161c923053",
+      "replaced": false,
+      "config_extended": false,
+      "public_revoked": false,
+      "hardened": false
+    },
+    {
+      "name": "read_qualified_invocation117",
+      "input_types": [
+        "pg_catalog.uuid",
+        "pg_catalog.jsonb",
+        "pg_catalog.bytea"
+      ],
+      "body_sha256": "6019c54e51e66b03689d3d812fab4a9d47fe7294e2228a92a6385bbc1f9b24d0",
+      "replaced": false,
+      "config_extended": false,
+      "public_revoked": false,
+      "hardened": false
+    },
+    {
+      "name": "read_qualified_invocation119",
+      "input_types": [
+        "pg_catalog.uuid",
+        "pg_catalog.jsonb",
+        "pg_catalog.bytea"
+      ],
+      "body_sha256": "b6fc4e5740d609852219879bc1901f3dbf80debd01448eb77922d3723f9f6884",
+      "replaced": false,
+      "config_extended": false,
+      "public_revoked": false,
+      "hardened": false
+    },
+    {
+      "name": "ready_retention_lease_reopening_matches",
+      "input_types": [
+        "pg_catalog.uuid",
+        "pg_catalog.uuid",
+        "pg_catalog.uuid"
+      ],
+      "body_sha256": "fb25a35361dc45877c435a0d9c864e9d17a4794b265643fe701b95b7f3da2745",
+      "replaced": false,
+      "config_extended": false,
+      "public_revoked": false,
+      "hardened": false
+    },
+    {
+      "name": "ready_retention_manager",
+      "input_types": [
+        "pg_catalog.uuid",
+        "pg_catalog.uuid"
+      ],
+      "body_sha256": "ad57299fa9858940242816beaa55cb8d9133c5a23e46f131163681d5cbf72184",
+      "replaced": false,
+      "config_extended": false,
+      "public_revoked": false,
+      "hardened": false
+    },
+    {
+      "name": "ready_retention_original_matches",
+      "input_types": [
+        "pg_catalog.uuid"
+      ],
+      "body_sha256": "65b272236df131890146e0bf25a66d33f127f72cb96ad414a2d33572c9ec6cbf",
+      "replaced": false,
+      "config_extended": false,
+      "public_revoked": false,
+      "hardened": false
+    },
+    {
+      "name": "ready_retention_quiescent",
+      "input_types": [
+        "pg_catalog.uuid"
+      ],
+      "body_sha256": "be0152edab06205e5a913a928f3f60056f9a411241e21ae30ad5b7e7ada5842c",
+      "replaced": false,
+      "config_extended": false,
+      "public_revoked": false,
+      "hardened": false
+    },
+    {
+      "name": "ready_retention_run_terminal",
+      "input_types": [
+        "public.runs",
+        "pg_catalog.text",
+        "pg_catalog.text"
+      ],
+      "body_sha256": "3ce6c36f1823961f276f7be99076bd174fc6c13e151f744cde53d0ef41cade31",
+      "replaced": false,
+      "config_extended": false,
+      "public_revoked": false,
+      "hardened": false
+    },
+    {
+      "name": "recipe_execution_preparation_authorized",
+      "input_types": [
+        "public.recipe_deployment_commands"
+      ],
+      "body_sha256": "2d7ad67ad8e06eee68377ffce6ee8d882830d8786dd8cce026568e955f9a6a0f",
+      "replaced": false,
+      "config_extended": false,
+      "public_revoked": false,
+      "hardened": false
+    },
+    {
+      "name": "recipe_execution_transition_guard",
+      "input_types": [],
+      "body_sha256": "f67fff3f3033ca39f73006cd787751d96cb2eb0e17c8a85dd8668b986d9a53f2",
+      "replaced": true,
+      "config_extended": false,
+      "public_revoked": false,
+      "hardened": false
+    },
+    {
+      "name": "recipe_import107_command_mutex",
+      "input_types": [
+        "pg_catalog.bytea"
+      ],
+      "body_sha256": "24c5c5d437340cd1e8d7c33163e16d660274d181f534c2b7eceb4038ff89c54e",
+      "replaced": false,
+      "config_extended": false,
+      "public_revoked": false,
+      "hardened": false
+    },
+    {
+      "name": "recipe_import107_input_hash",
+      "input_types": [
+        "public.recipe_prepared_instance_imports",
+        "pg_catalog.uuid"
+      ],
+      "body_sha256": "d7feb3058056fdd074a90564969b9172652e5128b7ba8006490edf4706659711",
+      "replaced": false,
+      "config_extended": false,
+      "public_revoked": false,
+      "hardened": false
+    },
+    {
+      "name": "recipe_import107_json_bytes",
+      "input_types": [
+        "pg_catalog.jsonb",
+        "pg_catalog.int4"
+      ],
+      "body_sha256": "5aeee78589b9ef22f0dcf6da16a0cbb6b37b84836330fec1948a9f550ca40460",
+      "replaced": false,
+      "config_extended": false,
+      "public_revoked": false,
+      "hardened": false
+    },
+    {
+      "name": "recipe_import107_parameter_hash",
+      "input_types": [
+        "pg_catalog.jsonb"
+      ],
+      "body_sha256": "43ce85b806b31aacd6368f127379cd0fece2e2b1b5be3dcd6b371eb146c15a14",
+      "replaced": false,
+      "config_extended": false,
+      "public_revoked": false,
+      "hardened": false
+    },
+    {
+      "name": "recipe_import113_instance_mutex",
+      "input_types": [
+        "pg_catalog.uuid"
+      ],
+      "body_sha256": "21885842a6832fe9d4e354dbd565ae3cef33ed2e693cca0dc2e4559e3b6b864f",
+      "replaced": false,
+      "config_extended": false,
+      "public_revoked": false,
+      "hardened": false
+    },
+    {
+      "name": "recipe_owned_first_birth_completed",
+      "input_types": [
+        "pg_catalog.uuid"
+      ],
+      "body_sha256": "dfab22d0328e722ab591a363004d9bb3b8444e35519a73d94ae8b88df65a674a",
+      "replaced": false,
+      "config_extended": false,
+      "public_revoked": false,
+      "hardened": false
+    },
+    {
+      "name": "recipe_owned_first_birth_matches",
+      "input_types": [
+        "pg_catalog.uuid"
+      ],
+      "body_sha256": "77f487fedf38b97bbcca214be202d2c1a14b0ec7251b786b8017b947e482296a",
+      "replaced": false,
+      "config_extended": false,
+      "public_revoked": false,
+      "hardened": false
+    },
+    {
+      "name": "recipe_owned_first_provision_id",
+      "input_types": [
+        "pg_catalog.uuid"
+      ],
+      "body_sha256": "4548960c3ae9ebd91d127ec7ec1988919a8ea72c1ed7383bfb38ceae811a378f",
+      "replaced": false,
+      "config_extended": false,
+      "public_revoked": false,
+      "hardened": false
+    },
+    {
+      "name": "recipe_preparation_digest",
+      "input_types": [
+        "pg_catalog.jsonb"
+      ],
+      "body_sha256": "beaffa25b7eda6d6fe9eb42e3cfedd90aa9bc62f91b2bb7293b7ffa83fb3c353",
+      "replaced": false,
+      "config_extended": false,
+      "public_revoked": false,
+      "hardened": false
+    },
+    {
+      "name": "record_invocation119_terminal_transaction",
+      "input_types": [],
+      "body_sha256": "732865ceaf2e36b6c2a63f26256a01a1bf44af1488d7a87a094d45bc3f3c9dc6",
+      "replaced": false,
+      "config_extended": false,
+      "public_revoked": false,
+      "hardened": false
+    },
+    {
+      "name": "record_legacy_vm_placement",
+      "input_types": [
+        "pg_catalog.uuid",
+        "pg_catalog.uuid",
+        "pg_catalog.text",
+        "pg_catalog.text"
+      ],
+      "body_sha256": "bedfc048d41ad017abf0ebe19f69703ae51bf24d9101397efaf992794268d0e1",
+      "replaced": false,
+      "config_extended": false,
+      "public_revoked": false,
+      "hardened": false
+    },
+    {
+      "name": "refresh_qualified_invocation119",
+      "input_types": [
+        "pg_catalog.uuid",
+        "pg_catalog.bytea",
+        "pg_catalog.jsonb",
+        "pg_catalog.text",
+        "pg_catalog.timestamptz",
+        "pg_catalog.timestamptz",
+        "pg_catalog.bool"
+      ],
+      "body_sha256": "c5de370b0cea00e6bc3f5e921acc9b96e41cf763ce94e65374ae158a2cde5a2a",
+      "replaced": false,
+      "config_extended": false,
+      "public_revoked": false,
+      "hardened": false
+    },
+    {
+      "name": "reject_closed_ready_birth_writes",
+      "input_types": [],
+      "body_sha256": "2439d8e33de8353f753c0bbd5320e045de6e63f2a3a42a57bbe55083849f9477",
+      "replaced": false,
+      "config_extended": false,
+      "public_revoked": false,
+      "hardened": false
+    },
+    {
+      "name": "reject_closed_ready_recipe_writes",
+      "input_types": [],
+      "body_sha256": "9d93dc8ada8398fdd393b7763ff9c536158d7bbe7555781a469ec22fa9545a0d",
+      "replaced": false,
+      "config_extended": false,
+      "public_revoked": false,
+      "hardened": false
+    },
+    {
+      "name": "reject_instance_activation_rewrite",
+      "input_types": [],
+      "body_sha256": "166aa60c40dfe2bd7fe77420a8126d9bb4384aed07fd8435344257a1d2171e25",
+      "replaced": false,
+      "config_extended": false,
+      "public_revoked": true,
+      "hardened": false
+    },
+    {
+      "name": "reject_instance_invocation_rewrite",
+      "input_types": [],
+      "body_sha256": "c99ffaaba52b19466b525326309818b5aa520447a1536d5478def955c4250bbb",
+      "replaced": false,
+      "config_extended": false,
+      "public_revoked": false,
+      "hardened": false
+    },
+    {
+      "name": "reject_invocation117_rewrite",
+      "input_types": [],
+      "body_sha256": "2c97072637f69637009d22d55eed1ff60621869e4d218709b540a2e925289623",
+      "replaced": false,
+      "config_extended": false,
+      "public_revoked": false,
+      "hardened": false
+    },
+    {
+      "name": "reject_recipe_preparation_audit_rewrite",
+      "input_types": [],
+      "body_sha256": "2cb6e41a2eafb5fda5071743a864a8c6024c3216b1561b5aec71a41cd893c7b4",
+      "replaced": false,
+      "config_extended": false,
+      "public_revoked": false,
+      "hardened": false
+    },
+    {
+      "name": "reject_retired_owned_birth_progress",
+      "input_types": [],
+      "body_sha256": "dd2655f483e1d16642631bb7cee459260fa7d119680e371625cb26d39fed93d0",
+      "replaced": false,
+      "config_extended": false,
+      "public_revoked": true,
+      "hardened": true
+    },
+    {
+      "name": "release_legacy_scalar_lease_after_detach",
+      "input_types": [
+        "pg_catalog.uuid",
+        "pg_catalog.uuid",
+        "pg_catalog.uuid",
+        "pg_catalog.text",
+        "pg_catalog.int8",
+        "pg_catalog.bool"
+      ],
+      "body_sha256": "bdb313306a9db412c0db3b58b6f84b8548dee23105168bd994ceb203bb7708a2",
+      "replaced": false,
+      "config_extended": false,
+      "public_revoked": false,
+      "hardened": false
+    },
+    {
+      "name": "remove_resume_actor118",
+      "input_types": [
+        "pg_catalog.uuid"
+      ],
+      "body_sha256": "bdd5d61e31c60197902f5b0c2b3b375932e4fbf95808822236f98c9bfb08fe13",
+      "replaced": false,
+      "config_extended": false,
+      "public_revoked": false,
+      "hardened": false
+    },
+    {
+      "name": "remove_resume_context118",
+      "input_types": [
+        "pg_catalog.uuid"
+      ],
+      "body_sha256": "b1a69953bf60bd7ff632d95e12983e85f1ea0bd769b7c762449806b3a2f9670d",
+      "replaced": false,
+      "config_extended": false,
+      "public_revoked": false,
+      "hardened": false
+    },
+    {
+      "name": "remove_resume_reservations118",
+      "input_types": [
+        "pg_catalog.uuid"
+      ],
+      "body_sha256": "9f4c9d856b558969937ffa9b40555ac3006cf192db489920647fbc126cf7ea16",
+      "replaced": false,
+      "config_extended": false,
+      "public_revoked": false,
+      "hardened": false
+    },
+    {
+      "name": "require_invocation117_worker",
+      "input_types": [],
+      "body_sha256": "cd92e31dccf8fe9408bc78700348c2356312cfad1410181e5bd01d90d38833d3",
+      "replaced": false,
+      "config_extended": false,
+      "public_revoked": false,
+      "hardened": false
+    },
+    {
+      "name": "require_invocation119_integrity_mutator",
+      "input_types": [],
+      "body_sha256": "2090a3c72fda590d4e41cb184a210c1fcc025a1dc8cfb2b11c04e25c925fbd22",
+      "replaced": false,
+      "config_extended": false,
+      "public_revoked": false,
+      "hardened": false
+    },
+    {
+      "name": "require_invocation119_terminal_transaction",
+      "input_types": [],
+      "body_sha256": "22af9ada2ba49901a45e1aa0668089b1dc7b30b80a568ece573f0512d42341c1",
+      "replaced": false,
+      "config_extended": false,
+      "public_revoked": false,
+      "hardened": false
+    },
+    {
+      "name": "require_partial_birth_quiescence",
+      "input_types": [
+        "pg_catalog.uuid"
+      ],
+      "body_sha256": "a45c0d3e53e641e807e0cd91f2401e2f7e0772be9aa5772a6a15d1d99cd054b7",
+      "replaced": false,
+      "config_extended": false,
+      "public_revoked": false,
+      "hardened": false
+    },
+    {
+      "name": "require_recipe_whole_preparation_before_effect",
+      "input_types": [],
+      "body_sha256": "d7b7e7d2abacb97f5173db2a0c291814549c8daf0741b333e82de6d5b633e106",
+      "replaced": false,
+      "config_extended": false,
+      "public_revoked": false,
+      "hardened": false
+    },
+    {
+      "name": "require_recipe_whole_preparation_before_provider_mapping",
+      "input_types": [],
+      "body_sha256": "03b68879d0b0878f20157e0229fe2ad104569a67d9ced98af00b188ac78afcec",
+      "replaced": false,
+      "config_extended": false,
+      "public_revoked": false,
+      "hardened": false
+    },
+    {
+      "name": "require_remove_resume_admission118",
+      "input_types": [],
+      "body_sha256": "0e5abf17f97d8ab0b721ed4c083007bf49f0bc8be2352f66e97b7bc655401bb8",
+      "replaced": false,
+      "config_extended": false,
+      "public_revoked": false,
+      "hardened": false
+    },
+    {
+      "name": "require_run_cleanup_wake118",
+      "input_types": [],
+      "body_sha256": "4f8c3cb2045ce0da996bd5dd0351d259ef209457bfc0d8e2059b3ee6ca26c03c",
+      "replaced": false,
+      "config_extended": false,
+      "public_revoked": false,
+      "hardened": false
+    },
+    {
+      "name": "require_run_cleanup_worker",
+      "input_types": [],
+      "body_sha256": "4e1dd1d50064e7a48c545477f6623efa70a682c6d4d9b3e6d4f7e20bde36de06",
+      "replaced": false,
+      "config_extended": false,
+      "public_revoked": false,
+      "hardened": false
+    },
+    {
+      "name": "reserve_invocation119",
+      "input_types": [
+        "pg_catalog.uuid"
+      ],
+      "body_sha256": "d12b95364b6d264909ea6b1f1d1b728a8cb1e7228312a4beb8285ac63df41610",
+      "replaced": false,
+      "config_extended": false,
+      "public_revoked": false,
+      "hardened": false
+    },
+    {
+      "name": "reserve_ready_retention_deployment",
+      "input_types": [
+        "pg_catalog.uuid"
+      ],
+      "body_sha256": "353f861258cac7e2eaadfa5f69d9aea2d475614d0c775ae05793d170d57ae059",
+      "replaced": false,
+      "config_extended": false,
+      "public_revoked": false,
+      "hardened": false
+    },
+    {
+      "name": "reserve_recipe_execution_preparation",
+      "input_types": [
+        "pg_catalog.uuid",
+        "pg_catalog.uuid",
+        "pg_catalog.bytea",
+        "pg_catalog._bytea"
+      ],
+      "body_sha256": "50ae18a969f561af56e753d1c8eb04c914007381297bffe7d4b7524ab64d40d9",
+      "replaced": false,
+      "config_extended": false,
+      "public_revoked": false,
+      "hardened": false
+    },
+    {
+      "name": "reserve_remove_resume118",
+      "input_types": [
+        "pg_catalog.uuid"
+      ],
+      "body_sha256": "15b8e29d4270aaeaffe1d1f1ea98344842c1de4fde7b44af7a06e2a1ff8e317c",
+      "replaced": false,
+      "config_extended": false,
+      "public_revoked": false,
+      "hardened": false
+    },
+    {
+      "name": "retire_owned_partial_birth",
+      "input_types": [
+        "pg_catalog.uuid",
+        "public.recipe_execution_transitions"
+      ],
+      "body_sha256": "5e6376da40a3c1510778ae2e3dba328d9ecdd12127303cd757a30f32a53ebfa2",
+      "replaced": false,
+      "config_extended": false,
+      "public_revoked": false,
+      "hardened": false
+    },
+    {
+      "name": "run_cleanup_identifier_is_valid",
+      "input_types": [
+        "pg_catalog.text"
+      ],
+      "body_sha256": "60a057d304138fd15cd5e265737fb34c4be1d1af903f2e6a8923a279176eea64",
+      "replaced": false,
+      "config_extended": false,
+      "public_revoked": false,
+      "hardened": false
+    },
+    {
+      "name": "run_cleanup_set_matches",
+      "input_types": [
+        "pg_catalog.uuid",
+        "pg_catalog.int8",
+        "pg_catalog.bool"
+      ],
+      "body_sha256": "e9e01e9ebb0720fe75f6e67e62e6171d8f63de6f448ab165db07072f4541c5f0",
+      "replaced": false,
+      "config_extended": false,
+      "public_revoked": false,
+      "hardened": false
+    },
+    {
+      "name": "run_cleanup_target_digest",
+      "input_types": [
+        "pg_catalog.uuid",
+        "pg_catalog.int8"
+      ],
+      "body_sha256": "00e50be8425bf05d52ded165617e97f8030530c259123797682dadbb11a1fd79",
+      "replaced": false,
+      "config_extended": false,
+      "public_revoked": false,
+      "hardened": false
+    },
+    {
+      "name": "run_cleanup_wake_cancel118",
+      "input_types": [
+        "pg_catalog.uuid",
+        "pg_catalog.uuid"
+      ],
+      "body_sha256": "bb92150eadceaeea4b1281da54e281d39a746d6ef7a1797ed6b283f256789fd1",
+      "replaced": false,
+      "config_extended": false,
+      "public_revoked": false,
+      "hardened": false
+    },
+    {
+      "name": "run_cleanup_wake_closure118",
+      "input_types": [
+        "pg_catalog.uuid",
+        "pg_catalog.uuid",
+        "pg_catalog.jsonb"
+      ],
+      "body_sha256": "cda058dc47e2cca2de9362df49f8a524a30320a62ae7dc7a08eb3dfb483777e0",
+      "replaced": false,
+      "config_extended": false,
+      "public_revoked": false,
+      "hardened": false
+    },
+    {
+      "name": "run_cleanup_wake_original118",
+      "input_types": [
+        "pg_catalog.uuid"
+      ],
+      "body_sha256": "21bd94d9790727e40d26fa48d109e5d80b3f5521aa18ce9ba9d24210ec6bc9b1",
+      "replaced": false,
+      "config_extended": false,
+      "public_revoked": false,
+      "hardened": false
+    },
+    {
+      "name": "run_cleanup_wake_producer118",
+      "input_types": [
+        "public.runs",
+        "pg_catalog.bytea"
+      ],
+      "body_sha256": "d03b4fa018c617eb7c03c997bf6ba7c0393f673b0987119b025d20d6ca05b38b",
+      "replaced": false,
+      "config_extended": false,
+      "public_revoked": false,
+      "hardened": false
+    },
+    {
+      "name": "run_cleanup_wake_reservations118",
+      "input_types": [
+        "pg_catalog.uuid",
+        "pg_catalog.uuid",
+        "pg_catalog.jsonb",
+        "pg_catalog.text",
+        "pg_catalog.text",
+        "pg_catalog.bytea"
+      ],
+      "body_sha256": "ebaf7f1e188a72d42da640c4ac29328a2ec66e87b949ac9c63caeb65bcbf1b9b",
+      "replaced": false,
+      "config_extended": false,
+      "public_revoked": false,
+      "hardened": false
+    },
+    {
+      "name": "run_cleanup_wake_selections118",
+      "input_types": [
+        "public.runs"
+      ],
+      "body_sha256": "3e5c578b3700bffa328eb380e31890cc8a6a08a76188ebe65c34cfea63007519",
+      "replaced": false,
+      "config_extended": false,
+      "public_revoked": false,
+      "hardened": false
+    },
+    {
+      "name": "run_cleanup_wake_set118",
+      "input_types": [
+        "public.runs",
+        "pg_catalog.bool"
+      ],
+      "body_sha256": "6f220a5c9feef19b1de092390196ce645551f1245fe460bebfcc2207802d648d",
+      "replaced": false,
+      "config_extended": false,
+      "public_revoked": false,
+      "hardened": false
+    },
+    {
+      "name": "run_profile_producer_matches",
+      "input_types": [
+        "public.runs"
+      ],
+      "body_sha256": "90fb1dbde0d55c46167de3f1c2dafedced256c92d403a95e51c3aeba5443d8ff",
+      "replaced": false,
+      "config_extended": false,
+      "public_revoked": false,
+      "hardened": false
+    },
+    {
+      "name": "validate_canonical_lease_release",
+      "input_types": [],
+      "body_sha256": "504e2845871f69014bbd6191a03df05f159c1c51dd238958cd0b0ad91977f81d",
+      "replaced": false,
+      "config_extended": false,
+      "public_revoked": false,
+      "hardened": false
+    },
+    {
+      "name": "validate_fresh_run_execution_profile",
+      "input_types": [],
+      "body_sha256": "5eafb3d735e54cf7d77d2d8c00322ee6bfed755c11686af0ea0f4ef84fd0e795",
+      "replaced": false,
+      "config_extended": false,
+      "public_revoked": false,
+      "hardened": false
+    },
+    {
+      "name": "validate_invocation117_commit",
+      "input_types": [],
+      "body_sha256": "fc22024b1165a2bc2b8acfeed2b4eeae5b27a86928bcd20efbccb140b44ece93",
+      "replaced": false,
+      "config_extended": false,
+      "public_revoked": false,
+      "hardened": false
+    },
+    {
+      "name": "validate_invocation119_authority_commit",
+      "input_types": [],
+      "body_sha256": "22ceda4f0beb5ee5f810c051866d3bab9b654b0a1889dfbd7076c0595f0a50fe",
+      "replaced": false,
+      "config_extended": false,
+      "public_revoked": false,
+      "hardened": false
+    },
+    {
+      "name": "validate_invocation119_commit",
+      "input_types": [],
+      "body_sha256": "8a6ec479265889dd483fdd2b16dd1ca092fd900c4f230ba357fea9cea8215447",
+      "replaced": false,
+      "config_extended": false,
+      "public_revoked": false,
+      "hardened": false
+    },
+    {
+      "name": "validate_invocation119_queued_cleanup",
+      "input_types": [
+        "public.runs",
+        "public.runs"
+      ],
+      "body_sha256": "50c062e1982983c2bf07e3f1faf20858bc7e65b645dc738556cf030324299a97",
+      "replaced": false,
+      "config_extended": false,
+      "public_revoked": false,
+      "hardened": false
+    },
+    {
+      "name": "validate_invocation119_terminal_candidate_commit",
+      "input_types": [],
+      "body_sha256": "8dcdc7ea842964350f04f93679e29bf165f334d619764bce8ebec51aad0b86ee",
+      "replaced": false,
+      "config_extended": false,
+      "public_revoked": false,
+      "hardened": false
+    },
+    {
+      "name": "validate_invocation119_volume_fence",
+      "input_types": [],
+      "body_sha256": "d45e616233f9f96260308834f5e9210b188cc633f1125ad81c8cbf92e6ffa02e",
+      "replaced": false,
+      "config_extended": false,
+      "public_revoked": false,
+      "hardened": false
+    },
+    {
+      "name": "validate_legacy_scalar_acquisition_binding",
+      "input_types": [],
+      "body_sha256": "aba608e1ccd1654b20d268b53e70b99a34a8ddd2760ea8f8617407e86699571b",
+      "replaced": false,
+      "config_extended": false,
+      "public_revoked": false,
+      "hardened": false
+    },
+    {
+      "name": "validate_legacy_vm_placement_birth",
+      "input_types": [],
+      "body_sha256": "ad50004a12a869ec3f27333f954970ab746720d564b5d7799da7224b479318e8",
+      "replaced": false,
+      "config_extended": false,
+      "public_revoked": false,
+      "hardened": false
+    },
+    {
+      "name": "validate_new_run_vm_admission_commit",
+      "input_types": [],
+      "body_sha256": "d8a322e6238a174abbc7d67e145949c803fdc239c29fa793ee5d9297dfa79eb6",
+      "replaced": false,
+      "config_extended": false,
+      "public_revoked": false,
+      "hardened": false
+    },
+    {
+      "name": "validate_ordinary_queued_cancel_commit140",
+      "input_types": [],
+      "body_sha256": "35761bc26e4e87f80cca13912c67041d811231c41e5c6cddb3f84d7cda95358c",
+      "replaced": false,
+      "config_extended": false,
+      "public_revoked": false,
+      "hardened": false
+    },
+    {
+      "name": "validate_qualified_instance_activation_commit",
+      "input_types": [],
+      "body_sha256": "bb1d7bd51809451728b79ad32bb05ac2828a70215509d912a2b761f7322df7d6",
+      "replaced": false,
+      "config_extended": false,
+      "public_revoked": false,
+      "hardened": false
+    },
+    {
+      "name": "validate_qualified_instance_invocation_commit",
+      "input_types": [],
+      "body_sha256": "863b5eb4a60466922580dfe9e50a3ff32623c12a038417de2b52fecd129588c5",
+      "replaced": false,
+      "config_extended": false,
+      "public_revoked": false,
+      "hardened": false
+    },
+    {
+      "name": "validate_recipe_execution_preparation_commit",
+      "input_types": [],
+      "body_sha256": "d7f14e8f81f918db2e067876b2910c83110dad95e8d66c54dbbe7d9f81f9e74c",
+      "replaced": false,
+      "config_extended": false,
+      "public_revoked": false,
+      "hardened": false
+    },
+    {
+      "name": "validate_recipe_instance_birth_commit",
+      "input_types": [],
+      "body_sha256": "cb4532fdbaf5bae73abcc298f562365063227cfc6542caca8c6216b748e2a5fd",
+      "replaced": false,
+      "config_extended": false,
+      "public_revoked": false,
+      "hardened": false
+    },
+    {
+      "name": "validate_recipe_ready_retention_commit",
+      "input_types": [],
+      "body_sha256": "e5d5f2a5c89b0da0ea0f5df30023ba667605c634362bbd361440659126bed45e",
+      "replaced": false,
+      "config_extended": false,
+      "public_revoked": false,
+      "hardened": false
+    },
+    {
+      "name": "validate_run_cleanup_completion_commit",
+      "input_types": [],
+      "body_sha256": "bd7af811e002d43e72a79e58330dae7acff6c04a1b4b53ac3a3954ccfab10eec",
+      "replaced": false,
+      "config_extended": false,
+      "public_revoked": false,
+      "hardened": false
+    },
+    {
+      "name": "validate_run_cleanup_snapshot",
+      "input_types": [],
+      "body_sha256": "0f7faf66f185d620bc6115ac0abd3e882a64504b9d52863174521df5df0b8674",
+      "replaced": false,
+      "config_extended": false,
+      "public_revoked": false,
+      "hardened": false
+    },
+    {
+      "name": "validate_run_vm_plan_admission_commit",
+      "input_types": [],
+      "body_sha256": "129daf74dfa03d1a011babcbef86262b8d14acf44cda7150c0127ef79b94bdf6",
+      "replaced": false,
+      "config_extended": false,
+      "public_revoked": false,
+      "hardened": false
+    },
+    {
+      "name": "verify_invocation119_empty_secret_cleanup",
+      "input_types": [
+        "pg_catalog.uuid",
+        "pg_catalog.bytea",
+        "pg_catalog.text",
+        "pg_catalog.text"
+      ],
+      "body_sha256": "d5fc60f8def939a5b27e4d1b2387114dbc07fb26f1b30d99623cecdd20395974",
+      "replaced": false,
+      "config_extended": false,
+      "public_revoked": false,
+      "hardened": false
+    },
+    {
+      "name": "verify_invocation119_empty_secrets",
+      "input_types": [
+        "pg_catalog.uuid",
+        "pg_catalog.bytea",
+        "pg_catalog.uuid",
+        "pg_catalog.uuid",
+        "pg_catalog.uuid",
+        "pg_catalog.uuid",
+        "pg_catalog.uuid",
+        "pg_catalog.bool",
+        "pg_catalog.text",
+        "pg_catalog.text"
+      ],
+      "body_sha256": "7c22fd695877bd1c16ad98728efc8609fc7227a1f24dbeca3a359ac529040b46",
+      "replaced": false,
+      "config_extended": false,
+      "public_revoked": false,
+      "hardened": false
+    },
+    {
+      "name": "verify_invocation119_pre_acquisition",
+      "input_types": [
+        "pg_catalog.uuid",
+        "pg_catalog.bytea",
+        "pg_catalog.uuid",
+        "pg_catalog.uuid",
+        "pg_catalog.uuid",
+        "pg_catalog.uuid",
+        "pg_catalog.uuid",
+        "pg_catalog.bool",
+        "pg_catalog.text",
+        "pg_catalog.int8",
+        "pg_catalog.text"
+      ],
+      "body_sha256": "08878e4f50bc60f0cfda9af6f979da9feec059405d7e21521ec3475d28bc8338",
+      "replaced": false,
+      "config_extended": false,
+      "public_revoked": false,
+      "hardened": false
+    },
+    {
+      "name": "verify_ordinary_cancel_delivery140",
+      "input_types": [
+        "pg_catalog.uuid",
+        "pg_catalog.jsonb",
+        "pg_catalog.text",
+        "pg_catalog.text",
+        "pg_catalog.bytea"
+      ],
+      "body_sha256": "489400e144aca119417d9b3e6b1dac1ca77fb1d94155b66b8284b3d3f5e6294f",
+      "replaced": false,
+      "config_extended": false,
+      "public_revoked": false,
+      "hardened": false
+    },
+    {
+      "name": "verify_owned_purpose_commit",
+      "input_types": [],
+      "body_sha256": "a95fdf88d72712a8b12e3160c32b0bc7ffe023440f3dd9521c02bfafe4939f3b",
+      "replaced": false,
+      "config_extended": false,
+      "public_revoked": false,
+      "hardened": false
+    },
+    {
+      "name": "verify_owned_transition_commit",
+      "input_types": [],
+      "body_sha256": "43736d8fbebe604cff3400d852ab5bb9487cb0ebaeac22b30c7588935b7c2ca3",
+      "replaced": false,
+      "config_extended": false,
+      "public_revoked": false,
+      "hardened": false
+    },
+    {
+      "name": "verify_partial_birth_retirement_commit",
+      "input_types": [],
+      "body_sha256": "ba7ea2a27dc8744dae95939e2fe3da0045d605a51d63f8805e24bff84cbf393d",
+      "replaced": false,
+      "config_extended": false,
+      "public_revoked": true,
+      "hardened": true
+    },
+    {
+      "name": "verify_queued_cancel_delivery119",
+      "input_types": [
+        "pg_catalog.uuid",
+        "pg_catalog.jsonb",
+        "pg_catalog.text",
+        "pg_catalog.text",
+        "pg_catalog.bytea"
+      ],
+      "body_sha256": "d8c0f5f22c317c7f6b15f67225539974de0708ba1dee702379b7dc30e1f484fb",
+      "replaced": false,
+      "config_extended": false,
+      "public_revoked": false,
+      "hardened": false
+    },
+    {
+      "name": "write_invocation119_session",
+      "input_types": [
+        "pg_catalog.uuid",
+        "pg_catalog.bytea",
+        "pg_catalog.text",
+        "pg_catalog.bytea",
+        "pg_catalog.bytea",
+        "pg_catalog.int8",
+        "pg_catalog.bytea",
+        "pg_catalog.timestamptz",
+        "pg_catalog.timestamptz",
+        "pg_catalog.text",
+        "pg_catalog.text"
+      ],
+      "body_sha256": "2d64979c106d26973b42216304ebafc8069433926104f5ea4a15a498f1f13924",
+      "replaced": false,
+      "config_extended": false,
+      "public_revoked": false,
+      "hardened": false
+    },
+    {
+      "name": "write_qualified_instance_activation",
+      "input_types": [
+        "pg_catalog.uuid",
+        "pg_catalog.bytea",
+        "pg_catalog.uuid",
+        "pg_catalog.uuid",
+        "pg_catalog.int8",
+        "pg_catalog.bytea",
+        "pg_catalog.text"
+      ],
+      "body_sha256": "9687b6b60616bcf5ef801a2b7de367733ad395a2bf894cad7a876c413f239c74",
+      "replaced": false,
+      "config_extended": false,
+      "public_revoked": false,
+      "hardened": false
+    },
+    {
+      "name": "write_qualified_instance_invocation",
+      "input_types": [
+        "pg_catalog.uuid",
+        "pg_catalog.bytea",
+        "pg_catalog.uuid",
+        "pg_catalog.uuid",
+        "pg_catalog.uuid",
+        "pg_catalog.uuid",
+        "pg_catalog.bytea",
+        "pg_catalog.text"
+      ],
+      "body_sha256": "6d8bd31558a5793836e1c648d17592b9a46b465b768b0324ace1696009f5633b",
+      "replaced": false,
+      "config_extended": false,
+      "public_revoked": false,
+      "hardened": false
+    },
+    {
+      "name": "write_recipe_execution_preparation",
+      "input_types": [
+        "pg_catalog.uuid",
+        "pg_catalog.uuid",
+        "pg_catalog.bytea",
+        "pg_catalog._bytea",
+        "pg_catalog.text"
+      ],
+      "body_sha256": "1f7de8189a2fb60675810214a73d6f4eb4f43ef884091a1ee1f1417155096e15",
+      "replaced": false,
+      "config_extended": false,
+      "public_revoked": false,
+      "hardened": false
+    },
+    {
+      "name": "prepared_closure_row142",
+      "input_types": [
+        "public.agent_instance_removal_requests"
+      ],
+      "body_sha256": "b6952c588b9e6a7cbe8303eceb14efa753b5c255b8d3c27743e1d2248654c2a6",
+      "replaced": false,
+      "config_extended": false,
+      "public_revoked": false,
+      "hardened": false
+    },
+    {
+      "name": "prepared_drain_progress142",
+      "input_types": [
+        "pg_catalog.uuid",
+        "pg_catalog.jsonb"
+      ],
+      "body_sha256": "fa69bfc7af186afeccb207273e0cf2d21da9e146aa308fe5b1d1489b640f4bbf",
+      "replaced": false,
+      "config_extended": false,
+      "public_revoked": false,
+      "hardened": false
+    },
+    {
+      "name": "pending_instance_drain142",
+      "input_types": [
+        "pg_catalog.uuid",
+        "pg_catalog.text"
+      ],
+      "body_sha256": "da4a35ad515e6772a3286048d24b06b7b40c7b50b5eebaef2382670da74324b0",
+      "replaced": false,
+      "config_extended": false,
+      "public_revoked": false,
+      "hardened": false
+    },
+    {
+      "name": "prepared_closure_origin142",
+      "input_types": [
+        "pg_catalog.uuid"
+      ],
+      "body_sha256": "99a5b4b1163897c49dc4db43055242d2d1e078908aac19a4574beb2cf12fb499",
+      "replaced": false,
+      "config_extended": false,
+      "public_revoked": false,
+      "hardened": false
+    },
+    {
+      "name": "prepared_resume_inventory142",
+      "input_types": [
+        "pg_catalog.uuid",
+        "pg_catalog.text",
+        "pg_catalog.text",
+        "pg_catalog.jsonb"
+      ],
+      "body_sha256": "4e44e388600faf3efb0c23ee4c37e8827eee562db40658b1e4d11c9bc86d3a71",
+      "replaced": false,
+      "config_extended": false,
+      "public_revoked": false,
+      "hardened": false
+    },
+    {
+      "name": "prepare_resumed_prepared_instance_closure142",
+      "input_types": [
+        "pg_catalog.uuid",
+        "pg_catalog.uuid",
+        "pg_catalog.jsonb",
+        "pg_catalog.jsonb",
+        "pg_catalog.bytea",
+        "pg_catalog.jsonb",
+        "pg_catalog.jsonb",
+        "pg_catalog.text",
+        "pg_catalog.text",
+        "pg_catalog.jsonb",
+        "pg_catalog.int8",
+        "pg_catalog.bytea",
+        "pg_catalog.uuid",
+        "pg_catalog.int8",
+        "pg_catalog.bytea"
+      ],
+      "body_sha256": "c976a4b80daf25c60683097033ec5c5c015b5a34e125b14d6bc17393938d5248",
+      "replaced": false,
+      "config_extended": false,
+      "public_revoked": false,
+      "hardened": false
+    },
+    {
+      "name": "guard_prepared_resume_origin142",
+      "input_types": [],
+      "body_sha256": "d1202931ee6be5d1e4ddfccfb05d212828d1e04cd79af01deb113db0b677cb74",
+      "replaced": false,
+      "config_extended": false,
+      "public_revoked": false,
+      "hardened": false
+    },
+    {
+      "name": "validate_prepared_resume_origin142",
+      "input_types": [],
+      "body_sha256": "c4c2ccced3bbfb449c2718d941594b449a7195cbb72976763602c644542e7f74",
+      "replaced": false,
+      "config_extended": false,
+      "public_revoked": false,
+      "hardened": false
+    },
+    {
+      "name": "recipe_command_guard",
+      "input_types": [],
+      "body_sha256": "f3b6be374f225cdefe48374506b9767cb6de310dc185843371789e26dd9ae953",
+      "replaced": true,
+      "config_extended": false,
+      "public_revoked": false,
+      "hardened": false
+    },
+    {
+      "name": "verify_invocation142_empty_secret_cleanup",
+      "input_types": [
+        "pg_catalog.uuid",
+        "pg_catalog.bytea",
+        "pg_catalog.text",
+        "pg_catalog.text"
+      ],
+      "body_sha256": "00a4f259f25f7caa83d80b09aacba49def830a8a9cdf6d14ad6fd8c298e129a9",
+      "replaced": false,
+      "config_extended": false,
+      "public_revoked": false,
+      "hardened": false
+    },
+    {
+      "name": "prepared_instance_birth143",
+      "input_types": [
+        "pg_catalog.uuid",
+        "pg_catalog.bytea"
+      ],
+      "body_sha256": "ef382d516762515fd79d87bc48bbc5fd0abaddfd93aa06e57faa7bbfe70aee65",
+      "replaced": false,
+      "config_extended": false,
+      "public_revoked": false,
+      "hardened": false
+    },
+    {
+      "name": "prepared_instance_cleanup143",
+      "input_types": [
+        "pg_catalog.uuid",
+        "pg_catalog.text",
+        "pg_catalog.text"
+      ],
+      "body_sha256": "c8eab464331dda72e4a5dd67c4e5394696a03dd9ce99af51f65117d0ff5f0710",
+      "replaced": false,
+      "config_extended": false,
+      "public_revoked": false,
+      "hardened": false
+    },
+    {
+      "name": "prepared_instance_progress143",
+      "input_types": [
+        "pg_catalog.uuid",
+        "pg_catalog.jsonb"
+      ],
+      "body_sha256": "039cb0a294a1b080de30b65402257fd8e10ad5e7575f096b8daa48e4173e5830",
+      "replaced": false,
+      "config_extended": false,
+      "public_revoked": false,
+      "hardened": false
+    },
+    {
+      "name": "prepared_instance_phase143",
+      "input_types": [
+        "pg_catalog.uuid",
+        "pg_catalog.text",
+        "pg_catalog.bytea"
+      ],
+      "body_sha256": "8d74620cb49aaa3ad3cf2f5e2bd5a5ded608b83bd2b67c4286cb3f2ba44d91e4",
+      "replaced": false,
+      "config_extended": false,
+      "public_revoked": false,
+      "hardened": false
+    },
+    {
+      "name": "prepared_instance_detached143",
+      "input_types": [
+        "pg_catalog.uuid",
+        "pg_catalog.bytea"
+      ],
+      "body_sha256": "6410151c3cc5b6f2ef2c268640187a97f1f19be5da369be5ae6e7aaff7db6870",
+      "replaced": false,
+      "config_extended": false,
+      "public_revoked": false,
+      "hardened": false
+    },
+    {
+      "name": "prepared_instance_original143",
+      "input_types": [
+        "pg_catalog.jsonb",
+        "pg_catalog.bytea"
+      ],
+      "body_sha256": "0fe4dfbcf650ee09f221396318c228a6b5304b7f66c8188fcc17216166724194",
+      "replaced": false,
+      "config_extended": false,
+      "public_revoked": false,
+      "hardened": false
+    },
+    {
+      "name": "prepared_instance_terminal143",
+      "input_types": [
+        "pg_catalog.uuid"
+      ],
+      "body_sha256": "4dd0a0cb383515c22ed2155c1d36e49358ede2942be5dd270444d375d5deaed7",
+      "replaced": false,
+      "config_extended": false,
+      "public_revoked": false,
+      "hardened": false
+    },
+    {
+      "name": "prepared_instance_current143",
+      "input_types": [
+        "pg_catalog.jsonb",
+        "pg_catalog.bytea"
+      ],
+      "body_sha256": "2d994503273013378ab29ab83cf1698264fe186f68b49e54f2293fda1ad3426a",
+      "replaced": false,
+      "config_extended": false,
+      "public_revoked": false,
+      "hardened": false
+    },
+    {
+      "name": "observe_prepared_instance_detach143",
+      "input_types": [
+        "pg_catalog.jsonb",
+        "pg_catalog.bytea"
+      ],
+      "body_sha256": "ec11a9196bd2cdfa3c4aa5c89b5b30211f7aefa958a8db9c36895090e7b4d987",
+      "replaced": false,
+      "config_extended": false,
+      "public_revoked": false,
+      "hardened": false
+    },
+    {
+      "name": "delete_prepared_instance143",
+      "input_types": [
+        "pg_catalog.jsonb",
+        "pg_catalog.bytea"
+      ],
+      "body_sha256": "d1f0da305ddb560e9d30957014c415336993ffcc12fde2184ffd7ffc06e97063",
+      "replaced": false,
+      "config_extended": false,
+      "public_revoked": false,
+      "hardened": false
+    },
+    {
+      "name": "observe_prepared_instance_deleted143",
+      "input_types": [
+        "pg_catalog.jsonb",
+        "pg_catalog.bytea"
+      ],
+      "body_sha256": "2a848b2fc9325046041ca372f69732fcebef5dbd3e891ffb55b663363e63ad6a",
+      "replaced": false,
+      "config_extended": false,
+      "public_revoked": false,
+      "hardened": false
+    },
+    {
+      "name": "prepared_instance_delete_context143",
+      "input_types": [
+        "pg_catalog.uuid"
+      ],
+      "body_sha256": "a3bfc8929d5a87f7bb208c87986679e83cbae1457c1fc6f7a1b0a2b164597144",
+      "replaced": false,
+      "config_extended": false,
+      "public_revoked": false,
+      "hardened": false
+    },
+    {
+      "name": "prepared_instance_terminal_context143",
+      "input_types": [
+        "pg_catalog.uuid",
+        "pg_catalog.jsonb",
+        "pg_catalog.text",
+        "pg_catalog.text",
+        "pg_catalog.jsonb"
+      ],
+      "body_sha256": "0a5c797f168d92eb1673921b7b43a102016136570ca0c219a6607635f7815883",
+      "replaced": false,
+      "config_extended": false,
+      "public_revoked": false,
+      "hardened": false
+    },
+    {
+      "name": "load_prepared_instance_delete_continuation143",
+      "input_types": [
+        "pg_catalog.uuid",
+        "pg_catalog.jsonb",
+        "pg_catalog.bytea"
+      ],
+      "body_sha256": "472d926c1ad6ab27fef68547c7e17705b920c0897bd325cb516664c7190cb430",
+      "replaced": false,
+      "config_extended": false,
+      "public_revoked": false,
+      "hardened": false
+    },
+    {
+      "name": "guard_prepared_instance_terminal143",
+      "input_types": [],
+      "body_sha256": "b95cb6a6a7082719f6fd46e222916b6eb4763620a3daafd85d9c264158b303be",
+      "replaced": false,
+      "config_extended": false,
+      "public_revoked": false,
+      "hardened": false
+    },
+    {
+      "name": "validate_prepared_instance_terminal143",
+      "input_types": [],
+      "body_sha256": "f2cc41dde5375f2067d4c88ad77d59ba5d1449afcf74454fd3b0d0a77e50d0d3",
+      "replaced": false,
+      "config_extended": false,
+      "public_revoked": false,
+      "hardened": false
+    }
+  ],
+  "native": [
+    {
+      "name": "digest",
+      "input_types": [
+        "pg_catalog.text",
+        "pg_catalog.text"
+      ],
+      "symbol": "pg_digest",
+      "strict": true,
+      "volatility": "i"
+    },
+    {
+      "name": "digest",
+      "input_types": [
+        "pg_catalog.bytea",
+        "pg_catalog.text"
+      ],
+      "symbol": "pg_digest",
+      "strict": true,
+      "volatility": "i"
+    },
+    {
+      "name": "hmac",
+      "input_types": [
+        "pg_catalog.text",
+        "pg_catalog.text",
+        "pg_catalog.text"
+      ],
+      "symbol": "pg_hmac",
+      "strict": true,
+      "volatility": "i"
+    },
+    {
+      "name": "hmac",
+      "input_types": [
+        "pg_catalog.bytea",
+        "pg_catalog.bytea",
+        "pg_catalog.text"
+      ],
+      "symbol": "pg_hmac",
+      "strict": true,
+      "volatility": "i"
+    },
+    {
+      "name": "crypt",
+      "input_types": [
+        "pg_catalog.text",
+        "pg_catalog.text"
+      ],
+      "symbol": "pg_crypt",
+      "strict": true,
+      "volatility": "i"
+    },
+    {
+      "name": "gen_salt",
+      "input_types": [
+        "pg_catalog.text"
+      ],
+      "symbol": "pg_gen_salt",
+      "strict": true,
+      "volatility": "v"
+    },
+    {
+      "name": "gen_salt",
+      "input_types": [
+        "pg_catalog.text",
+        "pg_catalog.int4"
+      ],
+      "symbol": "pg_gen_salt_rounds",
+      "strict": true,
+      "volatility": "v"
+    },
+    {
+      "name": "encrypt",
+      "input_types": [
+        "pg_catalog.bytea",
+        "pg_catalog.bytea",
+        "pg_catalog.text"
+      ],
+      "symbol": "pg_encrypt",
+      "strict": true,
+      "volatility": "i"
+    },
+    {
+      "name": "decrypt",
+      "input_types": [
+        "pg_catalog.bytea",
+        "pg_catalog.bytea",
+        "pg_catalog.text"
+      ],
+      "symbol": "pg_decrypt",
+      "strict": true,
+      "volatility": "i"
+    },
+    {
+      "name": "encrypt_iv",
+      "input_types": [
+        "pg_catalog.bytea",
+        "pg_catalog.bytea",
+        "pg_catalog.bytea",
+        "pg_catalog.text"
+      ],
+      "symbol": "pg_encrypt_iv",
+      "strict": true,
+      "volatility": "i"
+    },
+    {
+      "name": "decrypt_iv",
+      "input_types": [
+        "pg_catalog.bytea",
+        "pg_catalog.bytea",
+        "pg_catalog.bytea",
+        "pg_catalog.text"
+      ],
+      "symbol": "pg_decrypt_iv",
+      "strict": true,
+      "volatility": "i"
+    },
+    {
+      "name": "gen_random_bytes",
+      "input_types": [
+        "pg_catalog.int4"
+      ],
+      "symbol": "pg_random_bytes",
+      "strict": true,
+      "volatility": "v"
+    },
+    {
+      "name": "gen_random_uuid",
+      "input_types": [],
+      "symbol": "pg_random_uuid",
+      "strict": false,
+      "volatility": "v"
+    },
+    {
+      "name": "pgp_sym_encrypt",
+      "input_types": [
+        "pg_catalog.text",
+        "pg_catalog.text"
+      ],
+      "symbol": "pgp_sym_encrypt_text",
+      "strict": true,
+      "volatility": "v"
+    },
+    {
+      "name": "pgp_sym_encrypt_bytea",
+      "input_types": [
+        "pg_catalog.bytea",
+        "pg_catalog.text"
+      ],
+      "symbol": "pgp_sym_encrypt_bytea",
+      "strict": true,
+      "volatility": "v"
+    },
+    {
+      "name": "pgp_sym_encrypt",
+      "input_types": [
+        "pg_catalog.text",
+        "pg_catalog.text",
+        "pg_catalog.text"
+      ],
+      "symbol": "pgp_sym_encrypt_text",
+      "strict": true,
+      "volatility": "v"
+    },
+    {
+      "name": "pgp_sym_encrypt_bytea",
+      "input_types": [
+        "pg_catalog.bytea",
+        "pg_catalog.text",
+        "pg_catalog.text"
+      ],
+      "symbol": "pgp_sym_encrypt_bytea",
+      "strict": true,
+      "volatility": "v"
+    },
+    {
+      "name": "pgp_sym_decrypt",
+      "input_types": [
+        "pg_catalog.bytea",
+        "pg_catalog.text"
+      ],
+      "symbol": "pgp_sym_decrypt_text",
+      "strict": true,
+      "volatility": "i"
+    },
+    {
+      "name": "pgp_sym_decrypt_bytea",
+      "input_types": [
+        "pg_catalog.bytea",
+        "pg_catalog.text"
+      ],
+      "symbol": "pgp_sym_decrypt_bytea",
+      "strict": true,
+      "volatility": "i"
+    },
+    {
+      "name": "pgp_sym_decrypt",
+      "input_types": [
+        "pg_catalog.bytea",
+        "pg_catalog.text",
+        "pg_catalog.text"
+      ],
+      "symbol": "pgp_sym_decrypt_text",
+      "strict": true,
+      "volatility": "i"
+    },
+    {
+      "name": "pgp_sym_decrypt_bytea",
+      "input_types": [
+        "pg_catalog.bytea",
+        "pg_catalog.text",
+        "pg_catalog.text"
+      ],
+      "symbol": "pgp_sym_decrypt_bytea",
+      "strict": true,
+      "volatility": "i"
+    },
+    {
+      "name": "pgp_pub_encrypt",
+      "input_types": [
+        "pg_catalog.text",
+        "pg_catalog.bytea"
+      ],
+      "symbol": "pgp_pub_encrypt_text",
+      "strict": true,
+      "volatility": "v"
+    },
+    {
+      "name": "pgp_pub_encrypt_bytea",
+      "input_types": [
+        "pg_catalog.bytea",
+        "pg_catalog.bytea"
+      ],
+      "symbol": "pgp_pub_encrypt_bytea",
+      "strict": true,
+      "volatility": "v"
+    },
+    {
+      "name": "pgp_pub_encrypt",
+      "input_types": [
+        "pg_catalog.text",
+        "pg_catalog.bytea",
+        "pg_catalog.text"
+      ],
+      "symbol": "pgp_pub_encrypt_text",
+      "strict": true,
+      "volatility": "v"
+    },
+    {
+      "name": "pgp_pub_encrypt_bytea",
+      "input_types": [
+        "pg_catalog.bytea",
+        "pg_catalog.bytea",
+        "pg_catalog.text"
+      ],
+      "symbol": "pgp_pub_encrypt_bytea",
+      "strict": true,
+      "volatility": "v"
+    },
+    {
+      "name": "pgp_pub_decrypt",
+      "input_types": [
+        "pg_catalog.bytea",
+        "pg_catalog.bytea"
+      ],
+      "symbol": "pgp_pub_decrypt_text",
+      "strict": true,
+      "volatility": "i"
+    },
+    {
+      "name": "pgp_pub_decrypt_bytea",
+      "input_types": [
+        "pg_catalog.bytea",
+        "pg_catalog.bytea"
+      ],
+      "symbol": "pgp_pub_decrypt_bytea",
+      "strict": true,
+      "volatility": "i"
+    },
+    {
+      "name": "pgp_pub_decrypt",
+      "input_types": [
+        "pg_catalog.bytea",
+        "pg_catalog.bytea",
+        "pg_catalog.text"
+      ],
+      "symbol": "pgp_pub_decrypt_text",
+      "strict": true,
+      "volatility": "i"
+    },
+    {
+      "name": "pgp_pub_decrypt_bytea",
+      "input_types": [
+        "pg_catalog.bytea",
+        "pg_catalog.bytea",
+        "pg_catalog.text"
+      ],
+      "symbol": "pgp_pub_decrypt_bytea",
+      "strict": true,
+      "volatility": "i"
+    },
+    {
+      "name": "pgp_pub_decrypt",
+      "input_types": [
+        "pg_catalog.bytea",
+        "pg_catalog.bytea",
+        "pg_catalog.text",
+        "pg_catalog.text"
+      ],
+      "symbol": "pgp_pub_decrypt_text",
+      "strict": true,
+      "volatility": "i"
+    },
+    {
+      "name": "pgp_pub_decrypt_bytea",
+      "input_types": [
+        "pg_catalog.bytea",
+        "pg_catalog.bytea",
+        "pg_catalog.text",
+        "pg_catalog.text"
+      ],
+      "symbol": "pgp_pub_decrypt_bytea",
+      "strict": true,
+      "volatility": "i"
+    },
+    {
+      "name": "pgp_key_id",
+      "input_types": [
+        "pg_catalog.bytea"
+      ],
+      "symbol": "pgp_key_id_w",
+      "strict": true,
+      "volatility": "i"
+    },
+    {
+      "name": "armor",
+      "input_types": [
+        "pg_catalog.bytea"
+      ],
+      "symbol": "pg_armor",
+      "strict": true,
+      "volatility": "i"
+    },
+    {
+      "name": "armor",
+      "input_types": [
+        "pg_catalog.bytea",
+        "pg_catalog._text",
+        "pg_catalog._text"
+      ],
+      "symbol": "pg_armor",
+      "strict": true,
+      "volatility": "i"
+    },
+    {
+      "name": "dearmor",
+      "input_types": [
+        "pg_catalog.text"
+      ],
+      "symbol": "pg_dearmor",
+      "strict": true,
+      "volatility": "i"
+    },
+    {
+      "name": "pgp_armor_headers",
+      "input_types": [
+        "pg_catalog.text"
+      ],
+      "symbol": "pgp_armor_headers",
+      "strict": true,
+      "volatility": "i"
+    }
+  ]
+}

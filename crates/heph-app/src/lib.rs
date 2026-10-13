@@ -1,8 +1,39 @@
 //! Production composition root and supervised daemon lifecycle.
 mod application;
+mod managed_backend;
+pub use managed_backend::{
+    ManagedBackendConfig, ManagedBackendSupervisor, ManagedHeldReason, ManagedRootIntent,
+    ManagedSupervisorPhase, ManagedSupervisorStatus,
+};
+mod managed_run_commands;
+pub use managed_run_commands::{
+    ManagedOrdinaryAdmissionPolicy, ManagedRunCommandExecutor, ManagedRunCommandInputs,
+};
+mod managed_legacy;
+pub use managed_legacy::{
+    ManagedLegacyAuthority, ManagedLegacyController, ManagedLegacyInputs, ManagedLegacyPools,
+};
+mod prepared_instance_terminal;
+pub use prepared_instance_terminal::{
+    PreparedInstanceTerminalCoordinator, PreparedInstanceTerminalError,
+    PreparedInstanceTerminalPending,
+};
+mod prepared_instance_drain;
+pub use prepared_instance_drain::{
+    PreparedInstanceDrainCoordinator, PreparedInstanceDrainError, PreparedInstanceDrainPending,
+};
+mod managed_invocation;
+pub use managed_invocation::{
+    ManagedInvocationAuthority, ManagedInvocationController, ManagedInvocationInputs,
+    ManagedInvocationPools,
+};
 mod event_adapter;
 mod event_cursor;
 pub mod recipe;
+pub mod recipe_engine;
+pub mod recipe_instance_import;
+pub mod recipe_owned_volume;
+pub mod recipe_retained_volume;
 pub mod rpc;
 mod runtime_git_listener;
 mod service_log_maintenance;
@@ -88,12 +119,15 @@ use outbox_flush::{FlushDiagnostics, FlushPublisher, flush_publisher, flush_unti
 
 #[path = "runtime_authority_manager.rs"]
 mod runtime_authority_manager;
-use runtime_authority_manager::PgRunAuthorityManager;
+pub use runtime_authority_manager::PgRunAuthorityManager;
+#[path = "canonical_launch_authorizer.rs"]
+mod canonical_launch_authorizer;
+pub use canonical_launch_authorizer::CanonicalRunLaunchAuthorizer;
 pub use runtime_authority_manager::RunEventKind;
 
 #[path = "vm_spec_factory.rs"]
 mod vm_spec_factory;
-use vm_spec_factory::PgAgentVmSpecFactory;
+pub use vm_spec_factory::PgAgentVmSpecFactory;
 #[cfg(test)]
 use vm_spec_factory::StoredNetworkAccess;
 #[cfg(test)]
@@ -269,38 +303,8 @@ fn canonicalize_release_artifact_root(path: PathBuf) -> Result<PathBuf, AppError
     std::fs::canonicalize(path).map_err(component("release artifact store"))
 }
 
-impl HephaestusApp {
-    /// Validates configuration and constructs every production dependency.
-    ///
-    /// This does not bind listeners or spawn background tasks.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error for invalid configuration, incompatible migrations, or
-    /// an unavailable required dependency.
-    pub async fn build(config: AppConfig) -> Result<Self, AppError> {
-        app_build::build(config).await
-    }
-
-    /// Binds HTTP, establishes durable NATS topology, and starts supervised
-    /// background workers.
-    ///
-    /// This returns only after HTTP, command consumption, and outbox
-    /// publication have crossed their readiness barriers.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error when startup or readiness fails. Already-started tasks
-    /// are cancelled and reaped before the error is returned.
-    pub async fn start(self) -> Result<RunningHephaestus, AppError> {
-        // Keep the large startup state machine off the caller's stack.
-        Box::pin(self.start_inner()).await
-    }
-
-    async fn start_inner(self) -> Result<RunningHephaestus, AppError> {
-        startup::start(self).await
-    }
-}
+#[path = "composition/app_lifecycle.rs"]
+mod app_lifecycle;
 
 #[path = "composition/running.rs"]
 mod running;

@@ -17,15 +17,22 @@ mod execution_preparation_repository;
 mod existing_instance_closure;
 mod ids;
 mod instance_closure;
+mod instance_closure_publication;
+mod instance_delete_continuation;
 mod instance_safety;
+mod instance_terminal;
+mod instance_terminal_preparation;
+mod instance_terminal_resume;
 mod intent;
 mod owned_partial_retention;
 mod owned_ready_retention;
+mod pending_instance_drain;
 mod planning;
 mod planning_observations;
 mod planning_request;
 mod remove_resume;
 mod repository;
+mod resumed_instance_closure;
 mod states;
 
 pub use active_effect::ActiveDeploymentEffectRepository;
@@ -49,10 +56,23 @@ pub use instance_closure::{
     PreparedInstanceClosureAdmission, PreparedInstanceClosureRepository,
     PreparedInstanceClosureRequest,
 };
+pub use instance_closure_publication::{
+    InstanceClosurePublicationOrigin, InstanceClosurePublicationProgress,
+    QualifiedFreshInstanceClosurePublication,
+};
+pub use instance_delete_continuation::{
+    PreparedInstanceDeleteContinuation, PreparedInstanceDeletePublication,
+    PreparedInstanceDeletePublicationRecord,
+};
 pub use instance_safety::{
     InstanceSafetyInventory, InstanceSafetyWork, InstanceSafetyWorkKind,
     PreparedInstanceSafetyObservation, PreparedInstanceSafetyRepository,
     PreparedInstanceSafetyState, PreparedInstanceSafetyTarget,
+};
+pub use instance_terminal::{
+    PreparedInstanceDeleteObservation, PreparedInstanceDeleteRequest,
+    PreparedInstanceDetachObservation, PreparedInstanceDetachRequest,
+    PreparedInstanceTerminalRepository,
 };
 pub use intent::{DeploymentIntent, PlannedResource, PlannedResourceIdentity, ResourceOwnership};
 pub use owned_partial_retention::{
@@ -61,7 +81,8 @@ pub use owned_partial_retention::{
 };
 pub use owned_ready_retention::{
     OwnedReadyRemoveResume, OwnedReadyRetentionPlan, OwnedReadyRetentionRepository,
-    ReopenRetainedOwnedVolume, RetainOwnedReady,
+    ReopenRetainedOwnedVolume, RetainOwnedReady, RetainedExternalCompletion,
+    RetainedExternalVerificationPlan,
 };
 pub use planning::{PlanningCatalog, PlanningCatalogSnapshot, RecipePlan, RecipePlanner};
 pub use planning_observations::{PlatformPolicyObservation, SourceObservation};
@@ -74,4 +95,18 @@ mod tests;
 
 pub use remove_resume::{
     OriginalInstanceClosure, RemoveContinuation, RemoveResumeAdmission, RemoveResumeConfiguration,
+};
+
+pub use pending_instance_drain::PendingInstanceDrainClosure;
+pub use resumed_instance_closure::ResumedPreparedInstanceClosureRequest;
+
+pub use instance_terminal_resume::{
+    PreparedInstanceDeleteCompletedHistory, PreparedInstanceDeleteHistory,
+    PreparedInstanceDeleteHistoryState, PreparedInstanceDetachRecovery,
+    PreparedInstanceTerminalHistoryRepository, PreparedInstanceTerminalProgress,
+    PreparedInstanceTerminalPublisher,
+};
+
+pub use instance_terminal_preparation::{
+    PreparedInstanceTerminalPreparationInput, PreparedInstanceTerminalPreparationRepository,
 };

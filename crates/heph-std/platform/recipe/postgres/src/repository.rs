@@ -5,7 +5,7 @@ use recipe_application::{
     AttemptProvenance, CommandIdentity, CommandReceipt, DeploymentAdmission, DeploymentError,
     DeploymentId, DeploymentRepository, DeploymentSnapshot, DiagnosticCode, EffectClaim,
     EffectEvidence, InstallDeployment, ReconciledOutcome, RemoveDeployment, ResourceEffect,
-    ResourceProgress,
+    ResourceProgress, RetireExternalObservation,
 };
 
 #[async_trait]
@@ -30,6 +30,13 @@ impl DeploymentRepository for PostgresDeploymentRepository {
         command: RemoveDeployment,
     ) -> Result<DeploymentAdmission, DeploymentError> {
         Self::admit_remove(self, identity, command).await
+    }
+    async fn admit_remove_resume(
+        &self,
+        identity: &AuthenticatedIdentity,
+        command: RemoveDeployment,
+    ) -> Result<recipe_application::RemoveResumeAdmission, DeploymentError> {
+        Self::admit_remove_resume(self, identity, command).await
     }
     async fn claim_resource_effect(
         &self,
@@ -63,6 +70,13 @@ impl DeploymentRepository for PostgresDeploymentRepository {
         outcome: ReconciledOutcome,
     ) -> Result<ResourceProgress, DeploymentError> {
         Self::record_reconciliation(self, identity, command, claim, provenance, outcome).await
+    }
+    async fn retire_external_observation(
+        &self,
+        identity: &AuthenticatedIdentity,
+        retirement: &RetireExternalObservation,
+    ) -> Result<ResourceProgress, DeploymentError> {
+        Self::retire_external_observation(self, identity, retirement).await
     }
     async fn finish_command(
         &self,

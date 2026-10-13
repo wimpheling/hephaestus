@@ -22,6 +22,9 @@ impl PgRuntimeSessionRepository {
         run_id: RunId,
         scope: &VolumeMountScope,
     ) -> Result<bool, RuntimeAuthorityError> {
+        if self.qualified_invocation_run(run_id.as_uuid()).await? {
+            return self.invocation_mount_authorized(run_id, scope).await;
+        }
         sqlx::query_scalar(
             "SELECT EXISTS(
                 SELECT 1 FROM agent_instance_volume_mount_grants mount_grant

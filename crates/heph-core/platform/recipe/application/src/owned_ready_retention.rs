@@ -3,6 +3,9 @@
 //! Original installation history remains unchanged. These backend comparison
 //! values neither grant provider ownership nor stand in for actual Local custody.
 
+mod retained_external;
+pub use retained_external::{RetainedExternalCompletion, RetainedExternalVerificationPlan};
+
 use crate::{
     CommandIdentity, DeploymentAttemptId, DeploymentError, EffectClaim,
     PreparedOwnedVolumeCreation, ResourceProgress,
@@ -124,6 +127,37 @@ pub trait OwnedReadyRetentionRepository: Send + Sync + 'static {
         _identity: &AuthenticatedIdentity,
         _request: &ReopenRetainedOwnedVolume,
     ) -> Result<(), DeploymentError> {
+        Err(DeploymentError::InvalidAction)
+    }
+    /// Discovers retained completed origin under the NEW claim's current authority.
+    ///
+    /// Backend selects original IDs and preparation through immutable lineage.
+    /// No caller-provided old actor or metadata-only Ready result authorizes IO.
+    ///
+    /// # Errors
+    /// Unsupported, denied/drifted preparation, foreign or unpaired history denies.
+    async fn prepare_retained_external_verification(
+        &self,
+        _identity: &AuthenticatedIdentity,
+        _claim: &EffectClaim,
+    ) -> Result<RetainedExternalVerificationPlan, DeploymentError> {
+        Err(DeploymentError::InvalidAction)
+    }
+    /// Atomically reopens and records a genuine Applied `VerifyExternal` completion.
+    ///
+    /// Owning App must move actual nonclone Local custody into protected completion
+    /// before worker/actor awaits and retain it until their outcomes are resolved.
+    /// The adapter freshly qualifies all pins and existing worker proof; a plan is
+    /// never proof authority. Exact replay requires BOTH reopening and completion.
+    ///
+    /// # Errors
+    /// Unsupported, lost authority, stale claim/CAS/proof, or unpaired history denies.
+    async fn complete_retained_external_verification(
+        &self,
+        _identity: &AuthenticatedIdentity,
+        _plan: &RetainedExternalVerificationPlan,
+        _completion: RetainedExternalCompletion,
+    ) -> Result<ResourceProgress, DeploymentError> {
         Err(DeploymentError::InvalidAction)
     }
 }

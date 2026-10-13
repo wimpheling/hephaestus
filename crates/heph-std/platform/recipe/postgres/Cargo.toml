@@ -17,6 +17,7 @@ identity-domain = { path = "../../../../heph-core/auth/identity/domain" }
 recipe-application = { path = "../../../../heph-core/platform/recipe/application" }
 recipe-domain = { path = "../../../../heph-core/platform/recipe/domain" }
 release-domain = { path = "../../../../heph-core/forge/release/domain" }
+release-service = { path = "../../../../heph-core/forge/release/service" }
 runtime-types = { path = "../../../../heph-core/platform/runtime-types" }
 serde.workspace = true
 serde_json.workspace = true

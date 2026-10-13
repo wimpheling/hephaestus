@@ -17,6 +17,8 @@ mod helpers;
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 #[serial]
+// The live daemon spans all session-authority assertions, then shutdown consumes its handle.
+#[allow(clippy::significant_drop_tightening)]
 async fn production_browser_session_create_protect_revoke_and_replay() {
     if std::env::var("REAL_APP_BROWSER_SESSION_RPC").as_deref() != Ok("1") {
         eprintln!("SKIPPED browser-session RPC lifecycle: set REAL_APP_BROWSER_SESSION_RPC=1");
@@ -46,11 +48,11 @@ async fn production_browser_session_create_protect_revoke_and_replay() {
     let sid = BrowserSessionSid::new();
     let other_sid = BrowserSessionSid::new();
     let root = tempfile::tempdir().expect("browser-session application root");
-    let app = HephaestusApp::build(app_config(
+    let app = Box::pin(HephaestusApp::build(app_config(
         database_url.clone(),
         nats_url.clone(),
         root.path(),
-    ))
+    )))
     .await
     .expect("build production browser-session application")
     .start()

@@ -52,3 +52,13 @@ pub struct TransitionRow {
     pub fingerprint: Vec<u8>,
     pub after_state: Option<sqlx::types::Json<crate::effect_state::State>>,
 }
+
+/// Encodes the exact existing persisted claim representation as comparison data.
+///
+/// This pure helper grants no admission, verification or execution authority.
+///
+/// # Errors
+/// Rejects an identity or claim that the existing wire encoder cannot serialize.
+pub fn encode_effect_claim(claim: &EffectClaim) -> Result<serde_json::Value, DeploymentError> {
+    serde_json::to_value(ClaimWire::new(claim)?).map_err(|_| DeploymentError::Serialization)
+}

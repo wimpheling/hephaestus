@@ -26,6 +26,7 @@ fn request() -> ExistingInstanceClosureRequest {
         PreparedInstanceClosureRequest::new(intent.clone(), target.clone(), drain.clone(), 1)
             .unwrap();
     let expected = OriginalInstanceClosure {
+        publication_origin: crate::InstanceClosurePublicationOrigin::OriginalDrain,
         drain,
         removal_id: closed.removal_id(),
         command_key: closed.command_key(),

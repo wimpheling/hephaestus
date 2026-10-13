@@ -1,6 +1,8 @@
 //! Controlled repository/provider evidence, never actual filesystem/VM proof.
 #[path = "strict_legacy/fixture.rs"]
 mod fixture;
+#[path = "strict_legacy/managed_reconciliation.rs"]
+mod managed_reconciliation;
 #[path = "strict_legacy/races.rs"]
 mod races;
 #[path = "strict_legacy/recovery.rs"]

@@ -245,7 +245,18 @@ async fn invocation_failed_cleanup_holds_fences_and_source_failure_stays_failed(
 #[tokio::test]
 async fn invocation_restart_cleanup_uses_exact_run_without_git_sweeps() {
     let fixture = fixture().await;
+    // This controlled checked call is the adapter's 117 consumption boundary.
+    let (host, vm) = fixture.runs.planned_vm.lock().await.clone().unwrap();
+    let consumed = fixture
+        .runs
+        .create_run_with_vm_plan(&fixture.command, &host, &vm)
+        .await
+        .unwrap();
+    assert!(!consumed.created);
     fixture.runs.run.lock().await.state = RunState::Running;
+    // The fixture has exactly one known original; unknown/foreign associations deny.
+    fixture.cleanup.state.lock().await.invocation_inventory =
+        Some(fixture.provider.owner_scope().unwrap());
     let runner = configured(&fixture, 0, fixture.provider.clone(), Arc::new(Factory));
     assert_eq!(
         tokio::time::timeout(Duration::from_secs(2), runner.recover_after_restart())
@@ -257,3 +268,6 @@ async fn invocation_restart_cleanup_uses_exact_run_without_git_sweeps() {
     assert_eq!(fixture.runs.run.lock().await.state, RunState::CleanedUp);
     assert_eq!(fixture.count("scoped-cleanup"), 1);
 }
+
+#[path = "invocation/managed_reconciliation.rs"]
+mod managed_reconciliation;

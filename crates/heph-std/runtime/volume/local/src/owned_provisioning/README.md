@@ -47,3 +47,18 @@ metadata ports. They prove host behavior only. Ordered private 0110/0111 migrati
 tests and later composed PostgreSQL/host tests remain separate verification.
 Production generic metadata exclusions must accompany coherent sealed-schema
 publication; this module does not publish migrations or enable legacy startup.
+
+## Ready before first-consumer completion
+
+`verify_owned_ready` verifies an already Ready backing before its original
+protected creation completes. It opens only the existing owner/journal/inode,
+checks the dedicated worker admission fence under the actual journal flock,
+and requires zero global runtime lease history before checking UUID, geometry
+and clean filesystem with readonly e2fsck. It never rewrites Ready metadata or
+formats. Existing provision/reconcile Ready replay semantics remain unchanged.
+
+The returned `OwnedReadyCustody` cannot be cloned. It retains the actual flock
+through worker recording and actor completion; caller cancellation must not
+release it while the commit may still resolve. Child inherited custody persists
+until fsck exits. Completed replay skips verification: normal runtime admission
+may already be open. Any replacement, dirty backing or unknown history is held.

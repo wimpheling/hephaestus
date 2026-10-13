@@ -25,8 +25,8 @@ pub struct HostContext<'a> {
     git_ref: Option<&'a str>,
     commit_sha: Option<&'a str>,
     release_mount: &'static str,
-    repository_mount: &'static str,
-    work_mount: &'static str,
+    repository_mount: Option<&'static str>,
+    work_mount: Option<&'static str>,
     state_mount: Option<&'static str>,
     parameters_path: &'static str,
     update_id: Option<Uuid>,
@@ -39,6 +39,18 @@ pub struct HostContext<'a> {
 }
 
 impl<'a> HostContext<'a> {
+    pub(crate) fn invocation(
+        run: &Run,
+        input: &'a RunRuntimeInput,
+        state_mount: Option<&'static str>,
+    ) -> Self {
+        let mut context = Self::new(run, input);
+        context.repository_mount = None;
+        context.work_mount = None;
+        context.state_mount = state_mount;
+        context
+    }
+
     pub fn new(run: &Run, input: &'a RunRuntimeInput) -> Self {
         Self {
             schema_version: 1,
@@ -53,8 +65,8 @@ impl<'a> HostContext<'a> {
             git_ref: input.git_ref.as_deref(),
             commit_sha: input.commit_sha.as_deref(),
             release_mount: "/release",
-            repository_mount: "/workspace/repo",
-            work_mount: "/workspace/work",
+            repository_mount: Some("/workspace/repo"),
+            work_mount: Some("/workspace/work"),
             state_mount: run.requires_state.then_some("/var/lib/hephaestus"),
             parameters_path: "/run/hephaestus/parameters.json",
             update_id: input.update_id,

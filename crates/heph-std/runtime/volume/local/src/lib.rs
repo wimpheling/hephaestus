@@ -16,8 +16,12 @@ mod owned_provisioning;
 mod root_owner;
 pub use owned_journal::partial_retention::OwnedPartialBirthCustody;
 pub use owned_provisioning::OwnedVolumeMetadata;
+pub use owned_provisioning::first_ready::OwnedReadyCustody;
 pub use owned_provisioning::partial_retention::PartialBirthCustodyError;
-pub use root_owner::VolumeRootOwner;
+pub use owned_provisioning::ready_retention::{
+    OwnedReadyRetentionCustody, OwnedRetainedReuseCustody,
+};
+pub use root_owner::{ProspectiveVolumeRootBootstrap, VolumeRootOwner};
 mod provisioning;
 mod run_volumes;
 use volume_trait::{
@@ -190,6 +194,13 @@ impl VolumeStore for LocalVolumeStore {
     async fn heartbeat(&self, lease: &VolumeLease) -> Result<VolumeLease, VolumeError> {
         let now = OffsetDateTime::now_utc();
         self.metadata.heartbeat(lease, now, self.expiry(now)?).await
+    }
+
+    async fn scalar_lease_history(
+        &self,
+        run_id: RunId,
+    ) -> Result<volume_trait::ScalarLeaseHistory, VolumeError> {
+        self.metadata.scalar_lease_history(run_id).await
     }
 
     async fn active_lease_for_run(

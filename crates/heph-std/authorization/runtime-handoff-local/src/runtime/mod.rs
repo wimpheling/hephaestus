@@ -4,6 +4,9 @@
 //! bytes are authenticated-encrypted under a host-loaded key and are removed
 //! after exact-generation acknowledgement, revocation, or expiry.
 
+#[path = "expired.rs"]
+mod expired;
+
 use aes_gcm::{
     Aes256Gcm, KeyInit,
     aead::{Aead, AeadCore, OsRng, Payload},
@@ -14,7 +17,7 @@ use serde::{Deserialize, Serialize};
 use std::{
     fs::{self, OpenOptions},
     io::Write,
-    os::unix::fs::{OpenOptionsExt, PermissionsExt},
+    os::unix::fs::OpenOptionsExt,
     path::{Path, PathBuf},
 };
 use time::OffsetDateTime;
@@ -26,6 +29,7 @@ const ALGORITHM: &str = "AES-256-GCM/hephaestus-runtime-handoff-v1";
 /// Filesystem-backed encrypted handoff store for one trusted VM host.
 pub struct EncryptedFileHandoffStore {
     directory: PathBuf,
+    root: crate::pinned::Root,
     key: Zeroizing<[u8; 32]>,
 }
 
@@ -35,18 +39,20 @@ impl EncryptedFileHandoffStore {
     /// # Errors
     ///
     /// Returns [`RuntimeAuthorityError::HandoffUnavailable`] when the
-    /// directory cannot be created or constrained to owner-only access.
+    /// directory cannot be created, constrained to owner-only access, or
+    /// retained as the original nofollow owner directory.
     pub fn new(
         directory: impl Into<PathBuf>,
         key: [u8; 32],
     ) -> Result<Self, RuntimeAuthorityError> {
+        let key = Zeroizing::new(key);
         let directory = directory.into();
-        fs::create_dir_all(&directory).map_err(|_| RuntimeAuthorityError::HandoffUnavailable)?;
-        fs::set_permissions(&directory, fs::Permissions::from_mode(0o700))
+        let root = crate::pinned::Root::initialize(&directory)
             .map_err(|_| RuntimeAuthorityError::HandoffUnavailable)?;
         Ok(Self {
             directory,
-            key: Zeroizing::new(key),
+            root,
+            key,
         })
     }
 
@@ -187,6 +193,13 @@ impl RuntimeHandoffStore for EncryptedFileHandoffStore {
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
             Err(_) => Err(RuntimeAuthorityError::HandoffUnavailable),
         }
+    }
+
+    fn destroy_expired(
+        &self,
+        original: &runtime_authority::ExpiredRuntimeHandoff,
+    ) -> Result<(), RuntimeAuthorityError> {
+        self.destroy_expired_original(original)
     }
 
     fn purge_expired(&self, now: OffsetDateTime) -> Result<u64, RuntimeAuthorityError> {

@@ -14,10 +14,13 @@ pub mod instance;
 pub mod launch;
 pub mod organization;
 pub mod project;
+mod qualified_invocation_contract;
 pub mod release;
 pub mod repository;
 pub mod repository_browser;
 pub mod run;
+
+pub use qualified_invocation_contract::verify_qualified_invocation_contract;
 
 pub use run::{
     PendingUpdateAdmission, is_update_hook_run, load_vm_launch_contract, pending_update_admissions,

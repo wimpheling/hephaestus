@@ -22,6 +22,7 @@ time.workspace = true
 tracing.workspace = true
 uuid.workspace = true
 vm-trait.workspace = true
+volume-trait = { path = "../../../heph-core/runtime/volume/trait" }
 
 [dev-dependencies]
 release-artifact-store = { path = "../../forge/release/artifact-store" }

@@ -4,7 +4,7 @@ use std::sync::Arc;
 use vm_trait::VmInstance;
 use volume_trait::VolumeLease;
 
-use super::{OrchestratorError, RunOrchestrator};
+use super::{OrchestratorError, RunOrchestrator, SupervisorReconciliationCause};
 
 impl RunOrchestrator {
     pub(super) async fn fail_without_lease(
@@ -144,21 +144,22 @@ impl RunOrchestrator {
     }
 
     pub(super) async fn finish_recovered_run(&self, run: Run) -> Result<(), OrchestratorError> {
+        self.finish_reconciled_run(run, SupervisorReconciliationCause::Restart)
+            .await
+    }
+
+    pub(super) async fn finish_reconciled_run(
+        &self,
+        run: Run,
+        cause: SupervisorReconciliationCause,
+    ) -> Result<(), OrchestratorError> {
         if self.legacy_scope.is_some() {
-            self.cleanup_legacy(
-                run.id,
-                None,
-                Some(("supervisor restarted while resources were active", None)),
-            )
-            .await?;
+            self.cleanup_legacy(run.id, None, Some((cause.legacy_failure(), None)))
+                .await?;
             return Ok(());
         }
         if self.canonical_cleanup.is_some() {
-            self.fail_claimed_run(
-                run.id,
-                "supervisor restarted while run resources were active",
-            )
-            .await?;
+            self.fail_claimed_run(run.id, cause.failure()).await?;
             return Ok(());
         }
         self.runtime_git_workspace
@@ -174,12 +175,7 @@ impl RunOrchestrator {
             }
             _ => {
                 self.repository
-                    .transition(
-                        run.id,
-                        RunState::Failed,
-                        None,
-                        Some("supervisor restarted while run resources were active"),
-                    )
+                    .transition(run.id, RunState::Failed, None, Some(cause.failure()))
                     .await?
             }
         };

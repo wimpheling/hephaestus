@@ -30,6 +30,9 @@ impl PostgresDeploymentRepository {
         let mut tx = begin_actor_transaction(&self.pool, identity)
             .await
             .map_err(repository_error)?;
+        if self.remove_resume.is_some() && command.operation() == DeploymentOperation::Remove {
+            crate::remove_resume::context::reserve(&mut tx, id).await?;
+        }
         let project = persistence::project(&mut tx, id).await?;
         self.require(
             &mut tx,
@@ -52,8 +55,18 @@ impl PostgresDeploymentRepository {
             let evidence = catalog::load(&mut tx, &declaration, &snapshot.intent).await?;
             catalog::reconstruct(&snapshot.intent, &declaration, &evidence)?;
         }
-        self.cleanup_authority(&mut tx, identity, &snapshot.intent)
-            .await?;
+        if let Some(config) = self
+            .remove_resume
+            .as_ref()
+            .filter(|_| command.operation() == DeploymentOperation::Remove)
+        {
+            crate::remove_resume::context::configured(&mut tx, &snapshot.intent, config).await?;
+            crate::remove_resume::context::command_configuration(&mut tx, command, config).await?;
+            crate::remove_resume::authority::all(&mut tx, identity, &snapshot.intent).await?;
+        } else {
+            self.cleanup_authority(&mut tx, identity, &snapshot.intent)
+                .await?;
+        }
         let row = receipts::find(&mut tx, command)
             .await?
             .ok_or(DeploymentError::Unavailable)?;

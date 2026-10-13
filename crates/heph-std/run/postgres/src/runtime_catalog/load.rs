@@ -13,6 +13,9 @@ use super::{
 #[async_trait]
 impl RunRuntimeCatalog for PgRunRepository {
     async fn load_runtime(&self, run: &Run) -> Result<RunRuntimeInput, RunRuntimeCatalogError> {
+        if run.kind == RunKind::Invocation {
+            return self.load_invocation_runtime(run).await;
+        }
         require_supported_kind(run.kind)?;
         let context = sqlx::query_as::<_, RuntimeContextRow>(
             "SELECT revision.parameters,
@@ -76,20 +79,7 @@ impl RunRuntimeCatalog for PgRunRepository {
         .map_err(storage)?
         .ok_or(RunRuntimeCatalogError::Unavailable)?;
 
-        if context.release_state != "published" {
-            return Err(RunRuntimeCatalogError::InvalidData(
-                "release is not published",
-            ));
-        }
-        if run.kind == RunKind::Normal
-            && (context.repository_id.is_none()
-                || context.git_ref.is_none()
-                || context.commit_sha.is_none())
-        {
-            return Err(RunRuntimeCatalogError::InvalidData(
-                "normal run target provenance",
-            ));
-        }
+        validate_context(run.kind, &context)?;
 
         let artifacts = self
             .load_runtime_artifacts(run.release_id.as_uuid())
@@ -138,5 +128,27 @@ fn require_supported_kind(kind: RunKind) -> Result<(), RunRuntimeCatalogError> {
             "Invocation runtime catalog is unsupported",
         ));
     }
+    Ok(())
+}
+
+fn validate_context(
+    kind: RunKind,
+    context: &RuntimeContextRow,
+) -> Result<(), RunRuntimeCatalogError> {
+    if context.release_state != "published" {
+        return Err(RunRuntimeCatalogError::InvalidData(
+            "release is not published",
+        ));
+    }
+    if kind == RunKind::Normal
+        && (context.repository_id.is_none()
+            || context.git_ref.is_none()
+            || context.commit_sha.is_none())
+    {
+        return Err(RunRuntimeCatalogError::InvalidData(
+            "normal run target provenance",
+        ));
+    }
+
     Ok(())
 }

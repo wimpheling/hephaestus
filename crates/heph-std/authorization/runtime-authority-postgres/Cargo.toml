@@ -22,8 +22,27 @@ tracing.workspace = true
 uuid.workspace = true
 runtime-types = { path = "../../../heph-core/platform/runtime-types" }
 volume-domain = { path = "../../../heph-core/runtime/volume/domain" }
+release-service = { path = "../../../heph-core/forge/release/service" }
+serde_json.workspace = true
 
 [dev-dependencies]
+# Genuine Invocation authority fixtures reuse prerequisite helpers only.
+authz-postgres = { path = "../authz-postgres" }
+forge-domain = { path = "../../../heph-core/forge/domain" }
+recipe-application = { path = "../../../heph-core/platform/recipe/application" }
+recipe-domain = { path = "../../../heph-core/platform/recipe/domain" }
+recipe-postgres = { path = "../../platform/recipe/postgres" }
+release-domain = { path = "../../../heph-core/forge/release/domain" }
+release-postgres = { path = "../../forge/release/postgres" }
+run-orchestrator = { path = "../../../heph-core/runtime/run/orchestrator" }
+run-postgres = { path = "../../run/postgres" }
+sha2.workspace = true
+tempfile = "3"
+vm-trait.workspace = true
+volume-local = { path = "../../runtime/volume/local" }
+volume-postgres = { path = "../../runtime/volume/postgres" }
+volume-trait = { path = "../../../heph-core/runtime/volume/trait" }
+identity-domain = { path = "../../../heph-core/auth/identity/domain" }
 serial_test = "3"
 tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }
 

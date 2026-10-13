@@ -15,7 +15,24 @@ use uuid::Uuid;
 
 use crate::support::Fixture;
 
+#[path = "../../../../../runtime/volume/postgres/tests/private_migrations/mod.rs"]
+pub mod private_migrations;
+
 pub async fn app_pool(pool: &PgPool) -> PgPool {
+    // Explicit staging-only regressions run on 111; historical upgrade fixtures
+    // keep their authored 103/105 baselines and exact 104/106 target versions.
+    if std::env::var("HEPHAESTUS_PRIVATE_RECIPE_REGRESSION_HEAD").as_deref() == Ok("111") {
+        let current: i64 = sqlx::query_scalar("SELECT max(version) FROM _sqlx_migrations")
+            .fetch_one(pool)
+            .await
+            .expect("actual regression schema checkpoint");
+        if current >= 107 {
+            private_migrations::checkpoint(111)
+                .run(pool)
+                .await
+                .expect("explicit private111 regression checkpoint");
+        }
+    }
     PgPoolOptions::new()
         .max_connections(8)
         .after_connect(|connection, _| {

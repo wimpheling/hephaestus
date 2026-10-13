@@ -21,6 +21,7 @@ mod artifacts;
 mod context;
 mod filesystem;
 mod gateway;
+mod invocation;
 mod manager;
 mod recovery;
 mod release;

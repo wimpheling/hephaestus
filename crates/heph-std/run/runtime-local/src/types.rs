@@ -19,6 +19,7 @@ pub struct LocalRunRuntimeConfig {
 pub struct LocalRunRuntimeManager {
     pub(crate) catalog: std::sync::Arc<dyn run_orchestrator::RunRuntimeCatalog>,
     pub(crate) config: LocalRunRuntimeConfig,
+    pub(crate) invocation: Option<crate::invocation::QualifiedInvocation>,
 }
 
 /// Local immutable release tree used by a one-shot gateway invocation.

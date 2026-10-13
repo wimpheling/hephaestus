@@ -4,7 +4,6 @@ use super::{
 };
 use async_trait::async_trait;
 use axum::Router;
-use control_plane_postgres::connect as connect_control_plane;
 use event_postgres::ReleaseOutboxPublisher;
 use forge_nats::ForgeNatsOutboxPublisher;
 use forge_postgres::PgForgeRepository;
@@ -261,8 +260,8 @@ impl RevokedRawRunCanceller for RunOrchestrator {
 }
 
 pub async fn build_secret_mount_manager(
-    pool: PgPool,
-    database_url: &str,
+    application_pool: PgPool,
+    worker_pool: PgPool,
     keys: LocalKeyProvider,
     config: EphemeralSecretConfig,
 ) -> Result<
@@ -273,26 +272,23 @@ pub async fn build_secret_mount_manager(
     ),
     AppError,
 > {
-    let resolver_pool = connect_control_plane(database_url, 4)
-        .await
-        .map_err(component("secret resolver PostgreSQL connection"))?;
     let authorizer = Arc::new(authz_postgres::PostgresMelangeAuthorizer);
     let dispatch = Arc::new(SecretService::new(
-        pool.clone(),
+        application_pool.clone(),
         EncryptedStore::new(keys.clone()),
         authorizer.clone(),
     ));
     let runtime = Arc::new(
         SecretRuntimeService::new(
-            pool.clone(),
-            resolver_pool,
+            application_pool,
+            worker_pool.clone(),
             EncryptedStore::new(keys),
             authorizer,
         )
         .with_mount_provider(Arc::new(FilesystemSecretMountProvider::new())),
     );
     let manager = initialize_manager(
-        pool,
+        worker_pool,
         dispatch.as_ref().clone(),
         runtime.as_ref().clone(),
         config,

@@ -11,23 +11,41 @@ mod dispatch_commands;
 mod dispatch_lifecycle;
 mod errors;
 mod helpers;
+mod legacy_placement;
 mod operator;
 mod recovery;
 
 use mailbox_domain::MailboxEventId;
+use run_domain::FreshRunExecutionProfile;
 use sqlx::PgPool;
 
 /// `PostgreSQL` authority for mailbox creation and event acceptance.
 #[derive(Clone)]
 pub struct PostgresMailboxRepository {
     pub(crate) pool: PgPool,
+    pub(crate) execution_profile: Option<FreshRunExecutionProfile>,
+    pub(crate) legacy_vm_scope: Option<run_domain::LegacyVmPlacementScope>,
 }
 
 impl PostgresMailboxRepository {
     /// Creates a mailbox adapter over the control-plane pool.
     #[must_use]
     pub const fn new(pool: PgPool) -> Self {
-        Self { pool }
+        Self {
+            pool,
+            execution_profile: None,
+            legacy_vm_scope: None,
+        }
+    }
+
+    /// Selects an explicit fresh profile for the reviewed private schema.
+    ///
+    /// Owned mailbox dispatch remains unsupported without positive delegation
+    /// admission. Selection does not alter acceptance or promote old attempts.
+    #[must_use]
+    pub const fn with_execution_profile(mut self, profile: FreshRunExecutionProfile) -> Self {
+        self.execution_profile = Some(profile);
+        self
     }
 }
 

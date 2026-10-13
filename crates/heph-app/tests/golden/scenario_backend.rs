@@ -247,6 +247,7 @@ pub async fn configure_golden_backend(
             },
             |fixture| fixture.adapter(),
         ),
+        managed_backend: None,
         vm_backend: backend_fixture.backend,
         root_images,
         oci_builder: cooking_worker,

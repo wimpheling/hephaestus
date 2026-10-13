@@ -137,4 +137,21 @@ pub trait PreparedInstanceClosureRepository: Send + Sync + 'static {
     ) -> Result<PreparedInstanceClosureAdmission, DeploymentError> {
         Err(DeploymentError::InvalidAction)
     }
+    /// Publishes an original pending Drain closure under a fresh current manager.
+    ///
+    /// The adapter must independently qualify the complete native original inventory,
+    /// current ALL-owned cleanup rights, exact pending claim and explicit instance CAS.
+    /// It must retain original removal identities while recording the actual fresh
+    /// publisher; comparison data never authenticates the original actor.
+    ///
+    /// # Errors
+    /// Denies unsupported adapters, changed originals, stale CAS, lost current rights
+    /// or inconsistent pending/closed history without adopting another claim.
+    async fn close_resumed_for_remove(
+        &self,
+        _identity: &AuthenticatedIdentity,
+        _request: &crate::ResumedPreparedInstanceClosureRequest,
+    ) -> Result<PreparedInstanceClosureAdmission, DeploymentError> {
+        Err(DeploymentError::InvalidAction)
+    }
 }

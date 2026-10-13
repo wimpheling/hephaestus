@@ -1,3 +1,5 @@
+#[path = "runtime_catalog/invocation.rs"]
+mod invocation;
 #[path = "runtime_catalog/load.rs"]
 mod load;
 #[path = "runtime_catalog/models.rs"]

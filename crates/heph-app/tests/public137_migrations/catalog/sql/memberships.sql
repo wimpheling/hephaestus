@@ -1,0 +1,1 @@
+SELECT payload,payload::text FROM (SELECT coalesce(jsonb_agg(jsonb_build_object('raw',to_jsonb(m),'role',pg_get_userbyid(m.roleid),'member',pg_get_userbyid(m.member),'grantor',pg_get_userbyid(m.grantor)) ORDER BY m.roleid,m.member,m.grantor),'[]'::jsonb) AS payload FROM pg_auth_members m) AS capture

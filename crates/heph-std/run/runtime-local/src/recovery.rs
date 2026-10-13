@@ -13,6 +13,9 @@ use crate::{
 #[async_trait]
 impl RunRuntimeManager for LocalRunRuntimeManager {
     async fn prepare(&self, run: &Run) -> Result<PreparedRunRuntime, RunRuntimeError> {
+        if let Some(current) = self.invocation_run(run).await? {
+            return self.prepare_invocation(&current).await;
+        }
         if self.active_path(run.id).exists() {
             return Err(runtime_error("run runtime already exists"));
         }

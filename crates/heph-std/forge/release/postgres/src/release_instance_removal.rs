@@ -1,16 +1,14 @@
 //! Permanent launch closure admission; physical drain is a later worker boundary.
 
 use authz_domain::{ObjectRef, ObjectType, Permission};
-use authz_postgres::{AUTHORIZATION_MODEL_VERSION, begin_actor_transaction};
+use authz_postgres::begin_actor_transaction;
 use identity_domain::AuthenticatedIdentity;
 use release_domain::InstanceRemovalId;
 use release_service::{InstanceRemovalAdmission, RequestInstanceRemoval};
-use serde_json::json;
-use sha2::{Digest, Sha256};
 use uuid::Uuid;
 
-use crate::release_volume_instance_inputs::{exact_replay, record_exact};
-use crate::{ReleaseService, ReleaseServiceError, append_instance_event};
+use crate::release_volume_instance_inputs::exact_replay;
+use crate::{ReleaseService, ReleaseServiceError};
 
 impl ReleaseService {
     /// Permanently closes future launches and admits supervised cancellation.
@@ -38,7 +36,7 @@ impl ReleaseService {
         if command.instance_id.as_uuid().is_nil() || command.removal_id.as_uuid().is_nil() {
             return Err(ReleaseServiceError::InvalidUpdateLifecycle);
         }
-        let hash:[u8;32]=Sha256::digest(serde_json::to_vec(&json!({"version":1,"operation":"request_instance_removal","actor":identity.user_id,"instance":command.instance_id,"removal":command.removal_id,"expected_version":command.expected_version}))?).into();
+        let hash = crate::release_instance_removal_work::input_hash(identity, &command)?;
         if let Some((instance, Some(removal))) = exact_replay(
             &mut tx,
             command.command_key,
@@ -71,29 +69,8 @@ impl ReleaseService {
         if existing.is_some() {
             return Err(ReleaseServiceError::IdempotencyConflict);
         }
-        sqlx::query("INSERT INTO agent_instance_removal_requests(id,instance_id,expected_version,input_hash,created_by,request_id,authorization_model_version) VALUES($1,$2,$3,$4,$5,$6,$7)")
-            .bind(command.removal_id.as_uuid()).bind(command.instance_id.as_uuid()).bind(version).bind(hash.as_slice()).bind(identity.user_id.as_uuid()).bind(identity.request_id.as_uuid()).bind(AUTHORIZATION_MODEL_VERSION).execute(&mut *tx).await?;
-        crate::release_instance_removal_work::admit_cancellation(&mut tx, identity, &command)
+        crate::release_instance_removal_work::admit_request(&mut tx, identity, &command, &hash)
             .await?;
-        record_exact(
-            &mut tx,
-            command.command_key,
-            "request_instance_removal",
-            command.instance_id.as_uuid(),
-            Some(command.removal_id.as_uuid()),
-            identity,
-            &hash,
-        )
-        .await?;
-        append_instance_event(
-            &mut tx,
-            command.instance_id,
-            None,
-            "instance.removal_requested",
-            identity,
-            json!({"removal_id":command.removal_id,"cleanup_complete":false}),
-        )
-        .await?;
         tx.commit().await?;
         Ok(InstanceRemovalAdmission {
             instance_id: command.instance_id,

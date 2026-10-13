@@ -1,6 +1,8 @@
 use super::*;
 
 #[allow(clippy::needless_borrow, clippy::too_many_lines)]
+// The original daemon is consumed by shutdown; its replacement is moved back into preparation.
+#[allow(clippy::significant_drop_tightening)]
 pub async fn run_adversarial_gateway_denial(prep: &mut CookingPreparation) {
     let CookingPreparation {
         pool,

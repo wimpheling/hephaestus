@@ -8,6 +8,7 @@ use super::{
     PgAgentVmSpecFactory, PgBuildRepository, PgRunLaunchAuthorizer, RunCompletionObserver,
     RuntimeGitHttpAuthenticator, component, prepare_build,
 };
+use run_domain::FreshRunExecutionProfile;
 use std::{net::SocketAddr, path::PathBuf, sync::Arc, time::Duration};
 
 use super::{
@@ -20,8 +21,10 @@ use super::{
 
 /// Constructed application whose external tasks have not started.
 pub struct HephaestusApp {
+    pub(super) managed_backend: Option<crate::managed_backend::NodeLease>,
     pub(super) pool: PgPool,
     pub(super) application_pool: PgPool,
+    pub(super) worker_pool: PgPool,
     pub(super) service_log_pool: PgPool,
     pub(super) nats_client: async_nats::Client,
     pub(super) jetstream: async_nats::jetstream::Context,
@@ -64,13 +67,18 @@ pub struct HephaestusApp {
 
 // Keep dependency assembly in one auditable sequence; the source file remains bounded.
 #[allow(clippy::too_many_lines)]
-pub async fn build(config: AppConfig) -> Result<HephaestusApp, AppError> {
+pub async fn build(
+    config: AppConfig,
+    service: Option<&crate::ManagedBackendSupervisor>,
+) -> Result<HephaestusApp, AppError> {
     let BuildPreparation {
         config,
+        managed_backend,
         runtime_git_socket_path,
         gateway_service_host_id,
         pool,
         application_pool,
+        worker_pool,
         storage,
         forge,
         run_repository,
@@ -100,7 +108,7 @@ pub async fn build(config: AppConfig) -> Result<HephaestusApp, AppError> {
         provider,
         image_filesystems,
         oci_builder_workers,
-    } = Box::pin(prepare_build(config)).await?;
+    } = Box::pin(prepare_build(config, service)).await?;
     let gateway_edge = gateway::build(gateway::GatewayInputs {
         database_url: config.database_url.clone(),
         gateway_service_host_id,
@@ -116,10 +124,10 @@ pub async fn build(config: AppConfig) -> Result<HephaestusApp, AppError> {
     })
     .await?;
     let release_authorizer = Arc::new(authz_postgres::PostgresMelangeAuthorizer);
-    let release_service = Arc::new(ReleaseService::new(
-        pool.clone(),
-        release_authorizer.clone(),
-    ));
+    let release_service = Arc::new(
+        ReleaseService::new(worker_pool.clone(), release_authorizer.clone())
+            .with_execution_profile(FreshRunExecutionProfile::LegacyScalar),
+    );
     let artifact_store = LocalArtifactStore::new(super::canonicalize_release_artifact_root(
         release_artifact_root,
     )?)
@@ -153,13 +161,16 @@ pub async fn build(config: AppConfig) -> Result<HephaestusApp, AppError> {
     };
     let internal_platform_policy_version = config.runtime_policy.version.clone();
     let spec_factory = Arc::new(PgAgentVmSpecFactory {
-        pool: pool.clone(),
+        pool: worker_pool.clone(),
         root_images: config.root_images,
         runtime_policy: config.runtime_policy,
     });
-    let launch_authorizer = Arc::new(PgRunLaunchAuthorizer::new(pool.clone(), release_authorizer));
+    let launch_authorizer = Arc::new(PgRunLaunchAuthorizer::new(
+        worker_pool.clone(),
+        release_authorizer,
+    ));
     let update_completion = Arc::new(UpdateRunCompletion {
-        pool: pool.clone(),
+        pool: worker_pool.clone(),
         releases: Arc::clone(&release_service),
         admission_cursor: Mutex::new(None),
     });
@@ -223,8 +234,10 @@ pub async fn build(config: AppConfig) -> Result<HephaestusApp, AppError> {
     let jetstream = async_nats::jetstream::new(nats_client.clone());
 
     Ok(crate::HephaestusApp {
+        managed_backend,
         pool,
         application_pool,
+        worker_pool,
         nats_client,
         jetstream,
         forge,
@@ -265,3 +278,7 @@ pub async fn build(config: AppConfig) -> Result<HephaestusApp, AppError> {
         runtime_git_socket_path,
     })
 }
+
+#[cfg(all(test, feature = "test-fixtures"))]
+#[path = "construction/public139.rs"]
+mod public139;

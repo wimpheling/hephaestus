@@ -186,6 +186,8 @@ pub struct AppConfig {
     pub secret_broker_adapter: Arc<dyn BrokerAdapter>,
     /// VM implementation selected for this process.
     pub vm_backend: VmBackendConfig,
+    /// Optional dedicated managed Run backend; startup remains pending lifecycle wiring.
+    pub managed_backend: Option<crate::ManagedBackendConfig>,
     /// Immutable image references resolved to provider-neutral roots.
     pub root_images: BTreeMap<String, RootFilesystem>,
     /// Optional local worker for repository-owned OCI builders.

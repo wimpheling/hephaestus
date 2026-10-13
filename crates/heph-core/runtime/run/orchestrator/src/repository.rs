@@ -46,6 +46,44 @@ pub enum RepositoryError {
 /// Persistence boundary required by the orchestrator.
 #[async_trait]
 pub trait RunRepository: Send + Sync + 'static {
+    /// Positively classifies configured immutable Invocation cancellation history.
+    ///
+    /// Worker-only RRRO comparison of the global original and complete per-Run
+    /// associations. No hydration requiring prepared115, write, freeze, physical
+    /// IO or adoption belongs here. A captured result grants no later authority;
+    /// preparation requalifies under the owning caller's SAME Start/operation guards.
+    /// Unknown/foreign/configuration-conflicting evidence denies, never selects a
+    /// family by missing rows. Defaults explicitly unsupported.
+    async fn classify_invocation_cancel(
+        &self,
+        _run: RunId,
+        _scope: &vm_trait::VmProviderOwnerScope,
+    ) -> Result<crate::InvocationCancelEvidence, RepositoryError> {
+        Err(RepositoryError::InvalidData(
+            "Invocation cancellation classification is unsupported",
+        ))
+    }
+
+    /// Prepares processed genuine queued cancellation under the existing locks.
+    ///
+    /// Caller holds the SAME live Start claim and per-Run operation mutex. Actual
+    /// worker/configuration/owner/original history is independently requalified;
+    /// only this Run is closed and its complete target frozen/replayed. Ordinary
+    /// Cancel leaves instance grants/gates/other Runs untouched; Drain requires its
+    /// genuine original evidence. No Cancel/Wake/consumption, state transition,
+    /// physical absence receipt or lease release is manufactured. A returned
+    /// queued bundle is strict prepared metadata; consumed117 is positively proven.
+    /// Defaults explicitly unsupported, including for an empty database.
+    async fn prepare_invocation_cancel_cleanup(
+        &self,
+        _run: RunId,
+        _scope: &vm_trait::VmProviderOwnerScope,
+    ) -> Result<crate::InvocationCancelPreparation, RepositoryError> {
+        Err(RepositoryError::InvalidData(
+            "Invocation cancellation preparation is unsupported",
+        ))
+    }
+
     /// Atomically prepares metadata for exact permanently cancelled owning cleanup.
     ///
     /// Worker-only: independently qualify original removal/Cancel, immutable
@@ -217,6 +255,26 @@ pub trait RunRepository: Send + Sync + 'static {
 /// provider observations; public domain values alone establish no cleanup proof.
 #[async_trait]
 pub trait RunCleanupRepository: Send + Sync + 'static {
+    /// Observes complete qualified Invocation originals and unreleased leases.
+    ///
+    /// Worker-only RRRO comparison for the actual configured provider scope.
+    /// Unknown/foreign originals, inconsistent associations and invalid cleanup
+    /// receipts return an error; they must not disappear behind host/state filters.
+    /// Positive open queued/no-IO originals remain available for redelivery.
+    /// `stale_before` limits actionable Runs by their complete lease set, never
+    /// the scalar stale port. Returned unique IDs grant no cleanup/Start authority;
+    /// each owning action must requalify under its existing operation guards.
+    /// Defaults explicitly unsupported, including for an empty database.
+    async fn qualified_invocation_recovery_inventory(
+        &self,
+        _scope: &vm_trait::VmProviderOwnerScope,
+        _stale_before: Option<OffsetDateTime>,
+    ) -> Result<Vec<RunId>, RepositoryError> {
+        Err(RepositoryError::InvalidData(
+            "qualified Invocation recovery inventory is unsupported",
+        ))
+    }
+
     /// Persists an exact planned VM identity before any provisioning IO.
     ///
     /// Trusted configured provider ownership supplies the host scope. Replays

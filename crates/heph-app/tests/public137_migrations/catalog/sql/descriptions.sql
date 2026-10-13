@@ -1,0 +1,1 @@
+SELECT payload,payload::text FROM (SELECT coalesce(jsonb_agg(jsonb_build_object('raw',to_jsonb(d),'identity',to_jsonb(pg_identify_object(d.classoid,d.objoid,d.objsubid))) ORDER BY d.classoid,d.objoid,d.objsubid),'[]'::jsonb) AS payload FROM pg_description d) AS capture

@@ -2,6 +2,8 @@
 
 mod cleanup;
 mod execution_profile;
+mod vm_owner_history;
+pub use vm_owner_history::{VmOwnerHistory, VmOwnerHistoryConflict, VmOwnerHistoryUnknown};
 mod legacy_vm_placement;
 
 pub use legacy_vm_placement::{

@@ -1,6 +1,9 @@
 use async_trait::async_trait;
 use run_domain::{CancelRun, Run, RunState, StartRun};
-use run_orchestrator::{CreateRunResult, RepositoryError, RunRepository, StoredVmEvent};
+use run_orchestrator::{
+    CreateRunResult, InvocationCancelEvidence, InvocationCancelPreparation, RepositoryError,
+    RunRepository, StoredVmEvent,
+};
 use runtime_types::{LeaseId, RunId, VolumeId};
 use std::sync::{
     Arc,
@@ -8,8 +11,9 @@ use std::sync::{
 };
 use time::OffsetDateTime;
 use tokio::sync::Mutex;
-use vm_trait::VmExit;
-
+use vm_trait::{VmExit, VmProviderOwnerScope};
+#[path = "repository/invocation.rs"]
+mod invocation;
 #[derive(Clone)]
 pub struct TransitionPause {
     pub entered: Arc<tokio::sync::Notify>,
@@ -46,6 +50,8 @@ pub struct MemoryRepository {
     pub event_entered: tokio::sync::Notify,
     /// Controlled test evidence only; no real SQL admission is claimed.
     pub invocation_admitted: AtomicBool,
+    // Test-only 117 boundary: published only by the checked consumption method below.
+    invocation_consumed: Mutex<Option<StartRun>>,
     pub planned_vm: Mutex<Option<(run_domain::RunCleanupHostId, vm_trait::VmId)>>,
 }
 
@@ -90,6 +96,7 @@ impl MemoryRepository {
             pause_running_transition: Mutex::new(None),
             planned_vm: Mutex::new(None),
             invocation_admitted: AtomicBool::new(false),
+            invocation_consumed: Mutex::new(None),
             hang_events: AtomicBool::new(false),
             hang_get: AtomicBool::new(false),
             event_entered: tokio::sync::Notify::new(),
@@ -99,6 +106,21 @@ impl MemoryRepository {
 
 #[async_trait]
 impl RunRepository for MemoryRepository {
+    async fn classify_invocation_cancel(
+        &self,
+        run: RunId,
+        scope: &VmProviderOwnerScope,
+    ) -> Result<InvocationCancelEvidence, RepositoryError> {
+        self.consumed_invocation(run, scope).await
+    }
+    async fn prepare_invocation_cancel_cleanup(
+        &self,
+        run: RunId,
+        scope: &VmProviderOwnerScope,
+    ) -> Result<InvocationCancelPreparation, RepositoryError> {
+        self.consumed_invocation(run, scope).await?;
+        Ok(InvocationCancelPreparation::Consumed117)
+    }
     async fn prepare_cleanup_wake(
         &self,
         request: &run_orchestrator::RunCleanupWakeRequest,
@@ -195,6 +217,7 @@ impl RunRepository for MemoryRepository {
                     "protected Invocation admission is absent or differs",
                 ));
             }
+            *self.invocation_consumed.lock().await = Some(command.clone());
             return Ok(CreateRunResult {
                 run: run.clone(),
                 created: false,

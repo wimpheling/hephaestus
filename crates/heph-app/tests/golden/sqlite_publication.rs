@@ -12,6 +12,8 @@ use crate::*;
 #[tokio::test(flavor = "multi_thread")]
 #[serial]
 #[ignore = "requires dedicated real libkrun/Python image/PostgreSQL/NATS fixture"]
+// The owning daemon must span publication and is consumed by its awaited shutdown.
+#[allow(clippy::significant_drop_tightening)]
 async fn configured_source_build_and_authenticated_publication() {
     assert_eq!(
         env::var("HEPHAESTUS_APP_SQLITE_PUBLICATION").as_deref(),
@@ -60,7 +62,7 @@ async fn configured_source_build_and_authenticated_publication() {
             host_path: backend.root_image.clone(),
         },
     );
-    let running = HephaestusApp::build(backend.app_config)
+    let running = Box::pin(HephaestusApp::build(backend.app_config))
         .await
         .expect("production build composition")
         .start()
@@ -80,21 +82,25 @@ async fn configured_source_build_and_authenticated_publication() {
         .join("../../examples/local-sqlite")
         .canonicalize()
         .expect("exact example source");
-    let context = cooking_builds::CookingBuildContext {
-        pool: &pool,
-        running: &running,
-        root: &seed.root,
-        source_root: &source,
-        project_id: seed.project.id,
-        repositories: &seed.fixture_repository,
-        identity: cooking_builds::CookingIdentity {
-            actor: &identity,
-            git_token: &git_token,
-            rpc_token: &rpc_token,
+    let published = build_and_publish(
+        &cooking_builds::CookingBuildContext {
+            pool: &pool,
+            running: &running,
+            root: &seed.root,
+            source_root: &source,
+            project_id: seed.project.id,
+            repositories: &seed.fixture_repository,
+            identity: cooking_builds::CookingIdentity {
+                actor: &identity,
+                git_token: &git_token,
+                rpc_token: &rpc_token,
+            },
+            timeout: Duration::from_secs(120),
         },
-        timeout: Duration::from_secs(120),
-    };
-    let published = build_and_publish(&context, &source, &seed.release_artifact_root).await;
+        &source,
+        &seed.release_artifact_root,
+    )
+    .await;
     running
         .shutdown()
         .await

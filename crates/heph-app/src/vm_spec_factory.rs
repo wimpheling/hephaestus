@@ -6,15 +6,26 @@ use async_trait::async_trait;
 use control_plane_postgres::{load_vm_launch_contract, run::VmLaunchContract};
 use volume_domain::RunVolumeSelections;
 
+#[path = "vm_spec_factory/invocation.rs"]
+mod invocation;
+
 #[cfg(test)]
 #[path = "vm_spec_factory/loader_postgres.rs"]
 mod loader_postgres;
 #[path = "vm_spec_factory/volumes.rs"]
 mod volumes;
 use heph_run::VmSpecFactory;
+/// Projects ordinary Run VM specifications from immutable release data.
+///
+/// Qualified Invocation projection requires explicit opt-in through
+/// [`Self::with_qualified_invocation`]. These construction fields do not prove
+/// provider or root ownership, or caller authority.
 pub struct PgAgentVmSpecFactory {
+    /// Database pool used to load persisted immutable Run launch contracts.
     pub pool: PgPool,
+    /// Materialized root filesystems indexed by the stored OCI image reference.
     pub root_images: BTreeMap<String, RootFilesystem>,
+    /// Current platform policy used to validate immutable resource selections.
     pub runtime_policy: RuntimePolicy,
 }
 
@@ -75,6 +86,25 @@ impl VmSpecFactory for PgAgentVmSpecFactory {
 }
 
 impl PgAgentVmSpecFactory {
+    /// Wraps the ordinary factory with explicit qualified Invocation projection.
+    ///
+    /// These ports are trusted composition data, not provider/root ownership or
+    /// caller authority. Startup must supply the same configured immutable Run
+    /// repository, qualified119 catalogue and canonical volume-store Arcs used
+    /// by execution. Per-Run persisted equality, live catalogue and whole-set
+    /// checks precede projection. Core B1/B2 and provider checks remain mandatory.
+    /// Existing Core release-cwd and qualified no-Git Local guards must also be
+    /// composed; this wrapper alone cannot start an Invocation guest.
+    #[must_use]
+    pub fn with_qualified_invocation(
+        self,
+        runs: std::sync::Arc<dyn heph_run::RunRepository>,
+        catalog: std::sync::Arc<dyn run_orchestrator::RunRuntimeCatalog>,
+        volumes: std::sync::Arc<dyn volume_trait::RunVolumeStore>,
+    ) -> impl VmSpecFactory {
+        invocation::QualifiedInvocationFactory::new(self, runs, catalog, volumes)
+    }
+
     async fn load_contract(&self, run: &Run) -> Result<VmLaunchContract, VmError> {
         if run.kind == RunKind::Invocation {
             return Err(invalid_spec(

@@ -5,6 +5,8 @@ use super::*;
     clippy::too_many_arguments,
     clippy::too_many_lines
 )]
+// The daemon spans cleanup assertions and is consumed by its awaited shutdown.
+#[allow(clippy::significant_drop_tightening)]
 pub async fn run_cooking_cleanup_phase(
     prep: &mut CookingPreparation,
     update_sequence: Option<cooking_updates::UpdateSequence>,

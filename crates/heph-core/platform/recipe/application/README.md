@@ -24,6 +24,13 @@ storage reuse. Removal drains consumers and proves detach/fencing before deletio
 External volumes can only be verified; retain/delete policy never grants access.
 Retained owned resources and removed deployment tombstones stay discoverable.
 
+`RetireExternalObservation` closes an exact active external read-only verification
+under the current actor's admitted removal command. It is a ledger cancellation,
+not a provider result: installation history, diagnostics, and fencing generation
+remain unchanged, and the external reference stays retained. It requires current
+cleanup authority and CAS, with no external access or existence requirement.
+No creation, detach, or delete fence can be retired through this operation.
+
 Validated intent has no deserializer. Database hydration must reparse canonical
 declaration source, resolve against authoritative immutable historical release
 and external facts, and compare the original fingerprints. Historical inspection

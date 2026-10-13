@@ -4,7 +4,7 @@ use capability_domain::RuntimeSessionId;
 use capability_domain::{
     AuthorizationSnapshot, AuthorizationSnapshotId, WorkloadKind, WorkloadPrincipal,
 };
-use run_domain::Run;
+use run_domain::{LegacyVmPlacementScope, Run};
 use runtime_authority::RuntimeAuthorityError;
 use sqlx::{PgPool, Postgres, Transaction};
 
@@ -12,13 +12,58 @@ use sqlx::{PgPool, Postgres, Transaction};
 #[derive(Clone)]
 pub struct PgRuntimeSessionRepository {
     pub(super) pool: PgPool,
+    pub(super) canonical_live_snapshots: bool,
+    pub(super) expired_legacy_scope: Option<LegacyVmPlacementScope>,
+    pub(super) invocation_configuration: Option<release_service::InstanceExecutionConfiguration>,
 }
 
 impl PgRuntimeSessionRepository {
     /// Creates a repository using a worker-role connection pool.
     #[must_use]
     pub const fn new(pool: PgPool) -> Self {
-        Self { pool }
+        Self {
+            pool,
+            canonical_live_snapshots: false,
+            expired_legacy_scope: None,
+            invocation_configuration: None,
+        }
+    }
+
+    /// Explicitly selects read-only owned-profile live resolution.
+    ///
+    /// Requires the owned execution-profile schema and a worker-role pool.
+    /// This grants no dispatch support and does not alter issuance guards.
+    #[must_use]
+    pub const fn with_canonical_live_snapshots(mut self) -> Self {
+        self.canonical_live_snapshots = true;
+        self
+    }
+
+    /// Selects the qualified private119 authority adapter explicitly.
+    ///
+    /// Requires the qualified119-A/119-B schema and a worker pool. The checked
+    /// configuration is data; actual provider ownership is validated by trusted
+    /// startup separately. It grants no caller, source, mount, or VM authority.
+    /// New Invocation sessions are Provisioning-only, at most 3600 seconds and
+    /// bounded by every held lease expiry. Existing normal/update TTLs are unchanged.
+    #[must_use]
+    pub fn with_qualified_invocation_configuration(
+        mut self,
+        configuration: release_service::InstanceExecutionConfiguration,
+    ) -> Self {
+        self.invocation_configuration = Some(configuration);
+        self
+    }
+
+    /// Retains the trusted strict Legacy owner for exact expired observation.
+    ///
+    /// This selects no live/issuance profile and grants no physical ownership,
+    /// recovery, dispatch or bootstrap authority. Startup must check the actual
+    /// provider separately. Unconfigured ordinary repositories remain unsupported.
+    #[must_use]
+    pub fn with_expired_legacy_vm_placement_scope(mut self, scope: LegacyVmPlacementScope) -> Self {
+        self.expired_legacy_scope = Some(scope);
+        self
     }
 
     /// Resolves the exact immutable instance-revision binding ceiling for a
@@ -33,6 +78,11 @@ impl PgRuntimeSessionRepository {
         run: &Run,
         authorization_model_version: &str,
     ) -> Result<AuthorizationSnapshot, RuntimeAuthorityError> {
+        if run.kind == run_domain::RunKind::Invocation {
+            return self
+                .invocation_snapshot(run, authorization_model_version)
+                .await;
+        }
         let dispatchable: bool = sqlx::query_scalar(
             "SELECT EXISTS(
                 SELECT 1
@@ -137,6 +187,9 @@ impl PgRuntimeSessionRepository {
         run: &Run,
         snapshot: &AuthorizationSnapshot,
     ) -> Result<bool, RuntimeAuthorityError> {
+        if run.kind == run_domain::RunKind::Invocation {
+            return self.invocation_live_authorized(run, snapshot).await;
+        }
         if snapshot.principal().id != run.instance_id.as_uuid()
             || snapshot.principal().revision_id != run.instance_revision_id.as_uuid()
         {

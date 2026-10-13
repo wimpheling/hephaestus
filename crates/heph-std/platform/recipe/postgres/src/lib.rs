@@ -12,14 +12,20 @@ mod effect_context;
 mod effect_outcome;
 mod effect_state;
 mod evidence;
+mod execution_preparation;
 mod execution_rows;
 mod execution_transitions;
 mod hydration;
+mod owned_creation_preparation;
+mod owned_partial_retention;
+mod owned_ready_retention;
 mod persistence;
 mod planning;
 mod planning_sources;
 mod receipts;
+mod remove_resume;
 mod repository;
+mod retirement;
 mod rows;
 mod terminal;
 mod verification;
@@ -33,16 +39,35 @@ use sqlx::PgPool;
 #[derive(Clone)]
 pub struct PostgresDeploymentRepository {
     pool: PgPool,
+    remove_resume: Option<recipe_application::RemoveResumeConfiguration>,
 }
 
+pub use execution_preparation::PostgresExecutionPreparationRepository;
+pub use execution_rows::encode_effect_claim;
+pub use owned_ready_retention::PostgresOwnedReadyRetentionRepository;
 pub use planning::PostgresPlanningCatalog;
 pub use verification::{PostgresEffectVerificationRecorder, VerifiedOutcome};
 
 impl PostgresDeploymentRepository {
+    /// Enables qualified fresh-manager continuation using trusted comparison data.
+    ///
+    /// This builder grants no runtime authority; every effect rechecks live admission.
+    #[must_use]
+    pub fn with_remove_resume(
+        mut self,
+        configuration: recipe_application::RemoveResumeConfiguration,
+    ) -> Self {
+        self.remove_resume = Some(configuration);
+        self
+    }
+
     /// Creates an admission ledger over an existing pool.
     #[must_use]
     pub const fn new(pool: PgPool) -> Self {
-        Self { pool }
+        Self {
+            pool,
+            remove_resume: None,
+        }
     }
 }
 

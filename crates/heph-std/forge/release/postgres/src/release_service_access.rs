@@ -12,7 +12,26 @@ impl ReleaseService {
     /// Creates the service.
     #[must_use]
     pub const fn new(pool: PgPool, authorizer: Arc<PostgresMelangeAuthorizer>) -> Self {
-        Self { pool, authorizer }
+        Self {
+            pool,
+            authorizer,
+            execution_profile: None,
+            legacy_vm_scope: None,
+        }
+    }
+
+    /// Selects explicit fresh update-hook producer SQL for the reviewed schema.
+    ///
+    /// The default constructor emits public107 SQL even if newer tables exist.
+    /// Owned selection requires fresh actor-authorized planning admission;
+    /// replay retains its original profile and cannot be promoted.
+    #[must_use]
+    pub const fn with_execution_profile(
+        mut self,
+        profile: run_domain::FreshRunExecutionProfile,
+    ) -> Self {
+        self.execution_profile = Some(profile);
+        self
     }
 
     /// Reads the hook run durably admitted for an update after a concurrent

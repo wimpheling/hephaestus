@@ -10,6 +10,10 @@ use tokio::task::JoinHandle;
 use tokio_util::sync::CancellationToken;
 
 pub async fn start(app: HephaestusApp) -> Result<RunningHephaestus, AppError> {
+    if let Some(managed) = &app.managed_backend {
+        // The transferred lease signals service-owned close if start is abandoned.
+        managed.require_ready()?;
+    }
     let resources = resources::prepare(&app).await?;
     workers::launch(app, resources).await
 }
@@ -21,11 +25,13 @@ pub fn running(
     tasks: Vec<JoinHandle<Result<(), String>>>,
 ) -> RunningHephaestus {
     RunningHephaestus {
+        managed_backend: app.managed_backend,
         http_addr,
         cancellation,
         tasks,
         pool: app.pool,
         application_pool: app.application_pool,
+        worker_pool: app.worker_pool,
         service_log_pool: app.service_log_pool,
         nats_client: app.nats_client,
         jetstream: app.jetstream,

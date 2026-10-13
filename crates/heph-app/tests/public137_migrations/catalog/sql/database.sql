@@ -1,0 +1,1 @@
+SELECT payload,payload::text FROM (SELECT coalesce(jsonb_agg(jsonb_build_object('raw',to_jsonb(d)-ARRAY['datfrozenxid','datminmxid'],'owner',pg_get_userbyid(d.datdba),'tablespace',to_jsonb(t)) ORDER BY d.oid),'[]'::jsonb) AS payload FROM pg_database d JOIN pg_tablespace t ON t.oid=d.dattablespace WHERE d.datname=current_database()) AS capture

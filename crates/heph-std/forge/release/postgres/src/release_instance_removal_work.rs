@@ -49,3 +49,70 @@ pub async fn admit_cancellation(
     }
     Ok(())
 }
+
+pub fn input_hash(
+    identity: &AuthenticatedIdentity,
+    command: &RequestInstanceRemoval,
+) -> Result<[u8; 32], ReleaseServiceError> {
+    use sha2::{Digest, Sha256};
+    Ok(Sha256::digest(serde_json::to_vec(&serde_json::json!({"version":1,"operation":"request_instance_removal","actor":identity.user_id,"instance":command.instance_id,"removal":command.removal_id,"expected_version":command.expected_version}))?).into())
+}
+// Shared write tail; each owning caller has separately established its lock and
+// authority/CAS protocol. This helper grants no eligibility or runtime evidence.
+pub async fn admit_request(
+    tx: &mut Transaction<'_, Postgres>,
+    identity: &AuthenticatedIdentity,
+    command: &RequestInstanceRemoval,
+    hash: &[u8; 32],
+) -> Result<(), ReleaseServiceError> {
+    let version = i64::try_from(command.expected_version)
+        .map_err(|_| ReleaseServiceError::StaleInstanceRevision)?;
+    sqlx::query("INSERT INTO agent_instance_removal_requests(id,instance_id,expected_version,input_hash,created_by,request_id,authorization_model_version) VALUES($1,$2,$3,$4,$5,$6,$7)")
+        .bind(command.removal_id.as_uuid()).bind(command.instance_id.as_uuid()).bind(version).bind(hash.as_slice()).bind(identity.user_id.as_uuid()).bind(identity.request_id.as_uuid()).bind(AUTHORIZATION_MODEL_VERSION).execute(&mut **tx).await?;
+    finish_request(tx, identity, command, hash).await
+}
+
+// The link is part of the FIRST INSERT; native142 validates current publication
+// and the complete original Pending endpoint before the unchanged write tail.
+pub async fn admit_resumed_request(
+    tx: &mut Transaction<'_, Postgres>,
+    identity: &AuthenticatedIdentity,
+    command: &RequestInstanceRemoval,
+    hash: &[u8; 32],
+    publisher: recipe_application::DeploymentCommandId,
+) -> Result<(), ReleaseServiceError> {
+    let version = i64::try_from(command.expected_version)
+        .map_err(|_| ReleaseServiceError::StaleInstanceRevision)?;
+    sqlx::query("INSERT INTO agent_instance_removal_requests(id,instance_id,expected_version,input_hash,created_by,request_id,authorization_model_version,prepared_resume_command_id) VALUES($1,$2,$3,$4,$5,$6,$7,$8)")
+        .bind(command.removal_id.as_uuid()).bind(command.instance_id.as_uuid()).bind(version).bind(hash.as_slice()).bind(identity.user_id.as_uuid()).bind(identity.request_id.as_uuid()).bind(AUTHORIZATION_MODEL_VERSION).bind(publisher.as_uuid()).execute(&mut **tx).await?;
+    finish_request(tx, identity, command, hash).await
+}
+
+async fn finish_request(
+    tx: &mut Transaction<'_, Postgres>,
+    identity: &AuthenticatedIdentity,
+    command: &RequestInstanceRemoval,
+    hash: &[u8; 32],
+) -> Result<(), ReleaseServiceError> {
+    admit_cancellation(tx, identity, command).await?;
+    crate::release_volume_instance_inputs::record_exact(
+        tx,
+        command.command_key,
+        "request_instance_removal",
+        command.instance_id.as_uuid(),
+        Some(command.removal_id.as_uuid()),
+        identity,
+        hash,
+    )
+    .await?;
+    crate::append_instance_event(
+        tx,
+        command.instance_id,
+        None,
+        "instance.removal_requested",
+        identity,
+        serde_json::json!({"removal_id":command.removal_id,"cleanup_complete":false}),
+    )
+    .await?;
+    Ok(())
+}

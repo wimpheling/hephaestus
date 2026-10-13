@@ -6,10 +6,11 @@ pub async fn run_cooking_browser_phase(
     update_sequence: Option<&cooking_updates::UpdateSequence>,
 ) {
     let pool = &prep.pool;
-    let restarted = prep
+    let http_addr = prep
         .running
         .as_ref()
-        .expect("running daemon for browser phase");
+        .expect("running daemon for browser phase")
+        .http_addr();
     let database_url = &prep.database_url;
     let project = &prep.project;
     let organization_id = prep.organization_id;
@@ -163,7 +164,7 @@ pub async fn run_cooking_browser_phase(
         .env("HEPHAESTUS_E2E_EXTERNAL_DATABASE_URL", database_url)
         .env(
             "HEPHAESTUS_E2E_EXTERNAL_RPC_ENDPOINT",
-            restarted.http_addr().to_string(),
+            http_addr.to_string(),
         )
         .env(
             "HEPHAESTUS_E2E_EXTERNAL_RPC_SECRET",

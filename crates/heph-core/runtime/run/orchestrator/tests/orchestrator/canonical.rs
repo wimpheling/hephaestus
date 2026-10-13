@@ -49,3 +49,11 @@ impl Fixture {
 
 #[path = "canonical/cleanup_wake.rs"]
 mod cleanup_wake;
+
+#[path = "canonical/invocation_recovery.rs"]
+mod invocation_recovery;
+
+#[path = "canonical/invocation_preparation.rs"]
+mod invocation_preparation;
+#[path = "canonical/invocation_preparation_repository.rs"]
+mod invocation_preparation_repository;

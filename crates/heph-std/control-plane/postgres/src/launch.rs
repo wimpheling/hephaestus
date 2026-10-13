@@ -1,4 +1,6 @@
 //! `PostgreSQL` launch authorization adapter.
+#[path = "launch/canonical.rs"]
+mod canonical;
 use async_trait::async_trait;
 use authz_domain::{ObjectRef, ObjectType, Permission, Subject};
 use authz_postgres::{PostgresMelangeAuthorizer, audit_decision};

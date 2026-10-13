@@ -72,6 +72,8 @@ release-artifact-store = { path = "../heph-std/forge/release/artifact-store" }
 release-domain = { path = "../heph-core/forge/release/domain" }
 release-postgres = { path = "../heph-std/forge/release/postgres" }
 recipe-application = { path = "../heph-core/platform/recipe/application" }
+recipe-domain = { path = "../heph-core/platform/recipe/domain" }
+recipe-postgres = { path = "../heph-std/platform/recipe/postgres" }
 registry-http = { path = "../heph-std/forge/registry/http" }
 registry-domain = { path = "../heph-core/forge/registry/domain" }
 registry-notification = { path = "../heph-core/forge/registry/notification" }
@@ -88,6 +90,7 @@ review-git = { path = "../heph-std/forge/review/git" }
 review-postgres = { path = "../heph-std/forge/review/postgres" }
 review-service = { path = "../heph-core/forge/review/service" }
 heph-run = { path = "../heph-core/runtime/run" }
+run-domain = { path = "../heph-core/runtime/run/domain" }
 run-orchestrator = { path = "../heph-core/runtime/run/orchestrator" }
 run-postgres = { path = "../heph-std/run/postgres" }
 run-nats = { path = "../heph-std/run/nats" }
@@ -126,12 +129,16 @@ workspace-local = { path = "../heph-std/runtime/workspace/local" }
 workspace-postgres = { path = "../heph-std/runtime/workspace/postgres" }
 
 [dev-dependencies]
+# Genuine Invocation fixtures use the native provider identity types.
+vm-trait.workspace = true
+forge-domain = { path = "../heph-core/forge/domain" }
 base64.workspace = true
 h2 = "0.4.15"
 registry-token = { path = "../heph-core/forge/registry/token" }
 rpc-proto = { path = "../heph-core/platform/rpc-proto", features = ["client"] }
 brokered-egress-domain = { path = "../heph-core/auth/secret/brokered-egress-domain" }
 secret-broker = { path = "../heph-std/secret/broker", features = ["test-fixtures"] }
+secret-store = { path = "../heph-core/auth/secret/store", features = ["test-fixtures"] }
 sqlx.workspace = true
 serial_test = "3"
 tempfile = "3"

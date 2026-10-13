@@ -201,6 +201,8 @@ mod artifact_deadline_transport {
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
     #[serial_test::serial]
+    // The daemon spans deadline/cancellation probes and is consumed by awaited shutdown.
+    #[allow(clippy::significant_drop_tightening)]
     async fn artifact_rpc_propagates_transport_deadline_to_real_adapter() {
         if env::var("REAL_APP_ARTIFACT_RPC").as_deref() != Ok("1") {
             eprintln!("SKIPPED artifact RPC deadline evidence: set REAL_APP_ARTIFACT_RPC=1");
@@ -220,12 +222,16 @@ mod artifact_deadline_transport {
             .expect("apply artifact RPC migrations");
         let root = tempdir().expect("artifact RPC root");
         let (artifact, user, issuer, subject) = seed_artifact(&pool, root.path()).await;
-        let app = HephaestusApp::build(app_config(database_url, nats_url.clone(), root.path()))
-            .await
-            .expect("build artifact RPC application")
-            .start()
-            .await
-            .expect("start artifact RPC application");
+        let app = Box::pin(HephaestusApp::build(app_config(
+            database_url,
+            nats_url.clone(),
+            root.path(),
+        )))
+        .await
+        .expect("build artifact RPC application")
+        .start()
+        .await
+        .expect("start artifact RPC application");
         let uri: axum::http::Uri = format!("http://{}", app.http_addr())
             .parse()
             .expect("artifact RPC URI");

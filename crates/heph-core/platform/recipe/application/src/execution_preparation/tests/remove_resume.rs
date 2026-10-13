@@ -30,6 +30,7 @@ fn original() -> (OriginalInstanceClosure, crate::EffectClaim) {
     .unwrap();
     (
         OriginalInstanceClosure {
+            publication_origin: crate::InstanceClosurePublicationOrigin::OriginalDrain,
             drain: claim.clone(),
             removal_id: request.removal_id(),
             command_key: request.command_key(),
@@ -92,4 +93,79 @@ fn actual_opaque_provider_configuration_is_checked_comparison_data() {
         )
         .is_err()
     );
+}
+
+fn admission() -> crate::DeploymentAdmission {
+    let intent = fixture::intent(fixture::SOURCE, 1);
+    let current = fixture::identity(11, 12);
+    let command = CommandIdentity::from_identity(&current, DeploymentOperation::Remove).unwrap();
+    crate::DeploymentAdmission {
+        disposition: crate::AdmissionDisposition::Resume,
+        snapshot: crate::DeploymentSnapshot {
+            intent: intent.clone(),
+            lifecycle: crate::DeploymentLifecycle::Removing,
+            version: 9,
+            resources: std::collections::BTreeMap::new(),
+        },
+        receipt: crate::CommandReceipt {
+            command,
+            deployment_id: intent.id(),
+            input_hash: ContentHash::digest(b"controlled admission"),
+            lifecycle: crate::DeploymentLifecycle::Removing,
+            deployment_version: 9,
+            event: event_application::CommittedMutation {
+                event_id: Uuid::from_u128(90),
+                scope_kind: "project".into(),
+                scope_id: intent.project_id().as_uuid(),
+                cursor: 1,
+                aggregate_version: 1,
+            },
+        },
+    }
+}
+
+#[test]
+fn inactive_original_closure_history_is_not_an_active_continuation_or_cleanup_proof() {
+    let (closure, _) = original();
+    let history = crate::RemoveResumeAdmission::with_complete_closures(
+        admission(),
+        vec![],
+        vec![closure.clone()],
+    )
+    .unwrap();
+    assert!(history.continuations().is_empty());
+    assert_eq!(history.closures(), &[closure]);
+}
+
+#[test]
+fn complete_history_rejects_duplicate_foreign_and_missing_active_closures() {
+    let (closure, claim) = original();
+    assert!(
+        crate::RemoveResumeAdmission::with_complete_closures(
+            admission(),
+            vec![],
+            vec![closure.clone(), closure.clone()],
+        )
+        .is_err()
+    );
+    let mut foreign = closure.clone();
+    foreign.drain.deployment_id = crate::DeploymentId::from_uuid(Uuid::from_u128(99)).unwrap();
+    assert!(
+        crate::RemoveResumeAdmission::with_complete_closures(admission(), vec![], vec![foreign],)
+            .is_err()
+    );
+    let active = crate::RemoveContinuation {
+        claim,
+        closure: Some(closure.clone()),
+    };
+    assert!(
+        crate::RemoveResumeAdmission::with_complete_closures(
+            admission(),
+            vec![active.clone()],
+            vec![],
+        )
+        .is_err()
+    );
+    let compatible = crate::RemoveResumeAdmission::new(admission(), vec![active]).unwrap();
+    assert_eq!(compatible.closures(), &[closure]);
 }

@@ -1,12 +1,10 @@
 //! Fresh removal admission and immutable original continuation data.
+mod terminal;
 use crate::{
     DeploymentAdmission, DeploymentError, DeploymentExecutionProfile, DeploymentOperation,
     EffectClaim, PlannedResourceIdentity, PlatformPolicyObservation, ResourceAction,
     ResourceOwnership,
 };
-use identity_domain::{RequestId, UserId};
-use release_domain::{ContentHash, InstanceRemovalId, ReleaseCommandKey};
-use uuid::Uuid;
 
 /// Trusted composition comparison data; grants no provider ownership or authority.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -67,69 +65,8 @@ impl RemoveResumeConfiguration {
     }
 }
 
-/// Immutable original permanent closure, never the old actor's credentials.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct OriginalInstanceClosure {
-    /// Exact original Drain claim that created the permanent request.
-    pub drain: EffectClaim,
-    /// Actual request derived from the original Drain attempt.
-    pub removal_id: InstanceRemovalId,
-    /// Original owning release command key.
-    pub command_key: ReleaseCommandKey,
-    /// Instance version before permanent closure.
-    pub expected_version: u64,
-    /// Original recorded creator, comparison data only.
-    pub actor: UserId,
-    /// Original recorded request, comparison data only.
-    pub request: RequestId,
-    /// Original exact request fingerprint.
-    pub input_hash: ContentHash,
-}
-impl OriginalInstanceClosure {
-    /// Compares closure identities to the original actual Drain claim.
-    ///
-    /// # Errors
-    /// Rejects substituted claims, identities, creator or version.
-    pub fn validate(&self, claim: &EffectClaim) -> Result<(), DeploymentError> {
-        let drain = &self.drain;
-        if drain.deployment_id != claim.deployment_id
-            || drain.resource != claim.resource
-            || drain.identity != claim.identity
-            || drain.input_hash != claim.input_hash
-        {
-            return Err(DeploymentError::IntentMismatch);
-        }
-        let PlannedResourceIdentity::Instance { id, .. } = drain.identity else {
-            return Err(DeploymentError::IntentMismatch);
-        };
-        let mut bytes = b"hephaestus-prepared-instance-removal-v1\0".to_vec();
-        bytes.extend_from_slice(id.as_uuid().as_bytes());
-        let expected = Uuid::new_v5(&drain.provenance.attempt_id.as_uuid(), &bytes);
-        let key = ReleaseCommandKey::derive(
-            "prepared_instance_remove_v1",
-            &[
-                id.as_uuid().as_bytes(),
-                drain.provenance.attempt_id.as_uuid().as_bytes(),
-            ],
-        );
-        if drain.provenance.actor_id != drain.command.actor_id()
-            || drain.provenance.request_id.as_uuid().is_nil()
-            || drain.generation == 0
-            || drain.resource_version == 0
-            || drain.action != ResourceAction::Drain
-            || drain.command.operation() != DeploymentOperation::Remove
-            || self.removal_id.as_uuid() != expected
-            || self.command_key != key
-            || self.actor != drain.provenance.actor_id
-            || self.request.as_uuid().is_nil()
-            || self.expected_version == 0
-            || self.expected_version > i64::MAX.cast_unsigned()
-        {
-            return Err(DeploymentError::IntentMismatch);
-        }
-        Ok(())
-    }
-}
+pub use crate::instance_closure_publication::OriginalInstanceClosure;
+
 /// One immutable original removal claim, with existing closure when relevant.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RemoveContinuation {
@@ -143,9 +80,16 @@ pub struct RemoveContinuation {
 pub struct RemoveResumeAdmission {
     admission: DeploymentAdmission,
     continuations: Vec<RemoveContinuation>,
+    closures: Vec<OriginalInstanceClosure>,
+    pending: Vec<crate::PendingInstanceDrainClosure>,
+    detach: Vec<crate::PreparedInstanceDetachRecovery>,
+    terminal: Vec<crate::PreparedInstanceDeleteHistory>,
 }
 impl RemoveResumeAdmission {
-    /// Checks shape against the exact immutable admitted deployment.
+    /// Checks active continuation shape against the exact immutable admitted deployment.
+    ///
+    /// This compatibility constructor retains supplied active closures; production
+    /// adapters use `with_complete_closures` to preserve inactive history too.
     ///
     /// Construction conveys no database admission or provider proof.
     ///
@@ -191,10 +135,110 @@ impl RemoveResumeAdmission {
                 return Err(DeploymentError::ReconciliationRequired);
             }
         }
+        let closures = continuations
+            .iter()
+            .filter_map(|item| item.closure.clone())
+            .collect();
         Ok(Self {
             admission,
             continuations,
+            closures,
+            pending: Vec::new(),
+            detach: Vec::new(),
+            terminal: Vec::new(),
         })
+    }
+    /// Preserves the complete native original closure inventory separately from active work.
+    ///
+    /// Inactive closures remain comparison data, never completed-effect or physical
+    /// cleanup proof. Adapters must independently qualify the complete persisted set.
+    ///
+    /// # Errors
+    /// Rejects duplicate, foreign or substituted originals and missing active closures.
+    pub fn with_complete_closures(
+        admission: DeploymentAdmission,
+        continuations: Vec<RemoveContinuation>,
+        closures: Vec<OriginalInstanceClosure>,
+    ) -> Result<Self, DeploymentError> {
+        let mut result = Self::new(admission, continuations)?;
+        let mut names = std::collections::BTreeMap::new();
+        let mut attempts = std::collections::BTreeSet::new();
+        let mut removals = std::collections::BTreeSet::new();
+        for closure in &closures {
+            let claim = &closure.drain;
+            let plan = result
+                .admission
+                .snapshot
+                .intent
+                .resources()
+                .get(&claim.resource)
+                .ok_or(DeploymentError::IntentMismatch)?;
+            closure.validate(claim)?;
+            if claim.deployment_id != result.admission.snapshot.intent.id()
+                || claim.command == result.admission.receipt.command
+                || plan.ownership() != ResourceOwnership::Owned
+                || plan.identity() != claim.identity
+                || plan.input_hash() != claim.input_hash
+                || names.insert(claim.resource.clone(), closure).is_some()
+                || !attempts.insert(claim.provenance.attempt_id)
+                || !removals.insert(closure.removal_id.as_uuid())
+            {
+                return Err(DeploymentError::IntentMismatch);
+            }
+        }
+        for item in &result.continuations {
+            if let Some(closure) = &item.closure {
+                if names.get(&closure.drain.resource).copied() != Some(closure) {
+                    return Err(DeploymentError::ReconciliationRequired);
+                }
+            }
+        }
+        result.closures = closures;
+        Ok(result)
+    }
+    /// Retains explicitly qualified pending projections alongside complete closed history.
+    ///
+    /// Only an exact supplied pending match permits an Instance continuation without
+    /// a closure. This comparison cannot establish missing native rows or authority.
+    /// The existing strict constructors retain their original denial behavior.
+    ///
+    /// # Errors
+    /// Rejects missing, orphan, duplicate or cross-inventory conflicting originals,
+    /// changed snapshots/current commands and substituted pending continuation claims.
+    pub fn with_pending_instance_drains(
+        admission: DeploymentAdmission,
+        continuations: Vec<RemoveContinuation>,
+        closures: Vec<OriginalInstanceClosure>,
+        pending: Vec<crate::PendingInstanceDrainClosure>,
+    ) -> Result<Self, DeploymentError> {
+        let mut names = std::collections::BTreeMap::new();
+        for item in &pending {
+            if item.snapshot() != &admission.snapshot
+                || item.current_command() != admission.receipt.command
+                || admission.receipt.deployment_id != admission.snapshot.intent.id()
+                || names.insert(item.drain().resource.clone(), item).is_some()
+            {
+                return Err(DeploymentError::IntentMismatch);
+            }
+        }
+        let closed = compared_continuations(&continuations, &names)?;
+        compare_inventory_attempts(&continuations, &closures, &names)?;
+        let mut result = Self::with_complete_closures(admission, closed, closures)?;
+        result.continuations = continuations;
+        result.pending = pending;
+        Ok(result)
+    }
+    /// Returns explicit pending comparison projections, never absence or admission proof.
+    #[must_use]
+    pub fn pending_instance_drains(&self) -> &[crate::PendingInstanceDrainClosure] {
+        &self.pending
+    }
+    /// Returns all qualified original closures, including inactive completed history.
+    ///
+    /// Presence is immutable comparison data, not an outcome or IO authorization.
+    #[must_use]
+    pub fn closures(&self) -> &[OriginalInstanceClosure] {
+        &self.closures
     }
     /// Returns the new current manager's real command admission.
     #[must_use]
@@ -206,4 +250,65 @@ impl RemoveResumeAdmission {
     pub fn continuations(&self) -> &[RemoveContinuation] {
         &self.continuations
     }
+}
+
+fn compared_continuations(
+    continuations: &[RemoveContinuation],
+    pending: &std::collections::BTreeMap<
+        capability_domain::CapabilitySlotKey,
+        &crate::PendingInstanceDrainClosure,
+    >,
+) -> Result<Vec<RemoveContinuation>, DeploymentError> {
+    let mut names = std::collections::BTreeSet::new();
+    let mut matched = std::collections::BTreeSet::new();
+    let mut closed = Vec::new();
+    for item in continuations {
+        if !names.insert(item.claim.resource.clone()) {
+            return Err(DeploymentError::IntentMismatch);
+        }
+        if let Some(original) = pending.get(&item.claim.resource) {
+            if item.closure.is_some() || original.drain() != &item.claim {
+                return Err(DeploymentError::IntentMismatch);
+            }
+            matched.insert(item.claim.resource.clone());
+        } else {
+            closed.push(item.clone());
+        }
+    }
+    if matched.len() != pending.len() {
+        return Err(DeploymentError::IntentMismatch);
+    }
+    Ok(closed)
+}
+
+fn compare_inventory_attempts(
+    continuations: &[RemoveContinuation],
+    closures: &[OriginalInstanceClosure],
+    pending: &std::collections::BTreeMap<
+        capability_domain::CapabilitySlotKey,
+        &crate::PendingInstanceDrainClosure,
+    >,
+) -> Result<(), DeploymentError> {
+    let mut attempts = std::collections::BTreeMap::new();
+    for item in continuations {
+        if attempts
+            .insert(item.claim.provenance.attempt_id, &item.claim.resource)
+            .is_some()
+        {
+            return Err(DeploymentError::IntentMismatch);
+        }
+    }
+    for closure in closures {
+        let claim = &closure.drain;
+        if pending.contains_key(&claim.resource) {
+            return Err(DeploymentError::IntentMismatch);
+        }
+        if attempts
+            .insert(claim.provenance.attempt_id, &claim.resource)
+            .is_some_and(|resource| resource != &claim.resource)
+        {
+            return Err(DeploymentError::IntentMismatch);
+        }
+    }
+    Ok(())
 }

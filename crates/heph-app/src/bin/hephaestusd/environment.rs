@@ -211,6 +211,7 @@ pub fn environment_config() -> Result<AppConfig, Box<dyn Error>> {
         secret_keys,
         secret_broker_socket,
         secret_broker_adapter: broker_adapter_from_environment()?,
+        managed_backend: None,
         vm_backend,
         root_images,
         oci_builder,
