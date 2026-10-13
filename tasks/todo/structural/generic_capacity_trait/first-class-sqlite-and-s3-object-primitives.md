@@ -503,7 +503,19 @@ Hosted run `38457048753` for `6ca5c816` completes with Cooking, workspace format
 and Clippy passing, and Rust/browser failures. Rust fails at the stale Build
 fixture's initial provisioning step; browser publication also fails because its
 fixture provider lacks the required attempt method. The browser fixture
-correction is reviewed source with its focused and actual browser checks pending.
+correction now passes all three focused controls, Rust 1.88 locked App strict
+Clippy, formatting and docs, and the unchanged existing release-publication
+browser case. That one case runs actual PostgreSQL/NATS/Git/Phoenix and Chromium,
+with the memory fixture provider. Its original timings and assertions remain;
+stream and retained-evidence scanners pass. The complete Secret/recipe journey,
+native guest, SQLite and full shutdown checks remain unfinished.
+
+The subsequent hosted run `38467277765` for `f573ce8d` passes Cooking and reaches
+Rust tests, then fails `pushed_config_publishes_command_and_starts_vm` because its
+run never reaches running. The published Build recovery scenario no longer blocks
+that test progression. The browser still uses its old provider on that head;
+the locally qualified correction is the next publication checkpoint.
+
 Secret completion/read/audit SQL and its finite catalog additions are privately
 reviewed after preserving the existing audit SELECT policy and standalone Grant
 expiry behavior. Rust adapter wiring and native qualification remain unfinished.

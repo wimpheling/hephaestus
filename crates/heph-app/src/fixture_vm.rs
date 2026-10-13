@@ -1,3 +1,6 @@
+#[path = "fixture_vm/provision_attempt.rs"]
+mod provision_attempt;
+
 use super::vm_spec_factory::invalid_spec;
 use super::{
     Arc, BTreeMap, PathBuf, StopMode, VmError, VmEvent, VmExit, VmId, VmInstance, VmMetric,
@@ -12,6 +15,13 @@ pub struct ResultFixtureProvider;
 impl VmProvider for ResultFixtureProvider {
     fn name(&self) -> &'static str {
         "local-result-fixture"
+    }
+
+    fn prepare_provision_attempt(
+        &self,
+        spec: VmSpec,
+    ) -> Result<Arc<dyn vm_trait::VmProvisionAttempt>, VmError> {
+        Ok(provision_attempt::prepare(spec))
     }
 
     async fn provision(&self, spec: VmSpec) -> Result<Arc<dyn VmInstance>, VmError> {
