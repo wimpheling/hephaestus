@@ -10,6 +10,8 @@ mod custody;
 mod history;
 #[path = "managed_backend/paths.rs"]
 mod paths;
+#[path = "managed_recipe.rs"]
+pub mod recipe;
 #[path = "managed_backend/roots.rs"]
 mod roots;
 #[path = "managed_backend/services.rs"]
@@ -49,6 +51,14 @@ impl NodeLease {
         let controller = self.executor()?.original_invocation();
         controller.validate_owners()?;
         Ok(controller)
+    }
+    /// Obtains only the SAME privately constructed service; mutation admission still checks Ready.
+    pub(crate) fn recipe_service(&self) -> Result<std::sync::Arc<recipe::ManagedRecipe>, AppError> {
+        let registry = self.registry()?;
+        registry.require_recovered()?;
+        registry.node()?.recipes.get().cloned().ok_or_else(|| {
+            AppError::Readiness("managed original recipe service is not assembled".into())
+        })
     }
     pub fn fork_service_lease(&self) -> Self {
         self.fork()

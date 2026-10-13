@@ -10,7 +10,7 @@ use release_service::InstanceExecutionConfiguration;
 use run_orchestrator::RunOperationGuards;
 use std::{
     error::Error,
-    sync::{Arc, OnceLock},
+    sync::{Arc, OnceLock, Weak},
 };
 use vm_libkrun::{LibkrunConfig, LibkrunProvider};
 use volume_local::VolumeRootOwner;
@@ -24,6 +24,8 @@ pub(super) struct ManagedBackendNode {
     pub(super) configuration: InstanceExecutionConfiguration,
     _pools: ManagedInvocationPools,
     executor: OnceLock<Arc<ManagedRunCommandExecutor>>,
+    registry: Weak<super::supervisor::registry::Registry>,
+    pub(super) recipes: OnceLock<Arc<super::recipe::ManagedRecipe>>,
     pub(super) services: Arc<super::services::Services>,
 }
 
@@ -81,7 +83,10 @@ pub(super) fn inputs(
     }
 }
 
-pub(super) fn node(inputs: &ManagedRunCommandInputs) -> Arc<ManagedBackendNode> {
+pub(super) fn node(
+    inputs: &ManagedRunCommandInputs,
+    registry: Weak<super::supervisor::registry::Registry>,
+) -> Arc<ManagedBackendNode> {
     let shared = &inputs.shared;
     Arc::new(ManagedBackendNode {
         provider: shared.provider.clone(),
@@ -95,6 +100,8 @@ pub(super) fn node(inputs: &ManagedRunCommandInputs) -> Arc<ManagedBackendNode> 
             application: shared.pools.application.clone(),
         },
         executor: OnceLock::new(),
+        registry,
+        recipes: OnceLock::new(),
         services: Arc::new(super::services::Services::default()),
     })
 }
@@ -113,7 +120,19 @@ pub(super) async fn construct(
     executor
         .reconcile_lifecycle(run_orchestrator::SupervisorReconciliationCause::Restart)
         .await
-        .map_err(failure)
+        .map_err(failure)?;
+    let result = {
+        let recipes = super::recipe::ManagedRecipe::new(
+            executor.original_invocation(),
+            node.registry.clone(),
+        )?;
+        node.registry
+            .upgrade()
+            .ok_or_else(|| AppError::Readiness("managed recipe original registry lost".into()))?
+            .install_recipe(node, recipes)
+    };
+    drop(executor);
+    result
 }
 
 pub(super) fn executor(
@@ -126,10 +145,13 @@ pub(super) fn executor(
 }
 
 pub(super) fn close_intake(node: &ManagedBackendNode) -> Result<(), AppError> {
+    node.services.request_close();
+    if let Some(recipes) = node.recipes.get() {
+        recipes.close();
+    }
     if let Some(executor) = node.executor.get() {
         executor.close_intake().map_err(failure)?;
     }
-    node.services.request_close();
     Ok(())
 }
 
@@ -144,6 +166,14 @@ pub(super) async fn stop_runs(node: &ManagedBackendNode) -> Result<Option<()>, A
         .await
         .map_err(failure)?;
     Ok(Some(()))
+}
+
+/// Settle only registered actual recipe tasks, retaining every logical outcome.
+pub(super) async fn join_recipes(node: &ManagedBackendNode) -> Result<(), AppError> {
+    if let Some(recipes) = node.recipes.get() {
+        recipes.join_jobs().await.map_err(failure)?;
+    }
+    Ok(())
 }
 
 pub(super) fn failure(error: impl Error + Send + Sync + 'static) -> AppError {

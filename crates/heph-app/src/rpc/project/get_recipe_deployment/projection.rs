@@ -8,7 +8,7 @@ use rpc_proto::messages::hephaestus::project::v1::{
 };
 use uuid::Uuid;
 
-pub(super) fn project(
+pub(in crate::rpc::project) fn project(
     snapshot: &DeploymentSnapshot,
     expected_project: Uuid,
     expected_deployment: DeploymentId,

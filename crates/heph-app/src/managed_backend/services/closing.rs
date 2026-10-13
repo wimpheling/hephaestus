@@ -3,7 +3,7 @@ use super::{AppError, Body, Services};
 
 pub(super) async fn run(services: &Services) -> Result<(), AppError> {
     services.request_close();
-    let (startup, body) = {
+    let body = {
         let mut state = services
             .state
             .lock()
@@ -14,14 +14,14 @@ pub(super) async fn run(services: &Services) -> Result<(), AppError> {
             ));
         }
         state.closing = true;
-        (state.startup.take(), state.body.clone())
+        let body = state.body.clone();
+        drop(state);
+        body
     };
+    // This transient serialization marker is never a cleanup receipt.
+    let _activity = ClosingActivity(services);
     let result = async {
-        if let Some(startup) = startup {
-            startup
-                .await
-                .map_err(crate::managed_backend::custody::failure)?;
-        }
+        services.join_mutations().await?;
         // Startup may have installed Running while the owning join awaited.
         let current = services
             .state
@@ -37,7 +37,6 @@ pub(super) async fn run(services: &Services) -> Result<(), AppError> {
                     ));
                 }
                 qualify_ordinary_services(running)?;
-                services.tasks.join().await?;
                 running.close_managed_services().await
             }
             Body::App(app) | Body::Starting(app) => {
@@ -49,7 +48,7 @@ pub(super) async fn run(services: &Services) -> Result<(), AppError> {
                     Err(ordinary_unavailable())
                 }
             }
-            Body::Empty => services.tasks.join().await,
+            Body::Empty => Err(ordinary_unavailable()),
             #[cfg(test)]
             Body::TestOwner(_) => Err(AppError::Readiness(
                 "controlled owner cannot qualify cleanup".into(),
@@ -57,14 +56,13 @@ pub(super) async fn run(services: &Services) -> Result<(), AppError> {
         }
     }
     .await;
-    // No original is removed on error. Even an unwound job leaves the actual
-    // body plus closing marker retained; a marker cannot establish cleanup.
+    // No original is removed on error/unwind. Activity resets for same-owner
+    // retry; closed intake and every actual body/slot/error remain retained.
     let retired = {
         let mut state = services
             .state
             .lock()
             .map_err(|_| AppError::Task("managed service slot poisoned".into()))?;
-        state.closing = false;
         let retired = if result.is_ok() {
             Some(std::mem::replace(&mut state.body, Body::Empty))
         } else {
@@ -93,4 +91,18 @@ fn qualify_ordinary_services(running: &crate::RunningHephaestus) -> Result<(), A
 }
 fn ordinary_unavailable() -> AppError {
     AppError::Readiness("ordinary Build/OCI/Gateway original-owner cleanup proof port is unavailable; original bundle/tasks/NATS/pools retained".into())
+}
+
+/// Observer cancellation/unwind releases serialization, never reopens admission.
+struct ClosingActivity<'a>(&'a Services);
+impl Drop for ClosingActivity<'_> {
+    fn drop(&mut self) {
+        let mut state = self
+            .0
+            .state
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        state.closing = false;
+        drop(state);
+    }
 }

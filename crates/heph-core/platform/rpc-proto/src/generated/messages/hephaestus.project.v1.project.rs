@@ -1359,6 +1359,181 @@ impl ::buffa::Enumeration for RecipeActivationObservation {
         ]
     }
 }
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
+#[repr(i32)]
+pub enum RecipeActivationResultStatus {
+    RECIPE_ACTIVATION_RESULT_STATUS_UNSPECIFIED = 0i32,
+    RECIPE_ACTIVATION_RESULT_STATUS_ADMITTED = 1i32,
+    RECIPE_ACTIVATION_RESULT_STATUS_HELD = 2i32,
+}
+impl RecipeActivationResultStatus {
+    ///Idiomatic alias for [`Self::RECIPE_ACTIVATION_RESULT_STATUS_UNSPECIFIED`]; `Debug` prints the variant name.
+    #[allow(non_upper_case_globals)]
+    pub const Unspecified: Self = Self::RECIPE_ACTIVATION_RESULT_STATUS_UNSPECIFIED;
+    ///Idiomatic alias for [`Self::RECIPE_ACTIVATION_RESULT_STATUS_ADMITTED`]; `Debug` prints the variant name.
+    #[allow(non_upper_case_globals)]
+    pub const Admitted: Self = Self::RECIPE_ACTIVATION_RESULT_STATUS_ADMITTED;
+    ///Idiomatic alias for [`Self::RECIPE_ACTIVATION_RESULT_STATUS_HELD`]; `Debug` prints the variant name.
+    #[allow(non_upper_case_globals)]
+    pub const Held: Self = Self::RECIPE_ACTIVATION_RESULT_STATUS_HELD;
+}
+impl ::core::default::Default for RecipeActivationResultStatus {
+    fn default() -> Self {
+        Self::RECIPE_ACTIVATION_RESULT_STATUS_UNSPECIFIED
+    }
+}
+impl ::serde::Serialize for RecipeActivationResultStatus {
+    fn serialize<S: ::serde::Serializer>(
+        &self,
+        s: S,
+    ) -> ::core::result::Result<S::Ok, S::Error> {
+        s.serialize_str(::buffa::Enumeration::proto_name(self))
+    }
+}
+impl<'de> ::serde::Deserialize<'de> for RecipeActivationResultStatus {
+    fn deserialize<D: ::serde::Deserializer<'de>>(
+        d: D,
+    ) -> ::core::result::Result<Self, D::Error> {
+        struct _V;
+        impl ::serde::de::Visitor<'_> for _V {
+            type Value = RecipeActivationResultStatus;
+            fn expecting(
+                &self,
+                f: &mut ::core::fmt::Formatter<'_>,
+            ) -> ::core::fmt::Result {
+                f.write_str(
+                    concat!(
+                        "a string, integer, or null for ",
+                        stringify!(RecipeActivationResultStatus)
+                    ),
+                )
+            }
+            fn visit_str<E: ::serde::de::Error>(
+                self,
+                v: &str,
+            ) -> ::core::result::Result<RecipeActivationResultStatus, E> {
+                <RecipeActivationResultStatus as ::buffa::Enumeration>::from_proto_name(
+                        v,
+                    )
+                    .ok_or_else(|| { ::serde::de::Error::unknown_variant(v, &[]) })
+            }
+            fn visit_i64<E: ::serde::de::Error>(
+                self,
+                v: i64,
+            ) -> ::core::result::Result<RecipeActivationResultStatus, E> {
+                let v32 = i32::try_from(v)
+                    .map_err(|_| {
+                        ::serde::de::Error::custom(
+                            ::buffa::alloc::format!("enum value {v} out of i32 range"),
+                        )
+                    })?;
+                <RecipeActivationResultStatus as ::buffa::Enumeration>::from_i32(v32)
+                    .ok_or_else(|| {
+                        ::serde::de::Error::custom(
+                            ::buffa::alloc::format!("unknown enum value {v32}"),
+                        )
+                    })
+            }
+            fn visit_u64<E: ::serde::de::Error>(
+                self,
+                v: u64,
+            ) -> ::core::result::Result<RecipeActivationResultStatus, E> {
+                let v32 = i32::try_from(v)
+                    .map_err(|_| {
+                        ::serde::de::Error::custom(
+                            ::buffa::alloc::format!("enum value {v} out of i32 range"),
+                        )
+                    })?;
+                <RecipeActivationResultStatus as ::buffa::Enumeration>::from_i32(v32)
+                    .ok_or_else(|| {
+                        ::serde::de::Error::custom(
+                            ::buffa::alloc::format!("unknown enum value {v32}"),
+                        )
+                    })
+            }
+            fn visit_unit<E: ::serde::de::Error>(
+                self,
+            ) -> ::core::result::Result<RecipeActivationResultStatus, E> {
+                ::core::result::Result::Ok(::core::default::Default::default())
+            }
+        }
+        d.deserialize_any(_V)
+    }
+}
+impl ::buffa::json_helpers::ProtoElemJson for RecipeActivationResultStatus {
+    fn serialize_proto_json<S: ::serde::Serializer>(
+        v: &Self,
+        s: S,
+    ) -> ::core::result::Result<S::Ok, S::Error> {
+        ::serde::Serialize::serialize(v, s)
+    }
+    fn deserialize_proto_json<'de, D: ::serde::Deserializer<'de>>(
+        d: D,
+    ) -> ::core::result::Result<Self, D::Error> {
+        <Self as ::serde::Deserialize>::deserialize(d)
+    }
+}
+impl ::buffa::Enumeration for RecipeActivationResultStatus {
+    fn from_i32(value: i32) -> ::core::option::Option<Self> {
+        match value {
+            0i32 => {
+                ::core::option::Option::Some(
+                    Self::RECIPE_ACTIVATION_RESULT_STATUS_UNSPECIFIED,
+                )
+            }
+            1i32 => {
+                ::core::option::Option::Some(
+                    Self::RECIPE_ACTIVATION_RESULT_STATUS_ADMITTED,
+                )
+            }
+            2i32 => {
+                ::core::option::Option::Some(Self::RECIPE_ACTIVATION_RESULT_STATUS_HELD)
+            }
+            _ => ::core::option::Option::None,
+        }
+    }
+    fn to_i32(&self) -> i32 {
+        *self as i32
+    }
+    fn proto_name(&self) -> &'static str {
+        match self {
+            Self::RECIPE_ACTIVATION_RESULT_STATUS_UNSPECIFIED => {
+                "RECIPE_ACTIVATION_RESULT_STATUS_UNSPECIFIED"
+            }
+            Self::RECIPE_ACTIVATION_RESULT_STATUS_ADMITTED => {
+                "RECIPE_ACTIVATION_RESULT_STATUS_ADMITTED"
+            }
+            Self::RECIPE_ACTIVATION_RESULT_STATUS_HELD => {
+                "RECIPE_ACTIVATION_RESULT_STATUS_HELD"
+            }
+        }
+    }
+    fn from_proto_name(name: &str) -> ::core::option::Option<Self> {
+        match name {
+            "RECIPE_ACTIVATION_RESULT_STATUS_UNSPECIFIED" => {
+                ::core::option::Option::Some(
+                    Self::RECIPE_ACTIVATION_RESULT_STATUS_UNSPECIFIED,
+                )
+            }
+            "RECIPE_ACTIVATION_RESULT_STATUS_ADMITTED" => {
+                ::core::option::Option::Some(
+                    Self::RECIPE_ACTIVATION_RESULT_STATUS_ADMITTED,
+                )
+            }
+            "RECIPE_ACTIVATION_RESULT_STATUS_HELD" => {
+                ::core::option::Option::Some(Self::RECIPE_ACTIVATION_RESULT_STATUS_HELD)
+            }
+            _ => ::core::option::Option::None,
+        }
+    }
+    fn values() -> &'static [Self] {
+        &[
+            Self::RECIPE_ACTIVATION_RESULT_STATUS_UNSPECIFIED,
+            Self::RECIPE_ACTIVATION_RESULT_STATUS_ADMITTED,
+            Self::RECIPE_ACTIVATION_RESULT_STATUS_HELD,
+        ]
+    }
+}
 #[derive(Clone, PartialEq, Default)]
 #[derive(::serde::Serialize, ::serde::Deserialize)]
 #[serde(default)]
@@ -7159,5 +7334,1211 @@ pub const __RECIPE_DEPLOYMENT_RESOURCE_JSON_ANY: ::buffa::type_registry::JsonAny
     type_url: "type.googleapis.com/hephaestus.project.v1.RecipeDeploymentResource",
     to_json: ::buffa::type_registry::any_to_json::<RecipeDeploymentResource>,
     from_json: ::buffa::type_registry::any_from_json::<RecipeDeploymentResource>,
+    is_wkt: false,
+};
+/// Bounded ordinary input only; trusted configuration and resolved graphs stay server-owned.
+#[derive(Clone, PartialEq, Default)]
+#[derive(::serde::Serialize, ::serde::Deserialize)]
+#[serde(default)]
+pub struct InstallRecipeDeploymentRequest {
+    /// Field 1: `context`
+    #[serde(
+        rename = "context",
+        skip_serializing_if = "::buffa::json_helpers::skip_if::is_unset_message_field"
+    )]
+    pub context: ::buffa::MessageField<super::super::common::v1::RequestContext>,
+    /// Field 2: `project_id`
+    #[serde(
+        rename = "projectId",
+        alias = "project_id",
+        skip_serializing_if = "::buffa::json_helpers::skip_if::is_unset_message_field"
+    )]
+    pub project_id: ::buffa::MessageField<super::super::common::v1::OpaqueId>,
+    /// Field 3: `deployment_key`
+    #[serde(
+        rename = "deploymentKey",
+        alias = "deployment_key",
+        with = "::buffa::json_helpers::proto_string",
+        skip_serializing_if = "::buffa::json_helpers::skip_if::is_empty_str"
+    )]
+    pub deployment_key: ::buffa::alloc::string::String,
+    /// Field 4: `declaration_toml`
+    #[serde(
+        rename = "declarationToml",
+        alias = "declaration_toml",
+        with = "::buffa::json_helpers::proto_string",
+        skip_serializing_if = "::buffa::json_helpers::skip_if::is_empty_str"
+    )]
+    pub declaration_toml: ::buffa::alloc::string::String,
+    /// Field 5: `inputs`
+    #[serde(
+        rename = "inputs",
+        skip_serializing_if = "::buffa::json_helpers::skip_if::is_empty_vec",
+        deserialize_with = "::buffa::json_helpers::null_as_default"
+    )]
+    pub inputs: ::buffa::alloc::vec::Vec<super::super::common::v1::ParameterValue>,
+    /// Field 6: `external_volumes`
+    #[serde(
+        rename = "externalVolumes",
+        alias = "external_volumes",
+        skip_serializing_if = "::buffa::json_helpers::skip_if::is_empty_vec",
+        deserialize_with = "::buffa::json_helpers::null_as_default"
+    )]
+    pub external_volumes: ::buffa::alloc::vec::Vec<RecipeExternalVolumeBinding>,
+    #[serde(skip)]
+    #[doc(hidden)]
+    pub __buffa_unknown_fields: ::buffa::UnknownFields,
+}
+impl ::core::fmt::Debug for InstallRecipeDeploymentRequest {
+    fn fmt(&self, f: &mut ::core::fmt::Formatter<'_>) -> ::core::fmt::Result {
+        f.debug_struct("InstallRecipeDeploymentRequest")
+            .field("context", &self.context)
+            .field("project_id", &self.project_id)
+            .field("deployment_key", &self.deployment_key)
+            .field("declaration_toml", &self.declaration_toml)
+            .field("inputs", &self.inputs)
+            .field("external_volumes", &self.external_volumes)
+            .finish()
+    }
+}
+impl InstallRecipeDeploymentRequest {
+    /// Protobuf type URL for this message, for use with `Any::pack` and
+    /// `Any::unpack_if`.
+    ///
+    /// Format: `type.googleapis.com/<fully.qualified.TypeName>`
+    pub const TYPE_URL: &'static str = "type.googleapis.com/hephaestus.project.v1.InstallRecipeDeploymentRequest";
+}
+::buffa::impl_default_instance!(InstallRecipeDeploymentRequest);
+impl ::buffa::MessageName for InstallRecipeDeploymentRequest {
+    const PACKAGE: &'static str = "hephaestus.project.v1";
+    const NAME: &'static str = "InstallRecipeDeploymentRequest";
+    const FULL_NAME: &'static str = "hephaestus.project.v1.InstallRecipeDeploymentRequest";
+    const TYPE_URL: &'static str = "type.googleapis.com/hephaestus.project.v1.InstallRecipeDeploymentRequest";
+}
+impl ::buffa::Message for InstallRecipeDeploymentRequest {
+    /// Returns the total encoded size in bytes.
+    ///
+    /// The result is a `u32`; the protobuf specification requires all
+    /// messages to fit within 2 GiB (2,147,483,647 bytes), so a
+    /// compliant message will never overflow this type.
+    #[allow(clippy::let_and_return)]
+    fn compute_size(&self, __cache: &mut ::buffa::SizeCache) -> u32 {
+        #[allow(unused_imports)]
+        use ::buffa::Enumeration as _;
+        let mut size = 0u32;
+        if self.context.is_set() {
+            let __slot = __cache.reserve();
+            let inner_size = self.context.compute_size(__cache);
+            __cache.set(__slot, inner_size);
+            size
+                += 1u32 + ::buffa::encoding::varint_len(inner_size as u64) as u32
+                    + inner_size;
+        }
+        if self.project_id.is_set() {
+            let __slot = __cache.reserve();
+            let inner_size = self.project_id.compute_size(__cache);
+            __cache.set(__slot, inner_size);
+            size
+                += 1u32 + ::buffa::encoding::varint_len(inner_size as u64) as u32
+                    + inner_size;
+        }
+        if !self.deployment_key.is_empty() {
+            size
+                += 1u32
+                    + ::buffa::types::string_encoded_len(&self.deployment_key) as u32;
+        }
+        if !self.declaration_toml.is_empty() {
+            size
+                += 1u32
+                    + ::buffa::types::string_encoded_len(&self.declaration_toml) as u32;
+        }
+        for v in &self.inputs {
+            let __slot = __cache.reserve();
+            let inner_size = v.compute_size(__cache);
+            __cache.set(__slot, inner_size);
+            size
+                += 1u32 + ::buffa::encoding::varint_len(inner_size as u64) as u32
+                    + inner_size;
+        }
+        for v in &self.external_volumes {
+            let __slot = __cache.reserve();
+            let inner_size = v.compute_size(__cache);
+            __cache.set(__slot, inner_size);
+            size
+                += 1u32 + ::buffa::encoding::varint_len(inner_size as u64) as u32
+                    + inner_size;
+        }
+        size += self.__buffa_unknown_fields.encoded_len() as u32;
+        size
+    }
+    fn write_to(
+        &self,
+        __cache: &mut ::buffa::SizeCache,
+        buf: &mut impl ::buffa::bytes::BufMut,
+    ) {
+        #[allow(unused_imports)]
+        use ::buffa::Enumeration as _;
+        if self.context.is_set() {
+            ::buffa::types::put_len_delimited_header(1u32, __cache.consume_next(), buf);
+            self.context.write_to(__cache, buf);
+        }
+        if self.project_id.is_set() {
+            ::buffa::types::put_len_delimited_header(2u32, __cache.consume_next(), buf);
+            self.project_id.write_to(__cache, buf);
+        }
+        if !self.deployment_key.is_empty() {
+            ::buffa::types::put_string_field(3u32, &self.deployment_key, buf);
+        }
+        if !self.declaration_toml.is_empty() {
+            ::buffa::types::put_string_field(4u32, &self.declaration_toml, buf);
+        }
+        for v in &self.inputs {
+            ::buffa::types::put_len_delimited_header(5u32, __cache.consume_next(), buf);
+            v.write_to(__cache, buf);
+        }
+        for v in &self.external_volumes {
+            ::buffa::types::put_len_delimited_header(6u32, __cache.consume_next(), buf);
+            v.write_to(__cache, buf);
+        }
+        self.__buffa_unknown_fields.write_to(buf);
+    }
+    fn merge_field(
+        &mut self,
+        tag: ::buffa::encoding::Tag,
+        buf: &mut impl ::buffa::bytes::Buf,
+        ctx: ::buffa::DecodeContext<'_>,
+    ) -> ::core::result::Result<(), ::buffa::DecodeError> {
+        #[allow(unused_imports)]
+        use ::buffa::bytes::Buf as _;
+        #[allow(unused_imports)]
+        use ::buffa::Enumeration as _;
+        match tag.field_number() {
+            1u32 => {
+                ::buffa::encoding::check_wire_type(
+                    tag,
+                    ::buffa::encoding::WireType::LengthDelimited,
+                )?;
+                ::buffa::Message::merge_length_delimited(
+                    self.context.get_or_insert_default(),
+                    buf,
+                    ctx,
+                )?;
+            }
+            2u32 => {
+                ::buffa::encoding::check_wire_type(
+                    tag,
+                    ::buffa::encoding::WireType::LengthDelimited,
+                )?;
+                ::buffa::Message::merge_length_delimited(
+                    self.project_id.get_or_insert_default(),
+                    buf,
+                    ctx,
+                )?;
+            }
+            3u32 => {
+                ::buffa::encoding::check_wire_type(
+                    tag,
+                    ::buffa::encoding::WireType::LengthDelimited,
+                )?;
+                ::buffa::types::merge_string(&mut self.deployment_key, buf)?;
+            }
+            4u32 => {
+                ::buffa::encoding::check_wire_type(
+                    tag,
+                    ::buffa::encoding::WireType::LengthDelimited,
+                )?;
+                ::buffa::types::merge_string(&mut self.declaration_toml, buf)?;
+            }
+            5u32 => {
+                ::buffa::encoding::check_wire_type(
+                    tag,
+                    ::buffa::encoding::WireType::LengthDelimited,
+                )?;
+                let mut elem = ::core::default::Default::default();
+                ::buffa::Message::merge_length_delimited(&mut elem, buf, ctx)?;
+                self.inputs.push(elem);
+            }
+            6u32 => {
+                ::buffa::encoding::check_wire_type(
+                    tag,
+                    ::buffa::encoding::WireType::LengthDelimited,
+                )?;
+                let mut elem = ::core::default::Default::default();
+                ::buffa::Message::merge_length_delimited(&mut elem, buf, ctx)?;
+                self.external_volumes.push(elem);
+            }
+            _ => {
+                self.__buffa_unknown_fields
+                    .push(::buffa::encoding::decode_unknown_field(tag, buf, ctx)?);
+            }
+        }
+        ::core::result::Result::Ok(())
+    }
+    fn clear(&mut self) {
+        self.context = ::buffa::MessageField::none();
+        self.project_id = ::buffa::MessageField::none();
+        self.deployment_key.clear();
+        self.declaration_toml.clear();
+        self.inputs.clear();
+        self.external_volumes.clear();
+        self.__buffa_unknown_fields.clear();
+    }
+}
+impl ::buffa::ExtensionSet for InstallRecipeDeploymentRequest {
+    const PROTO_FQN: &'static str = "hephaestus.project.v1.InstallRecipeDeploymentRequest";
+    fn unknown_fields(&self) -> &::buffa::UnknownFields {
+        &self.__buffa_unknown_fields
+    }
+    fn unknown_fields_mut(&mut self) -> &mut ::buffa::UnknownFields {
+        &mut self.__buffa_unknown_fields
+    }
+}
+impl ::buffa::json_helpers::ProtoElemJson for InstallRecipeDeploymentRequest {
+    fn serialize_proto_json<S: ::serde::Serializer>(
+        v: &Self,
+        s: S,
+    ) -> ::core::result::Result<S::Ok, S::Error> {
+        ::serde::Serialize::serialize(v, s)
+    }
+    fn deserialize_proto_json<'de, D: ::serde::Deserializer<'de>>(
+        d: D,
+    ) -> ::core::result::Result<Self, D::Error> {
+        <Self as ::serde::Deserialize>::deserialize(d)
+    }
+}
+#[doc(hidden)]
+pub const __INSTALL_RECIPE_DEPLOYMENT_REQUEST_JSON_ANY: ::buffa::type_registry::JsonAnyEntry = ::buffa::type_registry::JsonAnyEntry {
+    type_url: "type.googleapis.com/hephaestus.project.v1.InstallRecipeDeploymentRequest",
+    to_json: ::buffa::type_registry::any_to_json::<InstallRecipeDeploymentRequest>,
+    from_json: ::buffa::type_registry::any_from_json::<InstallRecipeDeploymentRequest>,
+    is_wkt: false,
+};
+#[derive(Clone, PartialEq, Default)]
+#[derive(::serde::Serialize, ::serde::Deserialize)]
+#[serde(default)]
+pub struct RecipeExternalVolumeBinding {
+    /// Field 1: `name`
+    #[serde(
+        rename = "name",
+        with = "::buffa::json_helpers::proto_string",
+        skip_serializing_if = "::buffa::json_helpers::skip_if::is_empty_str"
+    )]
+    pub name: ::buffa::alloc::string::String,
+    /// Field 2: `volume_id`
+    #[serde(
+        rename = "volumeId",
+        alias = "volume_id",
+        skip_serializing_if = "::buffa::json_helpers::skip_if::is_unset_message_field"
+    )]
+    pub volume_id: ::buffa::MessageField<super::super::common::v1::OpaqueId>,
+    #[serde(skip)]
+    #[doc(hidden)]
+    pub __buffa_unknown_fields: ::buffa::UnknownFields,
+}
+impl ::core::fmt::Debug for RecipeExternalVolumeBinding {
+    fn fmt(&self, f: &mut ::core::fmt::Formatter<'_>) -> ::core::fmt::Result {
+        f.debug_struct("RecipeExternalVolumeBinding")
+            .field("name", &self.name)
+            .field("volume_id", &self.volume_id)
+            .finish()
+    }
+}
+impl RecipeExternalVolumeBinding {
+    /// Protobuf type URL for this message, for use with `Any::pack` and
+    /// `Any::unpack_if`.
+    ///
+    /// Format: `type.googleapis.com/<fully.qualified.TypeName>`
+    pub const TYPE_URL: &'static str = "type.googleapis.com/hephaestus.project.v1.RecipeExternalVolumeBinding";
+}
+::buffa::impl_default_instance!(RecipeExternalVolumeBinding);
+impl ::buffa::MessageName for RecipeExternalVolumeBinding {
+    const PACKAGE: &'static str = "hephaestus.project.v1";
+    const NAME: &'static str = "RecipeExternalVolumeBinding";
+    const FULL_NAME: &'static str = "hephaestus.project.v1.RecipeExternalVolumeBinding";
+    const TYPE_URL: &'static str = "type.googleapis.com/hephaestus.project.v1.RecipeExternalVolumeBinding";
+}
+impl ::buffa::Message for RecipeExternalVolumeBinding {
+    /// Returns the total encoded size in bytes.
+    ///
+    /// The result is a `u32`; the protobuf specification requires all
+    /// messages to fit within 2 GiB (2,147,483,647 bytes), so a
+    /// compliant message will never overflow this type.
+    #[allow(clippy::let_and_return)]
+    fn compute_size(&self, __cache: &mut ::buffa::SizeCache) -> u32 {
+        #[allow(unused_imports)]
+        use ::buffa::Enumeration as _;
+        let mut size = 0u32;
+        if !self.name.is_empty() {
+            size += 1u32 + ::buffa::types::string_encoded_len(&self.name) as u32;
+        }
+        if self.volume_id.is_set() {
+            let __slot = __cache.reserve();
+            let inner_size = self.volume_id.compute_size(__cache);
+            __cache.set(__slot, inner_size);
+            size
+                += 1u32 + ::buffa::encoding::varint_len(inner_size as u64) as u32
+                    + inner_size;
+        }
+        size += self.__buffa_unknown_fields.encoded_len() as u32;
+        size
+    }
+    fn write_to(
+        &self,
+        __cache: &mut ::buffa::SizeCache,
+        buf: &mut impl ::buffa::bytes::BufMut,
+    ) {
+        #[allow(unused_imports)]
+        use ::buffa::Enumeration as _;
+        if !self.name.is_empty() {
+            ::buffa::types::put_string_field(1u32, &self.name, buf);
+        }
+        if self.volume_id.is_set() {
+            ::buffa::types::put_len_delimited_header(2u32, __cache.consume_next(), buf);
+            self.volume_id.write_to(__cache, buf);
+        }
+        self.__buffa_unknown_fields.write_to(buf);
+    }
+    fn merge_field(
+        &mut self,
+        tag: ::buffa::encoding::Tag,
+        buf: &mut impl ::buffa::bytes::Buf,
+        ctx: ::buffa::DecodeContext<'_>,
+    ) -> ::core::result::Result<(), ::buffa::DecodeError> {
+        #[allow(unused_imports)]
+        use ::buffa::bytes::Buf as _;
+        #[allow(unused_imports)]
+        use ::buffa::Enumeration as _;
+        match tag.field_number() {
+            1u32 => {
+                ::buffa::encoding::check_wire_type(
+                    tag,
+                    ::buffa::encoding::WireType::LengthDelimited,
+                )?;
+                ::buffa::types::merge_string(&mut self.name, buf)?;
+            }
+            2u32 => {
+                ::buffa::encoding::check_wire_type(
+                    tag,
+                    ::buffa::encoding::WireType::LengthDelimited,
+                )?;
+                ::buffa::Message::merge_length_delimited(
+                    self.volume_id.get_or_insert_default(),
+                    buf,
+                    ctx,
+                )?;
+            }
+            _ => {
+                self.__buffa_unknown_fields
+                    .push(::buffa::encoding::decode_unknown_field(tag, buf, ctx)?);
+            }
+        }
+        ::core::result::Result::Ok(())
+    }
+    fn clear(&mut self) {
+        self.name.clear();
+        self.volume_id = ::buffa::MessageField::none();
+        self.__buffa_unknown_fields.clear();
+    }
+}
+impl ::buffa::ExtensionSet for RecipeExternalVolumeBinding {
+    const PROTO_FQN: &'static str = "hephaestus.project.v1.RecipeExternalVolumeBinding";
+    fn unknown_fields(&self) -> &::buffa::UnknownFields {
+        &self.__buffa_unknown_fields
+    }
+    fn unknown_fields_mut(&mut self) -> &mut ::buffa::UnknownFields {
+        &mut self.__buffa_unknown_fields
+    }
+}
+impl ::buffa::json_helpers::ProtoElemJson for RecipeExternalVolumeBinding {
+    fn serialize_proto_json<S: ::serde::Serializer>(
+        v: &Self,
+        s: S,
+    ) -> ::core::result::Result<S::Ok, S::Error> {
+        ::serde::Serialize::serialize(v, s)
+    }
+    fn deserialize_proto_json<'de, D: ::serde::Deserializer<'de>>(
+        d: D,
+    ) -> ::core::result::Result<Self, D::Error> {
+        <Self as ::serde::Deserialize>::deserialize(d)
+    }
+}
+#[doc(hidden)]
+pub const __RECIPE_EXTERNAL_VOLUME_BINDING_JSON_ANY: ::buffa::type_registry::JsonAnyEntry = ::buffa::type_registry::JsonAnyEntry {
+    type_url: "type.googleapis.com/hephaestus.project.v1.RecipeExternalVolumeBinding",
+    to_json: ::buffa::type_registry::any_to_json::<RecipeExternalVolumeBinding>,
+    from_json: ::buffa::type_registry::any_from_json::<RecipeExternalVolumeBinding>,
+    is_wkt: false,
+};
+/// Uses the SAME actor/Install logical key; method audience authentication stays distinct.
+#[derive(Clone, PartialEq, Default)]
+#[derive(::serde::Serialize, ::serde::Deserialize)]
+#[serde(default)]
+pub struct ResumeRecipeDeploymentRequest {
+    /// Field 1: `context`
+    #[serde(
+        rename = "context",
+        skip_serializing_if = "::buffa::json_helpers::skip_if::is_unset_message_field"
+    )]
+    pub context: ::buffa::MessageField<super::super::common::v1::RequestContext>,
+    /// Field 2: `project_id`
+    #[serde(
+        rename = "projectId",
+        alias = "project_id",
+        skip_serializing_if = "::buffa::json_helpers::skip_if::is_unset_message_field"
+    )]
+    pub project_id: ::buffa::MessageField<super::super::common::v1::OpaqueId>,
+    /// Field 3: `deployment_id`
+    #[serde(
+        rename = "deploymentId",
+        alias = "deployment_id",
+        skip_serializing_if = "::buffa::json_helpers::skip_if::is_unset_message_field"
+    )]
+    pub deployment_id: ::buffa::MessageField<super::super::common::v1::OpaqueId>,
+    #[serde(skip)]
+    #[doc(hidden)]
+    pub __buffa_unknown_fields: ::buffa::UnknownFields,
+}
+impl ::core::fmt::Debug for ResumeRecipeDeploymentRequest {
+    fn fmt(&self, f: &mut ::core::fmt::Formatter<'_>) -> ::core::fmt::Result {
+        f.debug_struct("ResumeRecipeDeploymentRequest")
+            .field("context", &self.context)
+            .field("project_id", &self.project_id)
+            .field("deployment_id", &self.deployment_id)
+            .finish()
+    }
+}
+impl ResumeRecipeDeploymentRequest {
+    /// Protobuf type URL for this message, for use with `Any::pack` and
+    /// `Any::unpack_if`.
+    ///
+    /// Format: `type.googleapis.com/<fully.qualified.TypeName>`
+    pub const TYPE_URL: &'static str = "type.googleapis.com/hephaestus.project.v1.ResumeRecipeDeploymentRequest";
+}
+::buffa::impl_default_instance!(ResumeRecipeDeploymentRequest);
+impl ::buffa::MessageName for ResumeRecipeDeploymentRequest {
+    const PACKAGE: &'static str = "hephaestus.project.v1";
+    const NAME: &'static str = "ResumeRecipeDeploymentRequest";
+    const FULL_NAME: &'static str = "hephaestus.project.v1.ResumeRecipeDeploymentRequest";
+    const TYPE_URL: &'static str = "type.googleapis.com/hephaestus.project.v1.ResumeRecipeDeploymentRequest";
+}
+impl ::buffa::Message for ResumeRecipeDeploymentRequest {
+    /// Returns the total encoded size in bytes.
+    ///
+    /// The result is a `u32`; the protobuf specification requires all
+    /// messages to fit within 2 GiB (2,147,483,647 bytes), so a
+    /// compliant message will never overflow this type.
+    #[allow(clippy::let_and_return)]
+    fn compute_size(&self, __cache: &mut ::buffa::SizeCache) -> u32 {
+        #[allow(unused_imports)]
+        use ::buffa::Enumeration as _;
+        let mut size = 0u32;
+        if self.context.is_set() {
+            let __slot = __cache.reserve();
+            let inner_size = self.context.compute_size(__cache);
+            __cache.set(__slot, inner_size);
+            size
+                += 1u32 + ::buffa::encoding::varint_len(inner_size as u64) as u32
+                    + inner_size;
+        }
+        if self.project_id.is_set() {
+            let __slot = __cache.reserve();
+            let inner_size = self.project_id.compute_size(__cache);
+            __cache.set(__slot, inner_size);
+            size
+                += 1u32 + ::buffa::encoding::varint_len(inner_size as u64) as u32
+                    + inner_size;
+        }
+        if self.deployment_id.is_set() {
+            let __slot = __cache.reserve();
+            let inner_size = self.deployment_id.compute_size(__cache);
+            __cache.set(__slot, inner_size);
+            size
+                += 1u32 + ::buffa::encoding::varint_len(inner_size as u64) as u32
+                    + inner_size;
+        }
+        size += self.__buffa_unknown_fields.encoded_len() as u32;
+        size
+    }
+    fn write_to(
+        &self,
+        __cache: &mut ::buffa::SizeCache,
+        buf: &mut impl ::buffa::bytes::BufMut,
+    ) {
+        #[allow(unused_imports)]
+        use ::buffa::Enumeration as _;
+        if self.context.is_set() {
+            ::buffa::types::put_len_delimited_header(1u32, __cache.consume_next(), buf);
+            self.context.write_to(__cache, buf);
+        }
+        if self.project_id.is_set() {
+            ::buffa::types::put_len_delimited_header(2u32, __cache.consume_next(), buf);
+            self.project_id.write_to(__cache, buf);
+        }
+        if self.deployment_id.is_set() {
+            ::buffa::types::put_len_delimited_header(3u32, __cache.consume_next(), buf);
+            self.deployment_id.write_to(__cache, buf);
+        }
+        self.__buffa_unknown_fields.write_to(buf);
+    }
+    fn merge_field(
+        &mut self,
+        tag: ::buffa::encoding::Tag,
+        buf: &mut impl ::buffa::bytes::Buf,
+        ctx: ::buffa::DecodeContext<'_>,
+    ) -> ::core::result::Result<(), ::buffa::DecodeError> {
+        #[allow(unused_imports)]
+        use ::buffa::bytes::Buf as _;
+        #[allow(unused_imports)]
+        use ::buffa::Enumeration as _;
+        match tag.field_number() {
+            1u32 => {
+                ::buffa::encoding::check_wire_type(
+                    tag,
+                    ::buffa::encoding::WireType::LengthDelimited,
+                )?;
+                ::buffa::Message::merge_length_delimited(
+                    self.context.get_or_insert_default(),
+                    buf,
+                    ctx,
+                )?;
+            }
+            2u32 => {
+                ::buffa::encoding::check_wire_type(
+                    tag,
+                    ::buffa::encoding::WireType::LengthDelimited,
+                )?;
+                ::buffa::Message::merge_length_delimited(
+                    self.project_id.get_or_insert_default(),
+                    buf,
+                    ctx,
+                )?;
+            }
+            3u32 => {
+                ::buffa::encoding::check_wire_type(
+                    tag,
+                    ::buffa::encoding::WireType::LengthDelimited,
+                )?;
+                ::buffa::Message::merge_length_delimited(
+                    self.deployment_id.get_or_insert_default(),
+                    buf,
+                    ctx,
+                )?;
+            }
+            _ => {
+                self.__buffa_unknown_fields
+                    .push(::buffa::encoding::decode_unknown_field(tag, buf, ctx)?);
+            }
+        }
+        ::core::result::Result::Ok(())
+    }
+    fn clear(&mut self) {
+        self.context = ::buffa::MessageField::none();
+        self.project_id = ::buffa::MessageField::none();
+        self.deployment_id = ::buffa::MessageField::none();
+        self.__buffa_unknown_fields.clear();
+    }
+}
+impl ::buffa::ExtensionSet for ResumeRecipeDeploymentRequest {
+    const PROTO_FQN: &'static str = "hephaestus.project.v1.ResumeRecipeDeploymentRequest";
+    fn unknown_fields(&self) -> &::buffa::UnknownFields {
+        &self.__buffa_unknown_fields
+    }
+    fn unknown_fields_mut(&mut self) -> &mut ::buffa::UnknownFields {
+        &mut self.__buffa_unknown_fields
+    }
+}
+impl ::buffa::json_helpers::ProtoElemJson for ResumeRecipeDeploymentRequest {
+    fn serialize_proto_json<S: ::serde::Serializer>(
+        v: &Self,
+        s: S,
+    ) -> ::core::result::Result<S::Ok, S::Error> {
+        ::serde::Serialize::serialize(v, s)
+    }
+    fn deserialize_proto_json<'de, D: ::serde::Deserializer<'de>>(
+        d: D,
+    ) -> ::core::result::Result<Self, D::Error> {
+        <Self as ::serde::Deserialize>::deserialize(d)
+    }
+}
+#[doc(hidden)]
+pub const __RESUME_RECIPE_DEPLOYMENT_REQUEST_JSON_ANY: ::buffa::type_registry::JsonAnyEntry = ::buffa::type_registry::JsonAnyEntry {
+    type_url: "type.googleapis.com/hephaestus.project.v1.ResumeRecipeDeploymentRequest",
+    to_json: ::buffa::type_registry::any_to_json::<ResumeRecipeDeploymentRequest>,
+    from_json: ::buffa::type_registry::any_from_json::<ResumeRecipeDeploymentRequest>,
+    is_wkt: false,
+};
+#[derive(Clone, PartialEq, Default)]
+#[derive(::serde::Serialize, ::serde::Deserialize)]
+#[serde(default)]
+pub struct InstallRecipeDeploymentResponse {
+    /// Field 1: `deployment`
+    #[serde(
+        rename = "deployment",
+        skip_serializing_if = "::buffa::json_helpers::skip_if::is_unset_message_field"
+    )]
+    pub deployment: ::buffa::MessageField<RecipeDeployment>,
+    /// Field 2: `receipt`
+    #[serde(
+        rename = "receipt",
+        skip_serializing_if = "::buffa::json_helpers::skip_if::is_unset_message_field"
+    )]
+    pub receipt: ::buffa::MessageField<super::super::common::v1::MutationReceipt>,
+    /// Field 3: `activations`
+    #[serde(
+        rename = "activations",
+        skip_serializing_if = "::buffa::json_helpers::skip_if::is_empty_vec",
+        deserialize_with = "::buffa::json_helpers::null_as_default"
+    )]
+    pub activations: ::buffa::alloc::vec::Vec<RecipeActivationResult>,
+    #[serde(skip)]
+    #[doc(hidden)]
+    pub __buffa_unknown_fields: ::buffa::UnknownFields,
+}
+impl ::core::fmt::Debug for InstallRecipeDeploymentResponse {
+    fn fmt(&self, f: &mut ::core::fmt::Formatter<'_>) -> ::core::fmt::Result {
+        f.debug_struct("InstallRecipeDeploymentResponse")
+            .field("deployment", &self.deployment)
+            .field("receipt", &self.receipt)
+            .field("activations", &self.activations)
+            .finish()
+    }
+}
+impl InstallRecipeDeploymentResponse {
+    /// Protobuf type URL for this message, for use with `Any::pack` and
+    /// `Any::unpack_if`.
+    ///
+    /// Format: `type.googleapis.com/<fully.qualified.TypeName>`
+    pub const TYPE_URL: &'static str = "type.googleapis.com/hephaestus.project.v1.InstallRecipeDeploymentResponse";
+}
+::buffa::impl_default_instance!(InstallRecipeDeploymentResponse);
+impl ::buffa::MessageName for InstallRecipeDeploymentResponse {
+    const PACKAGE: &'static str = "hephaestus.project.v1";
+    const NAME: &'static str = "InstallRecipeDeploymentResponse";
+    const FULL_NAME: &'static str = "hephaestus.project.v1.InstallRecipeDeploymentResponse";
+    const TYPE_URL: &'static str = "type.googleapis.com/hephaestus.project.v1.InstallRecipeDeploymentResponse";
+}
+impl ::buffa::Message for InstallRecipeDeploymentResponse {
+    /// Returns the total encoded size in bytes.
+    ///
+    /// The result is a `u32`; the protobuf specification requires all
+    /// messages to fit within 2 GiB (2,147,483,647 bytes), so a
+    /// compliant message will never overflow this type.
+    #[allow(clippy::let_and_return)]
+    fn compute_size(&self, __cache: &mut ::buffa::SizeCache) -> u32 {
+        #[allow(unused_imports)]
+        use ::buffa::Enumeration as _;
+        let mut size = 0u32;
+        if self.deployment.is_set() {
+            let __slot = __cache.reserve();
+            let inner_size = self.deployment.compute_size(__cache);
+            __cache.set(__slot, inner_size);
+            size
+                += 1u32 + ::buffa::encoding::varint_len(inner_size as u64) as u32
+                    + inner_size;
+        }
+        if self.receipt.is_set() {
+            let __slot = __cache.reserve();
+            let inner_size = self.receipt.compute_size(__cache);
+            __cache.set(__slot, inner_size);
+            size
+                += 1u32 + ::buffa::encoding::varint_len(inner_size as u64) as u32
+                    + inner_size;
+        }
+        for v in &self.activations {
+            let __slot = __cache.reserve();
+            let inner_size = v.compute_size(__cache);
+            __cache.set(__slot, inner_size);
+            size
+                += 1u32 + ::buffa::encoding::varint_len(inner_size as u64) as u32
+                    + inner_size;
+        }
+        size += self.__buffa_unknown_fields.encoded_len() as u32;
+        size
+    }
+    fn write_to(
+        &self,
+        __cache: &mut ::buffa::SizeCache,
+        buf: &mut impl ::buffa::bytes::BufMut,
+    ) {
+        #[allow(unused_imports)]
+        use ::buffa::Enumeration as _;
+        if self.deployment.is_set() {
+            ::buffa::types::put_len_delimited_header(1u32, __cache.consume_next(), buf);
+            self.deployment.write_to(__cache, buf);
+        }
+        if self.receipt.is_set() {
+            ::buffa::types::put_len_delimited_header(2u32, __cache.consume_next(), buf);
+            self.receipt.write_to(__cache, buf);
+        }
+        for v in &self.activations {
+            ::buffa::types::put_len_delimited_header(3u32, __cache.consume_next(), buf);
+            v.write_to(__cache, buf);
+        }
+        self.__buffa_unknown_fields.write_to(buf);
+    }
+    fn merge_field(
+        &mut self,
+        tag: ::buffa::encoding::Tag,
+        buf: &mut impl ::buffa::bytes::Buf,
+        ctx: ::buffa::DecodeContext<'_>,
+    ) -> ::core::result::Result<(), ::buffa::DecodeError> {
+        #[allow(unused_imports)]
+        use ::buffa::bytes::Buf as _;
+        #[allow(unused_imports)]
+        use ::buffa::Enumeration as _;
+        match tag.field_number() {
+            1u32 => {
+                ::buffa::encoding::check_wire_type(
+                    tag,
+                    ::buffa::encoding::WireType::LengthDelimited,
+                )?;
+                ::buffa::Message::merge_length_delimited(
+                    self.deployment.get_or_insert_default(),
+                    buf,
+                    ctx,
+                )?;
+            }
+            2u32 => {
+                ::buffa::encoding::check_wire_type(
+                    tag,
+                    ::buffa::encoding::WireType::LengthDelimited,
+                )?;
+                ::buffa::Message::merge_length_delimited(
+                    self.receipt.get_or_insert_default(),
+                    buf,
+                    ctx,
+                )?;
+            }
+            3u32 => {
+                ::buffa::encoding::check_wire_type(
+                    tag,
+                    ::buffa::encoding::WireType::LengthDelimited,
+                )?;
+                let mut elem = ::core::default::Default::default();
+                ::buffa::Message::merge_length_delimited(&mut elem, buf, ctx)?;
+                self.activations.push(elem);
+            }
+            _ => {
+                self.__buffa_unknown_fields
+                    .push(::buffa::encoding::decode_unknown_field(tag, buf, ctx)?);
+            }
+        }
+        ::core::result::Result::Ok(())
+    }
+    fn clear(&mut self) {
+        self.deployment = ::buffa::MessageField::none();
+        self.receipt = ::buffa::MessageField::none();
+        self.activations.clear();
+        self.__buffa_unknown_fields.clear();
+    }
+}
+impl ::buffa::ExtensionSet for InstallRecipeDeploymentResponse {
+    const PROTO_FQN: &'static str = "hephaestus.project.v1.InstallRecipeDeploymentResponse";
+    fn unknown_fields(&self) -> &::buffa::UnknownFields {
+        &self.__buffa_unknown_fields
+    }
+    fn unknown_fields_mut(&mut self) -> &mut ::buffa::UnknownFields {
+        &mut self.__buffa_unknown_fields
+    }
+}
+impl ::buffa::json_helpers::ProtoElemJson for InstallRecipeDeploymentResponse {
+    fn serialize_proto_json<S: ::serde::Serializer>(
+        v: &Self,
+        s: S,
+    ) -> ::core::result::Result<S::Ok, S::Error> {
+        ::serde::Serialize::serialize(v, s)
+    }
+    fn deserialize_proto_json<'de, D: ::serde::Deserializer<'de>>(
+        d: D,
+    ) -> ::core::result::Result<Self, D::Error> {
+        <Self as ::serde::Deserialize>::deserialize(d)
+    }
+}
+#[doc(hidden)]
+pub const __INSTALL_RECIPE_DEPLOYMENT_RESPONSE_JSON_ANY: ::buffa::type_registry::JsonAnyEntry = ::buffa::type_registry::JsonAnyEntry {
+    type_url: "type.googleapis.com/hephaestus.project.v1.InstallRecipeDeploymentResponse",
+    to_json: ::buffa::type_registry::any_to_json::<InstallRecipeDeploymentResponse>,
+    from_json: ::buffa::type_registry::any_from_json::<InstallRecipeDeploymentResponse>,
+    is_wkt: false,
+};
+#[derive(Clone, PartialEq, Default)]
+#[derive(::serde::Serialize, ::serde::Deserialize)]
+#[serde(default)]
+pub struct ResumeRecipeDeploymentResponse {
+    /// Field 1: `deployment`
+    #[serde(
+        rename = "deployment",
+        skip_serializing_if = "::buffa::json_helpers::skip_if::is_unset_message_field"
+    )]
+    pub deployment: ::buffa::MessageField<RecipeDeployment>,
+    /// Field 2: `receipt`
+    #[serde(
+        rename = "receipt",
+        skip_serializing_if = "::buffa::json_helpers::skip_if::is_unset_message_field"
+    )]
+    pub receipt: ::buffa::MessageField<super::super::common::v1::MutationReceipt>,
+    /// Field 3: `activations`
+    #[serde(
+        rename = "activations",
+        skip_serializing_if = "::buffa::json_helpers::skip_if::is_empty_vec",
+        deserialize_with = "::buffa::json_helpers::null_as_default"
+    )]
+    pub activations: ::buffa::alloc::vec::Vec<RecipeActivationResult>,
+    #[serde(skip)]
+    #[doc(hidden)]
+    pub __buffa_unknown_fields: ::buffa::UnknownFields,
+}
+impl ::core::fmt::Debug for ResumeRecipeDeploymentResponse {
+    fn fmt(&self, f: &mut ::core::fmt::Formatter<'_>) -> ::core::fmt::Result {
+        f.debug_struct("ResumeRecipeDeploymentResponse")
+            .field("deployment", &self.deployment)
+            .field("receipt", &self.receipt)
+            .field("activations", &self.activations)
+            .finish()
+    }
+}
+impl ResumeRecipeDeploymentResponse {
+    /// Protobuf type URL for this message, for use with `Any::pack` and
+    /// `Any::unpack_if`.
+    ///
+    /// Format: `type.googleapis.com/<fully.qualified.TypeName>`
+    pub const TYPE_URL: &'static str = "type.googleapis.com/hephaestus.project.v1.ResumeRecipeDeploymentResponse";
+}
+::buffa::impl_default_instance!(ResumeRecipeDeploymentResponse);
+impl ::buffa::MessageName for ResumeRecipeDeploymentResponse {
+    const PACKAGE: &'static str = "hephaestus.project.v1";
+    const NAME: &'static str = "ResumeRecipeDeploymentResponse";
+    const FULL_NAME: &'static str = "hephaestus.project.v1.ResumeRecipeDeploymentResponse";
+    const TYPE_URL: &'static str = "type.googleapis.com/hephaestus.project.v1.ResumeRecipeDeploymentResponse";
+}
+impl ::buffa::Message for ResumeRecipeDeploymentResponse {
+    /// Returns the total encoded size in bytes.
+    ///
+    /// The result is a `u32`; the protobuf specification requires all
+    /// messages to fit within 2 GiB (2,147,483,647 bytes), so a
+    /// compliant message will never overflow this type.
+    #[allow(clippy::let_and_return)]
+    fn compute_size(&self, __cache: &mut ::buffa::SizeCache) -> u32 {
+        #[allow(unused_imports)]
+        use ::buffa::Enumeration as _;
+        let mut size = 0u32;
+        if self.deployment.is_set() {
+            let __slot = __cache.reserve();
+            let inner_size = self.deployment.compute_size(__cache);
+            __cache.set(__slot, inner_size);
+            size
+                += 1u32 + ::buffa::encoding::varint_len(inner_size as u64) as u32
+                    + inner_size;
+        }
+        if self.receipt.is_set() {
+            let __slot = __cache.reserve();
+            let inner_size = self.receipt.compute_size(__cache);
+            __cache.set(__slot, inner_size);
+            size
+                += 1u32 + ::buffa::encoding::varint_len(inner_size as u64) as u32
+                    + inner_size;
+        }
+        for v in &self.activations {
+            let __slot = __cache.reserve();
+            let inner_size = v.compute_size(__cache);
+            __cache.set(__slot, inner_size);
+            size
+                += 1u32 + ::buffa::encoding::varint_len(inner_size as u64) as u32
+                    + inner_size;
+        }
+        size += self.__buffa_unknown_fields.encoded_len() as u32;
+        size
+    }
+    fn write_to(
+        &self,
+        __cache: &mut ::buffa::SizeCache,
+        buf: &mut impl ::buffa::bytes::BufMut,
+    ) {
+        #[allow(unused_imports)]
+        use ::buffa::Enumeration as _;
+        if self.deployment.is_set() {
+            ::buffa::types::put_len_delimited_header(1u32, __cache.consume_next(), buf);
+            self.deployment.write_to(__cache, buf);
+        }
+        if self.receipt.is_set() {
+            ::buffa::types::put_len_delimited_header(2u32, __cache.consume_next(), buf);
+            self.receipt.write_to(__cache, buf);
+        }
+        for v in &self.activations {
+            ::buffa::types::put_len_delimited_header(3u32, __cache.consume_next(), buf);
+            v.write_to(__cache, buf);
+        }
+        self.__buffa_unknown_fields.write_to(buf);
+    }
+    fn merge_field(
+        &mut self,
+        tag: ::buffa::encoding::Tag,
+        buf: &mut impl ::buffa::bytes::Buf,
+        ctx: ::buffa::DecodeContext<'_>,
+    ) -> ::core::result::Result<(), ::buffa::DecodeError> {
+        #[allow(unused_imports)]
+        use ::buffa::bytes::Buf as _;
+        #[allow(unused_imports)]
+        use ::buffa::Enumeration as _;
+        match tag.field_number() {
+            1u32 => {
+                ::buffa::encoding::check_wire_type(
+                    tag,
+                    ::buffa::encoding::WireType::LengthDelimited,
+                )?;
+                ::buffa::Message::merge_length_delimited(
+                    self.deployment.get_or_insert_default(),
+                    buf,
+                    ctx,
+                )?;
+            }
+            2u32 => {
+                ::buffa::encoding::check_wire_type(
+                    tag,
+                    ::buffa::encoding::WireType::LengthDelimited,
+                )?;
+                ::buffa::Message::merge_length_delimited(
+                    self.receipt.get_or_insert_default(),
+                    buf,
+                    ctx,
+                )?;
+            }
+            3u32 => {
+                ::buffa::encoding::check_wire_type(
+                    tag,
+                    ::buffa::encoding::WireType::LengthDelimited,
+                )?;
+                let mut elem = ::core::default::Default::default();
+                ::buffa::Message::merge_length_delimited(&mut elem, buf, ctx)?;
+                self.activations.push(elem);
+            }
+            _ => {
+                self.__buffa_unknown_fields
+                    .push(::buffa::encoding::decode_unknown_field(tag, buf, ctx)?);
+            }
+        }
+        ::core::result::Result::Ok(())
+    }
+    fn clear(&mut self) {
+        self.deployment = ::buffa::MessageField::none();
+        self.receipt = ::buffa::MessageField::none();
+        self.activations.clear();
+        self.__buffa_unknown_fields.clear();
+    }
+}
+impl ::buffa::ExtensionSet for ResumeRecipeDeploymentResponse {
+    const PROTO_FQN: &'static str = "hephaestus.project.v1.ResumeRecipeDeploymentResponse";
+    fn unknown_fields(&self) -> &::buffa::UnknownFields {
+        &self.__buffa_unknown_fields
+    }
+    fn unknown_fields_mut(&mut self) -> &mut ::buffa::UnknownFields {
+        &mut self.__buffa_unknown_fields
+    }
+}
+impl ::buffa::json_helpers::ProtoElemJson for ResumeRecipeDeploymentResponse {
+    fn serialize_proto_json<S: ::serde::Serializer>(
+        v: &Self,
+        s: S,
+    ) -> ::core::result::Result<S::Ok, S::Error> {
+        ::serde::Serialize::serialize(v, s)
+    }
+    fn deserialize_proto_json<'de, D: ::serde::Deserializer<'de>>(
+        d: D,
+    ) -> ::core::result::Result<Self, D::Error> {
+        <Self as ::serde::Deserialize>::deserialize(d)
+    }
+}
+#[doc(hidden)]
+pub const __RESUME_RECIPE_DEPLOYMENT_RESPONSE_JSON_ANY: ::buffa::type_registry::JsonAnyEntry = ::buffa::type_registry::JsonAnyEntry {
+    type_url: "type.googleapis.com/hephaestus.project.v1.ResumeRecipeDeploymentResponse",
+    to_json: ::buffa::type_registry::any_to_json::<ResumeRecipeDeploymentResponse>,
+    from_json: ::buffa::type_registry::any_from_json::<ResumeRecipeDeploymentResponse>,
+    is_wkt: false,
+};
+/// Real activation admission is distinct from VM/Run/readiness observation.
+#[derive(Clone, PartialEq, Default)]
+#[derive(::serde::Serialize, ::serde::Deserialize)]
+#[serde(default)]
+pub struct RecipeActivationResult {
+    /// Field 1: `resource`
+    #[serde(
+        rename = "resource",
+        with = "::buffa::json_helpers::proto_string",
+        skip_serializing_if = "::buffa::json_helpers::skip_if::is_empty_str"
+    )]
+    pub resource: ::buffa::alloc::string::String,
+    /// Field 2: `status`
+    #[serde(
+        rename = "status",
+        with = "::buffa::json_helpers::proto_enum",
+        skip_serializing_if = "::buffa::json_helpers::skip_if::is_default_enum_value"
+    )]
+    pub status: ::buffa::EnumValue<RecipeActivationResultStatus>,
+    /// Field 3: `activation_id`
+    #[serde(
+        rename = "activationId",
+        alias = "activation_id",
+        skip_serializing_if = "::buffa::json_helpers::skip_if::is_unset_message_field"
+    )]
+    pub activation_id: ::buffa::MessageField<super::super::common::v1::OpaqueId>,
+    #[serde(skip)]
+    #[doc(hidden)]
+    pub __buffa_unknown_fields: ::buffa::UnknownFields,
+}
+impl ::core::fmt::Debug for RecipeActivationResult {
+    fn fmt(&self, f: &mut ::core::fmt::Formatter<'_>) -> ::core::fmt::Result {
+        f.debug_struct("RecipeActivationResult")
+            .field("resource", &self.resource)
+            .field("status", &self.status)
+            .field("activation_id", &self.activation_id)
+            .finish()
+    }
+}
+impl RecipeActivationResult {
+    /// Protobuf type URL for this message, for use with `Any::pack` and
+    /// `Any::unpack_if`.
+    ///
+    /// Format: `type.googleapis.com/<fully.qualified.TypeName>`
+    pub const TYPE_URL: &'static str = "type.googleapis.com/hephaestus.project.v1.RecipeActivationResult";
+}
+::buffa::impl_default_instance!(RecipeActivationResult);
+impl ::buffa::MessageName for RecipeActivationResult {
+    const PACKAGE: &'static str = "hephaestus.project.v1";
+    const NAME: &'static str = "RecipeActivationResult";
+    const FULL_NAME: &'static str = "hephaestus.project.v1.RecipeActivationResult";
+    const TYPE_URL: &'static str = "type.googleapis.com/hephaestus.project.v1.RecipeActivationResult";
+}
+impl ::buffa::Message for RecipeActivationResult {
+    /// Returns the total encoded size in bytes.
+    ///
+    /// The result is a `u32`; the protobuf specification requires all
+    /// messages to fit within 2 GiB (2,147,483,647 bytes), so a
+    /// compliant message will never overflow this type.
+    #[allow(clippy::let_and_return)]
+    fn compute_size(&self, __cache: &mut ::buffa::SizeCache) -> u32 {
+        #[allow(unused_imports)]
+        use ::buffa::Enumeration as _;
+        let mut size = 0u32;
+        if !self.resource.is_empty() {
+            size += 1u32 + ::buffa::types::string_encoded_len(&self.resource) as u32;
+        }
+        {
+            let val = self.status.to_i32();
+            if val != 0 {
+                size += 1u32 + ::buffa::types::int32_encoded_len(val) as u32;
+            }
+        }
+        if self.activation_id.is_set() {
+            let __slot = __cache.reserve();
+            let inner_size = self.activation_id.compute_size(__cache);
+            __cache.set(__slot, inner_size);
+            size
+                += 1u32 + ::buffa::encoding::varint_len(inner_size as u64) as u32
+                    + inner_size;
+        }
+        size += self.__buffa_unknown_fields.encoded_len() as u32;
+        size
+    }
+    fn write_to(
+        &self,
+        __cache: &mut ::buffa::SizeCache,
+        buf: &mut impl ::buffa::bytes::BufMut,
+    ) {
+        #[allow(unused_imports)]
+        use ::buffa::Enumeration as _;
+        if !self.resource.is_empty() {
+            ::buffa::types::put_string_field(1u32, &self.resource, buf);
+        }
+        {
+            let val = self.status.to_i32();
+            if val != 0 {
+                ::buffa::types::put_int32_field(2u32, val, buf);
+            }
+        }
+        if self.activation_id.is_set() {
+            ::buffa::types::put_len_delimited_header(3u32, __cache.consume_next(), buf);
+            self.activation_id.write_to(__cache, buf);
+        }
+        self.__buffa_unknown_fields.write_to(buf);
+    }
+    fn merge_field(
+        &mut self,
+        tag: ::buffa::encoding::Tag,
+        buf: &mut impl ::buffa::bytes::Buf,
+        ctx: ::buffa::DecodeContext<'_>,
+    ) -> ::core::result::Result<(), ::buffa::DecodeError> {
+        #[allow(unused_imports)]
+        use ::buffa::bytes::Buf as _;
+        #[allow(unused_imports)]
+        use ::buffa::Enumeration as _;
+        match tag.field_number() {
+            1u32 => {
+                ::buffa::encoding::check_wire_type(
+                    tag,
+                    ::buffa::encoding::WireType::LengthDelimited,
+                )?;
+                ::buffa::types::merge_string(&mut self.resource, buf)?;
+            }
+            2u32 => {
+                ::buffa::encoding::check_wire_type(
+                    tag,
+                    ::buffa::encoding::WireType::Varint,
+                )?;
+                self.status = ::buffa::EnumValue::from(
+                    ::buffa::types::decode_int32(buf)?,
+                );
+            }
+            3u32 => {
+                ::buffa::encoding::check_wire_type(
+                    tag,
+                    ::buffa::encoding::WireType::LengthDelimited,
+                )?;
+                ::buffa::Message::merge_length_delimited(
+                    self.activation_id.get_or_insert_default(),
+                    buf,
+                    ctx,
+                )?;
+            }
+            _ => {
+                self.__buffa_unknown_fields
+                    .push(::buffa::encoding::decode_unknown_field(tag, buf, ctx)?);
+            }
+        }
+        ::core::result::Result::Ok(())
+    }
+    fn clear(&mut self) {
+        self.resource.clear();
+        self.status = ::buffa::EnumValue::from(0);
+        self.activation_id = ::buffa::MessageField::none();
+        self.__buffa_unknown_fields.clear();
+    }
+}
+impl ::buffa::ExtensionSet for RecipeActivationResult {
+    const PROTO_FQN: &'static str = "hephaestus.project.v1.RecipeActivationResult";
+    fn unknown_fields(&self) -> &::buffa::UnknownFields {
+        &self.__buffa_unknown_fields
+    }
+    fn unknown_fields_mut(&mut self) -> &mut ::buffa::UnknownFields {
+        &mut self.__buffa_unknown_fields
+    }
+}
+impl ::buffa::json_helpers::ProtoElemJson for RecipeActivationResult {
+    fn serialize_proto_json<S: ::serde::Serializer>(
+        v: &Self,
+        s: S,
+    ) -> ::core::result::Result<S::Ok, S::Error> {
+        ::serde::Serialize::serialize(v, s)
+    }
+    fn deserialize_proto_json<'de, D: ::serde::Deserializer<'de>>(
+        d: D,
+    ) -> ::core::result::Result<Self, D::Error> {
+        <Self as ::serde::Deserialize>::deserialize(d)
+    }
+}
+#[doc(hidden)]
+pub const __RECIPE_ACTIVATION_RESULT_JSON_ANY: ::buffa::type_registry::JsonAnyEntry = ::buffa::type_registry::JsonAnyEntry {
+    type_url: "type.googleapis.com/hephaestus.project.v1.RecipeActivationResult",
+    to_json: ::buffa::type_registry::any_to_json::<RecipeActivationResult>,
+    from_json: ::buffa::type_registry::any_from_json::<RecipeActivationResult>,
     is_wkt: false,
 };

@@ -1,6 +1,8 @@
 //! One original node slot, retaining real errors independently of result waiters.
 #[path = "registry/readiness.rs"]
 mod readiness;
+#[path = "registry/recipes.rs"]
+mod recipes;
 use super::status::{ManagedHeldReason as Held, ManagedSupervisorPhase as Phase};
 use super::{Control, ManagedServiceFailure, ManagedSupervisorStatus, NodeLease};
 use crate::{AppError, managed_backend::custody::ManagedBackendNode};

@@ -8,6 +8,7 @@ mod list_importable_release_agents;
 mod list_project_instances;
 mod list_project_repositories;
 mod list_project_repository_images;
+mod recipe_mutations;
 mod retry_project_repository_image;
 
 use super::{MediatorAuthenticator, RpcError};
@@ -25,10 +26,12 @@ use rpc_proto::{
             CreateProjectRequest, CreateProjectResponse, GetProjectRepositoryImageRequest,
             GetProjectRepositoryImageResponse, GetProjectRequest, GetProjectResponse,
             GetRecipeDeploymentRequest, GetRecipeDeploymentResponse,
+            InstallRecipeDeploymentRequest, InstallRecipeDeploymentResponse,
             ListImportableReleaseAgentsRequest, ListImportableReleaseAgentsResponse,
             ListProjectInstancesRequest, ListProjectInstancesResponse,
             ListProjectRepositoriesRequest, ListProjectRepositoriesResponse,
             ListProjectRepositoryImagesRequest, ListProjectRepositoryImagesResponse,
+            ResumeRecipeDeploymentRequest, ResumeRecipeDeploymentResponse,
             RetryProjectRepositoryImageRequest, RetryProjectRepositoryImageResponse,
         },
     },
@@ -45,6 +48,7 @@ pub struct ProjectRpc {
     forge: std::sync::Arc<PgForgeRepository>,
     authenticator: MediatorAuthenticator,
     receipts: MutationReceipts,
+    managed_recipes: Option<std::sync::Arc<crate::managed_backend::recipe::ManagedRecipe>>,
 }
 
 impl ProjectRpc {
@@ -54,6 +58,7 @@ impl ProjectRpc {
         forge: std::sync::Arc<PgForgeRepository>,
         authenticator: MediatorAuthenticator,
         receipts: MutationReceipts,
+        managed_recipes: Option<std::sync::Arc<crate::managed_backend::recipe::ManagedRecipe>>,
     ) -> Self {
         Self {
             application: ProjectApplication::new(pool),
@@ -61,6 +66,7 @@ impl ProjectRpc {
             forge,
             authenticator,
             receipts,
+            managed_recipes,
         }
     }
 }
@@ -73,6 +79,7 @@ pub fn register(
     forge: std::sync::Arc<PgForgeRepository>,
     authenticator: MediatorAuthenticator,
     receipts: MutationReceipts,
+    managed_recipes: Option<std::sync::Arc<crate::managed_backend::recipe::ManagedRecipe>>,
 ) -> Router {
     ProjectServiceExt::register(
         std::sync::Arc::new(ProjectRpc::new(
@@ -81,6 +88,7 @@ pub fn register(
             forge,
             authenticator,
             receipts,
+            managed_recipes,
         )),
         router,
     )
@@ -110,6 +118,21 @@ impl ProjectService for ProjectRpc {
         request: ServiceRequest<'_, GetRecipeDeploymentRequest>,
     ) -> ServiceResult<GetRecipeDeploymentResponse> {
         get_recipe_deployment::handle(self, ctx, request).await
+    }
+
+    async fn install_recipe_deployment(
+        &self,
+        ctx: RequestContext,
+        request: ServiceRequest<'_, InstallRecipeDeploymentRequest>,
+    ) -> ServiceResult<InstallRecipeDeploymentResponse> {
+        recipe_mutations::install(self, ctx, request).await
+    }
+    async fn resume_recipe_deployment(
+        &self,
+        ctx: RequestContext,
+        request: ServiceRequest<'_, ResumeRecipeDeploymentRequest>,
+    ) -> ServiceResult<ResumeRecipeDeploymentResponse> {
+        recipe_mutations::resume(self, ctx, request).await
     }
 
     async fn list_project_repositories(

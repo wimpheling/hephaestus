@@ -64,6 +64,18 @@ pub fn spawn(
             registry.close();
             return;
         }
+        if node.services.closed() {
+            drop(node.services.put(Body::App(Arc::clone(&app))));
+            let failure = registry.record(
+                AppError::Readiness(
+                    "managed startup closed before original service effects".into(),
+                ),
+                ManagedHeldReason::Services,
+            );
+            registry.close();
+            drop(result.send(Err(custody::failure(failure))));
+            return;
+        }
         let outcome = crate::startup::managed_parts(&app, Arc::clone(&node.services)).await;
         match outcome {
             Ok(parts) => {
@@ -105,7 +117,10 @@ pub fn spawn(
             }
         }
     });
-    retained.services.attach(task)?;
+    if let Err(cause) = retained.services.attach(task) {
+        drop(admit); // Actual late handle stays registered; its gated owner settles.
+        return Err(cause);
+    }
     admit
         .send(())
         .map_err(|()| AppError::Task("managed startup task handoff failed".into()))?;

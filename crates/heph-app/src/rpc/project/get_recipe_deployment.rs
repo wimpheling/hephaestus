@@ -1,8 +1,8 @@
 //! Authenticated persisted progress inspection without execution authority.
 
-mod projection;
+pub(super) mod projection;
 #[cfg(test)]
-mod tests;
+pub(super) mod tests;
 
 use super::{ProjectRpc, parse_id};
 use crate::rpc::{RpcError, into_connect_error, request};

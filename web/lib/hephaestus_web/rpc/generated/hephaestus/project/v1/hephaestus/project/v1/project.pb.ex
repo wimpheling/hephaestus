@@ -110,6 +110,20 @@ defmodule Hephaestus.Project.V1.RecipeActivationObservation do
   field(:RECIPE_ACTIVATION_OBSERVATION_UNOBSERVED, 1)
 end
 
+defmodule Hephaestus.Project.V1.RecipeActivationResultStatus do
+  @moduledoc false
+
+  use Protobuf,
+    enum: true,
+    full_name: "hephaestus.project.v1.RecipeActivationResultStatus",
+    protoc_gen_elixir_version: "0.17.0",
+    syntax: :proto3
+
+  field(:RECIPE_ACTIVATION_RESULT_STATUS_UNSPECIFIED, 0)
+  field(:RECIPE_ACTIVATION_RESULT_STATUS_ADMITTED, 1)
+  field(:RECIPE_ACTIVATION_RESULT_STATUS_HELD, 2)
+end
+
 defmodule Hephaestus.Project.V1.CreateProjectRequest do
   @moduledoc false
 
@@ -530,6 +544,91 @@ defmodule Hephaestus.Project.V1.RecipeDeploymentResource do
   field(:recovery_required, 11, type: :bool, json_name: "recoveryRequired")
 end
 
+defmodule Hephaestus.Project.V1.InstallRecipeDeploymentRequest do
+  @moduledoc false
+
+  use Protobuf,
+    full_name: "hephaestus.project.v1.InstallRecipeDeploymentRequest",
+    protoc_gen_elixir_version: "0.17.0",
+    syntax: :proto3
+
+  field(:context, 1, type: Hephaestus.Common.V1.RequestContext)
+  field(:project_id, 2, type: Hephaestus.Common.V1.OpaqueId, json_name: "projectId")
+  field(:deployment_key, 3, type: :string, json_name: "deploymentKey")
+  field(:declaration_toml, 4, type: :string, json_name: "declarationToml", deprecated: false)
+  field(:inputs, 5, repeated: true, type: Hephaestus.Common.V1.ParameterValue, deprecated: false)
+
+  field(:external_volumes, 6,
+    repeated: true,
+    type: Hephaestus.Project.V1.RecipeExternalVolumeBinding,
+    json_name: "externalVolumes"
+  )
+end
+
+defmodule Hephaestus.Project.V1.RecipeExternalVolumeBinding do
+  @moduledoc false
+
+  use Protobuf,
+    full_name: "hephaestus.project.v1.RecipeExternalVolumeBinding",
+    protoc_gen_elixir_version: "0.17.0",
+    syntax: :proto3
+
+  field(:name, 1, type: :string)
+  field(:volume_id, 2, type: Hephaestus.Common.V1.OpaqueId, json_name: "volumeId")
+end
+
+defmodule Hephaestus.Project.V1.ResumeRecipeDeploymentRequest do
+  @moduledoc false
+
+  use Protobuf,
+    full_name: "hephaestus.project.v1.ResumeRecipeDeploymentRequest",
+    protoc_gen_elixir_version: "0.17.0",
+    syntax: :proto3
+
+  field(:context, 1, type: Hephaestus.Common.V1.RequestContext)
+  field(:project_id, 2, type: Hephaestus.Common.V1.OpaqueId, json_name: "projectId")
+  field(:deployment_id, 3, type: Hephaestus.Common.V1.OpaqueId, json_name: "deploymentId")
+end
+
+defmodule Hephaestus.Project.V1.InstallRecipeDeploymentResponse do
+  @moduledoc false
+
+  use Protobuf,
+    full_name: "hephaestus.project.v1.InstallRecipeDeploymentResponse",
+    protoc_gen_elixir_version: "0.17.0",
+    syntax: :proto3
+
+  field(:deployment, 1, type: Hephaestus.Project.V1.RecipeDeployment)
+  field(:receipt, 2, type: Hephaestus.Common.V1.MutationReceipt)
+  field(:activations, 3, repeated: true, type: Hephaestus.Project.V1.RecipeActivationResult)
+end
+
+defmodule Hephaestus.Project.V1.ResumeRecipeDeploymentResponse do
+  @moduledoc false
+
+  use Protobuf,
+    full_name: "hephaestus.project.v1.ResumeRecipeDeploymentResponse",
+    protoc_gen_elixir_version: "0.17.0",
+    syntax: :proto3
+
+  field(:deployment, 1, type: Hephaestus.Project.V1.RecipeDeployment)
+  field(:receipt, 2, type: Hephaestus.Common.V1.MutationReceipt)
+  field(:activations, 3, repeated: true, type: Hephaestus.Project.V1.RecipeActivationResult)
+end
+
+defmodule Hephaestus.Project.V1.RecipeActivationResult do
+  @moduledoc false
+
+  use Protobuf,
+    full_name: "hephaestus.project.v1.RecipeActivationResult",
+    protoc_gen_elixir_version: "0.17.0",
+    syntax: :proto3
+
+  field(:resource, 1, type: :string)
+  field(:status, 2, type: Hephaestus.Project.V1.RecipeActivationResultStatus, enum: true)
+  field(:activation_id, 3, type: Hephaestus.Common.V1.OpaqueId, json_name: "activationId")
+end
+
 defmodule Hephaestus.Project.V1.ProjectService.Service do
   @moduledoc false
 
@@ -553,6 +652,18 @@ defmodule Hephaestus.Project.V1.ProjectService.Service do
     :GetRecipeDeployment,
     Hephaestus.Project.V1.GetRecipeDeploymentRequest,
     Hephaestus.Project.V1.GetRecipeDeploymentResponse
+  )
+
+  rpc(
+    :InstallRecipeDeployment,
+    Hephaestus.Project.V1.InstallRecipeDeploymentRequest,
+    Hephaestus.Project.V1.InstallRecipeDeploymentResponse
+  )
+
+  rpc(
+    :ResumeRecipeDeployment,
+    Hephaestus.Project.V1.ResumeRecipeDeploymentRequest,
+    Hephaestus.Project.V1.ResumeRecipeDeploymentResponse
   )
 
   rpc(

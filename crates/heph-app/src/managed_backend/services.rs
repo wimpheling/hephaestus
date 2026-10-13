@@ -3,8 +3,12 @@
 mod startup;
 pub use startup::StartupTicket;
 pub(super) use startup::spawn;
+#[path = "services/build.rs"]
+mod build;
 #[path = "services/closing.rs"]
 mod closing;
+#[path = "services/joins.rs"]
+mod joins;
 #[path = "services/tasks.rs"]
 mod tasks;
 pub use tasks::OwnedTasks;
@@ -26,10 +30,13 @@ pub(super) enum Body {
         running: Arc<RunningHephaestus>,
     },
 }
+type BuildTask = Arc<joins::JoinSlot<Result<(), Arc<AppError>>>>;
 struct State {
     body: Body,
     closing: bool,
-    startup: Option<JoinHandle<()>>,
+    closed: bool,
+    startup: Vec<Arc<joins::JoinSlot<()>>>,
+    build: Vec<BuildTask>,
     cancellation: Option<CancellationToken>,
     registry: std::sync::Weak<super::supervisor::registry::Registry>,
 }
@@ -43,7 +50,9 @@ impl Default for Services {
             state: Mutex::new(State {
                 body: Body::Empty,
                 closing: false,
-                startup: None,
+                closed: false,
+                startup: Vec::new(),
+                build: Vec::new(),
                 cancellation: None,
                 registry: std::sync::Weak::new(),
             }),
@@ -66,24 +75,40 @@ impl Services {
                 "managed original startup already registered".into(),
             ));
         }
-        state.body = Body::Starting(app);
+        state.body = if state.closed {
+            Body::App(app)
+        } else {
+            Body::Starting(app)
+        };
         state.registry = registry;
+        build::initiate(&mut state, false)?;
+        let closed = state.closed;
         drop(state);
-        Ok(())
+        if closed {
+            Err(AppError::Readiness(
+                "managed startup intake is already closed; original App retained".into(),
+            ))
+        } else {
+            Ok(())
+        }
     }
     pub(super) fn attach(&self, task: JoinHandle<()>) -> Result<(), AppError> {
         let mut state = self
             .state
             .lock()
             .map_err(|_| AppError::Task("managed service slot poisoned".into()))?;
-        if state.startup.is_some() {
-            return Err(AppError::Task(
-                "managed startup already owns an original task".into(),
-            ));
-        }
-        state.startup = Some(task);
+        let duplicate = !state.startup.is_empty();
+        // Retain ANY actual handle before rejecting late or duplicate registration.
+        state.startup.push(joins::JoinSlot::new(task));
+        let closed = state.closed;
         drop(state);
-        Ok(())
+        if closed || duplicate {
+            Err(AppError::Readiness(
+                "managed startup closed or already registered; actual late handle retained".into(),
+            ))
+        } else {
+            Ok(())
+        }
     }
     pub fn token(&self, token: &CancellationToken) -> Result<(), AppError> {
         let registry = {
@@ -92,6 +117,9 @@ impl Services {
                 .lock()
                 .map_err(|_| AppError::Task("managed service slot poisoned".into()))?;
             state.cancellation = Some(token.clone());
+            if state.closed {
+                token.cancel();
+            }
             let registry = state.registry.clone();
             drop(state);
             registry
@@ -122,6 +150,7 @@ impl Services {
         match self.state.lock() {
             Ok(mut state) => {
                 state.body = body;
+                build::initiate(&mut state, false)?;
                 drop(state);
                 Ok(())
             }
@@ -147,7 +176,8 @@ impl Services {
     }
     pub fn healthy(&self) -> bool {
         self.state.lock().is_ok_and(|state| {
-            matches!(state.body, Body::Running { .. })
+            !state.closed
+                && matches!(state.body, Body::Running { .. })
                 && state
                     .cancellation
                     .as_ref()
@@ -155,13 +185,97 @@ impl Services {
                 && self.tasks.healthy()
         })
     }
+    pub(super) fn closed(&self) -> bool {
+        self.state.lock().map_or(true, |state| state.closed)
+    }
     pub fn request_close(&self) {
-        if let Ok(state) = self.state.lock() {
-            if let Some(token) = &state.cancellation {
-                token.cancel();
+        let mut state = self
+            .state
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        state.closed = true;
+        if let Some(token) = &state.cancellation {
+            token.cancel();
+        }
+        if let Err(cause) = build::initiate(&mut state, false) {
+            tracing::error!(%cause, "original Build cleanup registration remains held");
+        }
+        drop(state);
+    }
+    /// Starts/retries only the original Build barrier before DB/task waits.
+    pub(super) fn start_cleanup(&self) -> Result<(), AppError> {
+        self.request_close();
+        let mut state = self
+            .state
+            .lock()
+            .map_err(|_| AppError::Task("managed service slot poisoned".into()))?;
+        let result = build::initiate(&mut state, true);
+        drop(state);
+        result
+    }
+    /// Actual joins only. Original mutation outcomes never establish resource absence.
+    pub(super) async fn join_mutations(&self) -> Result<(), AppError> {
+        self.request_close();
+        let mut failure = None;
+        loop {
+            let startup = {
+                let state = self
+                    .state
+                    .lock()
+                    .map_err(|_| AppError::Task("managed service slot poisoned".into()))?;
+                let startup = state.startup.clone();
+                drop(state);
+                startup
+            };
+            for handle in &startup {
+                if let Err(cause) = handle.join().await {
+                    failure.get_or_insert(cause);
+                }
+            }
+            if let Err(cause) = self.tasks.join().await {
+                failure.get_or_insert(cause);
+            }
+            // Startup/put can register Build after the earlier startup snapshot.
+            let build = {
+                let state = self
+                    .state
+                    .lock()
+                    .map_err(|_| AppError::Task("managed service slot poisoned".into()))?;
+                let build = state.build.clone();
+                drop(state);
+                build
+            };
+            let mut latest = Ok(());
+            for handle in &build {
+                match handle.join().await {
+                    Ok(result) => latest = result,
+                    Err(cause) => {
+                        failure.get_or_insert(cause);
+                    }
+                }
+            }
+            // State→TaskRegistry matches healthy(). Transfer never takes State
+            // while holding TaskRegistry. Any late actual slot forces another pass.
+            let state = self
+                .state
+                .lock()
+                .map_err(|_| AppError::Task("managed service slot poisoned".into()))?;
+            let settled = state.startup.len() == startup.len()
+                && state.startup.iter().all(|handle| handle.settled())
+                && state.build.len() == build.len()
+                && state.build.iter().all(|handle| handle.settled())
+                && self.tasks.settled()?;
+            drop(state);
+            if settled {
+                // Other actual errors remain cached in their original slots.
+                if let Some(cause) = failure {
+                    return Err(cause);
+                }
+                return latest.map_err(crate::managed_backend::custody::failure);
             }
         }
     }
+
     pub(super) fn working(&self) -> bool {
         self.state.lock().map_or(true, |state| {
             matches!(state.body, Body::Starting(_)) || state.closing

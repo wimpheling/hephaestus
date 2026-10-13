@@ -1,6 +1,6 @@
 //! Controlled model and transport tests; these do not prove PG role/provenance.
 
-mod authentication;
+pub(in crate::rpc::project) mod authentication;
 
 use super::{map_error, projection};
 use crate::rpc::RpcError;

@@ -44,7 +44,7 @@ enum PreparationError {
 }
 
 async fn prepare_owned(
-    registry: &Registry,
+    registry: &Arc<Registry>,
     app: &AppConfig,
     pools: &ManagedInvocationPools,
 ) -> Result<(), PreparationError> {
@@ -85,7 +85,7 @@ async fn prepare_owned(
         pools.worker.clone(),
         &pools.application,
     );
-    let node = custody::node(&inputs);
+    let node = custody::node(&inputs, Arc::downgrade(registry));
     registry.install(Arc::clone(&node));
     if registry.control.is_closing() {
         return Err(PreparationError::Construction(AppError::Task(
@@ -112,47 +112,64 @@ pub(super) async fn drain(
             .await;
         }
         registry.attempt();
-        match physical_stop(&node).await {
-            Ok(true) => match node.services.close_owned().await {
-                Ok(()) => {
-                    registry.stopped();
-                    return;
-                }
-                Err(cause) => {
-                    registry.record(cause, ManagedHeldReason::OrdinaryServicesCleanupUnavailable);
-                    break;
-                }
-            },
-            Ok(false) => {
+        custody::close_intake(&node).unwrap_or_else(|cause| {
+            registry.record(cause, ManagedHeldReason::Services);
+        });
+        if let Err(cause) = node.services.start_cleanup() {
+            registry.record(cause, ManagedHeldReason::Services);
+        }
+        if let Err(cause) = physical_stop(&node).await {
+            tracing::warn!(error = %cause, attempt = index + 1, "managed same-owner physical cleanup remains held");
+            registry.record(cause, ManagedHeldReason::PhysicalCleanup);
+            continue;
+        }
+        let (services, recipes) =
+            tokio::join!(node.services.join_mutations(), custody::join_recipes(&node));
+        let failures = services
+            .err()
+            .into_iter()
+            .chain(recipes.err())
+            .collect::<Vec<_>>();
+        if !failures.is_empty() {
+            registry.record(
+                custody::failure(CleanupFailures(failures)),
+                ManagedHeldReason::Services,
+            );
+            break;
+        }
+        match custody::stop_runs(&node).await {
+            Ok(Some(())) => {}
+            Ok(None) => {
                 registry.record(
                     AppError::Readiness(
-                        "unassembled original physical stop cannot qualify Run reconciliation"
-                            .into(),
+                        "unassembled original node cannot qualify final Run reconciliation".into(),
                     ),
                     ManagedHeldReason::ReconciliationUnavailable,
                 );
                 break;
             }
             Err(cause) => {
-                tracing::warn!(
-                    error = %cause,
-                    attempt = index + 1,
-                    "managed same-owner physical cleanup remains held"
-                );
-                registry.record(cause, ManagedHeldReason::PhysicalCleanup);
+                registry.record(cause, ManagedHeldReason::ReconciliationUnavailable);
+                break;
+            }
+        }
+        match node.services.close_owned().await {
+            Ok(()) => {
+                registry.stopped();
+                return;
+            }
+            Err(cause) => {
+                registry.record(cause, ManagedHeldReason::OrdinaryServicesCleanupUnavailable);
+                break;
             }
         }
     }
     registry.drained();
 }
 
-async fn physical_stop(node: &custody::ManagedBackendNode) -> Result<bool, AppError> {
-    // Assembled lifecycle owns close/drain/qualified reconciliation itself.
-    // Retain the physical-only acquisition fallback for unassembled nodes.
-    if custody::stop_runs(node).await?.is_some() {
-        return Ok(true);
-    }
-
+async fn physical_stop(node: &custody::ManagedBackendNode) -> Result<(), AppError> {
+    // Drain only actual registered generation custody before potentially stalled
+    // startup/recipe/Core DB waits. Complete family reconciliation follows joins.
     let scope = node.configuration.provider_scope();
     let mut failures = Vec::new();
     if let Err(cause) = node
@@ -178,7 +195,7 @@ async fn physical_stop(node: &custody::ManagedBackendNode) -> Result<bool, AppEr
         failures.push(custody::failure(cause));
     }
     if failures.is_empty() {
-        Ok(false)
+        Ok(())
     } else {
         Err(custody::failure(CleanupFailures(failures)))
     }
@@ -191,7 +208,7 @@ impl fmt::Display for CleanupFailures {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(
             f,
-            "managed physical closing retained {} failure(s)",
+            "managed same-owner closing retained {} failure(s)",
             self.0.len()
         )?;
         for cause in &self.0 {

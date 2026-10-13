@@ -82,6 +82,17 @@ async fn dispatch(
     expected_sid: BrowserSessionSid,
     calls: Arc<AtomicUsize>,
 ) -> StatusCode {
+    dispatch_for(AUDIENCE, token, active, user, expected_sid, calls).await
+}
+
+pub(in crate::rpc::project) async fn dispatch_for(
+    audience: &str,
+    token: Option<&str>,
+    active: bool,
+    user: UserId,
+    expected_sid: BrowserSessionSid,
+    calls: Arc<AtomicUsize>,
+) -> StatusCode {
     let now = OffsetDateTime::now_utc();
     let sessions = Sessions {
         metadata: BrowserSessionMetadata::new(
@@ -104,7 +115,7 @@ async fn dispatch(
     );
     let app = Router::new()
         .route(
-            AUDIENCE,
+            audience,
             axum::routing::post(|request: Request<Body>| async move {
                 if request
                     .extensions()
@@ -121,7 +132,7 @@ async fn dispatch(
             state,
             mediator_identity_middleware,
         ));
-    let mut request = Request::builder().method("POST").uri(AUDIENCE);
+    let mut request = Request::builder().method("POST").uri(audience);
     if let Some(token) = token {
         request = request.header("authorization", format!("Bearer {token}"));
     }
@@ -131,7 +142,12 @@ async fn dispatch(
         .status()
 }
 
-fn token(user: UserId, audience: &str, expired: bool, sid: BrowserSessionSid) -> String {
+pub(in crate::rpc::project) fn token(
+    user: UserId,
+    audience: &str,
+    expired: bool,
+    sid: BrowserSessionSid,
+) -> String {
     let now = OffsetDateTime::now_utc().unix_timestamp();
     let issued = if expired { now - 100 } else { now };
     encode(

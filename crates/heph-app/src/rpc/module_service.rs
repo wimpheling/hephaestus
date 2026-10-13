@@ -27,6 +27,7 @@ pub struct ApplicationDependencies {
     identity_resolver: Arc<dyn IdempotentIdentityResolver>,
     browser_sessions: Arc<dyn BrowserSessionStore>,
     release_service: Arc<release_postgres::ReleaseService>,
+    managed_recipes: Option<Arc<crate::managed_backend::recipe::ManagedRecipe>>,
 }
 
 impl ApplicationDependencies {
@@ -52,7 +53,16 @@ impl ApplicationDependencies {
             identity_resolver,
             browser_sessions,
             release_service,
+            managed_recipes: None,
         }
+    }
+    /// Adds only the original node-backed service selected by internal composition.
+    pub fn with_managed_recipes(
+        mut self,
+        service: Option<Arc<crate::managed_backend::recipe::ManagedRecipe>>,
+    ) -> Self {
+        self.managed_recipes = service;
+        self
     }
 }
 
@@ -138,6 +148,7 @@ pub fn service(
         Arc::clone(&applications.forge),
         MediatorAuthenticator::new(mediator_signing_key),
         mutation_receipts.clone(),
+        applications.managed_recipes,
     );
     let router = repository::register(
         router,

@@ -1,4 +1,5 @@
 //! Immediate transfer of actual handles; error/drop never aborts admitted work.
+use super::joins::JoinSlot;
 use crate::AppError;
 use std::{
     error::Error,
@@ -8,9 +9,11 @@ use std::{
 };
 use tokio::task::JoinHandle;
 
+type ServiceTask = Arc<JoinSlot<Result<(), String>>>;
+
 #[derive(Default)]
 pub(super) struct TaskCustody {
-    handles: Mutex<Vec<JoinHandle<Result<(), String>>>>,
+    handles: Mutex<Vec<ServiceTask>>,
 }
 impl TaskCustody {
     pub(super) fn retain(&self, handles: &mut Vec<JoinHandle<Result<(), String>>>) {
@@ -18,35 +21,50 @@ impl TaskCustody {
         self.handles
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .append(handles);
+            .extend(handles.drain(..).map(JoinSlot::new));
     }
     pub(super) fn healthy(&self) -> bool {
         self.handles.lock().is_ok_and(|handles| {
-            !handles.is_empty() && handles.iter().all(|handle| !handle.is_finished())
+            !handles.is_empty() && handles.iter().all(|handle| handle.running())
         })
     }
+    pub(super) fn settled(&self) -> Result<bool, AppError> {
+        self.handles
+            .lock()
+            .map(|handles| handles.iter().all(|handle| handle.settled()))
+            .map_err(|_| AppError::Task("managed service handle registry poisoned".into()))
+    }
     pub(super) async fn join(&self) -> Result<(), AppError> {
-        // Original startup has settled before this transfer; no late spawner.
-        let handles = std::mem::take(
-            &mut *self
+        loop {
+            let handles = self
                 .handles
                 .lock()
-                .map_err(|_| AppError::Task("managed service handle registry poisoned".into()))?,
-        );
-        let mut failures = Vec::new();
-        for handle in handles {
-            match handle.await {
-                Ok(Ok(())) => {}
-                Ok(Err(cause)) => failures.push(AppError::Task(cause)),
-                Err(cause) => failures.push(crate::managed_backend::custody::failure(cause)),
+                .map_err(|_| AppError::Task("managed service handle registry poisoned".into()))?
+                .clone();
+            let mut failures = Vec::new();
+            for handle in handles {
+                match handle.join().await {
+                    Ok(Ok(())) => {}
+                    Ok(Err(cause)) => failures.push(AppError::Task(cause)),
+                    Err(cause) => failures.push(cause),
+                }
             }
-        }
-        if failures.is_empty() {
-            Ok(())
-        } else {
-            Err(crate::managed_backend::custody::failure(
-                ServiceJoinFailures(failures),
-            ))
+            // SAME registry lock linearizes this snapshot against late transferred handles.
+            let settled = self
+                .handles
+                .lock()
+                .map_err(|_| AppError::Task("managed service handle registry poisoned".into()))?
+                .iter()
+                .all(|handle| handle.settled());
+            if settled {
+                return if failures.is_empty() {
+                    Ok(())
+                } else {
+                    Err(crate::managed_backend::custody::failure(
+                        ServiceJoinFailures(failures),
+                    ))
+                };
+            }
         }
     }
 }

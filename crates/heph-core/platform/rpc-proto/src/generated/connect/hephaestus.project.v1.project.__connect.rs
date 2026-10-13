@@ -34,6 +34,30 @@ pub type OwnedGetRecipeDeploymentResponseView = ::buffa::view::OwnedView<
         'static,
     >,
 >;
+///Shorthand for `OwnedView<InstallRecipeDeploymentRequestView<'static>>`.
+pub type OwnedInstallRecipeDeploymentRequestView = ::buffa::view::OwnedView<
+    crate::messages::hephaestus::project::v1::__buffa::view::InstallRecipeDeploymentRequestView<
+        'static,
+    >,
+>;
+///Shorthand for `OwnedView<InstallRecipeDeploymentResponseView<'static>>`.
+pub type OwnedInstallRecipeDeploymentResponseView = ::buffa::view::OwnedView<
+    crate::messages::hephaestus::project::v1::__buffa::view::InstallRecipeDeploymentResponseView<
+        'static,
+    >,
+>;
+///Shorthand for `OwnedView<ResumeRecipeDeploymentRequestView<'static>>`.
+pub type OwnedResumeRecipeDeploymentRequestView = ::buffa::view::OwnedView<
+    crate::messages::hephaestus::project::v1::__buffa::view::ResumeRecipeDeploymentRequestView<
+        'static,
+    >,
+>;
+///Shorthand for `OwnedView<ResumeRecipeDeploymentResponseView<'static>>`.
+pub type OwnedResumeRecipeDeploymentResponseView = ::buffa::view::OwnedView<
+    crate::messages::hephaestus::project::v1::__buffa::view::ResumeRecipeDeploymentResponseView<
+        'static,
+    >,
+>;
 ///Shorthand for `OwnedView<ListProjectRepositoriesRequestView<'static>>`.
 pub type OwnedListProjectRepositoriesRequestView = ::buffa::view::OwnedView<
     crate::messages::hephaestus::project::v1::__buffa::view::ListProjectRepositoriesRequestView<
@@ -178,6 +202,62 @@ impl ::connectrpc::Encodable<
 >
 for ::buffa::view::OwnedView<
     crate::messages::hephaestus::project::v1::__buffa::view::GetRecipeDeploymentResponseView<
+        'static,
+    >,
+> {
+    fn encode(
+        &self,
+        codec: ::connectrpc::CodecFormat,
+    ) -> ::std::result::Result<::buffa::bytes::Bytes, ::connectrpc::ConnectError> {
+        ::connectrpc::__codegen::encode_view_body(self.reborrow(), codec)
+    }
+}
+impl ::connectrpc::Encodable<
+    crate::messages::hephaestus::project::v1::InstallRecipeDeploymentResponse,
+>
+for crate::messages::hephaestus::project::v1::__buffa::view::InstallRecipeDeploymentResponseView<
+    '_,
+> {
+    fn encode(
+        &self,
+        codec: ::connectrpc::CodecFormat,
+    ) -> ::std::result::Result<::buffa::bytes::Bytes, ::connectrpc::ConnectError> {
+        ::connectrpc::__codegen::encode_view_body(self, codec)
+    }
+}
+impl ::connectrpc::Encodable<
+    crate::messages::hephaestus::project::v1::InstallRecipeDeploymentResponse,
+>
+for ::buffa::view::OwnedView<
+    crate::messages::hephaestus::project::v1::__buffa::view::InstallRecipeDeploymentResponseView<
+        'static,
+    >,
+> {
+    fn encode(
+        &self,
+        codec: ::connectrpc::CodecFormat,
+    ) -> ::std::result::Result<::buffa::bytes::Bytes, ::connectrpc::ConnectError> {
+        ::connectrpc::__codegen::encode_view_body(self.reborrow(), codec)
+    }
+}
+impl ::connectrpc::Encodable<
+    crate::messages::hephaestus::project::v1::ResumeRecipeDeploymentResponse,
+>
+for crate::messages::hephaestus::project::v1::__buffa::view::ResumeRecipeDeploymentResponseView<
+    '_,
+> {
+    fn encode(
+        &self,
+        codec: ::connectrpc::CodecFormat,
+    ) -> ::std::result::Result<::buffa::bytes::Bytes, ::connectrpc::ConnectError> {
+        ::connectrpc::__codegen::encode_view_body(self, codec)
+    }
+}
+impl ::connectrpc::Encodable<
+    crate::messages::hephaestus::project::v1::ResumeRecipeDeploymentResponse,
+>
+for ::buffa::view::OwnedView<
+    crate::messages::hephaestus::project::v1::__buffa::view::ResumeRecipeDeploymentResponseView<
         'static,
     >,
 > {
@@ -385,6 +465,24 @@ pub const PROJECT_SERVICE_GET_RECIPE_DEPLOYMENT_SPEC: ::connectrpc::Spec = ::con
         ::connectrpc::StreamType::Unary,
     )
     .with_idempotency_level(::connectrpc::IdempotencyLevel::NoSideEffects);
+/// Static [`Spec`](::connectrpc::Spec) for the server-side `InstallRecipeDeployment` RPC.
+///
+/// The dispatcher surfaces this on
+/// [`RequestContext::spec`](::connectrpc::RequestContext::spec).
+pub const PROJECT_SERVICE_INSTALL_RECIPE_DEPLOYMENT_SPEC: ::connectrpc::Spec = ::connectrpc::Spec::server(
+        "/hephaestus.project.v1.ProjectService/InstallRecipeDeployment",
+        ::connectrpc::StreamType::Unary,
+    )
+    .with_idempotency_level(::connectrpc::IdempotencyLevel::Unknown);
+/// Static [`Spec`](::connectrpc::Spec) for the server-side `ResumeRecipeDeployment` RPC.
+///
+/// The dispatcher surfaces this on
+/// [`RequestContext::spec`](::connectrpc::RequestContext::spec).
+pub const PROJECT_SERVICE_RESUME_RECIPE_DEPLOYMENT_SPEC: ::connectrpc::Spec = ::connectrpc::Spec::server(
+        "/hephaestus.project.v1.ProjectService/ResumeRecipeDeployment",
+        ::connectrpc::StreamType::Unary,
+    )
+    .with_idempotency_level(::connectrpc::IdempotencyLevel::Unknown);
 /// Static [`Spec`](::connectrpc::Spec) for the server-side `ListProjectRepositories` RPC.
 ///
 /// The dispatcher surfaces this on
@@ -556,6 +654,52 @@ pub trait ProjectService: Send + Sync + 'static {
         Output = ::connectrpc::ServiceResult<
             impl ::connectrpc::Encodable<
                 crate::messages::hephaestus::project::v1::GetRecipeDeploymentResponse,
+            > + Send + use<'a, Self>,
+        >,
+    > + Send;
+    /// Handle the InstallRecipeDeployment RPC.
+    ///
+    /// `'a` lets the response body borrow from `&self` (e.g. server-resident state).
+    ///
+    /// `request` is borrowed from the request body and is valid for the
+    /// duration of the call; message fields are read directly on it
+    /// (zero-copy). The response cannot borrow from `request` — use
+    /// `.to_owned_message()` (or copy the specific fields) for anything
+    /// returned, stored, or moved into `tokio::spawn`.
+    fn install_recipe_deployment<'a>(
+        &'a self,
+        ctx: ::connectrpc::RequestContext,
+        request: ::connectrpc::ServiceRequest<
+            '_,
+            crate::messages::hephaestus::project::v1::InstallRecipeDeploymentRequest,
+        >,
+    ) -> impl ::std::future::Future<
+        Output = ::connectrpc::ServiceResult<
+            impl ::connectrpc::Encodable<
+                crate::messages::hephaestus::project::v1::InstallRecipeDeploymentResponse,
+            > + Send + use<'a, Self>,
+        >,
+    > + Send;
+    /// Handle the ResumeRecipeDeployment RPC.
+    ///
+    /// `'a` lets the response body borrow from `&self` (e.g. server-resident state).
+    ///
+    /// `request` is borrowed from the request body and is valid for the
+    /// duration of the call; message fields are read directly on it
+    /// (zero-copy). The response cannot borrow from `request` — use
+    /// `.to_owned_message()` (or copy the specific fields) for anything
+    /// returned, stored, or moved into `tokio::spawn`.
+    fn resume_recipe_deployment<'a>(
+        &'a self,
+        ctx: ::connectrpc::RequestContext,
+        request: ::connectrpc::ServiceRequest<
+            '_,
+            crate::messages::hephaestus::project::v1::ResumeRecipeDeploymentRequest,
+        >,
+    ) -> impl ::std::future::Future<
+        Output = ::connectrpc::ServiceResult<
+            impl ::connectrpc::Encodable<
+                crate::messages::hephaestus::project::v1::ResumeRecipeDeploymentResponse,
             > + Send + use<'a, Self>,
         >,
     > + Send;
@@ -816,6 +960,64 @@ impl<S: ProjectService> ProjectServiceExt for S {
                 },
             )
             .with_spec(PROJECT_SERVICE_GET_RECIPE_DEPLOYMENT_SPEC)
+            .route_view(
+                PROJECT_SERVICE_SERVICE_NAME,
+                "InstallRecipeDeployment",
+                {
+                    let svc = ::std::sync::Arc::clone(&self);
+                    ::connectrpc::view_handler_fn(move |
+                        ctx,
+                        req: ::buffa::view::OwnedView<
+                            crate::messages::hephaestus::project::v1::__buffa::view::InstallRecipeDeploymentRequestView<
+                                'static,
+                            >,
+                        >,
+                        format|
+                    {
+                        let svc = ::std::sync::Arc::clone(&svc);
+                        async move {
+                            let sreq = ::connectrpc::ServiceRequest::<
+                                crate::messages::hephaestus::project::v1::InstallRecipeDeploymentRequest,
+                            >::from_parts(req.reborrow(), req.bytes());
+                            svc.install_recipe_deployment(ctx, sreq)
+                                .await?
+                                .encode::<
+                                    crate::messages::hephaestus::project::v1::InstallRecipeDeploymentResponse,
+                                >(format)
+                        }
+                    })
+                },
+            )
+            .with_spec(PROJECT_SERVICE_INSTALL_RECIPE_DEPLOYMENT_SPEC)
+            .route_view(
+                PROJECT_SERVICE_SERVICE_NAME,
+                "ResumeRecipeDeployment",
+                {
+                    let svc = ::std::sync::Arc::clone(&self);
+                    ::connectrpc::view_handler_fn(move |
+                        ctx,
+                        req: ::buffa::view::OwnedView<
+                            crate::messages::hephaestus::project::v1::__buffa::view::ResumeRecipeDeploymentRequestView<
+                                'static,
+                            >,
+                        >,
+                        format|
+                    {
+                        let svc = ::std::sync::Arc::clone(&svc);
+                        async move {
+                            let sreq = ::connectrpc::ServiceRequest::<
+                                crate::messages::hephaestus::project::v1::ResumeRecipeDeploymentRequest,
+                            >::from_parts(req.reborrow(), req.bytes());
+                            svc.resume_recipe_deployment(ctx, sreq)
+                                .await?
+                                .encode::<
+                                    crate::messages::hephaestus::project::v1::ResumeRecipeDeploymentResponse,
+                                >(format)
+                        }
+                    })
+                },
+            )
+            .with_spec(PROJECT_SERVICE_RESUME_RECIPE_DEPLOYMENT_SPEC)
             .route_view_idempotent(
                 PROJECT_SERVICE_SERVICE_NAME,
                 "ListProjectRepositories",
@@ -1062,6 +1264,18 @@ impl<T: ProjectService> ::connectrpc::Dispatcher for ProjectServiceServer<T> {
                         .with_spec(PROJECT_SERVICE_GET_RECIPE_DEPLOYMENT_SPEC),
                 )
             }
+            "InstallRecipeDeployment" => {
+                Some(
+                    ::connectrpc::dispatcher::codegen::MethodDescriptor::unary(false)
+                        .with_spec(PROJECT_SERVICE_INSTALL_RECIPE_DEPLOYMENT_SPEC),
+                )
+            }
+            "ResumeRecipeDeployment" => {
+                Some(
+                    ::connectrpc::dispatcher::codegen::MethodDescriptor::unary(false)
+                        .with_spec(PROJECT_SERVICE_RESUME_RECIPE_DEPLOYMENT_SPEC),
+                )
+            }
             "ListProjectRepositories" => {
                 Some(
                     ::connectrpc::dispatcher::codegen::MethodDescriptor::unary(true)
@@ -1174,6 +1388,48 @@ impl<T: ProjectService> ::connectrpc::Dispatcher for ProjectServiceServer<T> {
                         .await?
                         .encode::<
                             crate::messages::hephaestus::project::v1::GetRecipeDeploymentResponse,
+                        >(format)
+                })
+            }
+            "InstallRecipeDeployment" => {
+                let svc = ::std::sync::Arc::clone(&self.inner);
+                Box::pin(async move {
+                    let body = ::connectrpc::dispatcher::codegen::request_proto_bytes::<
+                        crate::messages::hephaestus::project::v1::InstallRecipeDeploymentRequest,
+                    >(request.encoded()?, format)?;
+                    let req: crate::messages::hephaestus::project::v1::__buffa::view::InstallRecipeDeploymentRequestView<
+                        '_,
+                    > = ::connectrpc::dispatcher::codegen::decode_borrowed_request_view(
+                        &body,
+                    )?;
+                    let req = ::connectrpc::ServiceRequest::<
+                        crate::messages::hephaestus::project::v1::InstallRecipeDeploymentRequest,
+                    >::from_parts(&req, &body);
+                    svc.install_recipe_deployment(ctx, req)
+                        .await?
+                        .encode::<
+                            crate::messages::hephaestus::project::v1::InstallRecipeDeploymentResponse,
+                        >(format)
+                })
+            }
+            "ResumeRecipeDeployment" => {
+                let svc = ::std::sync::Arc::clone(&self.inner);
+                Box::pin(async move {
+                    let body = ::connectrpc::dispatcher::codegen::request_proto_bytes::<
+                        crate::messages::hephaestus::project::v1::ResumeRecipeDeploymentRequest,
+                    >(request.encoded()?, format)?;
+                    let req: crate::messages::hephaestus::project::v1::__buffa::view::ResumeRecipeDeploymentRequestView<
+                        '_,
+                    > = ::connectrpc::dispatcher::codegen::decode_borrowed_request_view(
+                        &body,
+                    )?;
+                    let req = ::connectrpc::ServiceRequest::<
+                        crate::messages::hephaestus::project::v1::ResumeRecipeDeploymentRequest,
+                    >::from_parts(&req, &body);
+                    svc.resume_recipe_deployment(ctx, req)
+                        .await?
+                        .encode::<
+                            crate::messages::hephaestus::project::v1::ResumeRecipeDeploymentResponse,
                         >(format)
                 })
             }
@@ -1566,6 +1822,96 @@ where
                 &self.config,
                 PROJECT_SERVICE_SERVICE_NAME,
                 "GetRecipeDeployment",
+                request,
+                options,
+            )
+            .await
+    }
+    /// Call the InstallRecipeDeployment RPC. Sends a request to /hephaestus.project.v1.ProjectService/InstallRecipeDeployment.
+    pub async fn install_recipe_deployment(
+        &self,
+        request: crate::messages::hephaestus::project::v1::InstallRecipeDeploymentRequest,
+    ) -> Result<
+        ::connectrpc::client::UnaryResponse<
+            ::buffa::view::OwnedView<
+                crate::messages::hephaestus::project::v1::__buffa::view::InstallRecipeDeploymentResponseView<
+                    'static,
+                >,
+            >,
+        >,
+        ::connectrpc::ConnectError,
+    > {
+        self.install_recipe_deployment_with_options(
+                request,
+                ::connectrpc::client::CallOptions::default(),
+            )
+            .await
+    }
+    /// Call the InstallRecipeDeployment RPC with explicit per-call options. Options override [`ClientConfig`](::connectrpc::client::ClientConfig) defaults.
+    pub async fn install_recipe_deployment_with_options(
+        &self,
+        request: crate::messages::hephaestus::project::v1::InstallRecipeDeploymentRequest,
+        options: ::connectrpc::client::CallOptions,
+    ) -> Result<
+        ::connectrpc::client::UnaryResponse<
+            ::buffa::view::OwnedView<
+                crate::messages::hephaestus::project::v1::__buffa::view::InstallRecipeDeploymentResponseView<
+                    'static,
+                >,
+            >,
+        >,
+        ::connectrpc::ConnectError,
+    > {
+        ::connectrpc::client::call_unary(
+                &self.transport,
+                &self.config,
+                PROJECT_SERVICE_SERVICE_NAME,
+                "InstallRecipeDeployment",
+                request,
+                options,
+            )
+            .await
+    }
+    /// Call the ResumeRecipeDeployment RPC. Sends a request to /hephaestus.project.v1.ProjectService/ResumeRecipeDeployment.
+    pub async fn resume_recipe_deployment(
+        &self,
+        request: crate::messages::hephaestus::project::v1::ResumeRecipeDeploymentRequest,
+    ) -> Result<
+        ::connectrpc::client::UnaryResponse<
+            ::buffa::view::OwnedView<
+                crate::messages::hephaestus::project::v1::__buffa::view::ResumeRecipeDeploymentResponseView<
+                    'static,
+                >,
+            >,
+        >,
+        ::connectrpc::ConnectError,
+    > {
+        self.resume_recipe_deployment_with_options(
+                request,
+                ::connectrpc::client::CallOptions::default(),
+            )
+            .await
+    }
+    /// Call the ResumeRecipeDeployment RPC with explicit per-call options. Options override [`ClientConfig`](::connectrpc::client::ClientConfig) defaults.
+    pub async fn resume_recipe_deployment_with_options(
+        &self,
+        request: crate::messages::hephaestus::project::v1::ResumeRecipeDeploymentRequest,
+        options: ::connectrpc::client::CallOptions,
+    ) -> Result<
+        ::connectrpc::client::UnaryResponse<
+            ::buffa::view::OwnedView<
+                crate::messages::hephaestus::project::v1::__buffa::view::ResumeRecipeDeploymentResponseView<
+                    'static,
+                >,
+            >,
+        >,
+        ::connectrpc::ConnectError,
+    > {
+        ::connectrpc::client::call_unary(
+                &self.transport,
+                &self.config,
+                PROJECT_SERVICE_SERVICE_NAME,
+                "ResumeRecipeDeployment",
                 request,
                 options,
             )

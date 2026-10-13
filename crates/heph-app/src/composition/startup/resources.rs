@@ -122,6 +122,12 @@ pub(super) async fn prepare(app: &HephaestusApp) -> Result<StartupResources, App
             Arc::clone(&app.identity_store) as Arc<dyn IdempotentIdentityResolver>,
             Arc::clone(&browser_sessions),
             Arc::clone(&app.release_service),
+        )
+        .with_managed_recipes(
+            app.managed_backend
+                .as_ref()
+                .map(crate::managed_backend::NodeLease::recipe_service)
+                .transpose()?,
         ),
         Arc::clone(&app.storage),
         app.artifact_store.clone(),

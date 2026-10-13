@@ -1,4 +1,6 @@
 //! Controlled original service custody; not native cleanup or readiness receipts.
+#[path = "tests/shutdown.rs"]
+mod shutdown;
 use super::{OwnedTasks, Services};
 use crate::managed_backend::supervisor::registry::Registry;
 use tokio::sync::oneshot;
@@ -103,7 +105,8 @@ async fn startup_panic_keeps_actual_original_owner_in_service_slot() {
     };
     assert!(
         source
-            .downcast_ref::<tokio::task::JoinError>()
+            .source()
+            .and_then(|cause| cause.downcast_ref::<tokio::task::JoinError>())
             .is_some_and(tokio::task::JoinError::is_panic)
     );
     assert!(observer.upgrade().is_some());

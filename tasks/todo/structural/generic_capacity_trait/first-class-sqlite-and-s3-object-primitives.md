@@ -464,6 +464,28 @@ remains required. Hosted run `38417742007` passes Cooking but fails Rust tests
 and the browser journey. No complete hosted CI pass or installed SQLite acceptance
 is established.
 
+The install/resume transport and recipe-aware shutdown checkpoint adds project
+RPC contracts and retains each admitted request, original job and outcome.
+Shutdown closes intake before waiting, joins late startup/Build registrations,
+and keeps the closing state recoverable when an observer is canceled. Rust 1.88
+scoped strict Clippy, formatting, documentation and all 38 focused cases pass
+against the branch's actual dependencies: 12 service, 11 recipe, and 15 RPC cases,
+none failed or ignored. A separate run against the main checkout resolves the
+unpublished Secret dependencies present in the earlier validation checkout.
+These results are not a full workspace check or actual authenticated database,
+browser, VM or complete shutdown behavior. Ordinary OCI/Gateway cleanup remains
+explicitly unqualified, and Remove/Invoke integration remains unfinished.
+
+The private Secret 0144 checkpoint passes four scoped package checks and an
+actual fresh installation/startup/catalog/roles/replay case. Its first user
+command still fails while recording completion: inbox table grants exist, but
+forced RLS has no policies. A private effect-witness producer and checked
+completion/read/audit integration remain unfinished. The complete Secret
+lifecycle and populated 0107→0144 upgrade have not passed. Published `c8edd006`
+CI passes Cooking, formatting and Clippy but fails a Build scenario and the
+browser journey. The Build fixture lacks the new provisioning-attempt method;
+a fixture correction is source-reviewed and awaits actual PostgreSQL testing.
+
 Provider orchestration and ownership seals, plural runtime attachment and cleanup,
 physical revocation, authenticated project web UI commands, real SQLite
 publication/install/inspect/remove and retained-data recovery, and the full
