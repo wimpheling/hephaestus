@@ -16,6 +16,22 @@ ceilings for runtime-Git publication, and validates gateway and UI routes
 without opening listeners or selecting tenant secrets. Repository image and
 gateway manifests use the same bounded, hashable parsing boundary.
 
+Authored `volume_slots` use validated paths, exact `read_only`/`read_write`
+attachment modes, required/optional flags, and bounded minimum capacities. The
+effective catalog adds enabled legacy state as required `state`, read-write at
+`/var/lib/hephaestus`, with a one-byte compatibility minimum because old releases
+declared no minimum. It validates duplicate keys and mount overlaps without
+adding grants. Explicit volume keys cannot shadow generic capability keys.
+Historical generic `state` key collisions stay parse-compatible but are
+incompatible with recipe catalog resolution until explicitly reconciled.
+
+Normalization sorts authored slots and omits empty catalogs. It never writes
+the effective legacy declaration into source configuration, preserving old
+normalized bytes and hashes. Named-volume persistence, instance binding, and
+runtime mounting require separate integration; declaration validation does not
+establish multi-volume execution. Operational entry points must reject explicit
+slots until their exact bindings and attachment modes can be enforced.
+
 # When
 
 Use this crate when a receive or release workflow reads a repository manifest:

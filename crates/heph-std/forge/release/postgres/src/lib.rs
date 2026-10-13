@@ -16,6 +16,7 @@ use git_capability_domain::{
     RefUpdatePolicy, RepositoryId as GitRepositoryId, TransferLimits,
 };
 use identity_domain::AuthenticatedIdentity;
+pub use prepared_instance_safety::PostgresPreparedInstanceSafetyRepository;
 use release_artifact_helpers::{
     artifact_kind_name, artifact_manifest_hash, parameter_schema, policy_from_contract,
     runtime_policy, validate_artifact,
@@ -48,6 +49,8 @@ use release_domain::{
     ReleaseCommandKey, ReleaseId, RuntimePolicy,
 };
 pub use release_errors::ReleaseServiceError;
+mod instance_execution;
+pub use instance_execution::{InstanceExecutionConfiguration, PostgresInstanceExecutionService};
 use release_revision_persistence::{
     clone_revision_binding, insert_revision, insert_revision_with_binding_ids,
     insert_update_candidate_revision,
@@ -64,7 +67,7 @@ use release_update_gate::{
     enqueue_mailbox_wakes, existing_terminal_decision, mark_volume_lease,
     materialize_deferred_triggers, recovery_decision, reopen_after_update,
 };
-use run_domain::{RunKind, StartRun};
+use run_domain::{FreshRunExecutionProfile, RunKind, StartRun};
 use runtime_types::{CommandId, RunId};
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
@@ -82,6 +85,9 @@ pub use ui_request_audit::{
 };
 use uuid::Uuid;
 
+mod prepared_instance_safety;
+mod prepared_instance_terminal;
+pub use prepared_instance_terminal::PostgresPreparedInstanceTerminalRepository;
 mod release_artifact_helpers;
 mod release_attachments;
 mod release_authorization;
@@ -94,7 +100,11 @@ mod release_capability_selection;
 mod release_command_events;
 mod release_errors;
 mod release_instance_import;
+mod release_instance_removal;
+mod release_instance_removal_work;
 mod release_instance_revision;
+mod release_legacy_completion;
+mod release_legacy_placement;
 mod release_publication;
 mod release_revision_persistence;
 mod release_rows;
@@ -105,6 +115,11 @@ mod release_update_finalization;
 mod release_update_gate;
 mod release_update_preparation;
 mod release_update_recovery;
+mod release_volume_grant_rows;
+mod release_volume_grants;
+mod release_volume_instance_import;
+mod release_volume_instance_inputs;
+mod release_volume_instance_status;
 mod ui_browser;
 mod ui_browser_resources;
 mod ui_installation;
@@ -120,6 +135,8 @@ const MAILBOX_WAKE_EVENT_TYPE: &str = "mailbox.wake.v1";
 pub struct ReleaseService {
     pool: PgPool,
     authorizer: Arc<PostgresMelangeAuthorizer>,
+    execution_profile: Option<FreshRunExecutionProfile>,
+    legacy_vm_scope: Option<run_domain::LegacyVmPlacementScope>,
 }
 
 impl ReleaseService {}

@@ -8,14 +8,14 @@ use vm_trait::{NetworkMode, StopMode, VmProvider};
 use crate::{boot::BootContext, support::*};
 
 pub async fn run(context: &BootContext) {
-    let provider = &context.provider;
     let rootfs = context.rootfs.clone();
     let cgroup_root_for_assertion = context.cgroup_root.clone();
     let rootfs_for_graceful_test = context.rootfs_for_graceful_test.clone();
     let rootfs_for_force_test = context.rootfs_for_force_test.clone();
     let runtime_root = context.runtime_root.clone();
     let secret_path = context.secret_path.clone();
-    let graceful = provider
+    let graceful = context
+        .provider
         .provision(long_running_spec(rootfs_for_graceful_test, "graceful"))
         .await
         .expect("provision graceful-shutdown VM");
@@ -52,7 +52,8 @@ pub async fn run(context: &BootContext) {
     let forced_secret_path = forced_secret_mount.host_path().to_path_buf();
     let mut forced_spec = long_running_spec(rootfs_for_force_test.clone(), "force");
     forced_spec.mounts.push(forced_secret_mount.vm_mount());
-    let forced = provider
+    let forced = context
+        .provider
         .provision(forced_spec)
         .await
         .expect("provision forced-cleanup VM");
@@ -74,7 +75,8 @@ pub async fn run(context: &BootContext) {
     assert!(!runtime_root.join(&forced_id).exists());
     assert!(!cgroup_root_for_assertion.join(&forced_id).exists());
 
-    let disabled = provider
+    let disabled = context
+        .provider
         .provision(mode_spec(
             rootfs.clone(),
             "integration-network-disabled",

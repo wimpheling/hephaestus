@@ -26,6 +26,7 @@ use vm_trait::{DiskFormat, NetworkMode, PortProtocol, RootFilesystem, VmError, V
 #[allow(clippy::too_many_lines)]
 pub fn prepare_spec(config: &LibkrunConfig, spec: &VmSpec) -> Result<PreparedSpec, VmError> {
     validate_id(&spec.id)?;
+    vm_trait::validate_vm_guest_volumes(spec)?;
     if spec.resources.vcpus == 0 || spec.resources.vcpus > 8 {
         return invalid("resources.vcpus", "must be between 1 and 8");
     }
@@ -127,6 +128,7 @@ pub fn prepare_spec(config: &LibkrunConfig, spec: &VmSpec) -> Result<PreparedSpe
         );
     }
     validate_state_volume_labels(spec, &disks)?;
+    super::validate_named_disk_files(&spec.guest_volumes, &disks)?;
 
     let runtime_authority = spec
         .runtime_authority
@@ -242,6 +244,7 @@ pub fn prepare_spec(config: &LibkrunConfig, spec: &VmSpec) -> Result<PreparedSpe
         id: spec.id.0.clone(),
         root,
         disks,
+        guest_volumes: spec.guest_volumes.clone(),
         mounts,
         vcpus: spec.resources.vcpus,
         memory_mib: spec.resources.memory_mib,

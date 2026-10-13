@@ -1,3 +1,7 @@
+#[path = "volumes.rs"]
+mod volumes;
+use volumes::named_volumes;
+
 use super::{
     lock, send_message,
     types::{WireError, WireErrorKind, WorkerEvent, WorkerMessage},
@@ -54,6 +58,22 @@ pub(super) fn spawn_guest_control(
     });
 }
 
+pub fn validate_guest_hello(message: &GuestMessage) -> io::Result<()> {
+    if matches!(
+        message,
+        GuestMessage::Hello {
+            version: PROTOCOL_VERSION
+        }
+    ) {
+        Ok(())
+    } else {
+        Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            "guest protocol version mismatch",
+        ))
+    }
+}
+
 // Keeping the authenticated handshake, exact authority acknowledgement, and
 // event forwarding together makes their ordering directly auditable.
 #[allow(clippy::too_many_lines)]
@@ -65,20 +85,11 @@ fn handle_guest(
 ) -> Result<(), Box<dyn Error + Send + Sync>> {
     let (mut stream, _) = listener.accept()?;
     let hello: GuestMessage = read_sync(&mut stream)?;
-    if !matches!(
-        hello,
-        GuestMessage::Hello {
-            version: PROTOCOL_VERSION
-        }
-    ) {
-        return Err(Box::new(io::Error::new(
-            io::ErrorKind::InvalidData,
-            "guest protocol version mismatch",
-        )));
-    }
+    validate_guest_hello(&hello)?;
 
     let guest_writer = stream.try_clone()?;
     *lock(guest_slot) = Some(guest_writer);
+    let volumes = named_volumes(&spec)?;
     let mut command = GuestCommandMessage {
         program: spec.command.program,
         args: spec.command.args,
@@ -147,6 +158,7 @@ fn handle_guest(
             command,
             mounts,
             state_volume,
+            volumes,
             runtime_authority,
             gateway_handler,
             private_http_service,

@@ -1,3 +1,129 @@
+defmodule Hephaestus.Project.V1.RecipeDeploymentLifecycle do
+  @moduledoc false
+
+  use Protobuf,
+    enum: true,
+    full_name: "hephaestus.project.v1.RecipeDeploymentLifecycle",
+    protoc_gen_elixir_version: "0.17.0",
+    syntax: :proto3
+
+  field(:RECIPE_DEPLOYMENT_LIFECYCLE_UNSPECIFIED, 0)
+  field(:RECIPE_DEPLOYMENT_LIFECYCLE_INSTALLING, 1)
+  field(:RECIPE_DEPLOYMENT_LIFECYCLE_INSTALLED, 2)
+  field(:RECIPE_DEPLOYMENT_LIFECYCLE_REMOVING, 3)
+  field(:RECIPE_DEPLOYMENT_LIFECYCLE_REMOVED, 4)
+  field(:RECIPE_DEPLOYMENT_LIFECYCLE_RECOVERY_REQUIRED, 5)
+end
+
+defmodule Hephaestus.Project.V1.RecipeResourceKind do
+  @moduledoc false
+
+  use Protobuf,
+    enum: true,
+    full_name: "hephaestus.project.v1.RecipeResourceKind",
+    protoc_gen_elixir_version: "0.17.0",
+    syntax: :proto3
+
+  field(:RECIPE_RESOURCE_KIND_UNSPECIFIED, 0)
+  field(:RECIPE_RESOURCE_KIND_VOLUME, 1)
+  field(:RECIPE_RESOURCE_KIND_INSTANCE, 2)
+end
+
+defmodule Hephaestus.Project.V1.RecipeResourceOwnership do
+  @moduledoc false
+
+  use Protobuf,
+    enum: true,
+    full_name: "hephaestus.project.v1.RecipeResourceOwnership",
+    protoc_gen_elixir_version: "0.17.0",
+    syntax: :proto3
+
+  field(:RECIPE_RESOURCE_OWNERSHIP_UNSPECIFIED, 0)
+  field(:RECIPE_RESOURCE_OWNERSHIP_OWNED, 1)
+  field(:RECIPE_RESOURCE_OWNERSHIP_EXTERNAL, 2)
+end
+
+defmodule Hephaestus.Project.V1.RecipeInstallProgress do
+  @moduledoc false
+
+  use Protobuf,
+    enum: true,
+    full_name: "hephaestus.project.v1.RecipeInstallProgress",
+    protoc_gen_elixir_version: "0.17.0",
+    syntax: :proto3
+
+  field(:RECIPE_INSTALL_PROGRESS_UNSPECIFIED, 0)
+  field(:RECIPE_INSTALL_PROGRESS_PENDING, 1)
+  field(:RECIPE_INSTALL_PROGRESS_CREATING, 2)
+  field(:RECIPE_INSTALL_PROGRESS_READY, 3)
+  field(:RECIPE_INSTALL_PROGRESS_FAILED, 4)
+  field(:RECIPE_INSTALL_PROGRESS_RECOVERY_REQUIRED, 5)
+end
+
+defmodule Hephaestus.Project.V1.RecipeRemovalProgress do
+  @moduledoc false
+
+  use Protobuf,
+    enum: true,
+    full_name: "hephaestus.project.v1.RecipeRemovalProgress",
+    protoc_gen_elixir_version: "0.17.0",
+    syntax: :proto3
+
+  field(:RECIPE_REMOVAL_PROGRESS_UNSPECIFIED, 0)
+  field(:RECIPE_REMOVAL_PROGRESS_PENDING, 1)
+  field(:RECIPE_REMOVAL_PROGRESS_DRAINING, 2)
+  field(:RECIPE_REMOVAL_PROGRESS_DETACHED, 3)
+  field(:RECIPE_REMOVAL_PROGRESS_RETAINED, 4)
+  field(:RECIPE_REMOVAL_PROGRESS_DELETED, 5)
+  field(:RECIPE_REMOVAL_PROGRESS_RECOVERY_REQUIRED, 6)
+end
+
+defmodule Hephaestus.Project.V1.RecipeProgressDiagnostic do
+  @moduledoc false
+
+  use Protobuf,
+    enum: true,
+    full_name: "hephaestus.project.v1.RecipeProgressDiagnostic",
+    protoc_gen_elixir_version: "0.17.0",
+    syntax: :proto3
+
+  field(:RECIPE_PROGRESS_DIAGNOSTIC_UNSPECIFIED, 0)
+  field(:RECIPE_PROGRESS_DIAGNOSTIC_PROVIDER_FAILURE, 1)
+  field(:RECIPE_PROGRESS_DIAGNOSTIC_PROVIDER_OUTCOME_UNKNOWN, 2)
+  field(:RECIPE_PROGRESS_DIAGNOSTIC_DEPENDENCY_UNAVAILABLE, 3)
+  field(:RECIPE_PROGRESS_DIAGNOSTIC_AUTHORIZATION_CHANGED, 4)
+  field(:RECIPE_PROGRESS_DIAGNOSTIC_DRAIN_PENDING, 5)
+  field(:RECIPE_PROGRESS_DIAGNOSTIC_FENCING_UNPROVEN, 6)
+  field(:RECIPE_PROGRESS_DIAGNOSTIC_INTENT_CONFLICT, 7)
+end
+
+defmodule Hephaestus.Project.V1.RecipeActivationObservation do
+  @moduledoc false
+
+  use Protobuf,
+    enum: true,
+    full_name: "hephaestus.project.v1.RecipeActivationObservation",
+    protoc_gen_elixir_version: "0.17.0",
+    syntax: :proto3
+
+  field(:RECIPE_ACTIVATION_OBSERVATION_UNSPECIFIED, 0)
+  field(:RECIPE_ACTIVATION_OBSERVATION_UNOBSERVED, 1)
+end
+
+defmodule Hephaestus.Project.V1.RecipeActivationResultStatus do
+  @moduledoc false
+
+  use Protobuf,
+    enum: true,
+    full_name: "hephaestus.project.v1.RecipeActivationResultStatus",
+    protoc_gen_elixir_version: "0.17.0",
+    syntax: :proto3
+
+  field(:RECIPE_ACTIVATION_RESULT_STATUS_UNSPECIFIED, 0)
+  field(:RECIPE_ACTIVATION_RESULT_STATUS_ADMITTED, 1)
+  field(:RECIPE_ACTIVATION_RESULT_STATUS_HELD, 2)
+end
+
 defmodule Hephaestus.Project.V1.CreateProjectRequest do
   @moduledoc false
 
@@ -357,6 +483,152 @@ defmodule Hephaestus.Project.V1.ListImportableReleaseAgentsResponse do
   field(:page, 2, type: Hephaestus.Common.V1.PageResponse)
 end
 
+defmodule Hephaestus.Project.V1.GetRecipeDeploymentRequest do
+  @moduledoc false
+
+  use Protobuf,
+    full_name: "hephaestus.project.v1.GetRecipeDeploymentRequest",
+    protoc_gen_elixir_version: "0.17.0",
+    syntax: :proto3
+
+  field(:project_id, 1, type: Hephaestus.Common.V1.OpaqueId, json_name: "projectId")
+  field(:deployment_id, 2, type: Hephaestus.Common.V1.OpaqueId, json_name: "deploymentId")
+end
+
+defmodule Hephaestus.Project.V1.GetRecipeDeploymentResponse do
+  @moduledoc false
+
+  use Protobuf,
+    full_name: "hephaestus.project.v1.GetRecipeDeploymentResponse",
+    protoc_gen_elixir_version: "0.17.0",
+    syntax: :proto3
+
+  field(:deployment, 1, type: Hephaestus.Project.V1.RecipeDeployment)
+end
+
+defmodule Hephaestus.Project.V1.RecipeDeployment do
+  @moduledoc false
+
+  use Protobuf,
+    full_name: "hephaestus.project.v1.RecipeDeployment",
+    protoc_gen_elixir_version: "0.17.0",
+    syntax: :proto3
+
+  field(:id, 1, type: Hephaestus.Common.V1.OpaqueId)
+  field(:project_id, 2, type: Hephaestus.Common.V1.OpaqueId, json_name: "projectId")
+  field(:key, 3, type: :string)
+  field(:version, 4, type: :uint64)
+  field(:lifecycle, 5, type: Hephaestus.Project.V1.RecipeDeploymentLifecycle, enum: true)
+  field(:resources, 6, repeated: true, type: Hephaestus.Project.V1.RecipeDeploymentResource)
+  field(:activation, 7, type: Hephaestus.Project.V1.RecipeActivationObservation, enum: true)
+end
+
+defmodule Hephaestus.Project.V1.RecipeDeploymentResource do
+  @moduledoc false
+
+  use Protobuf,
+    full_name: "hephaestus.project.v1.RecipeDeploymentResource",
+    protoc_gen_elixir_version: "0.17.0",
+    syntax: :proto3
+
+  field(:name, 1, type: :string)
+  field(:kind, 2, type: Hephaestus.Project.V1.RecipeResourceKind, enum: true)
+  field(:resource_id, 3, type: Hephaestus.Common.V1.OpaqueId, json_name: "resourceId")
+  field(:revision_id, 4, type: Hephaestus.Common.V1.OpaqueId, json_name: "revisionId")
+  field(:ownership, 5, type: Hephaestus.Project.V1.RecipeResourceOwnership, enum: true)
+  field(:install, 6, type: Hephaestus.Project.V1.RecipeInstallProgress, enum: true)
+  field(:removal, 7, type: Hephaestus.Project.V1.RecipeRemovalProgress, enum: true)
+  field(:version, 8, type: :uint64)
+  field(:active_attempt_id, 9, type: Hephaestus.Common.V1.OpaqueId, json_name: "activeAttemptId")
+  field(:diagnostic, 10, type: Hephaestus.Project.V1.RecipeProgressDiagnostic, enum: true)
+  field(:recovery_required, 11, type: :bool, json_name: "recoveryRequired")
+end
+
+defmodule Hephaestus.Project.V1.InstallRecipeDeploymentRequest do
+  @moduledoc false
+
+  use Protobuf,
+    full_name: "hephaestus.project.v1.InstallRecipeDeploymentRequest",
+    protoc_gen_elixir_version: "0.17.0",
+    syntax: :proto3
+
+  field(:context, 1, type: Hephaestus.Common.V1.RequestContext)
+  field(:project_id, 2, type: Hephaestus.Common.V1.OpaqueId, json_name: "projectId")
+  field(:deployment_key, 3, type: :string, json_name: "deploymentKey")
+  field(:declaration_toml, 4, type: :string, json_name: "declarationToml", deprecated: false)
+  field(:inputs, 5, repeated: true, type: Hephaestus.Common.V1.ParameterValue, deprecated: false)
+
+  field(:external_volumes, 6,
+    repeated: true,
+    type: Hephaestus.Project.V1.RecipeExternalVolumeBinding,
+    json_name: "externalVolumes"
+  )
+end
+
+defmodule Hephaestus.Project.V1.RecipeExternalVolumeBinding do
+  @moduledoc false
+
+  use Protobuf,
+    full_name: "hephaestus.project.v1.RecipeExternalVolumeBinding",
+    protoc_gen_elixir_version: "0.17.0",
+    syntax: :proto3
+
+  field(:name, 1, type: :string)
+  field(:volume_id, 2, type: Hephaestus.Common.V1.OpaqueId, json_name: "volumeId")
+end
+
+defmodule Hephaestus.Project.V1.ResumeRecipeDeploymentRequest do
+  @moduledoc false
+
+  use Protobuf,
+    full_name: "hephaestus.project.v1.ResumeRecipeDeploymentRequest",
+    protoc_gen_elixir_version: "0.17.0",
+    syntax: :proto3
+
+  field(:context, 1, type: Hephaestus.Common.V1.RequestContext)
+  field(:project_id, 2, type: Hephaestus.Common.V1.OpaqueId, json_name: "projectId")
+  field(:deployment_id, 3, type: Hephaestus.Common.V1.OpaqueId, json_name: "deploymentId")
+end
+
+defmodule Hephaestus.Project.V1.InstallRecipeDeploymentResponse do
+  @moduledoc false
+
+  use Protobuf,
+    full_name: "hephaestus.project.v1.InstallRecipeDeploymentResponse",
+    protoc_gen_elixir_version: "0.17.0",
+    syntax: :proto3
+
+  field(:deployment, 1, type: Hephaestus.Project.V1.RecipeDeployment)
+  field(:receipt, 2, type: Hephaestus.Common.V1.MutationReceipt)
+  field(:activations, 3, repeated: true, type: Hephaestus.Project.V1.RecipeActivationResult)
+end
+
+defmodule Hephaestus.Project.V1.ResumeRecipeDeploymentResponse do
+  @moduledoc false
+
+  use Protobuf,
+    full_name: "hephaestus.project.v1.ResumeRecipeDeploymentResponse",
+    protoc_gen_elixir_version: "0.17.0",
+    syntax: :proto3
+
+  field(:deployment, 1, type: Hephaestus.Project.V1.RecipeDeployment)
+  field(:receipt, 2, type: Hephaestus.Common.V1.MutationReceipt)
+  field(:activations, 3, repeated: true, type: Hephaestus.Project.V1.RecipeActivationResult)
+end
+
+defmodule Hephaestus.Project.V1.RecipeActivationResult do
+  @moduledoc false
+
+  use Protobuf,
+    full_name: "hephaestus.project.v1.RecipeActivationResult",
+    protoc_gen_elixir_version: "0.17.0",
+    syntax: :proto3
+
+  field(:resource, 1, type: :string)
+  field(:status, 2, type: Hephaestus.Project.V1.RecipeActivationResultStatus, enum: true)
+  field(:activation_id, 3, type: Hephaestus.Common.V1.OpaqueId, json_name: "activationId")
+end
+
 defmodule Hephaestus.Project.V1.ProjectService.Service do
   @moduledoc false
 
@@ -374,6 +646,24 @@ defmodule Hephaestus.Project.V1.ProjectService.Service do
     :GetProject,
     Hephaestus.Project.V1.GetProjectRequest,
     Hephaestus.Project.V1.GetProjectResponse
+  )
+
+  rpc(
+    :GetRecipeDeployment,
+    Hephaestus.Project.V1.GetRecipeDeploymentRequest,
+    Hephaestus.Project.V1.GetRecipeDeploymentResponse
+  )
+
+  rpc(
+    :InstallRecipeDeployment,
+    Hephaestus.Project.V1.InstallRecipeDeploymentRequest,
+    Hephaestus.Project.V1.InstallRecipeDeploymentResponse
+  )
+
+  rpc(
+    :ResumeRecipeDeployment,
+    Hephaestus.Project.V1.ResumeRecipeDeploymentRequest,
+    Hephaestus.Project.V1.ResumeRecipeDeploymentResponse
   )
 
   rpc(

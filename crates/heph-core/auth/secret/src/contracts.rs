@@ -25,6 +25,28 @@ pub struct SecretDispatchInput {
 /// Database boundary for ephemeral secret mount lifecycle and provenance.
 #[async_trait]
 pub trait SecretMountMetadata: Send + Sync {
+    /// Verifies that an exact qualified Invocation has no saved secret bindings.
+    ///
+    /// Default unsupported: kind, slot count or caller data cannot establish this.
+    /// An implementing worker adapter must validate positive protected producer
+    /// and consumption lineage, exact immutable revision/configuration, current
+    /// invoking actor `Execute`/`SourceUse`, and the phase's complete lease fences.
+    /// It must read the actual saved binding set and reject nonempty, missing or
+    /// malformed evidence. Historical actor IDs remain data, never middleware
+    /// identities. Success creates no session, credential, mount or physical proof.
+    ///
+    /// # Errors
+    ///
+    /// Rejects unsupported composition or any unverified/nonempty binding set.
+    async fn verify_qualified_invocation_empty_bindings(
+        &self,
+        _run: &Run,
+    ) -> Result<(), RunSecretError> {
+        Err(RunSecretError::redacted(
+            "qualified empty Invocation secrets are unsupported",
+        ))
+    }
+
     /// Loads exact dispatch provenance for one run.
     async fn dispatch_input(
         &self,

@@ -188,6 +188,11 @@ const fn admission_failure_kind(error: &ReleaseServiceError) -> AdmissionFailure
 #[async_trait]
 impl RunCompletionObserver for UpdateRunCompletion {
     async fn after_cleanup(&self, run: &Run) -> Result<(), RunCompletionError> {
+        if run.kind == RunKind::Invocation {
+            return Err(RunCompletionError::redacted(
+                "Invocation completion is unsupported",
+            ));
+        }
         self.apply(run).await?;
         if run.kind == RunKind::Normal {
             self.resume_pending_admissions().await?;

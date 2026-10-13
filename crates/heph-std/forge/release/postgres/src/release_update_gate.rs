@@ -1,9 +1,10 @@
 use super::release_command_events::append_event;
 use super::{
     AgentAttachmentId, AgentInstanceId, AgentInstanceRevisionId, AgentUpdateId, CommandId,
-    DeferredMaterializationRow, MAILBOX_WAKE_EVENT_TYPE, MAILBOX_WAKE_SUBJECT, Postgres,
-    RUN_START_SUBJECT, ReleaseAgentId, ReleaseId, ReleaseServiceError, RunId, RunKind, StartRun,
-    Transaction, UpdateDecision, UpdateRecoveryAction, UpdateRecoveryDecision, Uuid, json,
+    DeferredMaterializationRow, FreshRunExecutionProfile, MAILBOX_WAKE_EVENT_TYPE,
+    MAILBOX_WAKE_SUBJECT, Postgres, RUN_START_SUBJECT, ReleaseAgentId, ReleaseId,
+    ReleaseServiceError, RunId, RunKind, StartRun, Transaction, UpdateDecision,
+    UpdateRecoveryAction, UpdateRecoveryDecision, Uuid, json,
 };
 
 pub fn existing_terminal_decision(state: &str) -> Result<UpdateDecision, ReleaseServiceError> {
@@ -25,6 +26,51 @@ pub const fn recovery_decision(action: UpdateRecoveryAction) -> UpdateRecoveryDe
 }
 
 pub async fn mark_volume_lease(
+    tx: &mut Transaction<'_, Postgres>,
+    update_id: AgentUpdateId,
+    state: &str,
+    execution_profile: Option<FreshRunExecutionProfile>,
+    legacy_scope: Option<&run_domain::LegacyVmPlacementScope>,
+) -> Result<(), ReleaseServiceError> {
+    if let Some(scope) = legacy_scope {
+        if execution_profile != Some(FreshRunExecutionProfile::LegacyScalar)
+            || !matches!(state, "released" | "recovery_required")
+        {
+            return Err(ReleaseServiceError::InvalidUpdateLifecycle);
+        }
+        return super::release_legacy_completion::require_update_terminal(tx, update_id, scope)
+            .await;
+    }
+    // Constructor-selected query shape only; a profile never supplies detach
+    // authority. The ordinary constructor retains the exact public107 SQL.
+    if execution_profile.is_none() {
+        return mark_public107_volume_lease(tx, update_id, state).await;
+    }
+    // Normal hook leases carry run_id, not update_id. Historical update-only
+    // evidence is also included, but can never acquire a guessed cleanup proof.
+    sqlx::query("SELECT execution.id FROM runs execution WHERE execution.id=(SELECT hook_run_id FROM agent_updates WHERE id=$1) OR EXISTS(SELECT 1 FROM agent_instance_volume_leases lease WHERE lease.update_id=$1 AND lease.run_id=execution.id) ORDER BY execution.id FOR UPDATE")
+        .bind(update_id.as_uuid()).fetch_all(&mut **tx).await?;
+    if state == "released" {
+        let unproven: bool = sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM agent_instance_volume_leases lease WHERE (lease.update_id=$1 OR lease.run_id=(SELECT hook_run_id FROM agent_updates WHERE id=$1)) AND (lease.run_id IS NULL OR lease.released_at IS NULL OR lease.state<>'released' OR NOT EXISTS(SELECT 1 FROM runs execution JOIN run_cleanup_target_leases item ON item.run_id=execution.id JOIN run_cleanup_completions completion ON completion.run_id=item.run_id AND completion.generation=item.generation JOIN run_cleanup_targets target ON target.run_id=completion.run_id AND target.generation=completion.generation AND target.target_digest=completion.target_digest WHERE execution.id=lease.run_id AND execution.state='cleaned_up' AND item.lease_id=lease.id AND item.volume_id=lease.volume_id AND item.host_id=lease.host_id AND item.fencing_token=lease.fencing_token AND target.vm_host_id=lease.host_id)))")
+            .bind(update_id.as_uuid()).fetch_one(&mut **tx).await?;
+        if unproven {
+            return Err(ReleaseServiceError::InvalidUpdateLifecycle);
+        }
+        // Replay only. Canonical cleanup already released the complete set and
+        // restored Ready; a callback must not mutate a subsequently reused volume.
+        return Ok(());
+    }
+    if state != "recovery_required" {
+        return Err(ReleaseServiceError::InvalidUpdateLifecycle);
+    }
+    sqlx::query("SELECT volume.id FROM agent_instance_state_volumes volume WHERE EXISTS(SELECT 1 FROM agent_instance_volume_leases lease WHERE lease.volume_id=volume.id AND lease.released_at IS NULL AND (lease.update_id=$1 OR lease.run_id=(SELECT hook_run_id FROM agent_updates WHERE id=$1))) ORDER BY volume.id FOR UPDATE")
+        .bind(update_id.as_uuid()).fetch_all(&mut **tx).await?;
+    sqlx::query("WITH held AS (UPDATE agent_instance_volume_leases SET state='recovery_required',recovering_at=COALESCE(recovering_at,now()) WHERE released_at IS NULL AND (update_id=$1 OR run_id=(SELECT hook_run_id FROM agent_updates WHERE id=$1)) RETURNING volume_id,fencing_token) UPDATE agent_instance_state_volumes volume SET state='recovering',updated_at=now() FROM held WHERE volume.id=held.volume_id AND volume.lease_generation=held.fencing_token")
+        .bind(update_id.as_uuid()).execute(&mut **tx).await?;
+    Ok(())
+}
+
+async fn mark_public107_volume_lease(
     tx: &mut Transaction<'_, Postgres>,
     update_id: AgentUpdateId,
     state: &str,
@@ -68,6 +114,8 @@ pub async fn reopen_after_update(
     instance_id: Uuid,
     revision_id: Uuid,
     state: &str,
+    execution_profile: Option<FreshRunExecutionProfile>,
+    legacy_scope: Option<&run_domain::LegacyVmPlacementScope>,
 ) -> Result<(), ReleaseServiceError> {
     sqlx::query(
         "UPDATE agent_instances
@@ -82,7 +130,7 @@ pub async fn reopen_after_update(
     .bind(state)
     .execute(&mut **tx)
     .await?;
-    mark_volume_lease(tx, update_id, "released").await?;
+    mark_volume_lease(tx, update_id, "released", execution_profile, legacy_scope).await?;
     materialize_deferred_triggers(tx, instance_id, revision_id).await?;
     enqueue_mailbox_wakes(tx, instance_id).await
 }

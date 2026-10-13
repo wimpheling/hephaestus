@@ -8,6 +8,12 @@ pub struct PreparedSpec {
     pub id: String,
     pub root: PreparedRoot,
     pub disks: Vec<PreparedDisk>,
+    #[serde(
+        default,
+        skip_serializing_if = "Vec::is_empty",
+        deserialize_with = "vm_trait::deserialize_guest_volumes"
+    )]
+    pub guest_volumes: Vec<vm_trait::VmGuestVolume>,
     pub mounts: Vec<PreparedMount>,
     pub vcpus: u8,
     pub memory_mib: u32,

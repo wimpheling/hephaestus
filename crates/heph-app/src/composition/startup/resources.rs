@@ -47,10 +47,12 @@ pub(super) async fn prepare(app: &HephaestusApp) -> Result<StartupResources, App
         .recover_after_restart()
         .await
         .map_err(component("build recovery"))?;
-    app.orchestrator
-        .recover_after_restart()
-        .await
-        .map_err(component("run recovery"))?;
+    if app.managed_backend.is_none() {
+        app.orchestrator
+            .recover_after_restart()
+            .await
+            .map_err(component("run recovery"))?;
+    }
     ensure_forge_jetstream_topology(&app.jetstream)
         .await
         .map_err(component("forge JetStream topology"))?;
@@ -120,6 +122,12 @@ pub(super) async fn prepare(app: &HephaestusApp) -> Result<StartupResources, App
             Arc::clone(&app.identity_store) as Arc<dyn IdempotentIdentityResolver>,
             Arc::clone(&browser_sessions),
             Arc::clone(&app.release_service),
+        )
+        .with_managed_recipes(
+            app.managed_backend
+                .as_ref()
+                .map(crate::managed_backend::NodeLease::recipe_service)
+                .transpose()?,
         ),
         Arc::clone(&app.storage),
         app.artifact_store.clone(),

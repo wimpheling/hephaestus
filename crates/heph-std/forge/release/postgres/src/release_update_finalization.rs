@@ -21,7 +21,12 @@ impl ReleaseService {
         update_id: AgentUpdateId,
         result: UpdateHookResult,
     ) -> Result<UpdateDecision, ReleaseServiceError> {
+        self.require_legacy_placement_profile()?;
         let mut tx = self.pool.begin().await?;
+        self.lock_legacy_hook_parent(&mut tx, update_id.as_uuid())
+            .await?;
+        self.require_legacy_update_cleanup(&mut tx, update_id)
+            .await?;
         let update: UpdateLifecycleRow = sqlx::query_as(
             "SELECT update.instance_id, update.expected_current_revision_id,
                     update.candidate_revision_id, update.state
@@ -73,14 +78,8 @@ impl ReleaseService {
                 .bind(exit_code)
                 .execute(&mut *tx)
                 .await?;
-                reopen_after_update(
-                    &mut tx,
-                    update_id,
-                    update.instance_id,
-                    update.expected_current_revision_id,
-                    "update_rejected",
-                )
-                .await?;
+                self.reopen_rejected_update(&mut tx, update_id, &update)
+                    .await?;
                 append_rejected_update_event(&mut tx, update_id, &update, exit_code).await?;
                 UpdateDecision::AgentRejected
             }
@@ -104,7 +103,8 @@ impl ReleaseService {
                 .bind(update.instance_id)
                 .execute(&mut *tx)
                 .await?;
-                mark_volume_lease(&mut tx, update_id, "recovery_required").await?;
+                self.mark_update_volume_lease(&mut tx, update_id, "recovery_required")
+                    .await?;
                 append_uncertain_update_events(
                     &mut tx,
                     update_id,
@@ -135,6 +135,9 @@ impl ReleaseService {
         &self,
         run_id: RunId,
     ) -> Result<UpdateDecision, ReleaseServiceError> {
+        if self.legacy_vm_scope.is_some() {
+            self.legacy_run_cleanup_completed(run_id).await?;
+        }
         let row: UpdateRunResultRow = sqlx::query_as(
             "SELECT update.id AS update_id, update.state AS update_state,
                     run.state AS run_state, run.outcome, run.exit_code,
@@ -189,19 +192,9 @@ impl ReleaseService {
         &self,
         update_id: AgentUpdateId,
     ) -> Result<UpdateDecision, ReleaseServiceError> {
+        self.require_legacy_placement_profile()?;
         let mut tx = self.pool.begin().await?;
-        let update: UpdateLifecycleRow = sqlx::query_as(
-            "SELECT update.instance_id, update.expected_current_revision_id,
-                    update.candidate_revision_id, update.state
-             FROM agent_updates AS update
-             JOIN agent_instances AS instance ON instance.id = update.instance_id
-             WHERE update.id = $1
-             FOR UPDATE OF update, instance",
-        )
-        .bind(update_id.as_uuid())
-        .fetch_optional(&mut *tx)
-        .await?
-        .ok_or(ReleaseServiceError::Unavailable)?;
+        let update = self.locked_activation_update(&mut tx, update_id).await?;
         if update.state == "activated" {
             tx.commit().await?;
             return Ok(UpdateDecision::Activated);
@@ -242,7 +235,8 @@ impl ReleaseService {
             .bind(update.instance_id)
             .execute(&mut *tx)
             .await?;
-            mark_volume_lease(&mut tx, update_id, "recovery_required").await?;
+            self.mark_update_volume_lease(&mut tx, update_id, "recovery_required")
+                .await?;
             append_uncertain_update_events(
                 &mut tx,
                 update_id,
@@ -263,7 +257,8 @@ impl ReleaseService {
         .bind(update_id.as_uuid())
         .execute(&mut *tx)
         .await?;
-        mark_volume_lease(&mut tx, update_id, "released").await?;
+        self.mark_update_volume_lease(&mut tx, update_id, "released")
+            .await?;
         materialize_deferred_triggers(&mut tx, update.instance_id, update.candidate_revision_id)
             .await?;
         enqueue_mailbox_wakes(&mut tx, update.instance_id).await?;
@@ -282,5 +277,62 @@ impl ReleaseService {
         .await?;
         tx.commit().await?;
         Ok(UpdateDecision::Activated)
+    }
+    async fn locked_activation_update(
+        &self,
+        tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+        update_id: AgentUpdateId,
+    ) -> Result<UpdateLifecycleRow, ReleaseServiceError> {
+        self.lock_legacy_hook_parent(tx, update_id.as_uuid())
+            .await?;
+        self.require_legacy_update_cleanup(tx, update_id).await?;
+        sqlx::query_as(
+            "SELECT update.instance_id, update.expected_current_revision_id,
+                    update.candidate_revision_id, update.state
+             FROM agent_updates AS update
+             JOIN agent_instances AS instance ON instance.id = update.instance_id
+             WHERE update.id = $1
+             FOR UPDATE OF update, instance",
+        )
+        .bind(update_id.as_uuid())
+        .fetch_optional(&mut **tx)
+        .await?
+        .ok_or(ReleaseServiceError::Unavailable)
+    }
+
+    async fn reopen_rejected_update(
+        &self,
+        tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+        update_id: AgentUpdateId,
+        update: &UpdateLifecycleRow,
+    ) -> Result<(), ReleaseServiceError> {
+        reopen_after_update(
+            tx,
+            update_id,
+            update.instance_id,
+            update.expected_current_revision_id,
+            "update_rejected",
+            self.execution_profile,
+            self.legacy_vm_scope.as_ref(),
+        )
+        .await
+    }
+
+    // Keep constructor-selected schema routing attached to the service across
+    // both hook-result and activation callbacks.
+    async fn mark_update_volume_lease(
+        &self,
+        tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+        update_id: AgentUpdateId,
+        state: &str,
+    ) -> Result<(), ReleaseServiceError> {
+        mark_volume_lease(
+            tx,
+            update_id,
+            state,
+            self.execution_profile,
+            self.legacy_vm_scope.as_ref(),
+        )
+        .await
     }
 }

@@ -13,6 +13,7 @@ use vm_fake::FakeProvider;
 
 fn spec(root: &TempDir) -> VmSpec {
     VmSpec {
+        guest_volumes: Vec::new(),
         id: VmId(String::from("00000000-0000-0000-0000-000000000001")),
         root: RootFilesystem::Directory {
             host_path: root.path().to_owned(),

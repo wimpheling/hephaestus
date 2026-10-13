@@ -98,6 +98,7 @@ defmodule HephaestusWeb.RPC.Client do
     CreateProjectRequest,
     GetProjectRepositoryImageRequest,
     GetProjectRequest,
+    GetRecipeDeploymentRequest,
     ListImportableReleaseAgentsRequest,
     ListProjectInstancesRequest,
     ListProjectRepositoryImagesRequest,
@@ -393,6 +394,92 @@ defmodule HephaestusWeb.RPC.Client do
         &ProjectService.Stub.get_project/3,
         :project
       )
+
+  @doc "Inspects one exact saved deployment under the current authenticated session."
+  def get_recipe_deployment(identity, project_id, deployment_id, options \\ []) do
+    request = %GetRecipeDeploymentRequest{
+      project_id: id(project_id),
+      deployment_id: id(deployment_id)
+    }
+
+    stub = Keyword.get(options, :stub_call, &ProjectService.Stub.get_recipe_deployment/3)
+
+    options =
+      options
+      |> Keyword.take([:channel_provider, :channel_reset, :timeout])
+      |> Keyword.merge(
+        retry: :safe_query,
+        maximum_request_bytes: 4_096,
+        maximum_response_bytes: 65_536
+      )
+
+    case Invoke.unary(
+           identity,
+           "/hephaestus.project.v1.ProjectService/GetRecipeDeployment",
+           request,
+           stub,
+           options
+         ) do
+      {:ok, %{deployment: nil}} -> {:error, Error.local(:precondition)}
+      {:ok, %{deployment: deployment}} -> recipe_deployment_projection(deployment)
+      {:error, error} -> {:error, error}
+    end
+  end
+
+  defp recipe_deployment_projection(deployment) do
+    value = Projection.to_value(deployment)
+
+    with {:ok, value} <-
+           recipe_labels(value, [
+             {"lifecycle", "RECIPE_DEPLOYMENT_LIFECYCLE_",
+              ~w(installing installed removing removed recovery_required)},
+             {"activation", "RECIPE_ACTIVATION_OBSERVATION_", ~w(unobserved)}
+           ]),
+         true <- length(value["resources"]) <= 64,
+         {:ok, resources} <- recipe_resource_projections(value["resources"]) do
+      {:ok, Map.put(value, "resources", resources)}
+    else
+      _failure -> {:error, Error.local(:precondition)}
+    end
+  end
+
+  defp recipe_resource_projections(resources) do
+    Enum.reduce_while(resources, {:ok, []}, fn resource, {:ok, accumulated} ->
+      case recipe_labels(resource, [
+             {"kind", "RECIPE_RESOURCE_KIND_", ~w(volume instance)},
+             {"ownership", "RECIPE_RESOURCE_OWNERSHIP_", ~w(owned external)},
+             {"install", "RECIPE_INSTALL_PROGRESS_",
+              ~w(pending creating ready failed recovery_required)},
+             {"removal", "RECIPE_REMOVAL_PROGRESS_",
+              ~w(pending draining detached retained deleted recovery_required)},
+             {"diagnostic", "RECIPE_PROGRESS_DIAGNOSTIC_",
+              ~w(unspecified provider_failure provider_outcome_unknown dependency_unavailable authorization_changed drain_pending fencing_unproven intent_conflict)}
+           ]) do
+        {:ok, resource} -> {:cont, {:ok, [resource | accumulated]}}
+        error -> {:halt, error}
+      end
+    end)
+    |> case do
+      {:ok, resources} -> {:ok, Enum.reverse(resources)}
+      error -> error
+    end
+  end
+
+  defp recipe_labels(value, labels) do
+    Enum.reduce_while(labels, {:ok, value}, fn {key, prefix, allowed}, {:ok, value} ->
+      encoded = value[key]
+
+      if is_binary(encoded) and String.starts_with?(encoded, prefix) do
+        label = encoded |> String.replace_prefix(prefix, "") |> String.downcase()
+
+        if label in allowed,
+          do: {:cont, {:ok, Map.put(value, key, label)}},
+          else: {:halt, {:error, Error.local(:precondition)}}
+      else
+        {:halt, {:error, Error.local(:precondition)}}
+      end
+    end)
+  end
 
   def list_images(identity),
     do:

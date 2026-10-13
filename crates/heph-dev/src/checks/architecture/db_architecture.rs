@@ -222,6 +222,12 @@ impl SqlVisitor<'_> {
     fn validate_sql_file(&mut self, path: &str, base: &Path, query_index: usize) {
         let target = base.join(path);
         let Ok(sql) = fs::read_to_string(&target) else {
+            if self.active.contains(MIGRATION_RULE) {
+                self.diagnostics.push(Diagnostic::new(
+                    MIGRATION_RULE,
+                    format!("SQL source is missing or unreadable: {}", target.display()),
+                ));
+            }
             return;
         };
         self.validate_schema_sql(&sql, Some(&target));
@@ -230,7 +236,7 @@ impl SqlVisitor<'_> {
 
     fn validate_schema_sql(&mut self, sql: &str, origin: Option<&Path>) {
         let owned_by_migrations =
-            origin.is_some_and(|path| path.starts_with(self.repository_root.join("migrations")));
+            origin.is_some_and(|path| migration_owns_sql(self.repository_root, path));
         if self.active.contains(MIGRATION_RULE) && !owned_by_migrations && contains_schema_sql(sql)
         {
             self.diagnostics.push(Diagnostic::new(
@@ -242,6 +248,19 @@ impl SqlVisitor<'_> {
             ));
         }
     }
+}
+
+// Compare real existing paths: portable relative includes are legitimate, while
+// a symlink must not confer repository ownership on an external SQL file.
+fn migration_owns_sql(repository_root: &Path, target: &Path) -> bool {
+    let (Ok(root), Ok(migrations), Ok(target)) = (
+        repository_root.canonicalize(),
+        repository_root.join("migrations").canonicalize(),
+        target.canonicalize(),
+    ) else {
+        return false;
+    };
+    migrations.starts_with(root) && target.starts_with(migrations)
 }
 
 #[cfg(test)]

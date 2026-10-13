@@ -10,6 +10,9 @@ use super::{
 use serde_json::{Value, json};
 use uuid::Uuid;
 
+#[path = "release_instance_import/diagnostics.rs"]
+mod diagnostics;
+
 impl ReleaseService {
     /// Imports a published release export as a project-owned instance and
     /// atomically activates its first immutable revision.
@@ -38,25 +41,25 @@ impl ReleaseService {
         identity: &AuthenticatedIdentity,
         command: ImportAgent,
     ) -> Result<AgentInstanceId, ReleaseServiceError> {
-        let mut tx = begin_actor_transaction(&self.pool, identity).await?;
+        let mut tx = begin_actor_transaction(&self.pool, identity)
+            .await
+            .map_err(|error| diagnostics::database("begin_actor_transaction", error))?;
         self.require(
             &mut tx,
             identity,
             Permission::CanManage,
             ObjectRef::new(ObjectType::Project, command.project_id.as_uuid()),
         )
-        .await?;
+        .await
+        .map_err(|error| diagnostics::retained("authorize_project", error))?;
         self.require(
             &mut tx,
             identity,
             Permission::CanUse,
             ObjectRef::new(ObjectType::ReleaseAgent, command.release_agent_id.as_uuid()),
         )
-        .await?;
-        if let Some(id) = existing_command(&mut tx, command.command_key, "import_agent").await? {
-            tx.commit().await?;
-            return Ok(AgentInstanceId::from_uuid(id.0));
-        }
+        .await
+        .map_err(|error| diagnostics::retained("authorize_release", error))?;
         let release: ReleaseAgentRow = sqlx::query_as(
             "SELECT agent.family_id, agent.parameter_schema,
                     agent.secret_slot_schema, agent.runtime_contract,
@@ -67,8 +70,22 @@ impl ReleaseService {
         )
         .bind(command.release_agent_id.as_uuid())
         .fetch_optional(&mut *tx)
-        .await?
+        .await
+        .map_err(|error| diagnostics::database("load_release", error))?
         .ok_or(ReleaseServiceError::Unavailable)?;
+        super::release_build::runtime_contract::require_legacy_import(
+            &release.runtime_contract,
+            release.requires_state,
+        )?;
+        if let Some(id) = existing_command(&mut tx, command.command_key, "import_agent")
+            .await
+            .map_err(|error| diagnostics::retained("existing_command", error))?
+        {
+            tx.commit()
+                .await
+                .map_err(|error| diagnostics::database("replay_commit", error))?;
+            return Ok(AgentInstanceId::from_uuid(id.0));
+        }
         let declarations: Vec<ParameterDeclaration> =
             serde_json::from_value(release.parameter_schema)?;
         let parameters = ParameterDocument::resolve(&declarations, &command.parameters)
@@ -100,7 +117,8 @@ impl ReleaseService {
         )
         .bind(command.release_agent_id.as_uuid())
         .fetch_all(&mut *tx)
-        .await?;
+        .await
+        .map_err(|error| diagnostics::database("capability_requirements", error))?;
         diagnostics.extend(required_capability_slots.into_iter().map(|slot| {
             json!({
                 "code": "required_capability_binding_missing",
@@ -122,7 +140,8 @@ impl ReleaseService {
         .bind(state_volume_id)
         .bind(identity.user_id.as_uuid())
         .execute(&mut *tx)
-        .await?;
+        .await
+        .map_err(|error| diagnostics::database("insert_instance", error))?;
         if let Some(volume_id) = state_volume_id {
             sqlx::query(
                 "INSERT INTO agent_instance_state_volumes
@@ -132,7 +151,8 @@ impl ReleaseService {
             .bind(volume_id)
             .bind(command.instance_id.as_uuid())
             .execute(&mut *tx)
-            .await?;
+            .await
+            .map_err(|error| diagnostics::database("insert_state_volume", error))?;
         }
         insert_revision(
             &mut tx,
@@ -149,7 +169,8 @@ impl ReleaseService {
             &diagnostics,
             identity,
         )
-        .await?;
+        .await
+        .map_err(|error| diagnostics::retained("insert_revision", error))?;
         sqlx::query(
             "UPDATE agent_instances
              SET active_revision_id = $2, updated_at = now(), version = version + 1
@@ -158,7 +179,8 @@ impl ReleaseService {
         .bind(command.instance_id.as_uuid())
         .bind(command.revision_id.as_uuid())
         .execute(&mut *tx)
-        .await?;
+        .await
+        .map_err(|error| diagnostics::database("activate_revision", error))?;
         record_command(
             &mut tx,
             command.command_key,
@@ -167,7 +189,8 @@ impl ReleaseService {
             Some(command.revision_id.as_uuid()),
             Some(identity),
         )
-        .await?;
+        .await
+        .map_err(|error| diagnostics::retained("record_command", error))?;
         append_instance_event(
             &mut tx,
             command.instance_id,
@@ -176,7 +199,8 @@ impl ReleaseService {
             identity,
             json!({"runnable": runnable}),
         )
-        .await?;
+        .await
+        .map_err(|error| diagnostics::retained("instance_event", error))?;
         append_event(
             &mut tx,
             command.instance_id.as_uuid(),
@@ -191,8 +215,11 @@ impl ReleaseService {
                 "runnable": runnable,
             }),
         )
-        .await?;
-        tx.commit().await?;
+        .await
+        .map_err(|error| diagnostics::retained("outbox", error))?;
+        tx.commit()
+            .await
+            .map_err(|error| diagnostics::database("commit", error))?;
         Ok(command.instance_id)
     }
 }

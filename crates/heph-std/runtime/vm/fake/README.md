@@ -15,6 +15,12 @@ tests while preserving the request and response types of a real provider. The
 fake therefore tests orchestration ordering, cancellation, cleanup, and event
 handling rather than bypassing those contracts.
 
+`FakeProvider::new_owned(host_id)` creates an explicit test owner. Clones retain
+its scope, while each fresh provider receives a different random namespace and
+cannot confirm absence for another owner. This models scoped cleanup ordering
+without claiming durable physical host ownership. Ordinary `new()` remains
+unowned and rejects ownership lookup and scoped orphan cleanup.
+
 # When
 
 Use this provider in unit and conformance tests that need a VM implementation:

@@ -9,10 +9,17 @@ fn main() {
 
     let mut entries = fs::read_dir(&migrations)
         .expect("workspace migrations directory exists")
-        .map(|entry| {
+        .filter_map(|entry| {
             let entry = entry.expect("migration directory entry is readable");
+            if entry
+                .file_type()
+                .expect("migration entry type is readable")
+                .is_dir()
+            {
+                return None;
+            }
             let bytes = fs::read(entry.path()).expect("migration file is readable");
-            (entry.file_name(), bytes)
+            Some((entry.file_name(), bytes))
         })
         .collect::<Vec<_>>();
     entries.sort_by(|left, right| left.0.cmp(&right.0));

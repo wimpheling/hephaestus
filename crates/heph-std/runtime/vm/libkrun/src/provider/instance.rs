@@ -1,13 +1,12 @@
 use super::common::{
-    Arc, BoxedPrivateServiceConnection, ErrorSnapshot, LibkrunInstance, Lifecycle, Ordering,
-    PRIVATE_HTTP_TIMEOUT, PROVIDER_NAME, PrivateServiceConnectionMessage, StopMode, VmError,
-    VmEvent, VmExit, VmId, VmInstance, WorkerCommand, async_trait, broadcast, info, oneshot,
-    timeout, warn,
+    Arc, BoxedPrivateServiceConnection, LibkrunInstance, Lifecycle, Ordering, PRIVATE_HTTP_TIMEOUT,
+    PROVIDER_NAME, PrivateServiceConnectionMessage, StopMode, VmError, VmEvent, VmExit, VmId,
+    VmInstance, WorkerCommand, async_trait, broadcast, oneshot, timeout,
 };
 
 use super::{
     helpers::{provider_error, unavailable_error},
-    http::{private_http_request_message, wait_start_result},
+    http::private_http_request_message,
 };
 
 #[async_trait]
@@ -17,99 +16,13 @@ impl VmInstance for LibkrunInstance {
     }
 
     async fn start(&self) -> Result<(), VmError> {
-        let mut result_rx = self.start_result.subscribe();
-        let leader = {
-            let mut state = self.state.lock().await;
-            let leader = match &*state {
-                Lifecycle::Provisioned => {
-                    *state = Lifecycle::Starting;
-                    true
-                }
-                Lifecycle::Starting => false,
-                Lifecycle::Running | Lifecycle::Stopping => return Ok(()),
-                Lifecycle::Exited => {
-                    return Err(VmError::InvalidState("an exited VM cannot be restarted"));
-                }
-                Lifecycle::StartFailed(error) => return Err(error.to_vm_error()),
-                Lifecycle::Destroyed => return Err(VmError::Destroyed),
-            };
-            drop(state);
-            leader
-        };
-
-        if !leader {
-            return wait_start_result(&mut result_rx).await;
-        }
-
-        info!(vm_id = %self.id.0, "starting libkrun worker");
-        let mut outcome = self.start_leader().await;
-        let destroyed_during_start = {
-            let mut state = self.state.lock().await;
-            if matches!(*state, Lifecycle::Destroyed) {
-                outcome = Err(VmError::Destroyed);
-                true
-            } else {
-                match &outcome {
-                    Ok(()) => *state = Lifecycle::Running,
-                    Err(error) => {
-                        *state = Lifecycle::StartFailed(ErrorSnapshot::from_vm_error(error));
-                    }
-                }
-                false
-            }
-        };
-        let snapshot = outcome.as_ref().err().map(ErrorSnapshot::from_vm_error);
-        self.start_result
-            .send_replace(Some(snapshot.map_or(Ok(()), Err)));
-        if outcome.is_err() && !destroyed_during_start {
-            let _cleanup_result = self.force_cleanup(true).await;
-        }
-        outcome
+        self.run_lifecycle(super::lifecycle_task::Request::Start)
+            .await
     }
 
     async fn stop(&self, mode: StopMode) -> Result<(), VmError> {
-        let should_stop = {
-            let mut state = self.state.lock().await;
-            match &*state {
-                Lifecycle::Provisioned
-                | Lifecycle::Exited
-                | Lifecycle::StartFailed(_)
-                | Lifecycle::Destroyed => return Ok(()),
-                Lifecycle::Stopping => false,
-                Lifecycle::Starting | Lifecycle::Running => {
-                    *state = Lifecycle::Stopping;
-                    true
-                }
-            }
-        };
-        if !should_stop {
-            return self.wait_for_terminal().await.map(|_| ());
-        }
-
-        match mode {
-            StopMode::Graceful { timeout: grace } => {
-                let timeout_ms = u64::try_from(grace.as_millis()).unwrap_or(u64::MAX);
-                let cancel = self
-                    .worker
-                    .request(WorkerCommand::Cancel { timeout_ms })
-                    .await;
-                if let Err(error) = cancel {
-                    warn!(vm_id = %self.id.0, %error, "guest cancellation request failed");
-                }
-                if timeout(grace, self.wait_for_terminal()).await.is_err() {
-                    warn!(vm_id = %self.id.0, "graceful stop timed out; killing worker");
-                    self.worker.kill().await?;
-                }
-            }
-            StopMode::Force => self.worker.kill().await?,
-            _ => {
-                return Err(VmError::Unsupported {
-                    feature: "stop mode".to_owned(),
-                    provider: PROVIDER_NAME.to_owned(),
-                });
-            }
-        }
-        self.wait_for_terminal().await.map(|_| ())
+        self.run_lifecycle(super::lifecycle_task::Request::Stop(mode))
+            .await
     }
 
     async fn wait(&self) -> Result<VmExit, VmError> {
@@ -181,7 +94,9 @@ impl VmInstance for LibkrunInstance {
             let state = self.state.lock().await;
             match &*state {
                 Lifecycle::Running => {}
-                Lifecycle::Destroyed => return Err(VmError::Destroyed),
+                Lifecycle::Destroying { .. } | Lifecycle::Destroyed => {
+                    return Err(VmError::Destroyed);
+                }
                 Lifecycle::Exited => {
                     return Err(VmError::InvalidState("the VM has exited"));
                 }
@@ -256,25 +171,7 @@ impl VmInstance for LibkrunInstance {
     }
 
     async fn destroy(&self) -> Result<(), VmError> {
-        let was_started = {
-            let mut state = self.state.lock().await;
-            let was_started = match &*state {
-                Lifecycle::Destroyed => None,
-                Lifecycle::Provisioned | Lifecycle::StartFailed(_) => Some(false),
-                Lifecycle::Starting
-                | Lifecycle::Running
-                | Lifecycle::Stopping
-                | Lifecycle::Exited => Some(true),
-            };
-            if was_started.is_some() {
-                *state = Lifecycle::Destroyed;
-            }
-            was_started
-        };
-
-        match was_started {
-            Some(was_started) => self.force_cleanup(was_started).await,
-            None => self.cleanup_resources().await,
-        }
+        self.run_lifecycle(super::lifecycle_task::Request::Destroy)
+            .await
     }
 }

@@ -2,6 +2,9 @@
 
 extern crate heph_forge as forge_domain;
 
+#[path = "golden/sqlite_publication.rs"]
+mod sqlite_publication;
+
 use authz_postgres::PostgresMelangeAuthorizer;
 use brokered_egress_domain::{
     BrokeredSecretRule, BrokeredSecretRuleId, ExactHttpsOrigin, HeaderName, HttpInjectionLocation,
@@ -96,6 +99,8 @@ pub(crate) use golden_modules::*;
     clippy::too_many_lines,
     clippy::large_stack_frames
 )]
+// The start result and daemon are consumed; each branch transfers custody into its complete scenario.
+#[allow(clippy::significant_drop_tightening)]
 async fn bearer_push_starts_run_through_production_bootstrap() {
     let Some(GoldenRunMode {
         workload_phase_timing,
@@ -219,7 +224,7 @@ async fn bearer_push_starts_run_through_production_bootstrap() {
             cleanup_streams(&nats_url).await;
             return;
         }
-        let app = HephaestusApp::build(app_config.clone())
+        let app = Box::pin(HephaestusApp::build(app_config.clone()))
             .await
             .expect("build production application");
         let daemon_readiness_timer =

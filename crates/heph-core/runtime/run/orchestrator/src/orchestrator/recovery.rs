@@ -12,10 +12,18 @@ impl RunOrchestrator {
     /// Returns an error when persistence or VM shutdown fails.
     pub async fn cancel_run(&self, command: &CancelRun) -> Result<bool, OrchestratorError> {
         let inserted = self.repository.request_cancel(command).await?;
+        // An exact accepted replay still owns unfinished queued cancellation.
+        if self.invocation_scope.is_some() {
+            return self.cancel_invocation_run(command, inserted).await;
+        }
         if !inserted {
             return Ok(false);
         }
         let instance = self.active.lock().await.get(&command.run_id).cloned();
+        if self.legacy_scope.is_some() {
+            self.close_confirm_legacy(command.run_id, instance).await?;
+            return Ok(true);
+        }
         if let Some(instance) = instance {
             instance
                 .stop(StopMode::Graceful {
@@ -36,6 +44,15 @@ impl RunOrchestrator {
     /// Returns an error without releasing the affected lease when provider
     /// cleanup cannot be confirmed.
     pub async fn recover_stale_leases(&self) -> Result<usize, OrchestratorError> {
+        if self.legacy_scope.is_some() && self.invocation_scope.is_none() {
+            return self.recover_legacy_runs(true).await;
+        }
+        if self.canonical_cleanup.is_some() || self.invocation_scope.is_some() {
+            // In this mode the count is runs, not individual lease rows.
+            return self
+                .recover_canonical_runs(self.stale_cleanup_runs().await?)
+                .await;
+        }
         let leases = self.volumes.stale_leases(OffsetDateTime::now_utc()).await?;
         let mut recovered = 0;
         for lease in leases {
@@ -65,6 +82,12 @@ impl RunOrchestrator {
     /// Returns an error without claiming cleanup when provider or durable
     /// reconciliation cannot be confirmed.
     pub async fn recover_after_restart(&self) -> Result<usize, OrchestratorError> {
+        if self.legacy_scope.is_some() && self.invocation_scope.is_none() {
+            return self.recover_legacy_runs(false).await;
+        }
+        if self.canonical_cleanup.is_some() || self.invocation_scope.is_some() {
+            return self.restart_canonical_cleanup().await;
+        }
         let mut recovered = self.workspaces.recover().await?;
         recovered += self.runtimes.recover().await?;
         recovered += self.secrets.recover().await?;

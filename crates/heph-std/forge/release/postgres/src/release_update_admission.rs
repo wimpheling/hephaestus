@@ -2,10 +2,10 @@
 
 use super::{
     AgentInstanceId, AgentInstanceRevisionId, AuthenticatedIdentity, BeginUpdateHook, CommandId,
-    ObjectRef, ObjectType, Permission, RUN_START_SUBJECT, ReleaseAgentId, ReleaseId,
-    ReleaseService, ReleaseServiceError, RunKind, StartRun, UpdateHookAdmissionRow, append_event,
-    begin_actor_transaction, existing_command, is_update_admission_generation_conflict,
-    record_command,
+    FreshRunExecutionProfile, ObjectRef, ObjectType, Permission, RUN_START_SUBJECT, ReleaseAgentId,
+    ReleaseId, ReleaseService, ReleaseServiceError, RunKind, StartRun, UpdateHookAdmissionRow,
+    append_event, begin_actor_transaction, existing_command,
+    is_update_admission_generation_conflict, record_command,
 };
 use serde_json::json;
 
@@ -33,7 +33,10 @@ impl ReleaseService {
         identity: &AuthenticatedIdentity,
         command: BeginUpdateHook,
     ) -> Result<(), ReleaseServiceError> {
+        self.require_legacy_placement_profile()?;
         let mut tx = begin_actor_transaction(&self.pool, identity).await?;
+        self.lock_legacy_hook_parent(&mut tx, command.update_id.as_uuid())
+            .await?;
         let update: UpdateHookAdmissionRow = sqlx::query_as(
             "SELECT update.instance_id, update.candidate_revision_id, update.state,
                     instance.state AS instance_state,
@@ -62,10 +65,42 @@ impl ReleaseService {
             ObjectRef::new(ObjectType::AgentInstance, update.instance_id),
         )
         .await?;
-        if existing_command(&mut tx, command.command_key, "begin_update_hook")
-            .await?
-            .is_some()
+        self.require(
+            &mut tx,
+            identity,
+            Permission::CanUse,
+            ObjectRef::new(ObjectType::ReleaseAgent, update.release_agent_id),
+        )
+        .await?;
+        let contract: serde_json::Value =
+            sqlx::query_scalar("SELECT runtime_contract FROM release_agents WHERE id = $1")
+                .bind(update.release_agent_id)
+                .fetch_one(&mut *tx)
+                .await?;
+        super::release_build::runtime_contract::require_legacy_import(
+            &contract,
+            update.requires_state,
+        )?;
+        if let Some((update_id, hook_id)) =
+            existing_command(&mut tx, command.command_key, "begin_update_hook").await?
         {
+            if update_id != command.update_id.as_uuid()
+                || hook_id != Some(command.hook_run_id.as_uuid())
+            {
+                return Err(ReleaseServiceError::IdempotencyConflict);
+            }
+            if let Some(profile) = self.execution_profile {
+                let original: String =
+                    sqlx::query_scalar("SELECT execution_profile FROM runs WHERE id=$1")
+                        .bind(command.hook_run_id.as_uuid())
+                        .fetch_one(&mut *tx)
+                        .await?;
+                if original != profile.as_str() {
+                    return Err(ReleaseServiceError::IdempotencyConflict);
+                }
+            }
+            self.require_legacy_hook_replay(&mut tx, command.hook_run_id.as_uuid())
+                .await?;
             tx.commit().await?;
             return Ok(());
         }
@@ -101,24 +136,50 @@ impl ReleaseService {
         if pending {
             return Err(ReleaseServiceError::UpdateDrainPending);
         }
+        self.require_legacy_normal_drain(&mut tx, update.instance_id, update.created_at)
+            .await?;
         let start_id = CommandId::new();
-        let insert_result = sqlx::query(
-            "INSERT INTO runs
+        let planned_runtime =
+            self.execution_profile == Some(FreshRunExecutionProfile::OwnedCanonical);
+        let insert = match self.execution_profile {
+            Some(FreshRunExecutionProfile::LegacyScalar) if self.legacy_vm_scope.is_some() => sqlx::query(
+                "INSERT INTO runs(id,instance_id,instance_revision_id,release_id,release_agent_id,
+                 run_kind,command_id,state,requires_state,created_at,updated_at,
+                 execution_profile,legacy_vm_placement_required)
+                 VALUES($1,$2,$3,$4,$5,'update',$6,'queued',$7,now(),now(),'legacy_scalar',true)",
+            ),
+            Some(FreshRunExecutionProfile::OwnedCanonical) => sqlx::query(
+                "INSERT INTO runs
+                 (id,instance_id,instance_revision_id,release_id,release_agent_id,
+                  run_kind,command_id,state,requires_state,created_at,updated_at,
+                  vm_plan_admission_required,execution_profile)
+                 VALUES($1,$2,$3,$4,$5,'update',$6,'queued',$7,now(),now(),true,'owned_canonical')",
+            ),
+            Some(FreshRunExecutionProfile::LegacyScalar) => sqlx::query(
+                "INSERT INTO runs
+                 (id,instance_id,instance_revision_id,release_id,release_agent_id,
+                  run_kind,command_id,state,requires_state,created_at,updated_at,execution_profile)
+                 VALUES($1,$2,$3,$4,$5,'update',$6,'queued',$7,now(),now(),'legacy_scalar')",
+            ),
+            None => sqlx::query(
+                "INSERT INTO runs
              (id, instance_id, instance_revision_id, release_id,
               release_agent_id, run_kind, command_id, state, requires_state,
               created_at, updated_at)
              VALUES ($1, $2, $3, $4, $5, 'update', $6, 'queued', $7,
                      now(), now())",
-        )
-        .bind(command.hook_run_id.as_uuid())
-        .bind(update.instance_id)
-        .bind(update.candidate_revision_id)
-        .bind(update.release_id)
-        .bind(update.release_agent_id)
-        .bind(start_id.as_uuid())
-        .bind(update.requires_state)
-        .execute(&mut *tx)
-        .await;
+            ),
+        };
+        let insert_result = insert
+            .bind(command.hook_run_id.as_uuid())
+            .bind(update.instance_id)
+            .bind(update.candidate_revision_id)
+            .bind(update.release_id)
+            .bind(update.release_agent_id)
+            .bind(start_id.as_uuid())
+            .bind(update.requires_state)
+            .execute(&mut *tx)
+            .await;
         match insert_result {
             Ok(_) => {}
             Err(error) if is_update_admission_generation_conflict(&error) => {
@@ -138,6 +199,18 @@ impl ReleaseService {
         if changed.rows_affected() != 1 {
             return Err(ReleaseServiceError::InvalidUpdateLifecycle);
         }
+        // This is fresh hook admission, not replay or historical queued state.
+        // Worker planning consumes it atomically before provisioning is allowed.
+        // Constructor selection controls this producer; relation presence
+        // never promotes an ordinary legacy hook or historical replay.
+        if planned_runtime {
+            sqlx::query("INSERT INTO run_vm_plan_admissions(run_id,command_id,instance_id,instance_revision_id,update_id,actor_id,request_id,producer_command_key) VALUES($1,$2,$3,$4,$5,$6,$7,$8)")
+                .bind(command.hook_run_id.as_uuid()).bind(start_id.as_uuid())
+                .bind(update.instance_id).bind(update.candidate_revision_id).bind(command.update_id.as_uuid())
+                .bind(identity.user_id.as_uuid()).bind(identity.request_id.as_uuid())
+                .bind(command.command_key.as_bytes().as_slice())
+                .execute(&mut *tx).await?;
+        }
         sqlx::query(
             "UPDATE agent_instances
              SET state = 'updating', version = version + 1, updated_at = now()
@@ -156,6 +229,8 @@ impl ReleaseService {
             Some(identity),
         )
         .await?;
+        self.stamp_legacy_hook_placement(&mut tx, command.hook_run_id.as_uuid())
+            .await?;
         append_event(
             &mut tx,
             command.update_id.as_uuid(),

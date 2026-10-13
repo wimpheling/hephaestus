@@ -12,4 +12,7 @@ pub use repository::{
 };
 
 mod executor;
-pub use executor::{BuildExecutionError, BuildExecutionResult, BuildExecutor, BuildExecutorConfig};
+pub use executor::{
+    BuildCleanupError, BuildCleanupPhase, BuildCleanupStatus, BuildExecutionError,
+    BuildExecutionResult, BuildExecutor, BuildExecutorConfig,
+};

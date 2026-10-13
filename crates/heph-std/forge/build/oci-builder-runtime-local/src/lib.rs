@@ -11,6 +11,7 @@ mod filesystem;
 mod guest;
 mod operation;
 mod output;
+mod owner;
 mod publication;
 mod runtime;
 mod specs;
@@ -22,4 +23,5 @@ pub use config::{ForgeZotPublicationConfig, LocalOciRuntime, LocalOciRuntimeConf
 pub use constants::{VerifiedVmOciOutput, VmOciOperationConfig};
 pub use operation::VmOciOperation;
 pub use output::verified_vm_publication_material;
+pub use owner::{OciCleanupHeld, OciCleanupPhase, OciCleanupStatus};
 pub use publication::{ForgeZotOciPublisher, PreparedPublicationMaterial, VmPublishedOciEngine};

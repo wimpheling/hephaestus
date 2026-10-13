@@ -4,7 +4,7 @@ use async_nats::jetstream;
 use futures_util::StreamExt;
 use review_domain::CONTROL_EXECUTE_SUBJECT;
 use run_domain::{CancelRun, StartRun};
-use run_orchestrator::{OrchestratorError, RunOrchestrator};
+use run_orchestrator::{OrchestratorError, RunCommandExecutor, RunOrchestrator};
 use std::sync::Arc;
 
 const ACK_PROGRESS_INTERVAL: std::time::Duration = std::time::Duration::from_secs(10);
@@ -70,14 +70,25 @@ pub struct TopologyError(String);
 /// database effects are committed.
 #[derive(Clone)]
 pub struct NatsCommandHandler {
-    orchestrator: Arc<RunOrchestrator>,
+    executor: Arc<dyn RunCommandExecutor>,
 }
 
 impl NatsCommandHandler {
     /// Creates a handler for a durable pull consumer.
     #[must_use]
     pub const fn new(orchestrator: Arc<RunOrchestrator>) -> Self {
-        Self { orchestrator }
+        Self {
+            executor: orchestrator,
+        }
+    }
+
+    /// Creates a handler over an explicitly admitted command router.
+    ///
+    /// The executor must check persisted producer/profile and owner evidence.
+    /// This constructor performs no profile selection and grants no authority.
+    #[must_use]
+    pub const fn new_routed(executor: Arc<dyn RunCommandExecutor>) -> Self {
+        Self { executor }
     }
 
     /// Serves durable deliveries with bounded concurrency.
@@ -142,7 +153,7 @@ impl NatsCommandHandler {
         message: &jetstream::Message,
     ) -> Result<(), CommandHandlingError> {
         let command: StartRun = serde_json::from_slice(&message.payload)?;
-        let operation = self.orchestrator.start_run(&command);
+        let operation = self.executor.start_run(&command);
         tokio::pin!(operation);
         let mut progress = tokio::time::interval(ACK_PROGRESS_INTERVAL);
         progress.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
@@ -178,7 +189,7 @@ impl NatsCommandHandler {
         message: &jetstream::Message,
     ) -> Result<(), CommandHandlingError> {
         let command: CancelRun = serde_json::from_slice(&message.payload)?;
-        self.orchestrator.cancel_run(&command).await?;
+        self.executor.cancel_run(&command).await?;
         message
             .double_ack()
             .await

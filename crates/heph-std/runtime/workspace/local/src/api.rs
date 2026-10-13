@@ -8,6 +8,7 @@ use async_trait::async_trait;
 #[async_trait]
 impl RunWorkspaceManager for LocalWorkspaceManager {
     async fn prepare(&self, run: &Run) -> Result<PreparedWorkspace, WorkspaceError> {
+        reject_invocation(run)?;
         self.prepare_run(run)
             .await
             .map_err(WorkspaceError::operation)
@@ -18,6 +19,7 @@ impl RunWorkspaceManager for LocalWorkspaceManager {
         run: &Run,
         message: &str,
     ) -> Result<Option<PublishedResult>, WorkspaceError> {
+        reject_invocation(run)?;
         self.finalize_run(run, message)
             .await
             .map_err(WorkspaceError::operation)
@@ -42,6 +44,7 @@ impl RuntimeGitWorkspaceManager for LocalWorkspaceManager {
         &self,
         run: &Run,
     ) -> Result<Option<PreparedRuntimeGitWorkspace>, WorkspaceError> {
+        reject_invocation(run)?;
         self.prepare_runtime_git_run(run)
             .await
             .map_err(WorkspaceError::operation)
@@ -58,4 +61,15 @@ impl RuntimeGitWorkspaceManager for LocalWorkspaceManager {
             .await
             .map_err(WorkspaceError::operation)
     }
+}
+
+fn reject_invocation(run: &Run) -> Result<(), WorkspaceError> {
+    if run.kind == run_domain::RunKind::Invocation {
+        return Err(WorkspaceError::operation(
+            crate::LocalWorkspaceError::State(String::from(
+                "Invocation repository workspaces are unsupported",
+            )),
+        ));
+    }
+    Ok(())
 }

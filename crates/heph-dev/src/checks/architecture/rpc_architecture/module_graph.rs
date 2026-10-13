@@ -62,49 +62,56 @@ fn module_parent_candidates(path: &Path) -> Vec<std::path::PathBuf> {
 }
 
 fn module_targets(source_path: &Path, source: &str) -> Vec<(std::path::PathBuf, bool)> {
+    let Ok(file) = syn::parse_file(source) else {
+        return Vec::new();
+    };
     let mut targets = Vec::new();
-    let mut cfg_test = false;
-    let mut path_attribute = None;
-    for line in source.lines() {
-        let trimmed = line.trim();
-        if trimmed == "#[cfg(test)]" {
-            cfg_test = true;
-            continue;
-        }
-        if let Some(value) = trimmed
-            .strip_prefix("#[path = \"")
-            .and_then(|value| value.strip_suffix("\"]"))
-        {
-            path_attribute = Some(value.to_owned());
-            continue;
-        }
-        if trimmed.starts_with("#[") {
-            continue;
-        }
-        let Some(module) = trimmed
-            .strip_prefix("mod ")
-            .or_else(|| trimmed.strip_prefix("pub mod "))
-            .or_else(|| trimmed.strip_prefix("pub(crate) mod "))
-            .and_then(|value| value.strip_suffix(';'))
-        else {
-            cfg_test = false;
-            path_attribute = None;
+    for item in file.items {
+        let syn::Item::Mod(module) = item else {
             continue;
         };
-        let Some(module) = module.split_whitespace().next() else {
-            cfg_test = false;
-            path_attribute = None;
+        if module.content.is_some() {
             continue;
-        };
-        let target = path_attribute.take().map_or_else(
+        }
+        let cfg_test = module.attrs.iter().any(|attribute| {
+            attribute.path().is_ident("cfg")
+                && attribute
+                    .parse_args::<syn::Path>()
+                    .is_ok_and(|condition| condition.is_ident("test"))
+        });
+        let mut path_attribute = None;
+        let mut invalid_path = false;
+        for attribute in &module.attrs {
+            if !attribute.path().is_ident("path") {
+                continue;
+            }
+            if path_attribute.is_some() {
+                invalid_path = true;
+                break;
+            }
+            if let syn::Meta::NameValue(value) = &attribute.meta
+                && let syn::Expr::Lit(value) = &value.value
+                && let syn::Lit::Str(value) = &value.lit
+            {
+                path_attribute = Some(value.value());
+            } else {
+                invalid_path = true;
+                break;
+            }
+        }
+        if invalid_path {
+            continue;
+        }
+        let name = module.ident;
+        let target = path_attribute.map_or_else(
             || {
                 let parent = source_path.parent().unwrap_or_else(|| Path::new("."));
                 if source_path.file_stem() == Some(OsStr::new("mod")) {
-                    parent.join(format!("{module}.rs"))
+                    parent.join(format!("{name}.rs"))
                 } else {
                     parent
                         .join(source_path.file_stem().unwrap_or_default())
-                        .join(format!("{module}.rs"))
+                        .join(format!("{name}.rs"))
                 }
             },
             |path| {
@@ -115,7 +122,6 @@ fn module_targets(source_path: &Path, source: &str) -> Vec<(std::path::PathBuf, 
             },
         );
         targets.push((target, cfg_test));
-        cfg_test = false;
     }
     targets
 }

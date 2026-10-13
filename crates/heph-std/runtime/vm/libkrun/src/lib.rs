@@ -6,6 +6,7 @@
 
 mod cgroup;
 mod config;
+mod directory;
 mod ffi;
 mod framing;
 mod network;
@@ -17,7 +18,10 @@ mod validation;
 mod worker;
 
 pub use config::{CgroupLimits, IoLimit, LibkrunConfig};
-pub use provider::LibkrunProvider;
+pub use provider::{
+    LibkrunProvider, ProspectiveOwnedVmBootstrap, VmAttemptInventory, VmAttemptPhase,
+    VmAttemptSnapshot,
+};
 
 /// Runs the dedicated libkrun worker process.
 ///

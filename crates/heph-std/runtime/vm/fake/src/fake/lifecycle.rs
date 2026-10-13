@@ -138,7 +138,7 @@ impl VmInstance for FakeInstance {
                     *state = InstanceState::Destroyed;
                     DestroyAction::NoTerminalChange
                 }
-                InstanceState::Destroyed => DestroyAction::NoTerminalChange,
+                InstanceState::Destroyed => return Ok(()),
             }
         };
 

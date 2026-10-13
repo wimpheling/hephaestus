@@ -5,6 +5,7 @@ pub(super) const fn run_kind_name(kind: RunKind) -> &'static str {
     match kind {
         RunKind::Normal => "normal",
         RunKind::Update => "update",
+        RunKind::Invocation => "invocation",
     }
 }
 

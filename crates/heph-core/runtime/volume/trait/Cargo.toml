@@ -11,11 +11,17 @@ context = "volume"
 
 [dependencies]
 async-trait.workspace = true
+identity-domain = { path = "../../../auth/identity/domain" }
 runtime-types = { path = "../../../platform/runtime-types" }
 serde.workspace = true
+sha2.workspace = true
 thiserror.workspace = true
 time.workspace = true
 uuid.workspace = true
+volume-domain = { path = "../domain" }
+
+[dev-dependencies]
+serde_json.workspace = true
 
 [lints]
 workspace = true

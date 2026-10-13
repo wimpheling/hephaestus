@@ -1,15 +1,16 @@
-use super::{
-    PostgresVolumeMetadataRepository,
-    errors::{assert_host, invalid, metadata},
-    models::{LeaseRow, VolumeRow},
-};
+use super::{PostgresVolumeMetadataRepository, errors::metadata, models::VolumeRow};
 use async_trait::async_trait;
-use runtime_types::{AgentInstanceId, LeaseId, RunId, VolumeId};
-use sqlx::{Postgres, Transaction};
+use runtime_types::{AgentInstanceId, RunId, VolumeId};
 use std::path::Path;
 use time::OffsetDateTime;
 use uuid::Uuid;
 use volume_trait::{Volume, VolumeError, VolumeLease, VolumeMetadataRepository};
+
+mod profiled_scalar;
+mod public107;
+mod scalar_history;
+
+use crate::ScalarMetadataSchema;
 
 #[async_trait]
 impl VolumeMetadataRepository for PostgresVolumeMetadataRepository {
@@ -21,48 +22,46 @@ impl VolumeMetadataRepository for PostgresVolumeMetadataRepository {
         host_path: &Path,
         filesystem_uuid: Uuid,
     ) -> Result<Volume, VolumeError> {
-        let mut tx = self.pool.begin().await.map_err(metadata)?;
-        let existing = sqlx::query_as::<_, VolumeRow>(
-            "SELECT * FROM agent_instance_state_volumes WHERE instance_id = $1 FOR UPDATE",
+        self.reserve_legacy(
+            instance_id,
+            capacity_bytes,
+            host_id,
+            host_path.parent().unwrap_or(host_path),
+            filesystem_uuid,
         )
-        .bind(instance_id.as_uuid())
-        .fetch_optional(&mut *tx)
         .await
-        .map_err(metadata)?;
-        let Some(row) = existing else {
-            return Err(VolumeError::NotFound(VolumeId::from_uuid(Uuid::nil())));
-        };
-        let row = if row.state == "uninitialized" {
-            let capacity = i64::try_from(capacity_bytes).map_err(metadata)?;
-            let root = host_path.parent().unwrap_or(host_path);
-            let path = root.join(format!("{}.raw", row.id));
-            let path = path
-                .to_str()
-                .ok_or_else(|| invalid("volume path is not UTF-8"))?;
-            sqlx::query_as::<_, VolumeRow>(
-                "UPDATE agent_instance_state_volumes SET host_id = $2, host_path = $3,
-                 capacity_bytes = $4, filesystem_uuid = $5, updated_at = now()
-                 WHERE id = $1 AND state = 'uninitialized' RETURNING *",
-            )
-            .bind(row.id)
-            .bind(host_id)
-            .bind(path)
-            .bind(capacity)
-            .bind(filesystem_uuid)
-            .fetch_one(&mut *tx)
-            .await
-            .map_err(metadata)?
-        } else {
-            row
-        };
-        tx.commit().await.map_err(metadata)?;
-        row.try_into()
+    }
+
+    async fn reserve_provider(
+        &self,
+        volume_id: VolumeId,
+        host_id: &str,
+        root: &Path,
+    ) -> Result<Volume, VolumeError> {
+        self.reserve_standalone(volume_id, host_id, root).await
+    }
+
+    async fn claim_provisioning(
+        &self,
+        volume_id: VolumeId,
+    ) -> Result<volume_trait::ProvisioningClaim, VolumeError> {
+        self.claim(volume_id).await
+    }
+
+    async fn provisioning_progress(
+        &self,
+        claim: &volume_trait::ProvisioningClaim,
+        state: volume_trait::VolumeProvisioningState,
+    ) -> Result<(), VolumeError> {
+        self.progress(claim, state).await
     }
 
     async fn mark_ready(&self, volume_id: VolumeId) -> Result<(), VolumeError> {
-        let result = sqlx::query("UPDATE agent_instance_state_volumes SET state = 'ready', updated_at = now() WHERE id = $1 AND state = 'uninitialized'")
-            .bind(volume_id.as_uuid()).execute(&self.pool).await.map_err(metadata)?;
-        if result.rows_affected() == 0 {
+        // Compatibility entry point verifies prior fenced provisioning only;
+        // attachment and lease recovery must never be reset through this API.
+        let ready: bool = sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM agent_instance_state_volumes WHERE id=$1 AND state='ready' AND provisioning_state='ready')")
+            .bind(volume_id.as_uuid()).fetch_one(&self.pool).await.map_err(metadata)?;
+        if !ready {
             return Err(VolumeError::StaleLease);
         }
         Ok(())
@@ -86,49 +85,16 @@ impl VolumeMetadataRepository for PostgresVolumeMetadataRepository {
         now: OffsetDateTime,
         expires_at: OffsetDateTime,
     ) -> Result<VolumeLease, VolumeError> {
-        let mut tx = self.pool.begin().await.map_err(metadata)?;
-        let volume = sqlx::query_as::<_, VolumeRow>(
-            "SELECT * FROM agent_instance_state_volumes WHERE id = $1 FOR UPDATE",
-        )
-        .bind(volume_id.as_uuid())
-        .fetch_optional(&mut *tx)
-        .await
-        .map_err(metadata)?
-        .ok_or(VolumeError::NotFound(volume_id))?;
-        assert_host(
-            volume
-                .host_id
-                .as_deref()
-                .ok_or(VolumeError::InvalidState("volume has no host owner"))?,
-            host_id,
-        )?;
-        if let Some(existing) = active_lease(&mut tx, volume_id).await? {
-            if existing.run_id == run_id.as_uuid() {
-                tx.commit().await.map_err(metadata)?;
-                return existing.try_into();
+        match self.scalar_schema {
+            ScalarMetadataSchema::Public107 => {
+                public107::Public107(self)
+                    .acquire(volume_id, run_id, host_id, now, expires_at)
+                    .await
             }
-            return Err(VolumeError::LeaseConflict {
-                volume_id,
-                holder_run_id: RunId::from_uuid(existing.run_id),
-            });
+            ScalarMetadataSchema::Profiled => {
+                profiled_scalar::acquire(self, volume_id, run_id, host_id, now, expires_at).await
+            }
         }
-        if volume.state != "ready" {
-            return Err(VolumeError::InvalidState(
-                "only a ready volume can be leased",
-            ));
-        }
-        let generation = volume
-            .lease_generation
-            .checked_add(1)
-            .ok_or(VolumeError::InvalidState("lease generation overflow"))?;
-        let lease_id = LeaseId::new();
-        sqlx::query("INSERT INTO agent_instance_volume_leases (id, volume_id, instance_id, run_id, host_id, fencing_token, state, acquired_at, heartbeat_at, expires_at) VALUES ($1,$2,$3,$4,$5,$6,'active',$7,$7,$8)")
-            .bind(lease_id.as_uuid()).bind(volume_id.as_uuid()).bind(volume.instance_id).bind(run_id.as_uuid()).bind(host_id).bind(generation).bind(now).bind(expires_at)
-            .execute(&mut *tx).await.map_err(metadata)?;
-        sqlx::query("UPDATE agent_instance_state_volumes SET lease_generation = $2, updated_at = now() WHERE id = $1")
-            .bind(volume_id.as_uuid()).bind(generation).execute(&mut *tx).await.map_err(metadata)?;
-        tx.commit().await.map_err(metadata)?;
-        self.lease(lease_id).await
     }
 
     async fn mark_attached(
@@ -137,12 +103,16 @@ impl VolumeMetadataRepository for PostgresVolumeMetadataRepository {
         now: OffsetDateTime,
         expires_at: OffsetDateTime,
     ) -> Result<VolumeLease, VolumeError> {
-        let result = sqlx::query("WITH current_lease AS (UPDATE agent_instance_volume_leases SET attached_at = COALESCE(attached_at,$4), heartbeat_at=$4, expires_at=$5 WHERE id=$1 AND volume_id=$2 AND fencing_token=$3 AND released_at IS NULL RETURNING volume_id) UPDATE agent_instance_state_volumes SET state='attached', updated_at=$4 WHERE id IN (SELECT volume_id FROM current_lease) AND state IN ('ready','attached')")
-            .bind(lease.id.as_uuid()).bind(lease.volume_id.as_uuid()).bind(lease.fencing_token).bind(now).bind(expires_at).execute(&self.pool).await.map_err(metadata)?;
-        if result.rows_affected() == 0 {
-            return Err(VolumeError::StaleLease);
+        match self.scalar_schema {
+            ScalarMetadataSchema::Public107 => {
+                public107::Public107(self)
+                    .mark_attached(lease, now, expires_at)
+                    .await
+            }
+            ScalarMetadataSchema::Profiled => {
+                profiled_scalar::refresh(self, lease, now, expires_at, true).await
+            }
         }
-        self.lease(lease.id).await
     }
 
     async fn heartbeat(
@@ -151,31 +121,37 @@ impl VolumeMetadataRepository for PostgresVolumeMetadataRepository {
         now: OffsetDateTime,
         expires_at: OffsetDateTime,
     ) -> Result<VolumeLease, VolumeError> {
-        let result = sqlx::query("UPDATE agent_instance_volume_leases SET heartbeat_at=$4, expires_at=$5 WHERE id=$1 AND volume_id=$2 AND fencing_token=$3 AND released_at IS NULL AND recovering_at IS NULL")
-            .bind(lease.id.as_uuid()).bind(lease.volume_id.as_uuid()).bind(lease.fencing_token).bind(now).bind(expires_at).execute(&self.pool).await.map_err(metadata)?;
-        if result.rows_affected() == 0 {
-            return Err(VolumeError::StaleLease);
+        match self.scalar_schema {
+            ScalarMetadataSchema::Public107 => {
+                public107::Public107(self)
+                    .heartbeat(lease, now, expires_at)
+                    .await
+            }
+            ScalarMetadataSchema::Profiled => {
+                profiled_scalar::refresh(self, lease, now, expires_at, false).await
+            }
         }
-        self.lease(lease.id).await
     }
 
+    async fn scalar_lease_history(
+        &self,
+        run_id: RunId,
+    ) -> Result<volume_trait::ScalarLeaseHistory, VolumeError> {
+        scalar_history::observe(self, run_id).await
+    }
     async fn active_lease_for_run(
         &self,
         run_id: RunId,
         host_id: &str,
     ) -> Result<Option<VolumeLease>, VolumeError> {
-        let row = sqlx::query_as::<_, LeaseRow>(
-            "SELECT * FROM agent_instance_volume_leases WHERE run_id=$1 AND released_at IS NULL",
-        )
-        .bind(run_id.as_uuid())
-        .fetch_optional(&self.pool)
-        .await
-        .map_err(metadata)?;
-        row.map(|row| {
-            assert_host(&row.host_id, host_id)?;
-            row.try_into()
-        })
-        .transpose()
+        match self.scalar_schema {
+            ScalarMetadataSchema::Public107 => {
+                public107::Public107(self)
+                    .active_lease_for_run(run_id, host_id)
+                    .await
+            }
+            ScalarMetadataSchema::Profiled => profiled_scalar::active(self, run_id, host_id).await,
+        }
     }
 
     async fn release_after_detach(
@@ -183,58 +159,31 @@ impl VolumeMetadataRepository for PostgresVolumeMetadataRepository {
         lease: &VolumeLease,
         recovering: bool,
     ) -> Result<(), VolumeError> {
-        let mut tx = self.pool.begin().await.map_err(metadata)?;
-        let result = if recovering {
-            sqlx::query("UPDATE agent_instance_volume_leases SET released_at=now(), state='released' WHERE id=$1 AND volume_id=$2 AND fencing_token=$3 AND released_at IS NULL AND recovering_at IS NOT NULL")
-                .bind(lease.id.as_uuid())
-                .bind(lease.volume_id.as_uuid())
-                .bind(lease.fencing_token)
-                .execute(&mut *tx)
-                .await
-        } else {
-            sqlx::query("UPDATE agent_instance_volume_leases SET released_at=now(), state='released' WHERE id=$1 AND volume_id=$2 AND fencing_token=$3 AND released_at IS NULL AND recovering_at IS NULL")
-                .bind(lease.id.as_uuid())
-                .bind(lease.volume_id.as_uuid())
-                .bind(lease.fencing_token)
-                .execute(&mut *tx)
-                .await
+        match self.scalar_schema {
+            ScalarMetadataSchema::Public107 => {
+                public107::Public107(self)
+                    .release_after_detach(lease, recovering)
+                    .await
+            }
+            ScalarMetadataSchema::Profiled => {
+                profiled_scalar::release(self, lease, recovering).await
+            }
         }
-        .map_err(metadata)?;
-        if result.rows_affected() == 0 {
-            return Err(VolumeError::StaleLease);
-        }
-        sqlx::query("UPDATE agent_instance_state_volumes SET state='ready', updated_at=now() WHERE id=$1 AND lease_generation=$2").bind(lease.volume_id.as_uuid()).bind(lease.fencing_token).execute(&mut *tx).await.map_err(metadata)?;
-        tx.commit().await.map_err(metadata)
     }
 
     async fn stale_leases(&self, now: OffsetDateTime) -> Result<Vec<VolumeLease>, VolumeError> {
-        sqlx::query_as::<_, LeaseRow>("SELECT * FROM agent_instance_volume_leases WHERE released_at IS NULL AND expires_at <= $1 ORDER BY expires_at,id").bind(now).fetch_all(&self.pool).await.map_err(metadata)?.into_iter().map(TryInto::try_into).collect()
+        match self.scalar_schema {
+            ScalarMetadataSchema::Public107 => public107::Public107(self).stale_leases(now).await,
+            ScalarMetadataSchema::Profiled => profiled_scalar::stale(self, now).await,
+        }
     }
 
     async fn begin_recovery(&self, lease: &VolumeLease) -> Result<(), VolumeError> {
-        let result = sqlx::query("WITH current_lease AS (UPDATE agent_instance_volume_leases SET recovering_at=COALESCE(recovering_at,now()) WHERE id=$1 AND volume_id=$2 AND fencing_token=$3 AND released_at IS NULL AND expires_at <= now() RETURNING volume_id) UPDATE agent_instance_state_volumes SET state='recovering', updated_at=now() WHERE id IN (SELECT volume_id FROM current_lease)")
-            .bind(lease.id.as_uuid()).bind(lease.volume_id.as_uuid()).bind(lease.fencing_token).execute(&self.pool).await.map_err(metadata)?;
-        if result.rows_affected() == 0 {
-            return Err(VolumeError::StaleLease);
+        match self.scalar_schema {
+            ScalarMetadataSchema::Public107 => {
+                public107::Public107(self).begin_recovery(lease).await
+            }
+            ScalarMetadataSchema::Profiled => profiled_scalar::recover(self, lease).await,
         }
-        Ok(())
     }
-}
-
-impl PostgresVolumeMetadataRepository {
-    async fn lease(&self, id: LeaseId) -> Result<VolumeLease, VolumeError> {
-        sqlx::query_as::<_, LeaseRow>("SELECT * FROM agent_instance_volume_leases WHERE id=$1")
-            .bind(id.as_uuid())
-            .fetch_one(&self.pool)
-            .await
-            .map_err(metadata)?
-            .try_into()
-    }
-}
-
-async fn active_lease(
-    tx: &mut Transaction<'_, Postgres>,
-    volume_id: VolumeId,
-) -> Result<Option<LeaseRow>, VolumeError> {
-    sqlx::query_as::<_, LeaseRow>("SELECT * FROM agent_instance_volume_leases WHERE volume_id=$1 AND released_at IS NULL FOR UPDATE").bind(volume_id.as_uuid()).fetch_optional(&mut **tx).await.map_err(metadata)
 }

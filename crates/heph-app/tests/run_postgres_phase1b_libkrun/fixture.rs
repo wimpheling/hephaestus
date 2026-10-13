@@ -59,7 +59,8 @@ pub async fn setup() -> (
     );
     provider_config.startup_timeout = Duration::from_secs(15);
     provider_config.readiness_timeout = Duration::from_secs(45);
-    let provider = Arc::new(LibkrunProvider::new(provider_config).expect("libkrun provider"));
+    let provider_trait: Arc<dyn VmProvider> =
+        Arc::new(LibkrunProvider::new(provider_config).expect("libkrun provider"));
     let instance_id = AgentInstanceId::new();
     let scenario = seed_instance(&pool, instance_id).await;
     let factory = Arc::new(StateSpecFactory {
@@ -69,7 +70,6 @@ pub async fn setup() -> (
     });
     let repository_trait: Arc<dyn RunRepository> = repository.clone();
     let volume_trait: Arc<dyn VolumeStore> = volumes.clone();
-    let provider_trait: Arc<dyn VmProvider> = provider;
     let orchestrator = Arc::new(RunOrchestrator::new(
         repository_trait,
         volume_trait,

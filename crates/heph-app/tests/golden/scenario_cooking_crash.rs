@@ -6,6 +6,8 @@ use super::*;
     clippy::too_many_arguments,
     clippy::too_many_lines
 )]
+// The daemons are consumed by shutdown or preparation; the reused context only borrows that custody.
+#[allow(clippy::significant_drop_tightening)]
 pub async fn run_cooking_crash_branch(prep: &mut CookingPreparation) {
     let CookingPreparation {
         pool,
@@ -254,22 +256,21 @@ pub async fn run_cooking_crash_branch(prep: &mut CookingPreparation) {
         .await
         .expect("load guest crash state volume disk path"),
     );
-    let restarted_context = cooking_builds::CookingBuildContext {
-        pool,
-        running: &restarted,
-        root: &root,
-        source_root: &source_root,
-        project_id: project.id,
-        repositories: &fixture_repository,
-        identity: cooking_builds::CookingIdentity {
-            actor: &identity,
-            git_token: &token,
-            rpc_token,
-        },
-        timeout: cooking_wait_timeout,
-    };
     let restored_after_crash = cooking_builds::configure_cooking_gateway(
-        &restarted_context,
+        &cooking_builds::CookingBuildContext {
+            pool,
+            running: &restarted,
+            root: &root,
+            source_root: &source_root,
+            project_id: project.id,
+            repositories: &fixture_repository,
+            identity: cooking_builds::CookingIdentity {
+                actor: &identity,
+                git_token: &token,
+                rpc_token,
+            },
+            timeout: cooking_wait_timeout,
+        },
         cooking_builds::InstalledCookingGateway {
             gateway_id: crash_gateway_id,
             revision_id: crash_gateway.revision_id,

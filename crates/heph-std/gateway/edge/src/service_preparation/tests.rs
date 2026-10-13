@@ -195,6 +195,7 @@ fn launch(identity: GatewayServiceIdentity) -> GatewayServiceLaunch {
     let health_path = ServiceProbePath::parse("/health").unwrap();
     let service = GatewayServiceConfig::new(8080, readiness_path, health_path).unwrap();
     let spec = VmSpec {
+        guest_volumes: Vec::new(),
         id: VmId(format!("gateway-service-{}", identity.instance_id)),
         root: RootFilesystem::Directory {
             host_path: "/tmp/test-root".into(),

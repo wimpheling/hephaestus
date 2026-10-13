@@ -3,7 +3,7 @@ use serde::{Deserialize, Serialize};
 use std::{ffi::OsString, path::PathBuf, time::Duration};
 
 /// Per-device cgroup-v2 I/O throttling limits.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Eq, PartialEq, Serialize, Deserialize)]
 pub struct IoLimit {
     /// Linux block-device major number.
     pub major: u32,
@@ -20,7 +20,7 @@ pub struct IoLimit {
 }
 
 /// Resource limits applied to one worker's delegated cgroup.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Eq, PartialEq, Serialize, Deserialize)]
 pub struct CgroupLimits {
     /// CPU quota in microseconds per period, or no quota.
     pub cpu_quota_micros: Option<u64>,
@@ -53,7 +53,7 @@ impl Default for CgroupLimits {
 }
 
 /// Host configuration for the Fedora/Linux libkrun provider.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Eq, PartialEq)]
 pub struct LibkrunConfig {
     /// Parent directory for private per-VM runtime directories.
     pub runtime_root: PathBuf,

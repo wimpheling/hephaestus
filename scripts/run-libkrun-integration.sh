@@ -141,7 +141,13 @@ materialize_image() {
         podman pull "${reference}"
     fi
     podman create --pull never --name "${container_name}" "${reference}" /bin/true >/dev/null
-    podman export "${container_name}" | tar -C "${destination}" -xf -
+    # Preserve OCI numeric owners in the same subordinate-ID namespace used
+    # by the test. Mapping every root inode to workload UID 10001 would make
+    # /var/lib replaceable and correctly fail the guest ancestor check.
+    podman export "${container_name}" | run_as_guest_owner tar \
+        --numeric-owner --same-owner -C "${destination}" -xf -
+    run_as_guest_owner chown 0:0 "${destination}"
+    run_as_guest_owner chmod 0755 "${destination}"
     podman rm "${container_name}" >/dev/null
     container_name=""
 }
@@ -189,19 +195,23 @@ load_repository_image_workflow() {
 
 prepare_guest_root() {
     local root="$1"
-    install -D -m 0755 \
+    # Trusted guest entrypoints and their containers belong to guest root,
+    # while the separate workload remains UID/GID 10001.
+    run_as_guest_owner install -d -o 0 -g 0 -m 0755 \
+        "${root}/usr/libexec" "${root}/usr/libexec/hephaestus"
+    run_as_guest_owner install -D -o 0 -g 0 -m 0755 \
         "${cargo_target_dir}/${GUEST_TARGET}/release/heph-init" \
         "${root}/usr/libexec/hephaestus/heph-init"
-    install -D -m 0755 \
+    run_as_guest_owner install -D -o 0 -g 0 -m 0755 \
         "${cargo_target_dir}/${GUEST_TARGET}/release/heph-git-credential" \
         "${root}/usr/libexec/hephaestus/heph-git-credential"
-    install -D -m 0755 \
+    run_as_guest_owner install -D -o 0 -g 0 -m 0755 \
         "${cargo_target_dir}/${GUEST_TARGET}/release/heph-integration-check" \
         "${root}/usr/libexec/hephaestus/integration-check.payload"
     # libkrun's embedded DHCP setup runs before this workload. Keep the
     # fixture diagnostic immediately before the check so a network failure
     # records only bounded guest state that the workload actually sees.
-    install -D -m 0755 /dev/stdin \
+    run_as_guest_owner install -D -o 0 -g 0 -m 0755 /dev/stdin \
         "${root}/usr/libexec/hephaestus/integration-check" <<'EOF'
 #!/bin/sh
 krun_dhcp='absent'
@@ -250,17 +260,70 @@ EOF
         die "integration image already assigns guest UID 10001: ${root}"
     grep -qE '(^|:)10001:' "${root}/etc/group" &&
         die "integration image already assigns guest GID 10001: ${root}"
-    printf 'heph-agent:x:10001:10001:Hephaestus agent:/nonexistent:/sbin/nologin\n' \
-        >>"${root}/etc/passwd"
-    printf 'heph-agent:x:10001:\n' >>"${root}/etc/group"
+    printf 'heph-agent:x:10001:10001:Hephaestus agent:/nonexistent:/sbin/nologin\n' |
+        run_as_guest_owner tee -a "${root}/etc/passwd" >/dev/null
+    printf 'heph-agent:x:10001:\n' |
+        run_as_guest_owner tee -a "${root}/etc/group" >/dev/null
+    verify_guest_root_owners "${root}"
 }
 
 run_as_guest_owner() {
-    if [[ "$(id -u)" -eq 10001 && "$(id -g)" -eq 10001 ]]; then
-        "$@"
-    else
-        unshare --map-user 10001 --map-group 10001 "$@"
-    fi
+    # Always create the reviewed map, including when the caller is already
+    # UID/GID 10001. Never extract OCI root as the workload via a fast path.
+    # These retained capabilities belong only to the new user namespace.
+    unshare --map-auto --map-user 10001 --map-group 10001 --keep-caps "$@"
+}
+
+check_guest_owner_mapping() {
+    run_as_guest_owner python3 - "$(id -u)" "$(id -g)" <<'PYMAP'
+import json, os, sys
+from pathlib import Path
+
+def mapping(kind):
+    rows = [tuple(map(int, line.split())) for line in
+            Path(f"/proc/self/{kind}_map").read_text().splitlines()]
+    def outer(identity):
+        hits = [outside + identity - inside for inside, outside, count in rows
+                if inside <= identity < inside + count]
+        if len(hits) != 1:
+            raise SystemExit(f"unsupported {kind} mapping for {identity}")
+        return hits[0]
+    caller = int(sys.argv[1 if kind == "uid" else 2])
+    if outer(10001) != caller or outer(0) in (0, caller):
+        raise SystemExit(f"{kind} mapping does not separate guest root and workload")
+    for identity in (1000, 65534):
+        outer(identity)  # Ubuntu's ordinary and nobody numeric owners must map.
+    return rows
+
+if (os.geteuid(), os.getegid()) != (10001, 10001):
+    raise SystemExit("fixture process must remain non-root UID/GID 10001")
+print("LIBKRUN_FIXTURE_ID_MAP=" + json.dumps({
+    "uid": mapping("uid"), "gid": mapping("gid")}, sort_keys=True))
+PYMAP
+}
+
+verify_guest_root_owners() {
+    run_as_guest_owner python3 - "$1" <<'PYOWNERS'
+import json, os, stat, sys
+from pathlib import Path
+root = Path(sys.argv[1])
+observed = {}
+for relative in (".", "var", "var/lib", "etc", "usr", "usr/libexec",
+                 "usr/libexec/hephaestus"):
+    path = root / relative
+    metadata = path.lstat()
+    mode = stat.S_IMODE(metadata.st_mode)
+    if not stat.S_ISDIR(metadata.st_mode) or (metadata.st_uid, metadata.st_gid) != (0, 0) or mode & 0o022:
+        raise SystemExit(f"unsafe fixture root ancestor: {relative}")
+    observed[relative] = {"uid": metadata.st_uid, "gid": metadata.st_gid,
+                          "mode": oct(mode)}
+for name in ("heph-init", "heph-git-credential", "integration-check.payload",
+             "integration-check"):
+    metadata = (root / "usr/libexec/hephaestus" / name).lstat()
+    if not stat.S_ISREG(metadata.st_mode) or (metadata.st_uid, metadata.st_gid) != (0, 0) or stat.S_IMODE(metadata.st_mode) != 0o755:
+        raise SystemExit(f"unsafe fixture guest entrypoint: {name}")
+print("LIBKRUN_FIXTURE_ROOT_OWNERS=" + json.dumps(observed, sort_keys=True))
+PYOWNERS
 }
 
 contains_word() {
@@ -767,8 +830,8 @@ cleanup() {
         podman rmi "${verifier_vm_image}" >/dev/null 2>&1 || true
     fi
     if [[ -n "${fixture_root}" && -f "${fixture_root}/.hephaestus-integration-fixture" ]]; then
-        chmod -R u+w "${fixture_root}"
-        rm -rf -- "${fixture_root}"
+        run_as_guest_owner chmod -R u+w "${fixture_root}"
+        run_as_guest_owner rm -rf -- "${fixture_root}"
     fi
     if [[ -n "${runtime_root}" && -d "${runtime_root}" ]]; then
         chmod -R u+w "${runtime_root}"
@@ -792,13 +855,11 @@ trap 'interrupt TERM' TERM
 [[ "$(uname -m)" == "x86_64" ]] ||
     die "the pinned fixture currently supports x86_64 only"
 
-for command in awk blkid cargo cat find grep head id install ldconfig mkfs.ext4 mktemp musl-gcc openssl podman python3 rustup sha256sum sort tar timeout truncate unshare; do
+for command in awk blkid cargo cat chown find grep head id install ldconfig mkfs.ext4 mktemp musl-gcc newgidmap newuidmap openssl podman python3 rustup sha256sum sort tar tee timeout truncate unshare; do
     require_command "${command}"
 done
-if [[ "$(id -u)" -ne 10001 || "$(id -g)" -ne 10001 ]]; then
-    unshare --map-user 10001 --map-group 10001 true ||
-        die "cannot map the integration process to guest UID/GID 10001"
-fi
+check_guest_owner_mapping ||
+    die "cannot preserve distinct OCI-root and workload ownership in the fixture namespace"
 [[ -r /dev/kvm && -w /dev/kvm ]] || die "/dev/kvm is not readable and writable"
 [[ -x /usr/bin/passt ]] || die "/usr/bin/passt is unavailable"
 loader_cache="$(ldconfig -p)"
@@ -848,7 +909,13 @@ mkdir -p \
     "${fixture_root}/mounts/repository" \
     "${fixture_root}/mounts/workspace"
 
-materialize_image "${ubuntu_image}" "${fixture_root}/rootfs" fixture
+if [[ "${HEPHAESTUS_APP_SQLITE_PUBLICATION:-0}" == "1" ]]; then
+    materialize_layout_image "${ubuntu_image}" \
+        "${HEPHAESTUS_SQLITE_PYTHON_LAYOUT:?reviewed Python layout required}" \
+        "${fixture_root}/rootfs" fixture
+else
+    materialize_image "${ubuntu_image}" "${fixture_root}/rootfs" fixture
+fi
 prepare_guest_root "${fixture_root}/rootfs"
 if [[ "${HEPHAESTUS_APP_COOKING_BUILD_PROOF:-0}" == "1" ]]; then
     phase_timing_start oci-image-materialization
@@ -958,6 +1025,10 @@ if [[ "${HEPHAESTUS_APP_LIBKRUN_E2E:-0}" == "1" ]]; then
     phase_timing_end runtime-worker-build passed
     phase_timing_start golden-tests
     golden_features=()
+    golden_test_args=(--nocapture)
+    if [[ "${HEPHAESTUS_APP_SQLITE_PUBLICATION:-0}" == "1" ]]; then
+        golden_test_args=(sqlite_publication::configured_source_build_and_authenticated_publication --ignored --exact --nocapture)
+    fi
     if [[ "${HEPHAESTUS_APP_GATEWAY_SERVICE_LOG_GUEST_E2E:-0}" == "1" ||
         "${HEPHAESTUS_APP_GATEWAY_SERVICE_LOG_RPC_E2E:-0}" == "1" ]]; then
         golden_features+=(--features test-fixtures)
@@ -988,7 +1059,7 @@ if [[ "${HEPHAESTUS_APP_LIBKRUN_E2E:-0}" == "1" ]]; then
         --package hephaestus-app \
         --test golden \
         "${golden_features[@]}" \
-        -- --nocapture
+        -- "${golden_test_args[@]}"
     phase_timing_end golden-tests passed
     if [[ "${HEPHAESTUS_APP_SESSION_CHAT_NEGATIVE_E2E:-0}" == "1" ]]; then
         # Keep the negative proof in a fresh golden process. The canonical
@@ -1096,16 +1167,18 @@ if [[ "${HEPHAESTUS_APP_LIBKRUN_E2E:-0}" == "1" ]]; then
     # Reuse the same disposable authority database and JetStream fixture for
     # the gateway publication persistence, RLS, and recovery proof. Keeping
     # it here makes the joined wrapper one complete operator command.
-    phase_timing_start database-tests
-    run_as_guest_owner env \
-        HEPHAESTUS_POSTGRES_TEST_URL="${postgres_url}" \
-        HEPHAESTUS_NATS_TEST_URL="${nats_url}" \
-        cargo test \
-        --manifest-path "${repo_root}/Cargo.toml" \
-        --package gateway-postgres \
-        --test postgres \
-        -- --nocapture
-    phase_timing_end database-tests passed
+    if [[ "${HEPHAESTUS_APP_SQLITE_PUBLICATION:-0}" != "1" ]]; then
+        phase_timing_start database-tests
+        run_as_guest_owner env \
+            HEPHAESTUS_POSTGRES_TEST_URL="${postgres_url}" \
+            HEPHAESTUS_NATS_TEST_URL="${nats_url}" \
+            cargo test \
+            --manifest-path "${repo_root}/Cargo.toml" \
+            --package gateway-postgres \
+            --test postgres \
+            -- --nocapture
+        phase_timing_end database-tests passed
+    fi
 elif [[ "${HEPHAESTUS_PHASE1B_INTEGRATION:-0}" == "1" ]]; then
     printf 'Running Phase 1B persistence test with pinned image %s\n' "${ubuntu_image}"
     [[ -n "${HEPHAESTUS_POSTGRES_TEST_URL:-}" ]] ||
@@ -1130,6 +1203,8 @@ elif [[ "${HEPHAESTUS_PHASE1B_INTEGRATION:-0}" == "1" ]]; then
         -- --nocapture
 else
     printf 'Running libkrun smoke test with pinned image %s\n' "${ubuntu_image}"
+    printf 'LIBKRUN_SMOKE_SCOPE boot=enabled git_bridge=enabled named_volume_optin=%s guest_initialization=ignored\n' \
+        "${HEPHAESTUS_LIBKRUN_NAMED_INTEGRATION:-0}"
     run_as_guest_owner env \
         HEPHAESTUS_LIBKRUN_INTEGRATION=1 \
         HEPHAESTUS_LIBKRUN_RUNTIME_ROOT="${runtime_root}" \

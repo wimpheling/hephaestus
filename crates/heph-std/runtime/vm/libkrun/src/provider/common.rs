@@ -1,4 +1,6 @@
 use super::helpers::{ProcessStatus, wire_to_vm_error};
+pub(super) use super::launch::{LaunchCustody, PendingLaunch};
+pub(super) use super::worker_process::WorkerProcess;
 
 pub(super) use crate::{
     cgroup::Cgroup,
@@ -17,16 +19,18 @@ pub(super) use crate::{
 pub(super) use async_trait::async_trait;
 pub(super) use bytes::Bytes;
 pub(super) use http::{HeaderMap, HeaderName, HeaderValue, StatusCode};
+#[cfg(test)]
+pub(super) use std::os::unix::fs::PermissionsExt;
 pub(super) use std::{
     collections::{HashMap, HashSet},
     error::Error,
     fmt, fs, io,
-    os::unix::{fs::PermissionsExt, process::ExitStatusExt},
+    os::unix::process::ExitStatusExt,
     path::{Path, PathBuf},
     process::ExitStatus,
     sync::{
         Arc,
-        atomic::{AtomicU64, Ordering},
+        atomic::{AtomicBool, AtomicU64, Ordering},
     },
     time::Duration,
 };
@@ -47,23 +51,45 @@ pub(super) const PROCESS_POLL_INTERVAL: Duration = Duration::from_millis(20);
 pub(super) const PRIVATE_HTTP_TIMEOUT: Duration = Duration::from_secs(30);
 
 /// Fedora/Linux VM provider backed by a dedicated libkrun worker per VM.
-pub(super) struct ProviderInner {
+pub(super) struct ProviderLifetime {
     pub(super) config: Arc<LibkrunConfig>,
     pub(super) ids: Mutex<HashSet<VmId>>,
     pub(super) worker_spawner: Arc<dyn WorkerSpawner>,
+    pub(super) owner: std::sync::OnceLock<super::ownership::ProviderOwner>,
 }
+
+pub(super) struct ProviderInner {
+    pub(super) lifetime: Arc<ProviderLifetime>,
+    pub(super) registry: Arc<super::registry::Registry>,
+    pub(super) failed_cleanup: Mutex<HashMap<VmId, Arc<LibkrunInstance>>>,
+    pub(super) pending_launches: std::sync::Mutex<HashMap<VmId, Arc<PendingLaunch>>>,
+}
+impl std::ops::Deref for ProviderInner {
+    type Target = ProviderLifetime;
+    fn deref(&self) -> &Self::Target {
+        &self.lifetime
+    }
+}
+
 pub(super) struct LibkrunInstance {
+    pub(super) this: std::sync::Weak<Self>,
     pub(super) id: VmId,
     pub(super) config: Arc<LibkrunConfig>,
     pub(super) worker: Arc<dyn WorkerBackend>,
     pub(super) state: Mutex<Lifecycle>,
+    pub(super) operation: Mutex<()>,
+    pub(super) destroy_requested: watch::Sender<bool>,
+    pub(super) stop_requested: watch::Sender<bool>,
+    pub(super) cleanup_complete: AtomicBool,
     pub(super) terminal: watch::Sender<Option<Terminal>>,
     pub(super) terminal_guard: Mutex<()>,
     pub(super) ready: watch::Sender<bool>,
     pub(super) start_result: watch::Sender<Option<Result<(), ErrorSnapshot>>>,
     pub(super) events: broadcast::Sender<VmEvent>,
     pub(super) resources: Mutex<Option<OwnedResources>>,
-    pub(super) provider_ids: Arc<ProviderInner>,
+    pub(super) provider_ids: Arc<ProviderLifetime>,
+    pub(super) registry: std::sync::Weak<super::registry::Registry>,
+    pub(super) birth: u64,
     pub(super) private_http_enabled: bool,
     pub(super) private_service_timeout: Option<Duration>,
     pub(super) private_service_dispatch: Option<Arc<Semaphore>>,
@@ -85,13 +111,17 @@ pub(super) enum Lifecycle {
     Stopping,
     Exited,
     StartFailed(ErrorSnapshot),
+    Destroying { was_started: bool },
     Destroyed,
 }
 
 pub(super) struct OwnedResources {
     pub(super) runtime_dir: PathBuf,
+    pub(super) runtime_child: Option<crate::directory::ChildDirectory>,
+    pub(super) birth_record: Option<Arc<super::containment::BirthRecord>>,
     pub(super) cgroup: Cgroup,
     pub(super) service_broker: Option<Arc<ServiceBroker>>,
+    pub(super) cleanup_roots: Option<super::ownership::PinnedCleanupRoots>,
 }
 
 #[derive(Debug, Clone)]
@@ -159,9 +189,7 @@ pub(super) struct WorkerClient {
     pub(super) pending: PendingRequests,
     pub(super) next_request: AtomicU64,
     pub(super) events: broadcast::Sender<WorkerEvent>,
-    pub(super) child: Arc<Mutex<Child>>,
-    pub(super) process_exit: watch::Sender<Option<ProcessStatus>>,
-    pub(super) pid: u32,
+    pub(super) process: Arc<WorkerProcess>,
 }
 
 #[async_trait]
@@ -175,12 +203,15 @@ pub(super) trait WorkerBackend: Send + Sync {
 
 #[async_trait]
 pub(super) trait WorkerSpawner: Send + Sync {
+    // Publish the exact raw process/backend into the supplied owning launch
+    // before any await that can leave effects. Err carries cause, not absence.
     async fn spawn(
         &self,
         config: Arc<LibkrunConfig>,
         spec: PreparedSpec,
         runtime_dir: &Path,
         cgroup: &Cgroup,
+        custody: &LaunchCustody,
     ) -> Result<Arc<dyn WorkerBackend>, VmError>;
 }
 
@@ -194,8 +225,9 @@ impl WorkerSpawner for ProcessWorkerSpawner {
         spec: PreparedSpec,
         runtime_dir: &Path,
         cgroup: &Cgroup,
+        custody: &LaunchCustody,
     ) -> Result<Arc<dyn WorkerBackend>, VmError> {
-        WorkerClient::launch(config, spec, runtime_dir, cgroup)
+        WorkerClient::launch(config, spec, runtime_dir, cgroup, custody)
             .await
             .map(|worker| worker as Arc<dyn WorkerBackend>)
     }

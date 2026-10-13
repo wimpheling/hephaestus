@@ -65,6 +65,13 @@ pub enum HostMessage {
         mounts: Vec<GuestMount>,
         /// Persistent agent-state volume to locate by filesystem UUID.
         state_volume: Option<GuestStateVolume>,
+        /// Bounded exact named volume attachments; never a legacy projection.
+        #[serde(
+            default,
+            skip_serializing_if = "Vec::is_empty",
+            deserialize_with = "vm_trait::deserialize_guest_volumes"
+        )]
+        volumes: Vec<super::GuestVolume>,
         /// Sensitive one-run authority delivered only on this authenticated
         /// host-to-guest bootstrap stream.
         runtime_authority: Option<Box<RuntimeAuthorityMessage>>,

@@ -125,6 +125,22 @@ tuples:
     relation: use_brokered
     object: secret_lease:model-one
 
+  - user: project:forge
+    relation: project
+    object: state_volume:standalone-data
+  - user: project:forge
+    relation: project
+    object: state_volume:builder-state
+  - user: organization:acme
+    relation: organization
+    object: project:other
+  - user: user:other-maintainer
+    relation: maintainer
+    object: project:other
+  - user: project:other
+    relation: project
+    object: state_volume:other-data
+
 tests:
   - name: organization hierarchy
     check:
@@ -402,4 +418,57 @@ tests:
         object: agent_instance:reviewer
         assertions:
           can_read: false
+          can_manage: false
+
+  - name: standalone volumes require the stable project manager and exact consumer bindings
+    check:
+      - user: user:maintainer
+        object: state_volume:standalone-data
+        assertions:
+          can_read: true
+          can_manage: true
+          can_attach: true
+          can_restore: true
+          can_grant_agent_capability: true
+      - user: user:member
+        object: state_volume:standalone-data
+        assertions:
+          can_read: false
+          can_manage: false
+          can_attach: false
+          can_grant_agent_capability: false
+      - user: user:owner
+        object: state_volume:standalone-data
+        assertions:
+          can_read: false
+          can_manage: false
+          can_attach: false
+      - user: user:capability-granter
+        object: state_volume:standalone-data
+        assertions:
+          can_read: false
+          can_grant_agent_capability: false
+          can_attach: false
+      - user: user:other-maintainer
+        object: state_volume:standalone-data
+        assertions:
+          can_read: false
+          can_manage: false
+          can_attach: false
+      - user: user:maintainer
+        object: state_volume:other-data
+        assertions:
+          can_read: false
+          can_attach: false
+      - user: agent_instance:reviewer
+        object: state_volume:standalone-data
+        assertions:
+          agent_inspect: false
+          agent_attach: false
+          agent_restore: false
+      - user: user:member
+        object: state_volume:builder-state
+        assertions:
+          can_read: true
+          can_attach: false
           can_manage: false

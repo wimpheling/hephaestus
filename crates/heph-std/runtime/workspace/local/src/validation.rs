@@ -35,6 +35,9 @@ pub fn parse_run_kind(value: &str) -> Result<RunKind, LocalWorkspaceError> {
     match value {
         "normal" => Ok(RunKind::Normal),
         "update" => Ok(RunKind::Update),
+        "invocation" => Err(LocalWorkspaceError::State(String::from(
+            "Invocation repository workspaces are unsupported",
+        ))),
         _ => Err(LocalWorkspaceError::State(String::from(
             "stored run kind is invalid",
         ))),

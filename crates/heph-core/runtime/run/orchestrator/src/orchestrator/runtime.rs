@@ -27,6 +27,17 @@ pub trait RunRuntimeManager: Send + Sync + 'static {
 pub trait RunLaunchAuthorizer: Send + Sync + 'static {
     /// Rechecks the exact run, attachment/update, and release authority.
     async fn authorize(&self, run: &Run) -> Result<(), RunAuthorizationError>;
+
+    /// Rechecks live caller execute/update and exact released-source authority.
+    ///
+    /// This also runs for empty volume sets. Mailbox adapters must prove their
+    /// actual accepted/delegated producer authority, without inventing a user
+    /// principal. Implementing the legacy method does not opt into this port.
+    async fn authorize_with_volumes(&self, _run: &Run) -> Result<(), RunAuthorizationError> {
+        Err(RunAuthorizationError::redacted(
+            "canonical live caller/source authorization is unsupported",
+        ))
+    }
 }
 
 /// Persists exact resources bound to a run before guest provisioning.

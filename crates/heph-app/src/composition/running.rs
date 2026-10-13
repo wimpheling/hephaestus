@@ -11,13 +11,22 @@ use std::{net::SocketAddr, time::Instant};
 use tokio::task::JoinHandle;
 use tokio_util::sync::CancellationToken;
 
+pub struct OrdinaryCustody {
+    pub _build: Arc<crate::BuildExecutor>,
+    pub _oci: Option<Arc<crate::OciBuilderWorkers>>,
+    pub _gateway: Option<crate::GatewayEdgeRuntime>,
+    pub _original_app: Option<Arc<crate::HephaestusApp>>,
+}
+
 /// Running daemon handle.
 pub struct RunningHephaestus {
+    pub(super) managed_backend: Option<crate::managed_backend::NodeLease>,
     pub(super) http_addr: SocketAddr,
     pub(super) cancellation: CancellationToken,
     pub(super) tasks: Vec<JoinHandle<Result<(), String>>>,
     pub(super) pool: PgPool,
     pub(super) application_pool: PgPool,
+    pub(super) worker_pool: PgPool,
     pub(super) service_log_pool: PgPool,
     pub(super) nats_client: async_nats::Client,
     pub(super) jetstream: async_nats::jetstream::Context,
@@ -29,9 +38,38 @@ pub struct RunningHephaestus {
     pub(super) outbox_batch_size: i64,
     pub(super) product_event_cursor_key: [u8; 32],
     pub(super) shutdown_timeout: Duration,
+    pub(super) ordinary: Arc<OrdinaryCustody>,
 }
 
 impl RunningHephaestus {
+    pub(super) fn managed_facade(&self) -> Result<Self, AppError> {
+        let lease = self
+            .managed_backend
+            .as_ref()
+            .ok_or_else(|| AppError::Readiness("original managed Running lease missing".into()))?;
+        Ok(Self {
+            managed_backend: Some(lease.fork_service_lease()),
+            http_addr: self.http_addr,
+            cancellation: self.cancellation.clone(),
+            tasks: Vec::new(),
+            pool: self.pool.clone(),
+            application_pool: self.application_pool.clone(),
+            worker_pool: self.worker_pool.clone(),
+            service_log_pool: self.service_log_pool.clone(),
+            nats_client: self.nats_client.clone(),
+            jetstream: self.jetstream.clone(),
+            forge: Arc::clone(&self.forge),
+            run_repository: Arc::clone(&self.run_repository),
+            mailbox_repository: Arc::clone(&self.mailbox_repository),
+            review_repository: Arc::clone(&self.review_repository),
+            orchestrator: Arc::clone(&self.orchestrator),
+            outbox_batch_size: self.outbox_batch_size,
+            product_event_cursor_key: self.product_event_cursor_key,
+            shutdown_timeout: self.shutdown_timeout,
+            ordinary: Arc::clone(&self.ordinary),
+        })
+    }
+
     /// Bound HTTP address after the readiness barrier.
     #[must_use]
     pub const fn http_addr(&self) -> SocketAddr {
@@ -91,6 +129,10 @@ impl RunningHephaestus {
     ///
     /// Returns the first task or resource-shutdown failure.
     pub async fn shutdown(mut self) -> Result<(), AppError> {
+        if let Some(managed) = &self.managed_backend {
+            // The original bundle is node-owned; this facade owns no service jobs.
+            return managed.wait_stopped(self.shutdown_timeout).await;
+        }
         self.cancellation.cancel();
         for run in self
             .run_repository
@@ -137,8 +179,25 @@ impl RunningHephaestus {
         }
         self.pool.close().await;
         self.application_pool.close().await;
+        self.worker_pool.close().await;
         self.service_log_pool.close().await;
         first_error.map_or(Ok(()), Err)
+    }
+
+    pub(super) async fn close_managed_services(&self) -> Result<(), AppError> {
+        // Called by original service custody only after its qualified physical
+        // ordinary-owner boundary and actual task joins have succeeded.
+        self.flush_outbox(Instant::now() + self.shutdown_timeout)
+            .await?;
+        self.nats_client
+            .drain()
+            .await
+            .map_err(|cause| AppError::Shutdown(cause.to_string()))?;
+        self.pool.close().await;
+        self.application_pool.close().await;
+        self.worker_pool.close().await;
+        self.service_log_pool.close().await;
+        Ok(())
     }
 
     async fn flush_outbox(&self, deadline: Instant) -> Result<(), AppError> {

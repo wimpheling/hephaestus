@@ -81,6 +81,7 @@ pub(super) fn ready_supervisor(
         identity,
         service: service.clone(),
         spec: vm_trait::VmSpec {
+            guest_volumes: Vec::new(),
             id: VmId(format!("gateway-service-{instance_id}")),
             root: RootFilesystem::Directory {
                 host_path: PathBuf::from("/tmp/supervisor-ready-root"),

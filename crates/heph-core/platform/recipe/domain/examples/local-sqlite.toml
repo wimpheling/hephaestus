@@ -1,0 +1,40 @@
+contract_version = 1
+recipe_id = "local-sqlite"
+recipe_version = "1.0.0"
+
+[[inputs]]
+name = "capacity"
+required = true
+default = 16777216
+value_type = { type = "integer", minimum = 16777216, maximum = 1073741824 }
+
+[[inputs]]
+name = "database"
+default = "/data/app.sqlite"
+value_type = { type = "string", minimum_length = 1, maximum_length = 128 }
+
+[[resources]]
+kind = "volume"
+name = "data"
+source = { type = "created", capacity_bytes = { source = "input", name = "capacity" } }
+
+[[resources]]
+kind = "instance"
+name = "app"
+removal = "delete"
+release = { release_id = "10000000-0000-4000-8000-000000000001", release_agent_id = "10000000-0000-4000-8000-000000000002" }
+parameters = { database = { source = "input", name = "database" } }
+
+[[resources.volume_bindings]]
+slot = "state"
+resource = "data"
+guest_path = "/data"
+access_mode = "read_write"
+
+[[outputs]]
+name = "application"
+value = { source = "resource", name = "app" }
+
+[[outputs]]
+name = "volume"
+value = { source = "resource", name = "data" }

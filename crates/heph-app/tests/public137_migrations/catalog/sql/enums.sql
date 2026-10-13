@@ -1,0 +1,1 @@
+SELECT payload,payload::text FROM (SELECT coalesce(jsonb_agg(jsonb_build_object('raw',to_jsonb(e),'type',to_jsonb(pg_identify_object('pg_type'::regclass,e.enumtypid,0))) ORDER BY e.enumtypid,e.enumsortorder,e.oid),'[]'::jsonb) AS payload FROM pg_enum e JOIN pg_type t ON t.oid=e.enumtypid WHERE t.typnamespace='public'::regnamespace) AS capture

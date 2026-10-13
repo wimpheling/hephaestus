@@ -1,0 +1,1 @@
+SELECT payload,payload::text FROM (SELECT coalesce(jsonb_agg(jsonb_build_object('oid',c.oid::bigint,'schema',n.nspname,'name',c.relname,'kind',c.relkind) ORDER BY c.oid),'[]'::jsonb) AS payload FROM pg_class c JOIN pg_namespace n ON n.oid=c.relnamespace JOIN pg_sequence s ON s.seqrelid=c.oid WHERE n.nspname='public' AND c.relkind='S') AS capture

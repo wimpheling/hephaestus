@@ -178,6 +178,15 @@ pub struct RunApplication {
 /// Immutable launch contract loaded for a run before guest construction.
 #[derive(FromRow)]
 pub struct VmLaunchContract {
+    pub run_id: Uuid,
+    pub instance_id: Uuid,
+    pub instance_revision_id: Uuid,
+    pub release_id: Uuid,
+    pub release_agent_id: Uuid,
+    pub project_id: Uuid,
+    pub runtime_contract_hash: Vec<u8>,
+    pub volume_mode: String,
+    pub state_volume_id: Option<Uuid>,
     pub runtime_contract: Value,
     pub effective_runtime_policy: Value,
     pub requires_state: bool,

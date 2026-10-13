@@ -1,5 +1,5 @@
 use mailbox_domain::{MailboxId, MailboxOperationIdentity};
-use run_domain::{RunKind, StartRun};
+use run_domain::{FreshRunExecutionProfile, RunKind, StartRun};
 use runtime_types::{
     AgentAttachmentId, AgentInstanceId, AgentInstanceRevisionId, CommandId, ReleaseAgentId,
     ReleaseId, RunId,
@@ -22,7 +22,16 @@ impl PostgresMailboxRepository {
         &self,
         command: &MailboxDispatchCommand,
     ) -> Result<Option<StartRun>, MailboxDispatchStoreError> {
+        self.require_legacy_placement_profile()?;
+        if self.execution_profile == Some(FreshRunExecutionProfile::OwnedCanonical) {
+            return Err(MailboxDispatchStoreError(
+                "owned mailbox dispatch is unsupported without positive delegation admission"
+                    .into(),
+            ));
+        }
         let mut transaction = worker_transaction(&self.pool).await?;
+        self.lock_legacy_placement_parent(&mut transaction, command.event_id.as_uuid())
+            .await?;
         let target = sqlx::query_as::<_, DispatchTargetRow>(
             "SELECT event.mailbox_id, event.instance_id, revision.id AS instance_revision_id,
                     release_agent.release_id, revision.release_agent_id,
@@ -173,23 +182,46 @@ impl PostgresMailboxRepository {
             attempt_number_u32,
         )
         .id();
-        sqlx::query(
-            "INSERT INTO runs (id, instance_id, instance_revision_id, release_id,
+        let insert = if self.legacy_vm_scope.is_some() {
+            sqlx::query(
+                "INSERT INTO runs (id,instance_id,instance_revision_id,release_id,
+                 release_agent_id,attachment_id,run_kind,command_id,state,requires_state,
+                 created_at,updated_at,execution_profile,legacy_vm_placement_required)
+                 VALUES($1,$2,$3,$4,$5,$6,'normal',$7,'queued',$8,now(),now(),$9,true)",
+            )
+        } else if self.execution_profile.is_some() {
+            sqlx::query(
+                "INSERT INTO runs (id, instance_id, instance_revision_id, release_id,
+                 release_agent_id, attachment_id, run_kind, command_id, state,
+                 requires_state, created_at, updated_at, execution_profile)
+                 VALUES ($1, $2, $3, $4, $5, $6, 'normal', $7, 'queued', $8, now(), now(), $9)",
+            )
+        } else {
+            sqlx::query(
+                "INSERT INTO runs (id, instance_id, instance_revision_id, release_id,
                  release_agent_id, attachment_id, run_kind, command_id, state,
                  requires_state, created_at, updated_at)
              VALUES ($1, $2, $3, $4, $5, $6, 'normal', $7, 'queued', $8, now(), now())",
-        )
-        .bind(run_id)
-        .bind(target.instance_id)
-        .bind(target.instance_revision_id)
-        .bind(target.release_id)
-        .bind(target.release_agent_id)
-        .bind(target.attachment_id)
-        .bind(attempt_id.as_uuid())
-        .bind(target.requires_state)
-        .execute(&mut *transaction)
-        .await
-        .map_err(dispatch_error)?;
+            )
+        };
+        let insert = insert
+            .bind(run_id)
+            .bind(target.instance_id)
+            .bind(target.instance_revision_id)
+            .bind(target.release_id)
+            .bind(target.release_agent_id)
+            .bind(target.attachment_id)
+            .bind(attempt_id.as_uuid())
+            .bind(target.requires_state);
+        let insert = if let Some(profile) = self.execution_profile {
+            insert.bind(profile.as_str())
+        } else {
+            insert
+        };
+        insert
+            .execute(&mut *transaction)
+            .await
+            .map_err(dispatch_error)?;
         sqlx::query(
             "INSERT INTO mailbox_delivery_attempts
               (id, event_id, mailbox_id, attempt_number, state, command_id, instance_id,
@@ -214,6 +246,8 @@ impl PostgresMailboxRepository {
         .execute(&mut *transaction)
         .await
         .map_err(dispatch_error)?;
+        self.stamp_legacy_placement(&mut transaction, run_id)
+            .await?;
         transaction.commit().await.map_err(dispatch_error)?;
         Ok(Some(StartRun {
             command_id: CommandId::from_uuid(attempt_id.as_uuid()),

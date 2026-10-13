@@ -53,6 +53,24 @@ impl ReleaseService {
             ),
         )
         .await?;
+        let candidate: UpdateCandidateRow = sqlx::query_as(
+            "SELECT candidate.family_id, candidate.parameter_schema,
+                    candidate.secret_slot_schema, candidate.runtime_contract,
+                    candidate.requires_state, candidate.update_hook,
+                    candidate.publication_mode,
+                    candidate.publication_repository_slot
+             FROM release_agents AS candidate
+             JOIN releases AS release ON release.id = candidate.release_id
+             WHERE candidate.id = $1 AND release.state = 'published'",
+        )
+        .bind(command.candidate_release_agent_id.as_uuid())
+        .fetch_optional(&mut *tx)
+        .await?
+        .ok_or(ReleaseServiceError::Unavailable)?;
+        super::release_build::runtime_contract::require_legacy_import(
+            &candidate.runtime_contract,
+            candidate.requires_state,
+        )?;
         if let Some((id, _)) =
             existing_command(&mut tx, command.command_key, "create_update").await?
         {
@@ -84,20 +102,6 @@ impl ReleaseService {
         {
             return Err(ReleaseServiceError::ConcurrentUpdate);
         }
-        let candidate: UpdateCandidateRow = sqlx::query_as(
-            "SELECT candidate.family_id, candidate.parameter_schema,
-                    candidate.secret_slot_schema, candidate.runtime_contract,
-                    candidate.requires_state, candidate.update_hook,
-                    candidate.publication_mode,
-                    candidate.publication_repository_slot
-             FROM release_agents AS candidate
-             JOIN releases AS release ON release.id = candidate.release_id
-             WHERE candidate.id = $1 AND release.state = 'published'",
-        )
-        .bind(command.candidate_release_agent_id.as_uuid())
-        .fetch_optional(&mut *tx)
-        .await?
-        .ok_or(ReleaseServiceError::Unavailable)?;
         if candidate.family_id != current.family_id {
             return Err(ReleaseServiceError::AgentFamilyMismatch);
         }

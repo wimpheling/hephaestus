@@ -12,6 +12,22 @@ use runtime_authority_postgres::PgRuntimeSessionRepository;
 use runtime_git_authority::{RuntimeGitAuthorityError, RuntimeGitCredentialIssuer};
 use runtime_git_authority_postgres::PgRuntimeGitCredentialRepository;
 use runtime_handoff_local::EncryptedFileRuntimeGitHandoffStore;
+
+#[path = "runtime_authority_manager/cleanup.rs"]
+mod cleanup;
+
+#[path = "runtime_authority_manager/invocation.rs"]
+mod invocation;
+
+#[path = "runtime_authority_manager/ordinary_time.rs"]
+mod ordinary_time;
+
+#[path = "runtime_authority_manager/live.rs"]
+pub mod live;
+
+#[cfg(test)]
+#[path = "runtime_authority_manager/postgres.rs"]
+pub mod postgres;
 /// Persisted run lifecycle event used by operational waits.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum RunEventKind {
@@ -32,6 +48,7 @@ impl RunEventKind {
     }
 }
 
+/// Trusted worker adapter for issuing and checking exact run runtime sessions.
 pub struct PgRunAuthorityManager {
     repository: PgRuntimeSessionRepository,
     issuer: RuntimeSessionIssuer<PgRuntimeSessionRepository, EncryptedFileHandoffStore>,
@@ -40,9 +57,16 @@ pub struct PgRunAuthorityManager {
         EncryptedFileRuntimeGitHandoffStore,
     >,
     session_ttl: time::Duration,
+    canonical_live_authority: bool,
+    invocation: Option<invocation::QualifiedInvocation>,
 }
 
 impl PgRunAuthorityManager {
+    /// Creates a manager with the existing Provisioning-only scalar checks.
+    ///
+    /// # Errors
+    ///
+    /// Rejects unavailable encrypted handoff storage or an invalid session TTL.
     pub fn new(
         pool: PgPool,
         git_repository: PgRuntimeGitCredentialRepository,
@@ -50,7 +74,42 @@ impl PgRunAuthorityManager {
         handoff_key: [u8; 32],
         session_ttl: Duration,
     ) -> Result<Self, AppError> {
-        let repository = PgRuntimeSessionRepository::new(pool);
+        Self::from_repositories(
+            PgRuntimeSessionRepository::new(pool),
+            git_repository,
+            (handoff_root, handoff_key),
+            session_ttl,
+        )
+    }
+
+    /// Creates exact expired observers from one trusted worker pool and Legacy scope.
+    ///
+    /// This changes no live issuance/profile checks. Trusted composition must
+    /// validate the actual provider owner before supplying its checked scope.
+    /// Unowned ordinary managers remain unsupported for scoped expired cleanup.
+    ///
+    /// # Errors
+    /// Rejects unavailable retained handoff storage or an unrepresentable TTL.
+    pub fn new_qualified_legacy(
+        pool: PgPool,
+        handoff: (PathBuf, [u8; 32]),
+        session_ttl: Duration,
+        scope: run_domain::LegacyVmPlacementScope,
+    ) -> Result<Self, AppError> {
+        let repository = PgRuntimeSessionRepository::new(pool.clone())
+            .with_expired_legacy_vm_placement_scope(scope.clone());
+        let git_repository = PgRuntimeGitCredentialRepository::new(pool)
+            .with_expired_legacy_vm_placement_scope(scope);
+        Self::from_repositories(repository, git_repository, handoff, session_ttl)
+    }
+
+    fn from_repositories(
+        repository: PgRuntimeSessionRepository,
+        git_repository: PgRuntimeGitCredentialRepository,
+        handoff: (PathBuf, [u8; 32]),
+        session_ttl: Duration,
+    ) -> Result<Self, AppError> {
+        let (handoff_root, handoff_key) = handoff;
         let handoff = EncryptedFileHandoffStore::new(handoff_root.clone(), handoff_key)
             .map_err(component("runtime authority handoff"))?;
         let git_handoff = EncryptedFileRuntimeGitHandoffStore::new(handoff_root, handoff_key)
@@ -63,7 +122,20 @@ impl PgRunAuthorityManager {
             git_issuer: RuntimeGitCredentialIssuer::new(git_repository, git_handoff),
             repository,
             session_ttl,
+            canonical_live_authority: false,
+            invocation: None,
         })
+    }
+
+    /// Selects read-only owned-profile liveness checks with persisted ceilings.
+    ///
+    /// Requires the owned profile schema and a worker pool. This does not change
+    /// issuance phases, enable dispatch, or supply caller or typed mount grants.
+    #[must_use]
+    pub fn with_canonical_live_authority(mut self) -> Self {
+        self.repository = self.repository.with_canonical_live_snapshots();
+        self.canonical_live_authority = true;
+        self
     }
 
     async fn snapshot(
@@ -80,6 +152,12 @@ impl PgRunAuthorityManager {
 #[async_trait]
 impl RunAuthorityManager for PgRunAuthorityManager {
     async fn prepare(&self, run: &Run) -> Result<PreparedRunAuthority, RunAuthorityError> {
+        if let Some(current) = self.invocation_run(run).await? {
+            return self.prepare_invocation(&current).await;
+        }
+        if self.canonical_live_authority {
+            live::snapshot(&self.repository, run).await?;
+        }
         let snapshot = self.snapshot(run).await?;
         if !self
             .repository
@@ -97,12 +175,17 @@ impl RunAuthorityManager for PgRunAuthorityManager {
             .find(session_id)
             .await
             .map_err(authority_error)?;
-        let issued_at = existing
-            .as_ref()
-            .map_or_else(OffsetDateTime::now_utc, |session| session.issued_at);
-        let expires_at = existing
-            .as_ref()
-            .map_or(issued_at + self.session_ttl, |session| session.expires_at);
+        let (issued_at, expires_at) = ordinary_time::interval(
+            existing
+                .as_ref()
+                .map(|session| (session.issued_at, session.expires_at)),
+            || {
+                (
+                    OffsetDateTime::now_utc().unix_timestamp_nanos(),
+                    self.session_ttl.whole_nanoseconds(),
+                )
+            },
+        )?;
         let identity = RuntimeSessionIdentity::new(
             session_id,
             snapshot.principal(),
@@ -151,6 +234,12 @@ impl RunAuthorityManager for PgRunAuthorityManager {
     }
 
     async fn reauthorize(&self, run: &Run) -> Result<(), RunAuthorityError> {
+        if let Some(current) = self.invocation_run(run).await? {
+            return self.reauthorize_invocation(&current).await;
+        }
+        if self.canonical_live_authority {
+            return live::snapshot(&self.repository, run).await.map(|_| ());
+        }
         let snapshot = self.snapshot(run).await?;
         if self
             .repository
@@ -172,6 +261,11 @@ impl RunAuthorityManager for PgRunAuthorityManager {
         session_id: Uuid,
         generation: u64,
     ) -> Result<(), RunAuthorityError> {
+        if let Some(current) = self.invocation_run(run).await? {
+            return self
+                .acknowledge_invocation(&current, session_id, generation)
+                .await;
+        }
         if session_id != run.id.as_uuid() {
             return Err(RunAuthorityError::redacted(
                 "runtime session does not match the exact run",
@@ -194,6 +288,9 @@ impl RunAuthorityManager for PgRunAuthorityManager {
     }
 
     async fn revoke_after_guest(&self, run_id: RunId) -> Result<(), RunAuthorityError> {
+        if self.invocation_cleanup_run(run_id).await? {
+            return self.revoke_invocation(run_id).await;
+        }
         let session_id = RuntimeSessionId::from_uuid(run_id.as_uuid());
         let Some(session) = self
             .repository
@@ -207,14 +304,14 @@ impl RunAuthorityManager for PgRunAuthorityManager {
             session.status,
             capability_domain::RuntimeSessionStatus::Expired
         ) {
-            self.issuer
-                .recover_expired(OffsetDateTime::now_utc())
-                .await
-                .map_err(authority_error)?;
-            self.git_issuer
-                .recover_expired(OffsetDateTime::now_utc())
-                .map_err(runtime_git_authority_error)?;
-            return Ok(());
+            return cleanup::expired(
+                &self.issuer,
+                &self.git_issuer,
+                run_id.as_uuid(),
+                session.id,
+                session.generation,
+            )
+            .await;
         }
         self.issuer
             .revoke(session_id, OffsetDateTime::now_utc(), "run guest destroyed")

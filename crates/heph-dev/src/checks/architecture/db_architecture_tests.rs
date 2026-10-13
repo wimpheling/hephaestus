@@ -2,6 +2,8 @@
 mod exceptions;
 #[path = "db_architecture_tests/metadata.rs"]
 mod metadata;
+#[path = "db_architecture_tests/migration_ownership.rs"]
+mod migration_ownership;
 #[path = "db_architecture_tests/pagination.rs"]
 mod pagination;
 #[path = "db_architecture_tests/support.rs"]

@@ -4,7 +4,6 @@ use super::{
 };
 use async_trait::async_trait;
 use axum::Router;
-use control_plane_postgres::connect as connect_control_plane;
 use event_postgres::ReleaseOutboxPublisher;
 use forge_nats::ForgeNatsOutboxPublisher;
 use forge_postgres::PgForgeRepository;
@@ -177,7 +176,7 @@ impl OutboxWorker {
 
 pub async fn secret_revocation_loop(
     pool: PgPool,
-    orchestrator: Arc<RunOrchestrator>,
+    orchestrator: Arc<dyn run_orchestrator::RunCommandExecutor>,
     poll_interval: Duration,
     cancellation: CancellationToken,
     ready: oneshot::Sender<()>,
@@ -260,9 +259,22 @@ impl RevokedRawRunCanceller for RunOrchestrator {
     }
 }
 
+#[async_trait]
+impl RevokedRawRunCanceller for dyn run_orchestrator::RunCommandExecutor {
+    async fn cancel_revoked_raw_run(&self, run_id: RunId) -> Result<bool, String> {
+        self.cancel_run(&CancelRun {
+            command_id: CommandId::new(),
+            run_id,
+            reason: String::from("raw secret authority was revoked"),
+        })
+        .await
+        .map_err(|error| error.to_string())
+    }
+}
+
 pub async fn build_secret_mount_manager(
-    pool: PgPool,
-    database_url: &str,
+    application_pool: PgPool,
+    worker_pool: PgPool,
     keys: LocalKeyProvider,
     config: EphemeralSecretConfig,
 ) -> Result<
@@ -273,26 +285,23 @@ pub async fn build_secret_mount_manager(
     ),
     AppError,
 > {
-    let resolver_pool = connect_control_plane(database_url, 4)
-        .await
-        .map_err(component("secret resolver PostgreSQL connection"))?;
     let authorizer = Arc::new(authz_postgres::PostgresMelangeAuthorizer);
     let dispatch = Arc::new(SecretService::new(
-        pool.clone(),
+        application_pool.clone(),
         EncryptedStore::new(keys.clone()),
         authorizer.clone(),
     ));
     let runtime = Arc::new(
         SecretRuntimeService::new(
-            pool.clone(),
-            resolver_pool,
+            application_pool,
+            worker_pool.clone(),
             EncryptedStore::new(keys),
             authorizer,
         )
         .with_mount_provider(Arc::new(FilesystemSecretMountProvider::new())),
     );
     let manager = initialize_manager(
-        pool,
+        worker_pool,
         dispatch.as_ref().clone(),
         runtime.as_ref().clone(),
         config,

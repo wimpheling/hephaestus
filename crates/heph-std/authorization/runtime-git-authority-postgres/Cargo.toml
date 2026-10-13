@@ -15,6 +15,10 @@ database_context = "authorization"
 async-trait.workspace = true
 capability-domain = { path = "../../../heph-core/auth/authorization/capability-domain" }
 git-capability-domain = { path = "../../../heph-core/forge/git-capability" }
+runtime-authority = { path = "../../../heph-core/auth/authorization/runtime-authority" }
+runtime-authority-postgres = { path = "../runtime-authority-postgres" }
+run-domain = { path = "../../../heph-core/runtime/run/domain" }
+release-service = { path = "../../../heph-core/forge/release/service" }
 runtime-git-authority = { path = "../../../heph-core/auth/authorization/runtime-git-authority" }
 sqlx.workspace = true
 time.workspace = true

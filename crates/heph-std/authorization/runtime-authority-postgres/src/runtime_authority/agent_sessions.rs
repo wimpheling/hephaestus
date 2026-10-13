@@ -8,7 +8,8 @@ use capability_domain::{
     WorkloadKind,
 };
 use runtime_authority::{
-    NewRuntimeSession, RuntimeAuthorityError, RuntimeSessionRepository, StoredRuntimeSession,
+    ExpiredRuntimeHandoff, NewRuntimeSession, RuntimeAuthorityError, RuntimeSessionRepository,
+    StoredRuntimeSession,
 };
 use time::OffsetDateTime;
 
@@ -18,6 +19,9 @@ impl RuntimeSessionRepository for PgRuntimeSessionRepository {
         &self,
         session_id: RuntimeSessionId,
     ) -> Result<Option<StoredRuntimeSession>, RuntimeAuthorityError> {
+        if self.qualified_invocation_session(session_id).await? {
+            return self.invocation_find(session_id).await;
+        }
         sqlx::query_as::<_, SessionRow>(
             "SELECT id, snapshot_id, identity_hash, issuance_generation,
                     status, issued_at, expires_at, acknowledged_at, revoked_at
@@ -41,6 +45,9 @@ impl RuntimeSessionRepository for PgRuntimeSessionRepository {
         else {
             return Err(RuntimeAuthorityError::IdentityMismatch);
         };
+        if self.qualified_invocation_run(run_id.as_uuid()).await? {
+            return self.invocation_create(session).await;
+        }
         let mut transaction = self.pool.begin().await.map_err(storage)?;
         sqlx::query(
             "INSERT INTO run_authorization_snapshots
@@ -138,6 +145,11 @@ impl RuntimeSessionRepository for PgRuntimeSessionRepository {
         generation: RuntimeCredentialGeneration,
         acknowledged_at: OffsetDateTime,
     ) -> Result<StoredRuntimeSession, RuntimeAuthorityError> {
+        if self.qualified_invocation_session(session_id).await? {
+            return self
+                .invocation_acknowledge(session_id, generation, acknowledged_at)
+                .await;
+        }
         let mut transaction = self.pool.begin().await.map_err(storage)?;
         let current = Self::locked(&mut transaction, session_id).await?;
         let current_generation = generation_from_i64(current.issuance_generation)?;
@@ -211,6 +223,16 @@ impl RuntimeSessionRepository for PgRuntimeSessionRepository {
         self.find(session_id)
             .await?
             .ok_or(RuntimeAuthorityError::Persistence)
+    }
+
+    async fn observe_expired_run_handoff(
+        &self,
+        run: uuid::Uuid,
+        session: RuntimeSessionId,
+        generation: RuntimeCredentialGeneration,
+    ) -> Result<ExpiredRuntimeHandoff, RuntimeAuthorityError> {
+        self.observe_expired_original(run, session, generation)
+            .await
     }
 
     async fn expire(&self, now: OffsetDateTime) -> Result<u64, RuntimeAuthorityError> {

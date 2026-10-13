@@ -46,6 +46,16 @@ pub mod __buffa {
         reg.register_json_any(super::__LIST_PROJECT_INSTANCES_RESPONSE_JSON_ANY);
         reg.register_json_any(super::__LIST_IMPORTABLE_RELEASE_AGENTS_REQUEST_JSON_ANY);
         reg.register_json_any(super::__LIST_IMPORTABLE_RELEASE_AGENTS_RESPONSE_JSON_ANY);
+        reg.register_json_any(super::__GET_RECIPE_DEPLOYMENT_REQUEST_JSON_ANY);
+        reg.register_json_any(super::__GET_RECIPE_DEPLOYMENT_RESPONSE_JSON_ANY);
+        reg.register_json_any(super::__RECIPE_DEPLOYMENT_JSON_ANY);
+        reg.register_json_any(super::__RECIPE_DEPLOYMENT_RESOURCE_JSON_ANY);
+        reg.register_json_any(super::__INSTALL_RECIPE_DEPLOYMENT_REQUEST_JSON_ANY);
+        reg.register_json_any(super::__RECIPE_EXTERNAL_VOLUME_BINDING_JSON_ANY);
+        reg.register_json_any(super::__RESUME_RECIPE_DEPLOYMENT_REQUEST_JSON_ANY);
+        reg.register_json_any(super::__INSTALL_RECIPE_DEPLOYMENT_RESPONSE_JSON_ANY);
+        reg.register_json_any(super::__RESUME_RECIPE_DEPLOYMENT_RESPONSE_JSON_ANY);
+        reg.register_json_any(super::__RECIPE_ACTIVATION_RESULT_JSON_ANY);
     }
 }
 #[doc(inline)]
@@ -136,5 +146,45 @@ pub use self::__buffa::view::ListImportableReleaseAgentsRequestOwnedView;
 pub use self::__buffa::view::ListImportableReleaseAgentsResponseView;
 #[doc(inline)]
 pub use self::__buffa::view::ListImportableReleaseAgentsResponseOwnedView;
+#[doc(inline)]
+pub use self::__buffa::view::GetRecipeDeploymentRequestView;
+#[doc(inline)]
+pub use self::__buffa::view::GetRecipeDeploymentRequestOwnedView;
+#[doc(inline)]
+pub use self::__buffa::view::GetRecipeDeploymentResponseView;
+#[doc(inline)]
+pub use self::__buffa::view::GetRecipeDeploymentResponseOwnedView;
+#[doc(inline)]
+pub use self::__buffa::view::RecipeDeploymentView;
+#[doc(inline)]
+pub use self::__buffa::view::RecipeDeploymentOwnedView;
+#[doc(inline)]
+pub use self::__buffa::view::RecipeDeploymentResourceView;
+#[doc(inline)]
+pub use self::__buffa::view::RecipeDeploymentResourceOwnedView;
+#[doc(inline)]
+pub use self::__buffa::view::InstallRecipeDeploymentRequestView;
+#[doc(inline)]
+pub use self::__buffa::view::InstallRecipeDeploymentRequestOwnedView;
+#[doc(inline)]
+pub use self::__buffa::view::RecipeExternalVolumeBindingView;
+#[doc(inline)]
+pub use self::__buffa::view::RecipeExternalVolumeBindingOwnedView;
+#[doc(inline)]
+pub use self::__buffa::view::ResumeRecipeDeploymentRequestView;
+#[doc(inline)]
+pub use self::__buffa::view::ResumeRecipeDeploymentRequestOwnedView;
+#[doc(inline)]
+pub use self::__buffa::view::InstallRecipeDeploymentResponseView;
+#[doc(inline)]
+pub use self::__buffa::view::InstallRecipeDeploymentResponseOwnedView;
+#[doc(inline)]
+pub use self::__buffa::view::ResumeRecipeDeploymentResponseView;
+#[doc(inline)]
+pub use self::__buffa::view::ResumeRecipeDeploymentResponseOwnedView;
+#[doc(inline)]
+pub use self::__buffa::view::RecipeActivationResultView;
+#[doc(inline)]
+pub use self::__buffa::view::RecipeActivationResultOwnedView;
 #[doc(inline)]
 pub use self::__buffa::register_types;

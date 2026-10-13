@@ -19,6 +19,6 @@ pub use fakes::{
     TestSpecFactory, TimeoutSpecFactory,
 };
 pub use helpers::{assert_launch_order, lock, normal_stateless_command};
-pub use repository::MemoryRepository;
+pub use repository::{MemoryRepository, TransitionPause};
 pub use vm::{AutoExitProvider, HangingProvider, RevokeOnProvisionProvider};
 pub use volume::MemoryVolumeStore;

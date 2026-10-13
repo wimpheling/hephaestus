@@ -216,6 +216,8 @@ mod ui_installation_transport {
     // Keep the authenticated mutation sequence together so replay, CAS, and
     // no-row assertions share one production installation and generation chain.
     #[allow(clippy::too_many_lines)]
+    // Shutdown consumes the application after the complete RPC sequence; no handle remains to drop.
+    #[allow(clippy::significant_drop_tightening)]
     async fn production_ui_installation_rpc_matrix() {
         let trace_capture = super::ui_installation_trace_capture::install();
         assert_eq!(
@@ -239,11 +241,11 @@ mod ui_installation_transport {
             .expect("apply UI RPC migrations");
         let fixture = seed_fixture(&pool).await;
         let root = tempdir().expect("UI RPC application root");
-        let app = HephaestusApp::build(app_config(
+        let app = Box::pin(HephaestusApp::build(app_config(
             database_url.clone(),
             nats_url.clone(),
             root.path(),
-        ))
+        )))
         .await
         .expect("build production UI RPC application")
         .start()

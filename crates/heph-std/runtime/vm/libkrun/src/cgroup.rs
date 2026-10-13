@@ -1,32 +1,50 @@
-use crate::{
-    config::{CgroupLimits, LibkrunConfig},
-    validation::PROVIDER_NAME,
-};
+#[path = "cgroup/controls.rs"]
+mod controls;
+use crate::{config::LibkrunConfig, directory::ChildDirectory, validation::PROVIDER_NAME};
 use std::{
-    fs, io,
+    collections::HashSet,
+    fs,
+    io::{self, Write},
     path::{Path, PathBuf},
     thread,
     time::{Duration, Instant},
 };
 use vm_trait::VmError;
 
+#[derive(Clone)]
 pub struct Cgroup {
     path: PathBuf,
     emulated: bool,
+    child: Option<ChildDirectory>,
 }
 
 impl Cgroup {
-    pub fn create(config: &LibkrunConfig, id: &str) -> Result<Self, VmError> {
+    pub(crate) fn create_tracked(
+        config: &LibkrunConfig,
+        id: &str,
+        acquired: impl FnOnce(&Self),
+    ) -> Result<Self, VmError> {
         let path = config.cgroup_root.join(id);
-        fs::create_dir(&path).map_err(|error| provider("cgroup-create", error))?;
+        let child = ChildDirectory::create(
+            &config.cgroup_root,
+            id,
+            rustix::fs::Mode::from_bits_truncate(0o777),
+            |child| {
+                // Retain even a post-mkdir failure before configuration can run.
+                acquired(&Self {
+                    path: path.clone(),
+                    emulated: !config.enforce_cgroup_v2,
+                    child: Some(child),
+                });
+            },
+        )
+        .map_err(|error| provider("cgroup-create", error))?;
         let cgroup = Self {
             path,
             emulated: !config.enforce_cgroup_v2,
+            child: Some(child),
         };
-        if let Err(error) = cgroup.configure(&config.limits) {
-            let _cleanup_result = fs::remove_dir(&cgroup.path);
-            return Err(error);
-        }
+        cgroup.configure(&config.limits)?;
         Ok(cgroup)
     }
 
@@ -34,102 +52,199 @@ impl Cgroup {
         Self {
             path: config.cgroup_root.join(id),
             emulated: !config.enforce_cgroup_v2,
+            child: None,
         }
     }
 
+    pub(super) fn allocated_directory(&self) -> Result<ChildDirectory, VmError> {
+        self.child
+            .clone()
+            .ok_or(VmError::InvalidState("original cgroup allocation missing"))
+    }
+
+    pub(super) fn recorded(config: &LibkrunConfig, id: &str, child: ChildDirectory) -> Self {
+        Self {
+            path: config.cgroup_root.join(id),
+            emulated: !config.enforce_cgroup_v2,
+            child: Some(child),
+        }
+    }
+
+    pub(crate) fn validate_allocation(&self) -> Result<(), VmError> {
+        if let Some(child) = self.child.as_ref() {
+            if !child
+                .validate_named()
+                .map_err(|error| provider("cgroup-identity", error))?
+            {
+                return Err(provider(
+                    "cgroup-identity",
+                    io::Error::other("allocated cgroup was removed"),
+                ));
+            }
+        }
+        Ok(())
+    }
+
     pub fn add_process(&self, pid: u32) -> Result<(), VmError> {
-        write(self.path.join("cgroup.procs"), pid.to_string())
+        self.write_control("cgroup.procs", pid.to_string())
             .map_err(|error| provider("cgroup-place-worker", error))
     }
 
     pub fn cleanup(&self) -> Result<(), VmError> {
-        if !self.path.exists() {
-            return Ok(());
+        if let Some(child) = self.child.as_ref() {
+            return self.cleanup_pinned(child);
+        }
+        match fs::symlink_metadata(&self.path) {
+            Ok(metadata) if metadata.is_dir() => {}
+            Ok(_) => {
+                return Err(provider(
+                    "cgroup-cleanup",
+                    io::Error::other("cgroup path is not a directory"),
+                ));
+            }
+            Err(error) if error.kind() == io::ErrorKind::NotFound => {
+                return confirm_absent(&self.path);
+            }
+            Err(error) => return Err(provider("cgroup-cleanup", error)),
         }
         if self.emulated {
             return remove_directory_tree(&self.path);
         }
         let kill = self.path.join("cgroup.kill");
-        if kill.exists() {
-            write(kill, "1").map_err(|error| provider("cgroup-kill", error))?;
+        match fs::symlink_metadata(&kill) {
+            Ok(metadata) if metadata.is_file() => {
+                write(kill, "1").map_err(|error| provider("cgroup-kill", error))?;
+            }
+            Ok(_) => {
+                return Err(provider(
+                    "cgroup-kill",
+                    io::Error::other("cgroup.kill is not a regular control file"),
+                ));
+            }
+            Err(error) if error.kind() == io::ErrorKind::NotFound => {}
+            Err(error) => return Err(provider("cgroup-kill", error)),
         }
-        let deadline = Instant::now() + Duration::from_secs(2);
-        while self.is_populated()? && Instant::now() < deadline {
-            thread::sleep(Duration::from_millis(10));
-        }
+        self.wait_until_empty(Instant::now() + Duration::from_secs(2))?;
         match fs::remove_dir(&self.path) {
             Ok(()) => Ok(()),
-            Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(()),
+            Err(error) if error.kind() == io::ErrorKind::NotFound => confirm_absent(&self.path),
             Err(error) => Err(provider("cgroup-cleanup", error)),
+        }
+    }
+
+    fn cleanup_pinned(&self, child: &ChildDirectory) -> Result<(), VmError> {
+        if !child
+            .validate_named()
+            .map_err(|error| provider("cgroup-cleanup", error))?
+        {
+            return Ok(());
+        }
+        if self.emulated {
+            return child
+                .remove(true)
+                .map_err(|error| provider("cgroup-cleanup", error));
+        }
+        match self.control_file("cgroup.kill", rustix::fs::OFlags::WRONLY) {
+            Ok(mut kill) => kill
+                .write_all(b"1")
+                .map_err(|error| provider("cgroup-kill", error))?,
+            Err(error) if error.kind() == io::ErrorKind::NotFound => {}
+            Err(error) => return Err(provider("cgroup-kill", error)),
+        }
+        self.wait_until_empty(Instant::now() + Duration::from_secs(2))?;
+        child
+            .remove(false)
+            .map_err(|error| provider("cgroup-cleanup", error))
+    }
+
+    fn wait_until_empty(&self, deadline: Instant) -> Result<(), VmError> {
+        loop {
+            if !self.is_populated()? {
+                return Ok(());
+            }
+            if Instant::now() >= deadline {
+                return Err(provider(
+                    "cgroup-cleanup",
+                    io::Error::new(
+                        io::ErrorKind::TimedOut,
+                        "cgroup is still populated at cleanup deadline",
+                    ),
+                ));
+            }
+            thread::sleep(Duration::from_millis(10));
         }
     }
 
     pub fn path(&self) -> &Path {
         &self.path
     }
+}
 
-    fn configure(&self, limits: &CgroupLimits) -> Result<(), VmError> {
-        let cpu = limits.cpu_quota_micros.map_or_else(
-            || format!("max {}", limits.cpu_period_micros),
-            |quota| format!("{quota} {}", limits.cpu_period_micros),
-        );
-        write(self.path.join("cpu.max"), cpu)
-            .map_err(|error| provider("cgroup-cpu-limit", error))?;
-        write(
-            self.path.join("memory.max"),
-            limits.memory_max_bytes.to_string(),
+// cgroup.events is flat-keyed. Require one exact populated 0/1 observation;
+// malformed or duplicate fields cannot silently become an empty-cgroup proof.
+fn parse_populated(events: &str) -> io::Result<bool> {
+    let invalid = || {
+        io::Error::new(
+            io::ErrorKind::InvalidData,
+            "malformed cgroup.events populated observation",
         )
-        .map_err(|error| provider("cgroup-memory-limit", error))?;
-        write(self.path.join("pids.max"), limits.pids_max.to_string())
-            .map_err(|error| provider("cgroup-pids-limit", error))?;
-
-        if !limits.io.is_empty() {
-            let mut lines = String::new();
-            for limit in &limits.io {
-                use std::fmt::Write as _;
-                write!(&mut lines, "{}:{}", limit.major, limit.minor)
-                    .map_err(|error| provider("cgroup-io-format", io::Error::other(error)))?;
-                if let Some(value) = limit.read_bps {
-                    write!(&mut lines, " rbps={value}")
-                        .map_err(|error| provider("cgroup-io-format", io::Error::other(error)))?;
-                }
-                if let Some(value) = limit.write_bps {
-                    write!(&mut lines, " wbps={value}")
-                        .map_err(|error| provider("cgroup-io-format", io::Error::other(error)))?;
-                }
-                if let Some(value) = limit.read_iops {
-                    write!(&mut lines, " riops={value}")
-                        .map_err(|error| provider("cgroup-io-format", io::Error::other(error)))?;
-                }
-                if let Some(value) = limit.write_iops {
-                    write!(&mut lines, " wiops={value}")
-                        .map_err(|error| provider("cgroup-io-format", io::Error::other(error)))?;
-                }
-                lines.push('\n');
-            }
-            write(self.path.join("io.max"), lines)
-                .map_err(|error| provider("cgroup-io-limit", error))?;
+    };
+    let mut keys = HashSet::new();
+    let mut populated = None;
+    for line in events.lines() {
+        let mut fields = line.split_whitespace();
+        let key = fields.next().ok_or_else(invalid)?;
+        let value = fields.next().ok_or_else(invalid)?;
+        if fields.next().is_some()
+            || !keys.insert(key)
+            || !value.bytes().all(|byte| byte.is_ascii_digit())
+        {
+            return Err(invalid());
         }
-        Ok(())
-    }
-
-    fn is_populated(&self) -> Result<bool, VmError> {
-        let events = self.path.join("cgroup.events");
-        if !events.exists() {
-            return Ok(false);
+        if key == "populated" {
+            populated = Some(match value {
+                "0" => false,
+                "1" => true,
+                _ => return Err(invalid()),
+            });
         }
-        let events =
-            fs::read_to_string(events).map_err(|error| provider("cgroup-events", error))?;
-        Ok(events
-            .lines()
-            .any(|line| line.split_whitespace().eq(["populated", "1"])))
     }
+    populated.ok_or_else(invalid)
+}
+
+// Preserve exact known-child idempotence, but a missing or unreadable parent
+// cannot establish that this child was removed. Never infer a root-wide drain.
+fn confirm_absent(path: &Path) -> Result<(), VmError> {
+    match fs::symlink_metadata(path) {
+        Err(error) if error.kind() == io::ErrorKind::NotFound => {}
+        Err(error) => return Err(provider("cgroup-cleanup", error)),
+        Ok(_) => {
+            return Err(provider(
+                "cgroup-cleanup",
+                io::Error::other("cgroup path is still present"),
+            ));
+        }
+    }
+    let parent = path.parent().ok_or_else(|| {
+        provider(
+            "cgroup-cleanup",
+            io::Error::other("cgroup path has no parent"),
+        )
+    })?;
+    let metadata = fs::metadata(parent).map_err(|error| provider("cgroup-cleanup", error))?;
+    if !metadata.is_dir() {
+        return Err(provider(
+            "cgroup-cleanup",
+            io::Error::other("cgroup parent is not a directory"),
+        ));
+    }
+    Ok(())
 }
 
 fn remove_directory_tree(path: &Path) -> Result<(), VmError> {
     match fs::remove_dir_all(path) {
         Ok(()) => Ok(()),
-        Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(()),
+        Err(error) if error.kind() == io::ErrorKind::NotFound => confirm_absent(path),
         Err(error) => Err(provider("cgroup-cleanup", error)),
     }
 }
@@ -149,7 +264,8 @@ fn provider(code: &'static str, source: io::Error) -> VmError {
 #[cfg(test)]
 mod tests {
     use super::Cgroup;
-    use crate::config::{CgroupLimits, LibkrunConfig};
+    use crate::config::CgroupLimits;
+    use crate::config::LibkrunConfig;
     use std::{fs, os::unix::fs::PermissionsExt};
     use tempfile::TempDir;
 
@@ -184,6 +300,7 @@ mod tests {
         let cgroup = Cgroup {
             path: vm.clone(),
             emulated: true,
+            child: None,
         };
         cgroup.configure(&config.limits).unwrap();
         assert!(
@@ -198,3 +315,7 @@ mod tests {
         );
     }
 }
+
+#[cfg(test)]
+#[path = "cgroup/cleanup_tests.rs"]
+mod cleanup_tests;

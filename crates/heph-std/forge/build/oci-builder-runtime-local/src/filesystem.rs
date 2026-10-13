@@ -1,9 +1,10 @@
 //! Private filesystem and OCI layout safeguards.
 
+#[cfg(test)]
+use crate::constants::{BUILDER_SCRATCH_BYTES, ScratchDisk};
+
 use super::{
-    constants::{
-        BUILDER_SCRATCH_BYTES, BUILDER_SOURCE_GUEST_PATH, ScratchDisk, VerifiedVmOciOutput,
-    },
+    constants::{BUILDER_SOURCE_GUEST_PATH, VerifiedVmOciOutput},
     output::canonical_directory,
 };
 use builder_catalog_domain::OciDigest;
@@ -15,6 +16,7 @@ use std::{
     process::{Command as ProcessCommand, Stdio},
 };
 
+#[cfg(test)]
 pub fn prepare_scratch_disk(
     root: &Path,
     mkfs_ext4: &Path,
@@ -32,15 +34,7 @@ pub fn prepare_scratch_disk(
     }
     let filesystem_uuid = uuid::Uuid::new_v4();
     let filesystem_uuid_text = filesystem_uuid.to_string();
-    let status = ProcessCommand::new(mkfs_ext4)
-        // Ubuntu ships mkfs.ext4 as a symlink to mke2fs. The caller stores
-        // only the canonical executable, so select ext4 explicitly instead of
-        // relying on argv[0] to choose the filesystem type.
-        .args(["-t", "ext4", "-q", "-F", "-U", &filesystem_uuid_text])
-        .arg(&path)
-        .stdin(Stdio::null())
-        .stdout(Stdio::null())
-        .stderr(Stdio::null())
+    let status = scratch_command(mkfs_ext4, &filesystem_uuid_text, &path)
         .status()
         .map_err(OciWorkerError::Filesystem)?;
     if !status.success() {
@@ -75,6 +69,7 @@ pub fn prepare_empty_directory(path: &Path) -> Result<(), OciWorkerError> {
     fs::set_permissions(path, fs::Permissions::from_mode(0o700)).map_err(OciWorkerError::Filesystem)
 }
 
+#[cfg(test)]
 pub fn remove_private_directory(path: &Path) -> Result<(), OciWorkerError> {
     let metadata = fs::symlink_metadata(path).map_err(OciWorkerError::Filesystem)?;
     if metadata.file_type().is_symlink() || !metadata.is_dir() {
@@ -84,6 +79,7 @@ pub fn remove_private_directory(path: &Path) -> Result<(), OciWorkerError> {
     fs::remove_dir_all(path).map_err(OciWorkerError::Filesystem)
 }
 
+#[cfg(test)]
 pub fn restore_directory_tree_owner_write(path: &Path) -> Result<(), OciWorkerError> {
     let metadata = fs::symlink_metadata(path).map_err(OciWorkerError::Filesystem)?;
     if metadata.file_type().is_symlink() || !metadata.is_dir() {
@@ -231,4 +227,20 @@ pub fn copy_tree_without_following_links(
         }
     }
     Ok(())
+}
+
+pub fn scratch_command(
+    mkfs_ext4: &Path,
+    filesystem_uuid_text: &str,
+    path: &Path,
+) -> ProcessCommand {
+    let mut command = ProcessCommand::new(mkfs_ext4);
+    // Canonical mke2fs executable: select ext4 rather than argv[0].
+    command
+        .args(["-t", "ext4", "-q", "-F", "-U", filesystem_uuid_text])
+        .arg(path)
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null());
+    command
 }

@@ -4,6 +4,15 @@ use crate::BuildRepositoryError;
 #[derive(Debug, thiserror::Error)]
 #[non_exhaustive]
 pub enum BuildExecutionError {
+    /// New work is denied by this live owner after its monotonic close.
+    #[error("isolated build admission is closed")]
+    Closed,
+    /// Original sealed output needs genuine saved finalization, not a new VM.
+    #[error("isolated build finalization is required")]
+    FinalizationRequired,
+    /// Exact source-bearing original failure retained by the live owner.
+    #[error(transparent)]
+    Retained(std::sync::Arc<BuildExecutionError>),
     /// Static host configuration is unsafe.
     #[error("isolated build configuration is invalid")]
     InvalidConfiguration,
@@ -37,6 +46,9 @@ pub enum BuildExecutionError {
     /// Source contains an unsupported object such as a symlink or submodule.
     #[error("isolated build source contains an unsupported object")]
     UnsupportedSourceObject,
+    /// Configured Git does not qualify the no-lazy-fetch builtin profile.
+    #[error("trusted Git --no-lazy-fetch prerequisite failed")]
+    GitPrerequisite,
     /// Trusted Git inspection failed.
     #[error("isolated build Git inspection failed")]
     Git,
@@ -83,6 +95,9 @@ pub enum BuildExecutionError {
     /// A blocking worker failed to join.
     #[error("isolated build worker failed")]
     WorkerJoin,
+    /// Exact original filesystem source retained by the live owner.
+    #[error("isolated build filesystem operation failed")]
+    FilesystemSource(#[source] std::sync::Arc<std::io::Error>),
     /// Host filesystem operation failed.
     #[error("isolated build filesystem operation failed")]
     Filesystem,

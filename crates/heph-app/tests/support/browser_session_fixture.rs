@@ -157,6 +157,7 @@ pub fn app_config(database_url: String, nats_url: String, root: &Path) -> AppCon
             .expect("test secret key"),
         secret_broker_socket: broker_socket,
         secret_broker_adapter: Arc::new(DenyingBrokerAdapter),
+        managed_backend: None,
         vm_backend: VmBackendConfig::FixtureResult,
         root_images,
         oci_builder: None,

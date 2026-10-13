@@ -1,4 +1,4 @@
-use super::guest::{validate_authority_sequence, validate_guest_message};
+use super::guest::{validate_authority_sequence, validate_guest_hello, validate_guest_message};
 use crate::protocol::{GUEST_CONTROL_SOCKET_NAME, SUPERVISOR_SOCKET_NAME};
 use crate::protocol::{
     GuestLogStream, GuestMessage, MAX_LOG_CHUNK_SIZE, MAX_METRIC_LABELS, MAX_METRIC_TEXT_SIZE,
@@ -146,4 +146,15 @@ fn runtime_authority_acknowledgement_is_exact_and_precedes_ready() {
         )
         .is_err()
     );
+}
+
+#[test]
+fn stale_guest_version_cannot_silently_ignore_named_attachments() {
+    assert!(validate_guest_hello(&GuestMessage::Hello { version: 10 }).is_err());
+    assert!(validate_guest_hello(&GuestMessage::Hello { version: 9 }).is_err());
+    validate_guest_hello(&GuestMessage::Hello {
+        version: PROTOCOL_VERSION,
+    })
+    .unwrap();
+    assert!(validate_guest_hello(&GuestMessage::Ready).is_err());
 }

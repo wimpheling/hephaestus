@@ -1,4 +1,5 @@
 //! Shared RPC receipt and transport primitives.
+mod recipe;
 
 use super::{RpcError, into_connect_error};
 use event_application::MutationReceiptReader;

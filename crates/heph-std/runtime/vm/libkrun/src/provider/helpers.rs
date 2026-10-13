@@ -1,8 +1,10 @@
 use super::common::{
-    Error, ExitStatus, ExitStatusExt, PROVIDER_NAME, Path, PathBuf, PermissionsExt, PortForward,
-    PortProtocol, PreparedForward, VmError, VmEvent, VmExit, VmId, WireError, WireErrorKind,
-    broadcast, fmt, fs, io,
+    Error, ExitStatus, ExitStatusExt, PROVIDER_NAME, Path, PortForward, PortProtocol,
+    PreparedForward, VmError, VmEvent, VmExit, WireError, WireErrorKind, broadcast, fmt, fs, io,
 };
+
+#[cfg(test)]
+use super::common::{PathBuf, PermissionsExt, VmId};
 
 #[derive(Debug, Clone)]
 pub(super) struct ProcessStatus {
@@ -28,12 +30,24 @@ impl From<ExitStatus> for ProcessStatus {
     }
 }
 
+#[cfg(test)]
 pub(super) fn create_runtime_dir(root: &Path, id: &str) -> Result<PathBuf, VmError> {
+    create_runtime_dir_tracked(root, id, |_| {})
+}
+
+#[cfg(test)]
+pub(super) fn create_runtime_dir_tracked(
+    root: &Path,
+    id: &str,
+    acquired: impl FnOnce(&Path),
+) -> Result<PathBuf, VmError> {
     let path = root.join(id);
     fs::create_dir(&path).map_err(|error| match error.kind() {
         io::ErrorKind::AlreadyExists => VmError::AlreadyExists(VmId(id.to_owned())),
         _ => provider_error("runtime-create", error),
     })?;
+    // Only exclusive mkdir success authorizes cleanup, including chmod failure.
+    acquired(&path);
     fs::set_permissions(&path, fs::Permissions::from_mode(0o700))
         .map_err(|error| provider_error("runtime-permissions", error))?;
     Ok(path)

@@ -12,6 +12,11 @@ defmodule HephaestusWebWeb.DesignSystem.Pages.ProjectPage do
   attr :item_count, :integer, default: 0
   attr :repositories, :any, default: []
 
+  attr :recipe_form, :any, default: nil
+
+  attr :recipe_inspection, :map,
+    default: %{status: :idle, deployment_id: "", deployment: nil, error: nil, generation: 0}
+
   attr :installed_ui, :map,
     default: %{
       state: :loading,
@@ -73,6 +78,7 @@ defmodule HephaestusWebWeb.DesignSystem.Pages.ProjectPage do
             </.action>
           </.resource_list>
         </.frame>
+        <.recipe_deployment_inspection state={@recipe_inspection} form={@recipe_form} />
         <.installed_ui_navigation
           scope={:project}
           state={@installed_ui.state}
@@ -83,6 +89,66 @@ defmodule HephaestusWebWeb.DesignSystem.Pages.ProjectPage do
         />
       </.frame>
     </.page_state>
+    """
+  end
+
+  attr :state, :map, required: true
+
+  attr :form, :any, default: nil
+
+  defp recipe_deployment_inspection(assigns) do
+    ~H"""
+    <.frame as="section" id="recipe-deployment-inspection" variant={:summary_body}>
+      <.text as="h2">Inspect a recipe deployment</.text>
+      <.text as="p" variant={:muted}>
+        Enter an existing deployment ID to read its saved progress.
+      </.text>
+      <.form_container
+        :if={@form}
+        for={@form}
+        id="inspect-recipe-deployment-form"
+        submit="inspect-recipe-deployment"
+      >
+        <.input
+          field={@form[:deployment_id]}
+          label="Deployment ID"
+          required
+          maxlength="36"
+          autocomplete="off"
+        />
+        <.action interaction={:submit} variant={:secondary}>Inspect deployment</.action>
+      </.form_container>
+      <.text :if={@state.status == :loading} as="p">Reading saved progress…</.text>
+      <.text :if={@state.error} as="p" variant={:status}>{@state.error}</.text>
+      <.frame :if={@state.status == :ready && @state.deployment} variant={:resource_detail}>
+        <.text as="strong">{@state.deployment["key"]}</.text>
+        <.text as="p">
+          Deployment {@state.deployment["id"]} · Version {@state.deployment["version"]} · {@state.deployment[
+            "lifecycle"
+          ]}
+        </.text>
+        <.text as="p">
+          Activation is unobserved. Saved Ready or Installed progress does not confirm a running workload.
+        </.text>
+        <.frame :for={resource <- @state.deployment["resources"]} variant={:resource_detail}>
+          <.text as="strong">{resource["name"]} · {resource["kind"]} · {resource["ownership"]}</.text>
+          <.text as="code">{resource["resource_id"]}</.text>
+          <.text :if={resource["revision_id"]} as="code">Revision {resource["revision_id"]}</.text>
+          <.text as="p">
+            Install: {resource["install"]} · Removal: {resource["removal"]} · Version {resource[
+              "version"
+            ]}
+          </.text>
+          <.text :if={resource["recovery_required"]} as="p">Held for reconciliation.</.text>
+          <.text :if={resource["active_attempt_id"]} as="code">
+            Attempt {resource["active_attempt_id"]}
+          </.text>
+          <.text :if={resource["diagnostic"] != "unspecified"} as="p">
+            Diagnostic: {resource["diagnostic"]}
+          </.text>
+        </.frame>
+      </.frame>
+    </.frame>
     """
   end
 

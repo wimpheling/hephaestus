@@ -8,6 +8,7 @@ pub(super) async fn collect_execution(
     instance: &Arc<dyn vm_trait::VmInstance>,
     events: &mut broadcast::Receiver<VmEvent>,
     timeout: Duration,
+    node: &Arc<super::owner::Node>,
 ) -> (Option<VmExit>, Vec<Value>, Vec<Value>, bool) {
     let wait = instance.wait();
     tokio::pin!(wait);
@@ -20,7 +21,8 @@ pub(super) async fn collect_execution(
         tokio::select! {
             result = &mut wait => {
                 drain_execution_events(events, &mut logs, &mut metrics, &mut log_bytes);
-                return (result.ok(), logs, metrics, false);
+                let exit = match result { Ok(exit) => Some(exit), Err(error) => { node.vm_error(error); None } };
+                return (exit, logs, metrics, false);
             },
             () = &mut deadline => return (None, logs, metrics, true),
             event = events.recv() => match event {

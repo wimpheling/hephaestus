@@ -37,7 +37,12 @@ impl ReleaseService {
         identity: &AuthenticatedIdentity,
         command: RecoverInstanceUpdate,
     ) -> Result<UpdateRecoveryDecision, ReleaseServiceError> {
+        self.require_legacy_placement_profile()?;
         let mut tx = begin_actor_transaction(&self.pool, identity).await?;
+        self.lock_legacy_hook_parent(&mut tx, command.update_id.as_uuid())
+            .await?;
+        self.require_legacy_update_cleanup(&mut tx, command.update_id)
+            .await?;
         let update: UpdateRecoveryRow = sqlx::query_as(
             "SELECT update.instance_id, update.expected_current_revision_id,
                     update.candidate_revision_id, update.state,
@@ -104,7 +109,14 @@ impl ReleaseService {
                 .bind(update.instance_id)
                 .execute(&mut *tx)
                 .await?;
-                mark_volume_lease(&mut tx, command.update_id, "released").await?;
+                mark_volume_lease(
+                    &mut tx,
+                    command.update_id,
+                    "released",
+                    self.execution_profile,
+                    self.legacy_vm_scope.as_ref(),
+                )
+                .await?;
                 "update.recovery_retry_scheduled"
             }
             UpdateRecoveryAction::RejectCandidate => {
@@ -135,6 +147,8 @@ impl ReleaseService {
                     update.instance_id,
                     update.expected_current_revision_id,
                     "update_rejected",
+                    self.execution_profile,
+                    self.legacy_vm_scope.as_ref(),
                 )
                 .await?;
                 "update.recovery_candidate_rejected"
@@ -174,7 +188,14 @@ impl ReleaseService {
                 .bind(command.update_id.as_uuid())
                 .execute(&mut *tx)
                 .await?;
-                mark_volume_lease(&mut tx, command.update_id, "released").await?;
+                mark_volume_lease(
+                    &mut tx,
+                    command.update_id,
+                    "released",
+                    self.execution_profile,
+                    self.legacy_vm_scope.as_ref(),
+                )
+                .await?;
                 materialize_deferred_triggers(
                     &mut tx,
                     update.instance_id,

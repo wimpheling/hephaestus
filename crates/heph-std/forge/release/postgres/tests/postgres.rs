@@ -93,6 +93,9 @@ mod parent_move;
 #[path = "postgres/runtime_git.rs"]
 mod runtime_git;
 
+#[path = "postgres/recipe_volume_slots.rs"]
+mod recipe_volume_slots;
+
 /// Shared state passed between the isolated-instance test phases.
 #[path = "postgres/isolated_context.rs"]
 pub mod isolated_context;

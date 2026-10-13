@@ -57,6 +57,7 @@ pub fn assert_cgroup_limits(path: &std::path::Path, limits: &vm_libkrun::CgroupL
 
 pub fn long_running_spec(rootfs: PathBuf, kind: &str) -> VmSpec {
     VmSpec {
+        guest_volumes: Vec::new(),
         id: VmId(format!("integration-{kind}-{}", std::process::id())),
         root: RootFilesystem::Directory { host_path: rootfs },
         disks: Vec::new(),

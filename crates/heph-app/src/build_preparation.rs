@@ -1,3 +1,7 @@
+#[path = "build_preparation/error.rs"]
+mod error;
+pub use error::{AppError, component};
+
 use crate::background_loops::build_secret_mount_manager;
 use crate::connect_oci_worker;
 use crate::fixture_vm::ResultFixtureProvider;
@@ -8,7 +12,7 @@ use crate::{
     PostgresMailboxRepository, SecretService, VmBackendConfig,
 };
 use control_plane_postgres::{
-    connect as connect_control_plane, connect_app as connect_application,
+    connect as connect_control_plane, connect_app as connect_application, connect_worker,
 };
 use forge_storage::GitStorage;
 use gateway_postgres::PostgresGatewayServiceLogStore;
@@ -17,6 +21,7 @@ use heph_runtime::VmProvider;
 use review_git::GitReviewPublisher;
 use review_postgres::{GitRepositoryLocator, PostgresReviewRepository};
 use review_service::ReviewControlService;
+use run_domain::FreshRunExecutionProfile;
 use run_postgres::PgRunRepository;
 use runtime_git_authority_postgres::PgRuntimeGitCredentialRepository;
 use secret_broker::{BrokerExecutor, ServiceBrokerExecutor};
@@ -25,22 +30,24 @@ use std::path::PathBuf;
 use std::sync::{Arc, RwLock};
 
 /// Ordered database migration expected by this application version.
-pub const EXPECTED_DATABASE_MIGRATION: i64 = 100;
+pub const EXPECTED_DATABASE_MIGRATION: i64 = 143;
 
 pub const GATEWAY_SERVICE_SERVING_CAPACITY: usize = 8;
 pub const GATEWAY_SERVICE_REPLACEMENT_CAPACITY: usize = 2;
 pub const GATEWAY_SERVICE_REQUEST_CAPACITY: usize = 16;
 use vm_fake::FakeProvider;
 use vm_libkrun::LibkrunProvider;
-use volume_postgres::PostgresVolumeMetadataRepository;
+use volume_postgres::{PostgresVolumeMetadataRepository, ScalarMetadataSchema};
 use workspace_postgres::PgWorkspaceMetadataRepository;
 
 pub struct BuildPreparation {
     pub config: AppConfig,
+    pub managed_backend: Option<crate::managed_backend::NodeLease>,
     pub runtime_git_socket_path: Option<PathBuf>,
     pub gateway_service_host_id: String,
     pub pool: PgPool,
     pub application_pool: PgPool,
+    pub worker_pool: PgPool,
     pub storage: Arc<GitStorage>,
     pub forge: Arc<PgForgeRepository>,
     pub run_repository: Arc<crate::PgRunRepository>,
@@ -74,8 +81,16 @@ pub struct BuildPreparation {
 
 // Keep ordered startup setup in one function so dependency acquisition and error mapping remain auditable.
 #[allow(clippy::too_many_lines)]
-pub async fn prepare(mut config: AppConfig) -> Result<BuildPreparation, AppError> {
-    let runtime_git_socket_path = match &mut config.vm_backend {
+pub async fn prepare(
+    mut config: AppConfig,
+    service: Option<&crate::ManagedBackendSupervisor>,
+) -> Result<BuildPreparation, AppError> {
+    if config.managed_backend.is_some() && service.is_none() {
+        return Err(AppError::Configuration(
+            "managed configuration requires an explicit process-owned supervisor".into(),
+        ));
+    }
+    let mut runtime_git_socket_path = match &mut config.vm_backend {
         VmBackendConfig::Libkrun(provider) => {
             let path = provider
                 .runtime_git_socket_path
@@ -103,6 +118,9 @@ pub async fn prepare(mut config: AppConfig) -> Result<BuildPreparation, AppError
         }
         provider.broker_socket_path = Some(config.secret_broker_socket.clone());
     }
+    if let Some(managed) = &config.managed_backend {
+        runtime_git_socket_path = Some(managed.runtime_git_socket.clone());
+    }
     let normalized_config = config.clone();
     let pool = connect_control_plane(&config.database_url, 20)
         .await
@@ -111,6 +129,27 @@ pub async fn prepare(mut config: AppConfig) -> Result<BuildPreparation, AppError
     let application_pool = connect_application(&config.database_url, 10)
         .await
         .map_err(component("PostgreSQL application-role connection"))?;
+
+    let worker_pool = connect_worker(&config.database_url, 8)
+        .await
+        .map_err(component("PostgreSQL run-worker connection"))?;
+    // Every ordinary or managed build verifies the complete public143 contract
+    // on its actual three pools before ANY filesystem initializer.
+    control_plane_postgres::verify_qualified_invocation_contract(
+        &pool,
+        &worker_pool,
+        &application_pool,
+    )
+    .await
+    .map_err(component("public143 three-pool contract"))?;
+    let managed_backend = crate::managed_backend::prepare(
+        config.clone(),
+        &pool,
+        &worker_pool,
+        &application_pool,
+        service,
+    )
+    .await?;
 
     let storage = Arc::new(
         GitStorage::initialize(&config.repository_root)
@@ -121,15 +160,26 @@ pub async fn prepare(mut config: AppConfig) -> Result<BuildPreparation, AppError
         PgForgeRepository::new(pool.clone(), Arc::clone(&storage))
             .with_authorizer(Arc::new(authz_postgres::PostgresMelangeAuthorizer)),
     );
-    let run_repository = Arc::new(PgRunRepository::new(pool.clone()));
-    let mailbox_repository = Arc::new(PostgresMailboxRepository::new(pool.clone()));
+    // This explicit choice applies only to fresh ordinary Runs. Historical
+    // originals remain governed by their persisted profile; no owner is adopted.
+    let run_repository = Arc::new(
+        PgRunRepository::new(worker_pool.clone())
+            .with_execution_profile(FreshRunExecutionProfile::LegacyScalar),
+    );
+    let mailbox_repository = Arc::new(
+        PostgresMailboxRepository::new(worker_pool.clone())
+            .with_execution_profile(FreshRunExecutionProfile::LegacyScalar),
+    );
     let review_repository = Arc::new(PostgresReviewRepository::new(pool.clone()));
     let review_locator = Arc::new(GitRepositoryLocator::new(Arc::clone(&storage)));
     let review_control = ReviewControlService::with_git(
         Arc::clone(&review_repository) as Arc<dyn review_service::ReviewRepository>,
         Arc::new(GitReviewPublisher::new(review_locator)),
     );
-    let volume_metadata = Arc::new(PostgresVolumeMetadataRepository::new(pool.clone()));
+    let volume_metadata = Arc::new(
+        PostgresVolumeMetadataRepository::new(worker_pool.clone())
+            .with_scalar_schema(ScalarMetadataSchema::Profiled),
+    );
     let volumes = Arc::new(
         LocalVolumeStore::new(volume_metadata, config.volumes)
             .map_err(component("volume configuration"))?,
@@ -140,7 +190,7 @@ pub async fn prepare(mut config: AppConfig) -> Result<BuildPreparation, AppError
         .map_err(component("volume initialization"))?;
     let build_git_binary = config.workspaces.git_binary.clone();
     let result_artifact_root = config.workspaces.artifact_root.clone();
-    let workspace_repository = Arc::new(PgWorkspaceMetadataRepository::new(pool.clone()));
+    let workspace_repository = Arc::new(PgWorkspaceMetadataRepository::new(worker_pool.clone()));
     let mut workspaces = LocalWorkspaceManager::new(
         Arc::clone(&workspace_repository) as Arc<dyn heph_runtime::WorkspaceMetadataRepository>,
         Arc::clone(&workspace_repository) as Arc<dyn heph_runtime::ResultRepository>,
@@ -185,15 +235,15 @@ pub async fn prepare(mut config: AppConfig) -> Result<BuildPreparation, AppError
         gateway_edge::GatewayServiceLogMaintenancePolicy::default(),
     ));
     let (secret_mounts, secret_runtime, secret_service) = build_secret_mount_manager(
-        pool.clone(),
-        &config.database_url,
+        application_pool.clone(),
+        worker_pool.clone(),
         config.secret_keys,
         config.secret_mounts,
     )
     .await?;
-    let runtime_git_credentials = PgRuntimeGitCredentialRepository::new(pool.clone());
+    let runtime_git_credentials = PgRuntimeGitCredentialRepository::new(worker_pool.clone());
     let runtime_authority = Arc::new(PgRunAuthorityManager::new(
-        pool.clone(),
+        worker_pool.clone(),
         runtime_git_credentials.clone(),
         config.runtime_authority_handoff_root,
         config.runtime_authority_handoff_key,
@@ -232,10 +282,12 @@ pub async fn prepare(mut config: AppConfig) -> Result<BuildPreparation, AppError
     };
     Ok(BuildPreparation {
         config: normalized_config,
+        managed_backend,
         runtime_git_socket_path,
         gateway_service_host_id,
         pool,
         application_pool,
+        worker_pool,
         storage,
         forge,
         run_repository,
@@ -284,42 +336,4 @@ async fn verify_database_contract(pool: &PgPool) -> Result<(), AppError> {
         )));
     }
     Ok(())
-}
-
-pub fn component<Error: std::fmt::Display>(
-    name: &'static str,
-) -> impl FnOnce(Error) -> AppError + Copy {
-    move |error| AppError::Component {
-        component: name,
-        message: error.to_string(),
-    }
-}
-
-/// Application construction, startup, supervision, or shutdown failure.
-#[derive(Debug, thiserror::Error)]
-#[non_exhaustive]
-pub enum AppError {
-    /// Static or migration configuration is invalid.
-    #[error("invalid application configuration: {0}")]
-    Configuration(String),
-    /// One application component failed.
-    #[error("{component} failed: {message}")]
-    Component {
-        /// Component name.
-        component: &'static str,
-        /// Non-sensitive failure.
-        message: String,
-    },
-    /// Readiness barrier failed.
-    #[error("application readiness failed: {0}")]
-    Readiness(String),
-    /// A supervised task failed.
-    #[error("supervised application task failed: {0}")]
-    Task(String),
-    /// An operation timed out.
-    #[error("application operation timed out: {0}")]
-    Timeout(String),
-    /// Resource shutdown failed.
-    #[error("resource shutdown failed: {0}")]
-    Shutdown(String),
 }

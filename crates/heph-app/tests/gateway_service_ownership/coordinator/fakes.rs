@@ -202,6 +202,7 @@ pub fn fake_launch(identity: GatewayServiceIdentity) -> GatewayServiceLaunch {
         identity,
         service,
         spec: VmSpec {
+            guest_volumes: Vec::new(),
             id: VmId(format!("gateway-service-{}", identity.instance_id)),
             root: RootFilesystem::Directory {
                 host_path: PathBuf::from("/tmp/gateway-coordinator-test"),

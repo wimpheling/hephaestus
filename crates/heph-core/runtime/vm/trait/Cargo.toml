@@ -10,6 +10,9 @@ layer = "port"
 context = "vm"
 
 [dependencies]
+capability-domain = { path = "../../../auth/authorization/capability-domain" }
+serde.workspace = true
+volume-domain = { path = "../../volume/domain" }
 async-trait.workspace = true
 bytes.workspace = true
 http.workspace = true
@@ -19,3 +22,7 @@ uuid.workspace = true
 
 [lints]
 workspace = true
+
+[dev-dependencies]
+serde_json.workspace = true
+tokio = { workspace = true, features = ["macros", "rt"] }

@@ -11,7 +11,7 @@ use sqlx::{PgConnection, PgPool, Postgres, Transaction};
 
 /// Canonical authorization model revision recorded with audit events.
 pub const AUTHORIZATION_MODEL_VERSION: &str =
-    "melange-0.8.5:9b7a9b211e804d498d7bb9f106f3a79471c42dc2b9a654f10f234454d239189a";
+    "melange-0.8.5:ac00dabe86b9c473af56ea615b011445fa0597e3c1ea9802d83f0532fa82c148";
 
 /// Specialized Mélange authorization provider.
 #[derive(Debug, Clone, Copy, Default)]

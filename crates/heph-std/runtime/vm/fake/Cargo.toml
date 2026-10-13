@@ -13,6 +13,7 @@ context = "vm"
 async-trait.workspace = true
 tokio.workspace = true
 vm-trait.workspace = true
+uuid.workspace = true
 
 [dev-dependencies]
 bytes.workspace = true

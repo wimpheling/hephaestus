@@ -9,6 +9,17 @@ use uuid::Uuid;
 
 pub async fn seed_active_run(pool: &sqlx::PgPool, instance: &UpdateAdmissionInstance) -> Uuid {
     let active_run = Uuid::new_v4();
+    let mut tx = pool
+        .begin()
+        .await
+        .expect("begin active update-drain fixture");
+    // PUBLIC107 admission takes this parent NOWAIT inside the INSERT trigger.
+    // Wait before inserting the child; daemon work may already own the parent.
+    sqlx::query_scalar::<_, Uuid>("SELECT id FROM agent_instances WHERE id=$1 FOR UPDATE")
+        .bind(instance.instance_id)
+        .fetch_one(&mut *tx)
+        .await
+        .expect("lock active update-drain fixture parent");
     sqlx::query(
         "INSERT INTO runs
            (id, instance_id, instance_revision_id, release_id, release_agent_id,
@@ -23,14 +34,17 @@ pub async fn seed_active_run(pool: &sqlx::PgPool, instance: &UpdateAdmissionInst
     .bind(instance.release_agent_id)
     .bind(instance.attachment_id)
     .bind(Uuid::new_v4())
-    .execute(pool)
+    .execute(&mut *tx)
     .await
     .expect("persist active normal update-drain fixture");
     sqlx::query("UPDATE agent_instances SET run_gate_open = true WHERE id = $1")
         .bind(instance.instance_id)
-        .execute(pool)
+        .execute(&mut *tx)
         .await
         .expect("open gate for app update command");
+    tx.commit()
+        .await
+        .expect("commit active update-drain fixture");
     active_run
 }
 
@@ -223,3 +237,7 @@ pub async fn wait_for_new_hook_run(
         tokio::time::sleep(Duration::from_millis(50)).await;
     }
 }
+
+#[cfg(test)]
+#[path = "seed_tests.rs"]
+mod seed_tests;

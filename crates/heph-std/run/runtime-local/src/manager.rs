@@ -53,7 +53,11 @@ impl LocalRunRuntimeManager {
         }
         validate_root(&config.runtime_root)?;
         validate_root(&config.release_artifact_root)?;
-        Ok(Self { catalog, config })
+        Ok(Self {
+            catalog,
+            config,
+            invocation: None,
+        })
     }
 
     pub(crate) fn active_path(&self, run_id: RunId) -> PathBuf {
@@ -74,6 +78,9 @@ impl LocalRunRuntimeManager {
     }
 
     pub(crate) async fn load(&self, run: &Run) -> Result<RunRuntimeInput, RunRuntimeError> {
+        if run.kind == RunKind::Invocation {
+            return Err(runtime_error("Invocation materialization is unsupported"));
+        }
         let input = self.catalog.load_runtime(run).await.map_err(catalog)?;
         if input.artifacts.is_empty() || input.artifacts.len() > MAX_RUNTIME_ARTIFACTS {
             return Err(runtime_error("release artifact count is invalid"));
@@ -92,12 +99,16 @@ impl LocalRunRuntimeManager {
         run: &Run,
         input: &RunRuntimeInput,
     ) -> Result<PreparedRunRuntime, RunRuntimeError> {
+        if run.kind == RunKind::Invocation {
+            return Err(runtime_error("Invocation materialization is unsupported"));
+        }
         let staging = self
             .config
             .runtime_root
             .join(format!(".prepare-{}", Uuid::new_v4()));
         create_directory(&staging, 0o700)?;
-        let result = self.materialize_staging(run, input, &staging);
+        let context = HostContext::new(run, input);
+        let result = self.materialize_staging(run, input, &staging, &context);
         if result.is_err() {
             let _cleanup = fs::remove_dir_all(&staging);
         }
@@ -107,11 +118,12 @@ impl LocalRunRuntimeManager {
     // Staging the complete runtime is deliberately kept in one linear routine so
     // every validation failure shares the caller's atomic cleanup path.
     #[allow(clippy::cognitive_complexity)]
-    fn materialize_staging(
+    pub(crate) fn materialize_staging(
         &self,
         run: &Run,
         input: &RunRuntimeInput,
         staging: &Path,
+        context: &HostContext<'_>,
     ) -> Result<PreparedRunRuntime, RunRuntimeError> {
         let release = staging.join("release");
         let previous_release = staging.join("release-previous");
@@ -151,8 +163,7 @@ impl LocalRunRuntimeManager {
         if let Some(mailbox_event) = input.mailbox_event.as_ref() {
             materialize_mailbox_event(&control, mailbox_event)?;
         }
-        let context = HostContext::new(run, input);
-        write_json(&control.join("context.json"), &context)?;
+        write_json(&control.join("context.json"), context)?;
         tracing::debug!(run_id = %run.id, "runtime context materialized");
         if let Some(parameters) = input.previous_parameters.as_ref() {
             write_json(&control.join("parameters-previous.json"), parameters)?;

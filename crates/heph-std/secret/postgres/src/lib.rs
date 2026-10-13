@@ -22,7 +22,10 @@ pub use application_types::{
     GrantSummary, ImportSummary, Page, PageResult, ProjectAuthority, SecretQueryError,
     SecretSummary,
 };
-pub use mounts::{PgSecretMountManager, PostgresSecretMountMetadata, initialize_manager};
+pub use mounts::{
+    PgSecretMountManager, PostgresSecretMountMetadata, initialize_manager,
+    initialize_qualified_invocation_manager,
+};
 pub use service::{GatewayIngressSecretResolver, SecretRuntimeService, SecretService};
 
 use application_types::{

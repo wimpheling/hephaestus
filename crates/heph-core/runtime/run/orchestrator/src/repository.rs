@@ -46,8 +46,175 @@ pub enum RepositoryError {
 /// Persistence boundary required by the orchestrator.
 #[async_trait]
 pub trait RunRepository: Send + Sync + 'static {
+    /// Positively classifies configured immutable Invocation cancellation history.
+    ///
+    /// Worker-only RRRO comparison of the global original and complete per-Run
+    /// associations. No hydration requiring prepared115, write, freeze, physical
+    /// IO or adoption belongs here. A captured result grants no later authority;
+    /// preparation requalifies under the owning caller's SAME Start/operation guards.
+    /// Unknown/foreign/configuration-conflicting evidence denies, never selects a
+    /// family by missing rows. Defaults explicitly unsupported.
+    async fn classify_invocation_cancel(
+        &self,
+        _run: RunId,
+        _scope: &vm_trait::VmProviderOwnerScope,
+    ) -> Result<crate::InvocationCancelEvidence, RepositoryError> {
+        Err(RepositoryError::InvalidData(
+            "Invocation cancellation classification is unsupported",
+        ))
+    }
+
+    /// Prepares processed genuine queued cancellation under the existing locks.
+    ///
+    /// Caller holds the SAME live Start claim and per-Run operation mutex. Actual
+    /// worker/configuration/owner/original history is independently requalified;
+    /// only this Run is closed and its complete target frozen/replayed. Ordinary
+    /// Cancel leaves instance grants/gates/other Runs untouched; Drain requires its
+    /// genuine original evidence. No Cancel/Wake/consumption, state transition,
+    /// physical absence receipt or lease release is manufactured. A returned
+    /// queued bundle is strict prepared metadata; consumed117 is positively proven.
+    /// Defaults explicitly unsupported, including for an empty database.
+    async fn prepare_invocation_cancel_cleanup(
+        &self,
+        _run: RunId,
+        _scope: &vm_trait::VmProviderOwnerScope,
+    ) -> Result<crate::InvocationCancelPreparation, RepositoryError> {
+        Err(RepositoryError::InvalidData(
+            "Invocation cancellation preparation is unsupported",
+        ))
+    }
+
+    /// Atomically prepares metadata for exact permanently cancelled owning cleanup.
+    ///
+    /// Worker-only: independently qualify original removal/Cancel, immutable
+    /// producer, prepared creation, profile and actual provider scope. Under the
+    /// existing parent/resource lock order, permanently close acquisition and
+    /// freeze or replay the exact complete canonical target. The owning caller
+    /// holds its live-Start claim and operation mutex before invoking this port.
+    /// No physical IO, receipt, lease release, callback, new command, state or
+    /// outcome change belongs here. Unknown ownership and unsupported preconsumer
+    /// history deny; preparation cannot invent a VM or adopt historical work.
+    /// Defaults unsupported; a returned projection is not physical cleanup proof.
+    async fn prepare_cleanup_wake(
+        &self,
+        _request: &crate::RunCleanupWakeRequest,
+        _scope: &run_domain::RunCleanupHostId,
+    ) -> Result<crate::RunCleanupWakeSnapshot, RepositoryError> {
+        Err(RepositoryError::InvalidData(
+            "owning cleanup wake preparation is unsupported",
+        ))
+    }
+
+    /// Independently qualifies exact original removal and immutable owning history.
+    ///
+    /// Worker-only: match original request/key/hash/creator/CAS and durable Cancel,
+    /// permanent instance and Run acquisition closure, full producer/pins/profile,
+    /// and actual configured scope. Unknown/foreign history is never eligible.
+    /// No new Cancel, receipt, lifecycle write or host-filtered absence belongs here.
+    async fn load_cleanup_wake(
+        &self,
+        _request: &crate::RunCleanupWakeRequest,
+        _scope: &run_domain::RunCleanupHostId,
+    ) -> Result<crate::RunCleanupWakeSnapshot, RepositoryError> {
+        Err(RepositoryError::InvalidData(
+            "owning cleanup wake qualification is unsupported",
+        ))
+    }
+
+    /// Commits exact fresh Legacy placement before IO; unsupported by default.
+    async fn create_run_with_legacy_placement(
+        &self,
+        _command: &StartRun,
+        _scope: &run_domain::LegacyVmPlacementScope,
+    ) -> Result<CreateRunResult, RepositoryError> {
+        Err(RepositoryError::InvalidData(
+            "Legacy placement creation is unsupported",
+        ))
+    }
+    /// Consumes exact producer eligibility once; `CleanupOnly` grants no IO.
+    async fn consume_legacy_vm_placement(
+        &self,
+        _command: &StartRun,
+        _scope: &run_domain::LegacyVmPlacementScope,
+        _kind: run_domain::LegacyVmPlacementConsumption,
+    ) -> Result<run_domain::LegacyVmPlacement, RepositoryError> {
+        Err(RepositoryError::InvalidData(
+            "Legacy placement consumption is unsupported",
+        ))
+    }
+    /// Loads scoped birth metadata; a projection is not physical absence proof.
+    async fn legacy_vm_placement(
+        &self,
+        _run_id: RunId,
+        _scope: &run_domain::LegacyVmPlacementScope,
+    ) -> Result<run_domain::LegacyVmPlacement, RepositoryError> {
+        Err(RepositoryError::InvalidData(
+            "Legacy placement lookup is unsupported",
+        ))
+    }
+    /// Closes acquisition permanently without resource release or receipts.
+    async fn close_legacy_vm_acquisition(
+        &self,
+        _run_id: RunId,
+        _scope: &run_domain::LegacyVmPlacementScope,
+    ) -> Result<run_domain::LegacyVmPlacement, RepositoryError> {
+        Err(RepositoryError::InvalidData(
+            "Legacy acquisition closure is unsupported",
+        ))
+    }
+    /// Inspects placed and held history; unsupported never returns false empty.
+    async fn legacy_vm_placement_inventory(
+        &self,
+        _scope: &run_domain::LegacyVmPlacementScope,
+    ) -> Result<run_domain::LegacyVmPlacementInventory, RepositoryError> {
+        Err(RepositoryError::InvalidData(
+            "Legacy placement inventory is unsupported",
+        ))
+    }
+    /// Rechecks exact consumed placement and live openness before Legacy IO.
+    async fn assert_legacy_vm_placement_open(
+        &self,
+        _run_id: RunId,
+        _scope: &run_domain::LegacyVmPlacementScope,
+    ) -> Result<run_domain::LegacyVmPlacement, RepositoryError> {
+        Err(RepositoryError::InvalidData(
+            "Legacy open placement is unsupported",
+        ))
+    }
+    /// Reads exact qualified terminal evidence for callback replay, with no IO.
+    async fn legacy_vm_cleanup_completed(
+        &self,
+        _run_id: RunId,
+        _scope: &run_domain::LegacyVmPlacementScope,
+    ) -> Result<Run, RepositoryError> {
+        Err(RepositoryError::InvalidData(
+            "Legacy terminal evidence is unsupported",
+        ))
+    }
     /// Creates a queued run and command-inbox record idempotently.
     async fn create_run(&self, command: &StartRun) -> Result<CreateRunResult, RepositoryError>;
+    /// Atomically admits a run with its configured provider ownership before IO.
+    ///
+    /// Replays must compare the complete command and VM plan. Historical rows
+    /// without a plan may not be adopted; a precreated update needs persisted
+    /// admission evidence proving that provisioning has not been permitted.
+    /// Invocation may only consume/replay an exact PREEXISTING protected
+    /// admission: full command, immutable pins, explicit owned profile, fresh
+    /// eligibility and the actual provider scope/VM must match atomically. It
+    /// must never insert a Normal/Update alias or admit from a VM tuple alone.
+    /// The returned run is preexisting (`created` is false); absent, foreign or
+    /// unsupported admission fails before provisioning.
+    /// The default rejects use so existing adapters cannot imply atomicity.
+    async fn create_run_with_vm_plan(
+        &self,
+        _command: &StartRun,
+        _scope: &run_domain::RunCleanupHostId,
+        _vm_id: &vm_trait::VmId,
+    ) -> Result<CreateRunResult, RepositoryError> {
+        Err(RepositoryError::InvalidData(
+            "atomic planned run creation is unsupported",
+        ))
+    }
     /// Captures the immutable runtime Git target before materialization.
     async fn ensure_runtime_git_provenance(&self, run: &Run) -> Result<(), RepositoryError>;
     /// Loads one run.
@@ -79,4 +246,84 @@ pub trait RunRepository: Send + Sync + 'static {
     async fn request_cancel(&self, command: &CancelRun) -> Result<bool, RepositoryError>;
     /// Returns non-cleaned runs that may require restart reconciliation.
     async fn recoverable_runs(&self) -> Result<Vec<Run>, RepositoryError>;
+}
+
+/// Worker-only persistence boundary for canonical complete-set cleanup.
+///
+/// Existing run repositories are not implicitly cleanup implementations. An
+/// adapter must enforce acquisition closure, exact target identity, and trusted
+/// provider observations; public domain values alone establish no cleanup proof.
+#[async_trait]
+pub trait RunCleanupRepository: Send + Sync + 'static {
+    /// Observes complete qualified Invocation originals and unreleased leases.
+    ///
+    /// Worker-only RRRO comparison for the actual configured provider scope.
+    /// Unknown/foreign originals, inconsistent associations and invalid cleanup
+    /// receipts return an error; they must not disappear behind host/state filters.
+    /// Positive open queued/no-IO originals remain available for redelivery.
+    /// `stale_before` limits actionable Runs by their complete lease set, never
+    /// the scalar stale port. Returned unique IDs grant no cleanup/Start authority;
+    /// each owning action must requalify under its existing operation guards.
+    /// Defaults explicitly unsupported, including for an empty database.
+    async fn qualified_invocation_recovery_inventory(
+        &self,
+        _scope: &vm_trait::VmProviderOwnerScope,
+        _stale_before: Option<OffsetDateTime>,
+    ) -> Result<Vec<RunId>, RepositoryError> {
+        Err(RepositoryError::InvalidData(
+            "qualified Invocation recovery inventory is unsupported",
+        ))
+    }
+
+    /// Persists an exact planned VM identity before any provisioning IO.
+    ///
+    /// Trusted configured provider ownership supplies the host scope. Replays
+    /// must compare scope, VM identity, and exact run/revision. An adapter must
+    /// reject replacement, closed acquisition, and fabricated historical IDs.
+    async fn bind_vm_before_provision(
+        &self,
+        run_id: RunId,
+        instance_id: runtime_types::AgentInstanceId,
+        revision_id: runtime_types::AgentInstanceRevisionId,
+        host: &run_domain::RunCleanupHostId,
+        vm_id: &vm_trait::VmId,
+    ) -> Result<(), RepositoryError>;
+
+    /// Closes further acquisition under the run lock and snapshots every lease.
+    ///
+    /// Returns the same immutable generation/target on retry, including an
+    /// explicit empty set or unresolved historical VM identity. No IO belongs
+    /// in this transaction, and no in-memory attachment is a source of truth.
+    async fn begin_cleanup(
+        &self,
+        run_id: RunId,
+    ) -> Result<run_domain::RunCleanupTarget, RepositoryError>;
+
+    /// Loads an immutable observation before repeating provider destruction IO.
+    ///
+    /// The worker adapter must check configured provider ownership even for an
+    /// empty lease set. Absence of a receipt is not evidence of absent resources.
+    async fn recorded_cleanup_receipt(
+        &self,
+        run_id: RunId,
+    ) -> Result<Option<run_domain::RunCleanupReceipt>, RepositoryError>;
+
+    /// Persists a worker-verified exact VM destruction or authoritative absence.
+    ///
+    /// A DTO does not prove the observation: the trusted adapter must verify the
+    /// worker boundary and matching persisted generation/full fence-set digest.
+    async fn record_cleanup_receipt(
+        &self,
+        receipt: &run_domain::RunCleanupReceipt,
+    ) -> Result<(), RepositoryError>;
+
+    /// Consumes the persisted exact receipt and releases the complete fence set.
+    ///
+    /// One transaction verifies acquisition remains closed, matches every lease
+    /// and fence, releases the whole set, then permits `CleanedUp`. Missing or
+    /// stale receipt evidence must fail without releasing any lease.
+    async fn finish_cleanup(
+        &self,
+        receipt: &run_domain::RunCleanupReceipt,
+    ) -> Result<Run, RepositoryError>;
 }

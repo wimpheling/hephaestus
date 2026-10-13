@@ -69,32 +69,34 @@ where
         context.timeout,
     )
     .await;
-    let migrated_context = CookingUpdateContext {
-        pool: context.pool,
-        running: context.running,
-        instance_id: context.instance_id,
-        gateway: context.gateway,
-        current_revision_id: migration.candidate_revision_id,
-        owner: context.owner,
-        rpc_token: context.rpc_token,
-        brokered_rule_ids: BrokeredRuleIds {
-            model: migration.model_rule_id,
-            relay: migration.relay_rule_id,
-        },
-        timeout: context.timeout,
+    let abnormal = {
+        let migrated_context = CookingUpdateContext {
+            pool: context.pool,
+            running: context.running,
+            instance_id: context.instance_id,
+            gateway: context.gateway,
+            current_revision_id: migration.candidate_revision_id,
+            owner: context.owner,
+            rpc_token: context.rpc_token,
+            brokered_rule_ids: BrokeredRuleIds {
+                model: migration.model_rule_id,
+                relay: migration.relay_rule_id,
+            },
+            timeout: context.timeout,
+        };
+        exercise_explicit_rollback(
+            &migrated_context,
+            candidates.rollback_release_agent_id,
+            candidates.rollback_rule_ids,
+        )
+        .await;
+        exercise_abnormal_recovery(
+            &migrated_context,
+            candidates.abnormal_release_agent_id,
+            candidates.abnormal_rule_ids,
+        )
+        .await
     };
-    exercise_explicit_rollback(
-        &migrated_context,
-        candidates.rollback_release_agent_id,
-        candidates.rollback_rule_ids,
-    )
-    .await;
-    let abnormal = exercise_abnormal_recovery(
-        &migrated_context,
-        candidates.abnormal_release_agent_id,
-        candidates.abnormal_rule_ids,
-    )
-    .await;
     UpdateSequence {
         migration,
         abnormal,

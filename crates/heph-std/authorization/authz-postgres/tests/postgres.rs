@@ -9,6 +9,8 @@ mod catalog;
 mod parity;
 #[path = "postgres/permission_checks.rs"]
 mod permission_checks;
+#[path = "postgres/private_volumes.rs"]
+mod private_volumes;
 #[path = "postgres/revocation.rs"]
 mod revocation;
 #[path = "postgres/rls_checks.rs"]
@@ -34,4 +36,5 @@ async fn generated_permissions_and_rls_enforce_the_same_perimeter() {
     rls_checks::run(&pool, &fixture, &authorizer).await;
     revocation::run(&pool, &fixture, &authorizer).await;
     catalog::run(&pool, &fixture).await;
+    private_volumes::run(&pool, &fixture).await;
 }

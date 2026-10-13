@@ -1,9 +1,9 @@
 use super::common::{
-    Arc, AtomicU64, Cgroup, Command, EVENT_CAPACITY, HashMap, LibkrunConfig, Mutex, Ordering,
-    OwnedReadHalf, PROCESS_POLL_INTERVAL, Path, PreparedSpec, SUPERVISOR_SOCKET_NAME, VmError,
-    WireError, WireErrorKind, WorkerClient, WorkerCommand, WorkerConfiguration, WorkerEvent,
-    WorkerMessage, WorkerRequest, broadcast, error, info, oneshot, read_async, sleep, timeout,
-    watch, write_async,
+    Arc, AtomicU64, Cgroup, Command, EVENT_CAPACITY, ErrorSnapshot, ExitStatus, HashMap,
+    LaunchCustody, LibkrunConfig, Mutex, Ordering, OwnedReadHalf, Path, PreparedSpec,
+    SUPERVISOR_SOCKET_NAME, VmError, WireError, WireErrorKind, WorkerClient, WorkerCommand,
+    WorkerConfiguration, WorkerEvent, WorkerMessage, WorkerRequest, broadcast, info, oneshot,
+    read_async, timeout, watch, write_async,
 };
 use super::helpers::{ProcessStatus, provider_error, unavailable_error, wire_to_vm_error};
 use tokio::net::UnixListener;
@@ -14,24 +14,42 @@ impl WorkerClient {
         spec: PreparedSpec,
         runtime_dir: &Path,
         cgroup: &Cgroup,
+        custody: &LaunchCustody,
     ) -> Result<Arc<Self>, VmError> {
-        let socket_path = runtime_dir.join(SUPERVISOR_SOCKET_NAME);
-        let listener = UnixListener::bind(&socket_path)
+        Self::launch_with_after_spawn(config, spec, runtime_dir, cgroup, custody, |_| Ok(())).await
+    }
+
+    pub(super) async fn launch_with_after_spawn(
+        config: Arc<LibkrunConfig>,
+        spec: PreparedSpec,
+        runtime_dir: &Path,
+        cgroup: &Cgroup,
+        custody: &LaunchCustody,
+        after_spawn: impl FnOnce(&Arc<super::worker_process::WorkerProcess>) -> Result<(), VmError>,
+    ) -> Result<Arc<Self>, VmError> {
+        let runtime = custody.runtime_file()?;
+        let host_socket = custody.host_runtime_dir()?.join(SUPERVISOR_SOCKET_NAME);
+        let listener = UnixListener::bind(&host_socket)
             .map_err(|error| provider_error("worker-listener", error))?;
         let mut command = Command::new(&config.worker_binary);
-        command.arg("--socket").arg(&socket_path).kill_on_drop(true);
-        let child = command
-            .spawn()
-            .map_err(|error| unavailable_error("worker binary", error.to_string()))?;
-        let pid = child
-            .id()
+        // Stdio performs a child-local dup to FD0 without changing CLOEXEC in
+        // the supervisor or inheriting any ownership lock. IPC uses its socket.
+        command
+            .arg("--runtime-stdin")
+            .stdin(super::containment::worker_stdin(&runtime)?)
+            .kill_on_drop(true);
+        // Spawn and publish the retained Child synchronously before placement
+        // or the first IPC await. Launch's owning task handles every failure.
+        let process = custody.spawn(&mut command);
+        // Command/Stdio own the last parent gate duplicate. Drop, never LOCK_UN:
+        // unlocking its OFD would also unlock the child's inherited description.
+        drop(command);
+        let process = process?;
+        after_spawn(&process)?;
+        let pid = process
+            .pid
             .ok_or_else(|| unavailable_error("worker process", "worker has no PID"))?;
-        if let Err(error) = cgroup.add_process(pid) {
-            let mut child = child;
-            let _kill_result = child.start_kill();
-            let _wait_result = child.wait().await;
-            return Err(error);
-        }
+        cgroup.add_process(pid)?;
         info!(
             worker_pid = pid,
             cgroup = %cgroup.path().display(),
@@ -44,18 +62,15 @@ impl WorkerClient {
             .map_err(|error| provider_error("worker-accept", error))?;
         let (reader, writer) = stream.into_split();
         let (events, _) = broadcast::channel(EVENT_CAPACITY);
-        let (process_exit, _) = watch::channel(None);
         let client = Arc::new(Self {
             writer: Mutex::new(writer),
             pending: Arc::new(Mutex::new(HashMap::new())),
             next_request: AtomicU64::new(1),
             events,
-            child: Arc::new(Mutex::new(child)),
-            process_exit,
-            pid,
+            process,
         });
         client.spawn_reader(reader);
-        client.spawn_reaper();
+        custody.record_backend(client.clone())?;
 
         let worker_config = WorkerConfiguration {
             passt_binary: config.passt_binary.clone(),
@@ -66,18 +81,20 @@ impl WorkerClient {
             broker_socket_path: config.broker_socket_path.clone(),
             runtime_git_socket_path: config.runtime_git_socket_path.clone(),
         };
-        if let Err(error) = client
-            .request(WorkerCommand::Configure {
+        timeout(
+            config.startup_timeout,
+            client.request(WorkerCommand::Configure {
                 config: worker_config,
                 spec: Box::new(spec),
+                // Legacy wire field; inherited-mode worker resolves only its
+                // retained child-local descriptor, never this configured path.
                 runtime_dir: runtime_dir.to_path_buf(),
-            })
-            .await
-        {
-            let _kill_result = client.kill().await;
-            let _wait_result = client.wait_process().await;
-            return Err(error);
-        }
+            }),
+        )
+        .await
+        .map_err(|_| {
+            unavailable_error("worker configuration", "configuration request timed out")
+        })??;
         Ok(client)
     }
 
@@ -108,35 +125,15 @@ impl WorkerClient {
     }
 
     pub(super) fn subscribe_process_exit(&self) -> watch::Receiver<Option<ProcessStatus>> {
-        self.process_exit.subscribe()
+        self.process.subscribe_process_exit()
     }
 
     pub(super) async fn kill(&self) -> Result<(), VmError> {
-        let mut child = self.child.lock().await;
-        if child
-            .try_wait()
-            .map_err(|error| provider_error("worker-status", error))?
-            .is_none()
-        {
-            child
-                .start_kill()
-                .map_err(|error| provider_error("worker-kill", error))?;
-        }
-        drop(child);
-        Ok(())
+        self.process.kill().await
     }
 
     pub(super) async fn wait_process(&self) -> Result<ProcessStatus, VmError> {
-        let mut exit = self.process_exit.subscribe();
-        loop {
-            let current = exit.borrow_and_update().clone();
-            if let Some(status) = current {
-                return Ok(status);
-            }
-            exit.changed()
-                .await
-                .map_err(|error| provider_error("worker-exit-channel", error))?;
-        }
+        self.process.wait_process().await
     }
 
     pub(super) fn spawn_reader(self: &Arc<Self>, mut reader: OwnedReadHalf) {
@@ -175,40 +172,30 @@ impl WorkerClient {
             }
         });
     }
+}
 
-    pub(super) fn spawn_reaper(self: &Arc<Self>) {
-        let child = Arc::clone(&self.child);
-        let process_exit = self.process_exit.clone();
-        let pid = self.pid;
-        tokio::spawn(async move {
-            loop {
-                let status = {
-                    let mut child = child.lock().await;
-                    child.try_wait()
-                };
-                match status {
-                    Ok(Some(status)) => {
-                        let status = ProcessStatus::from(status);
-                        info!(
-                            worker_pid = pid,
-                            code = ?status.code,
-                            signal = ?status.signal,
-                            "worker reaped"
-                        );
-                        process_exit.send_replace(Some(status));
-                        break;
-                    }
-                    Ok(None) => sleep(PROCESS_POLL_INTERVAL).await,
-                    Err(error) => {
-                        error!(worker_pid = pid, %error, "failed to reap worker");
-                        process_exit.send_replace(Some(ProcessStatus {
-                            code: None,
-                            signal: None,
-                        }));
-                        break;
-                    }
-                }
-            }
-        });
+// This is the sole publication boundary for real Child::try_wait results.
+// Err retains unresolved process state; only Ok(Some) confirms actual reap.
+pub(super) fn publish_process_poll(
+    result: std::io::Result<Option<ExitStatus>>,
+    exit: &watch::Sender<Option<ProcessStatus>>,
+    errors: &watch::Sender<Option<ErrorSnapshot>>,
+) -> Result<Option<ProcessStatus>, VmError> {
+    match result {
+        Ok(Some(status)) => {
+            let status = ProcessStatus::from(status);
+            exit.send_replace(Some(status.clone()));
+            errors.send_replace(None);
+            Ok(Some(status))
+        }
+        Ok(None) => {
+            errors.send_replace(None);
+            Ok(None)
+        }
+        Err(error) => {
+            let error = provider_error("worker-reap", error);
+            errors.send_replace(Some(ErrorSnapshot::from_vm_error(&error)));
+            Err(error)
+        }
     }
 }

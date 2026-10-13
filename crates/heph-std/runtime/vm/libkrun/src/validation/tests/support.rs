@@ -51,6 +51,7 @@ impl Fixture {
 
     pub(super) fn spec(&self) -> VmSpec {
         VmSpec {
+            guest_volumes: Vec::new(),
             id: VmId("validation".to_owned()),
             root: RootFilesystem::Directory {
                 host_path: self.images.join("root"),

@@ -8,7 +8,7 @@ use super::{
 };
 use crate::protocol::PRIVATE_SERVICE_SOCKET_NAME;
 use std::{
-    fs,
+    fs::{self, File},
     os::unix::fs::PermissionsExt,
     path::{Path, PathBuf},
     sync::atomic::{AtomicBool, Ordering},
@@ -28,6 +28,8 @@ pub(crate) struct ServiceBroker {
     pub(super) inner: Arc<BrokerInner>,
     socket_path: PathBuf,
     accept_task: Mutex<Option<JoinHandle<()>>>,
+    // External broker clones retain this directory through shutdown and Drop.
+    runtime_directory: Option<Arc<File>>,
 }
 
 impl ServiceBroker {
@@ -68,7 +70,22 @@ impl ServiceBroker {
             inner,
             socket_path,
             accept_task: Mutex::new(Some(accept_task)),
+            runtime_directory: None,
         })
+    }
+
+    pub(crate) fn bind_pinned(
+        runtime: Arc<File>,
+        max_connections: u32,
+        handshake_timeout: Duration,
+    ) -> Result<Self, ServiceTransportError> {
+        let mut broker = Self::bind(
+            &crate::directory::fd_path(&runtime),
+            max_connections,
+            handshake_timeout,
+        )?;
+        broker.runtime_directory = Some(runtime);
+        Ok(broker)
     }
 
     #[cfg(test)]
@@ -134,6 +151,8 @@ impl Drop for ServiceBroker {
             task.abort();
         }
         remove_socket(&self.socket_path);
+        // Release the original directory only after its socket removal attempt.
+        drop(self.runtime_directory.take());
     }
 }
 
@@ -234,3 +253,7 @@ impl BrokerInner {
         }
     }
 }
+
+#[cfg(test)]
+#[path = "broker/path_tests.rs"]
+mod path_tests;

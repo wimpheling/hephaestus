@@ -20,5 +20,10 @@ thiserror.workspace = true
 tokio = { workspace = true, features = ["rt", "sync", "time"] }
 tracing.workspace = true
 
+[dev-dependencies]
+async-trait.workspace = true
+runtime-types = { path = "../../../heph-core/platform/runtime-types" }
+tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }
+
 [lints]
 workspace = true

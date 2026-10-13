@@ -24,7 +24,7 @@ impl<K: KeyProvider + Send + Sync> SecretService<K> {
     ) -> Result<CreatedSecret, SecretServiceError> {
         let mut tx = begin_actor_transaction(&self.pool, identity)
             .await
-            .map_err(|_| SecretServiceError::Persistence)?;
+            .map_err(|error| diagnostics::persistence("begin_actor_transaction", &error))?;
         let (owner_type, owner_id, owner_organization_id, project_id, organization_id) =
             resolve_owner(&mut tx, command.owner)
                 .await
@@ -43,7 +43,7 @@ impl<K: KeyProvider + Send + Sync> SecretService<K> {
         {
             tx.commit()
                 .await
-                .map_err(|_| SecretServiceError::Persistence)?;
+                .map_err(|error| diagnostics::persistence("replay_commit", &error))?;
             return Ok(CreatedSecret {
                 secret_id: SecretId::from_uuid(aggregate_id),
                 version_id: SecretVersionId::from_uuid(
@@ -76,7 +76,7 @@ impl<K: KeyProvider + Send + Sync> SecretService<K> {
         .bind(identity.user_id.as_uuid())
         .execute(&mut *tx)
         .await
-        .map_err(|_| SecretServiceError::Persistence)?;
+        .map_err(|error| diagnostics::persistence("insert_secret", &error))?;
         insert_encrypted_version(
             &mut tx,
             command.secret_id,
@@ -112,7 +112,7 @@ impl<K: KeyProvider + Send + Sync> SecretService<K> {
         .map_err(|_| SecretServiceError::Persistence)?;
         tx.commit()
             .await
-            .map_err(|_| SecretServiceError::Persistence)?;
+            .map_err(|error| diagnostics::persistence("commit", &error))?;
         Ok(CreatedSecret {
             secret_id: command.secret_id,
             version_id: command.version_id,

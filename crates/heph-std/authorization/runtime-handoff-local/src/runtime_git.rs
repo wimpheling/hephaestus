@@ -1,5 +1,8 @@
 //! Crash-recoverable encrypted handoff for separate runtime Git credentials.
 
+#[path = "runtime_git/expired.rs"]
+mod expired;
+
 use aes_gcm::{
     Aes256Gcm, KeyInit,
     aead::{Aead, AeadCore, OsRng, Payload},
@@ -12,7 +15,7 @@ use serde::{Deserialize, Serialize};
 use std::{
     fs::{self, OpenOptions},
     io::Write,
-    os::unix::fs::{OpenOptionsExt, PermissionsExt},
+    os::unix::fs::OpenOptionsExt,
     path::{Path, PathBuf},
 };
 use time::OffsetDateTime;
@@ -25,6 +28,7 @@ const EXTENSION: &str = "git-handoff";
 /// Filesystem-backed encrypted runtime Git handoff on one trusted VM host.
 pub struct EncryptedFileRuntimeGitHandoffStore {
     directory: PathBuf,
+    root: crate::pinned::Root,
     key: Zeroizing<[u8; 32]>,
 }
 
@@ -33,19 +37,20 @@ impl EncryptedFileRuntimeGitHandoffStore {
     ///
     /// # Errors
     ///
-    /// Fails when the directory cannot be created or constrained to owner-only
-    /// access.
+    /// Fails when the directory cannot be created, constrained to owner-only
+    /// access, or retained as the original nofollow owner directory.
     pub fn new(
         directory: impl Into<PathBuf>,
         key: [u8; 32],
     ) -> Result<Self, RuntimeGitAuthorityError> {
+        let key = Zeroizing::new(key);
         let directory = directory.into();
-        fs::create_dir_all(&directory).map_err(|_| RuntimeGitAuthorityError::HandoffUnavailable)?;
-        fs::set_permissions(&directory, fs::Permissions::from_mode(0o700))
+        let root = crate::pinned::Root::initialize(&directory)
             .map_err(|_| RuntimeGitAuthorityError::HandoffUnavailable)?;
         Ok(Self {
             directory,
-            key: Zeroizing::new(key),
+            root,
+            key,
         })
     }
 
@@ -186,6 +191,13 @@ impl RuntimeGitHandoffStore for EncryptedFileRuntimeGitHandoffStore {
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
             Err(_) => Err(RuntimeGitAuthorityError::HandoffUnavailable),
         }
+    }
+
+    fn destroy_expired(
+        &self,
+        original: &runtime_git_authority::ExpiredRuntimeGitHandoff,
+    ) -> Result<(), RuntimeGitAuthorityError> {
+        self.destroy_expired_original(original)
     }
 
     fn purge_expired(&self, now: OffsetDateTime) -> Result<u64, RuntimeGitAuthorityError> {

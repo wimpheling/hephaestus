@@ -1,0 +1,1 @@
+SELECT payload,payload::text FROM (SELECT coalesce(jsonb_agg(jsonb_build_object('raw',to_jsonb(n),'owner',pg_get_userbyid(n.nspowner)) ORDER BY n.oid),'[]'::jsonb) AS payload FROM pg_namespace n WHERE n.nspname='public') AS capture

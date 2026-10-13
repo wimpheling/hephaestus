@@ -64,22 +64,28 @@ pub struct BuildExecutionResult {
 }
 
 /// PostgreSQL-coordinated isolated build worker.
+#[derive(Clone)]
 pub struct BuildExecutor {
     repository: Arc<dyn BuildRepository>,
     provider: Arc<dyn VmProvider>,
     artifacts: LocalArtifactStore,
     releases: Arc<ReleaseService>,
     config: BuildExecutorConfig,
+    registry: Arc<owner::Registry>,
+    workspace_root: Arc<workspace::pin::WorkspacePin>,
 }
 
 mod cleanup;
 mod errors;
+mod guest;
 mod monitor;
 mod output;
+mod owner;
 mod run;
 mod state;
 mod verify;
 mod workspace;
+pub use owner::{BuildCleanupError, BuildCleanupPhase, BuildCleanupStatus};
 
 use cleanup::{cleanup_workspace, filesystem, validate_private_directory};
 pub use errors::BuildExecutionError;
@@ -88,7 +94,9 @@ use output::{
     artifact_manifest, release_inputs, seal_output, stored_release_inputs,
     validate_declared_outputs,
 };
-use workspace::{PreparedBuildWorkspace, prepare_workspace};
+use workspace::PreparedBuildWorkspace;
+#[cfg(test)]
+use workspace::prepare_workspace;
 
 #[cfg(test)]
 mod tests;

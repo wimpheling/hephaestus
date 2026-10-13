@@ -13,13 +13,19 @@ use super::{
 
 impl PgRunRepository {
     pub(super) async fn load_run(&self, run_id: RunId) -> Result<Run, RepositoryError> {
-        sqlx::query_as::<_, RunRow>("SELECT * FROM runs WHERE id = $1")
+        if let Some(run) = self.load_prepared_queued_cleanup(run_id).await? {
+            return Ok(run);
+        }
+        if self.invocation_configuration.is_some() {
+            return self.load_guarded_invocation_or_ordinary(run_id).await;
+        }
+        let row = sqlx::query_as::<_, RunRow>("SELECT * FROM runs WHERE id = $1")
             .bind(run_id.as_uuid())
             .fetch_optional(&self.pool)
             .await
             .map_err(storage)?
-            .ok_or(RepositoryError::NotFound(run_id))?
-            .try_into()
+            .ok_or(RepositoryError::NotFound(run_id))?;
+        self.hydrate_invocation_or_ordinary(row).await
     }
 
     pub(super) async fn bind_resources_impl(
@@ -30,6 +36,11 @@ impl PgRunRepository {
         lease_fencing_token: Option<i64>,
         vm_id: &str,
     ) -> Result<Run, RepositoryError> {
+        if self.execution_profile.is_some() {
+            return self
+                .bind_profiled_resources(run_id, volume_id, lease_id, lease_fencing_token, vm_id)
+                .await;
+        }
         sqlx::query(
             "UPDATE runs
              SET volume_id = $2, lease_id = $3, lease_fencing_token = $4,
@@ -55,7 +66,19 @@ impl PgRunRepository {
         failure: Option<&str>,
     ) -> Result<Run, RepositoryError> {
         let mut transaction = self.pool.begin().await.map_err(storage)?;
-        let current = Self::locked_run(&mut transaction, run_id).await?;
+        let queued = self
+            .lock_prepared_queued_cleanup_transition(&mut transaction, run_id, next, exit, failure)
+            .await?;
+        let current = if let Some(row) = queued {
+            row
+        } else if self.execution_profile.is_some() {
+            self.locked_profiled_run(&mut transaction, run_id).await?
+        } else {
+            Self::locked_default_transition_run(&mut transaction, run_id).await?
+        };
+        let next = self
+            .qualified_invocation_terminal_state(&mut transaction, &current, next, exit, failure)
+            .await?;
         let current_state = parse_state(&current.state)?;
         if !current_state.can_transition_to(next) {
             return Err(InvalidTransition {
@@ -63,6 +86,9 @@ impl PgRunRepository {
                 requested: next,
             }
             .into());
+        }
+        if self.execution_profile.is_some() {
+            Self::validate_profiled_transition(&mut transaction, run_id, next).await?;
         }
         let outcome = next.outcome().map(outcome_name);
         let exit_code = exit.and_then(|value| value.code);
@@ -116,7 +142,11 @@ impl PgRunRepository {
         event: StoredVmEvent,
     ) -> Result<(), RepositoryError> {
         let mut transaction = self.pool.begin().await.map_err(storage)?;
-        let _run = Self::locked_run(&mut transaction, run_id).await?;
+        if self.execution_profile.is_some() {
+            self.locked_profiled_run(&mut transaction, run_id).await?;
+        } else {
+            Self::locked_run(&mut transaction, run_id).await?;
+        }
         Self::append_event_tx(
             &mut transaction,
             run_id,
@@ -133,6 +163,16 @@ impl PgRunRepository {
         command: &CancelRun,
     ) -> Result<bool, RepositoryError> {
         let mut transaction = self.pool.begin().await.map_err(storage)?;
+        let queued_delivery = if self.execution_profile.is_some() {
+            self.lock_queued_cancel_delivery(&mut transaction, command)
+                .await?
+        } else {
+            false
+        };
+        if self.execution_profile.is_some() && !queued_delivery {
+            self.locked_profiled_run(&mut transaction, command.run_id)
+                .await?;
+        }
         let inserted = sqlx::query(
             "INSERT INTO command_inbox (command_id, command_type, payload)
              VALUES ($1, 'cancel_run', $2)
@@ -167,11 +207,18 @@ impl PgRunRepository {
                 .await
                 .map_err(storage)?;
         }
+        if queued_delivery {
+            self.verify_queued_cancel_delivery(&mut transaction, command)
+                .await?;
+        }
         transaction.commit().await.map_err(storage)?;
         Ok(inserted)
     }
 
     pub(super) async fn recoverable_runs_impl(&self) -> Result<Vec<Run>, RepositoryError> {
+        if self.execution_profile.is_some() {
+            return self.profiled_recoverable_runs().await;
+        }
         sqlx::query_as::<_, RunRow>(
             "SELECT * FROM runs WHERE state <> 'cleaned_up' ORDER BY created_at, id",
         )

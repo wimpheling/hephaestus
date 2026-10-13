@@ -2,7 +2,7 @@ use runtime_types::RunId;
 use std::{collections::HashMap, sync::Arc, time::Duration};
 use tokio::sync::Mutex;
 use vm_trait::{VmInstance, VmProvider};
-use volume_trait::VolumeStore;
+use volume_trait::{RunVolumeStore, VolumeStore};
 use workspace_domain::{DisabledWorkspaceManager, RunWorkspaceManager, RuntimeGitWorkspaceManager};
 
 use super::{
@@ -10,6 +10,8 @@ use super::{
         DisabledRunAuthorityManager, DisabledRunLaunchAuthorizer,
         DisabledRuntimeGitWorkspaceManager, RunAuthorityManager,
     },
+    canonical_cleanup::CanonicalCleanup,
+    operation_guards::RunOperationGuards,
     runtime::{
         DisabledRunResourceObserver, RunLaunchAuthorizer, RunResourceObserver, RunRuntimeManager,
     },
@@ -18,7 +20,7 @@ use super::{
         RunCompletionObserver, RunSecretManager,
     },
 };
-use crate::{RunRepository, VmSpecFactory};
+use crate::{RunCleanupRepository, RunRepository, VmSpecFactory};
 
 /// Durable coordinator for run, volume, and VM lifecycles.
 pub struct RunOrchestrator {
@@ -37,6 +39,13 @@ pub struct RunOrchestrator {
     pub(crate) active: Mutex<HashMap<RunId, Arc<dyn VmInstance>>>,
     pub(crate) instance_state_capacity_bytes: u64,
     pub(crate) cancellation_timeout: Duration,
+    pub(crate) canonical_cleanup: Option<CanonicalCleanup>,
+    pub(crate) cleanup_timeout: Duration,
+    pub(crate) plural_volumes: bool,
+    pub(crate) invocation_scope: Option<vm_trait::VmProviderOwnerScope>,
+    pub(crate) operation_guards: Arc<RunOperationGuards>,
+    pub(crate) legacy_scope: Option<run_domain::LegacyVmPlacementScope>,
+    pub(crate) legacy_plans: Mutex<HashMap<RunId, run_domain::LegacyVmPlacement>>,
 }
 
 impl RunOrchestrator {
@@ -66,7 +75,87 @@ impl RunOrchestrator {
             active: Mutex::new(HashMap::new()),
             instance_state_capacity_bytes,
             cancellation_timeout: Duration::from_secs(10),
+            canonical_cleanup: None,
+            cleanup_timeout: Duration::from_secs(30),
+            plural_volumes: false,
+            invocation_scope: None,
+            operation_guards: Arc::new(RunOperationGuards::default()),
+            legacy_scope: None,
+            legacy_plans: Mutex::new(HashMap::new()),
         }
+    }
+
+    /// Opts into prospective managed Legacy placement and scoped scalar cleanup.
+    ///
+    /// Requires the exact provider owner and supported placement/history ports.
+    /// This is mutually exclusive with canonical cleanup and named preparation.
+    #[must_use]
+    pub fn with_legacy_vm_placement(mut self, scope: run_domain::LegacyVmPlacementScope) -> Self {
+        self.legacy_scope = Some(scope);
+        self
+    }
+    /// Shares admission and physical IO guards for one managed provider owner.
+    ///
+    /// All canonical and Legacy orchestrators for the same provider clone family
+    /// must share this registry. No guard is held across ordinary guest execution.
+    #[must_use]
+    pub fn with_operation_guards(mut self, guards: Arc<RunOperationGuards>) -> Self {
+        self.operation_guards = guards;
+        self
+    }
+    /// Opts into durable complete-set cleanup and exact provider ownership.
+    ///
+    /// The worker repository closes acquisition and persists trusted scoped
+    /// observations. The exact-run volume port supplies global held-lease
+    /// evidence for grandfathered already-cleaned historical runs. Providers
+    /// without durable ownership fail before preparation or acquisition.
+    /// This does not enable named-volume dispatch.
+    #[must_use]
+    pub fn with_cleanup_repository(
+        mut self,
+        repository: Arc<dyn RunCleanupRepository>,
+        volumes: Arc<dyn RunVolumeStore>,
+    ) -> Self {
+        self.canonical_cleanup = Some(CanonicalCleanup {
+            repository,
+            volumes,
+        });
+        self
+    }
+
+    /// Opts into complete persisted selection preparation and live monitoring.
+    ///
+    /// Requires the canonical cleanup repository, an explicitly implemented
+    /// plural spec factory and a trusted live caller/source authorizer. The
+    /// default is disabled. This alone does not enable database named dispatch.
+    #[must_use]
+    pub const fn with_volume_preparation(mut self) -> Self {
+        self.plural_volumes = true;
+        self
+    }
+
+    /// Enables no-Git Invocation for this exact trusted provider owner.
+    ///
+    /// Requires canonical cleanup, plural preparation and a repository that
+    /// consumes only an existing protected Invocation admission. This option
+    /// supplies no caller, source, mount or database admission authority. The
+    /// expected scope comes from validated server/provider startup, never a
+    /// client command or archived identity.
+    #[must_use]
+    pub fn with_qualified_invocation(mut self, scope: vm_trait::VmProviderOwnerScope) -> Self {
+        self.invocation_scope = Some(scope);
+        self
+    }
+
+    /// Sets the combined physical destruction and scoped confirmation deadline.
+    ///
+    /// The default and maximum are 30 seconds. Timeout keeps every fence and
+    /// any active handle, with no cleanup receipt. This controls only the
+    /// opt-in canonical or strict Legacy cleanup path.
+    #[must_use]
+    pub fn with_cleanup_timeout(mut self, timeout: Duration) -> Self {
+        self.cleanup_timeout = timeout.min(Duration::from_secs(30));
+        self
     }
 
     /// Installs the trusted repository workspace and result lifecycle manager.

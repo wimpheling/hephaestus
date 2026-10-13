@@ -170,7 +170,7 @@ pub async fn prepare_cooking_flow(input: CookingFlowInput) -> Option<CookingPrep
         None
     };
     drop(cooking_context);
-    let Some(service_phase) = run_cooking_service_proof(
+    let Some(service_phase) = Box::pin(run_cooking_service_proof(
         &pool,
         running,
         app_config,
@@ -190,7 +190,7 @@ pub async fn prepare_cooking_flow(input: CookingFlowInput) -> Option<CookingPrep
         rpc_token.as_ref(),
         cooking_wait_timeout,
         installed_reference_uis,
-    )
+    ))
     .await
     else {
         return None;

@@ -1,9 +1,9 @@
 use super::release_rows::BuildRow;
 use super::ui_publication;
 use super::{
-    AgentConfig, AgentFamilyId, AgentKey, ArtifactPath, CapabilitySlotKey, CompleteBuild, Digest,
-    REUSABLE_RELEASE_VERSION, ReleaseId, ReleaseService, ReleaseServiceError, RuntimePolicy,
-    Sha256, Uuid, Value, artifact_kind_name, artifact_manifest_hash, decode_hash, existing_command,
+    AgentConfig, AgentFamilyId, AgentKey, ArtifactPath, CapabilitySlotKey, CompleteBuild,
+    REUSABLE_RELEASE_VERSION, ReleaseId, ReleaseService, ReleaseServiceError, RuntimePolicy, Uuid,
+    Value, artifact_kind_name, artifact_manifest_hash, decode_hash, existing_command,
     insert_release_git_ceiling, json, operation_names, parameter_schema, record_command,
     release_capability_requirements, release_capability_requirements_hash, runtime_policy,
     validate_artifact,
@@ -11,6 +11,9 @@ use super::{
 use agent_config::build_identity::base_build_definition_hash;
 use agent_config::ui::gateway_resolution::ReleaseAgentBinding;
 use agent_config::ui::static_resolution::StaticArtifactCandidate;
+
+#[path = "release_runtime_contract.rs"]
+pub mod runtime_contract;
 
 impl ReleaseService {
     /// Freezes complete build provenance into a draft release. This trusted
@@ -187,31 +190,8 @@ impl ReleaseService {
             release_capability_requirements(command.release_agent_id, &config.capability_slots)?;
         let capability_requirements_hash =
             release_capability_requirements_hash(&capability_requirements);
-        let executable = ArtifactPath::parse(config.guest.command.clone())?;
-        let working_directory = ArtifactPath::parse(config.guest.working_directory.clone())?;
-        let contract = json!({
-            "executable": executable,
-            "arguments": config.guest.arguments,
-            "working_directory": working_directory,
-            "image_reference": guest_image_reference,
-            "requires_state": config.state_volume.enabled,
-            "publication_mode": config.publication.mode,
-            "publication_repository_slot": config
-                .publication
-                .repository_slot
-                .as_ref()
-                .map(CapabilitySlotKey::as_str),
-            "policy_ceiling": policy,
-            "workspace": {
-                "source": "/workspace/repo",
-                "work": "/workspace/work",
-                "release": "/release",
-                "state": "/var/lib/hephaestus",
-                "parameters": "/run/hephaestus/parameters.json"
-            }
-        });
-        let contract_bytes = serde_json::to_vec(&contract)?;
-        let contract_hash: [u8; 32] = Sha256::digest(&contract_bytes).into();
+        let (contract, contract_hash) =
+            runtime_contract::build(&config, &guest_image_reference, &policy)?;
         sqlx::query(
             "INSERT INTO release_agents
              (id, release_id, family_id, agent_key, display_name,

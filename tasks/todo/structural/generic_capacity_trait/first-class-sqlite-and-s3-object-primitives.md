@@ -1,263 +1,799 @@
-# First-class private volumes, SQLite, and S3-compatible object primitives
+# Resource recipes for private volumes, SQLite, PostgreSQL, and S3
 
-Owner: unassigned
+Owner: resource-recipes implementation
+
+## Current implementation status
+
+Implementation is in progress on [PR #60](https://github.com/wimpheling/hephaestus/pull/60).
+The first delivery is local application/SQLite install, inspect, and remove.
+PostgreSQL and hosted S3 recipes remain dependent on private networking.
+
+Verified checkpoints:
+
+- `recipe-domain` validates the bounded version-1 static TOML graph, release
+  pins, inputs, exact volume slots, external references, and removal policy.
+  `volume-domain` defines validated paths, capacities, and RO/RW declarations.
+- `recipe-application` defines immutable deployment intent, stable predicted
+  resource IDs, lifecycle states, and repository/effect/reconciliation ports.
+  These ports alone do not execute deployments.
+- Release configuration and PostgreSQL catalogs persist authored named-volume
+  slots. Empty declarations preserve captured historical configuration and
+  runtime-contract hashes. Legacy import and update paths reject explicit slots
+  until typed runtime materialization is available.
+- Focused strict Rust checks, architecture checks, and real PostgreSQL
+  publication/import/update regressions passed for these checkpoints.
+- Additive migrations 0101/0102 generalize the existing volume table to stable
+  project ownership and add exact immutable revision-volume bindings. Real
+  actor/RLS checks and a populated schema-0100 upgrade rehearsal preserve
+  historical checksums, volume metadata, active leases, and mailbox fencing
+  evidence. This rehearsal verifies database records and backing references,
+  not filesystem bytes. Historical authorization generation is frozen;
+  current authorization diagnostics pass with zero warnings.
+- Guest named-volume contracts (`0fee5224`) passed 107 focused tests. Guest
+  protocol version 10 rejects stale initializers before execution. A real KVM
+  guest check (`399979fe`) passed with privileged RO/RW controls, persisted RW
+  data, immutable RO backing bytes after confirmed VM destruction, and refusal
+  of dirty read-only filesystems before workload execution. This checks the
+  guest/provider boundary, not installed recipe execution.
+- Local provider provisioning (`64e96dcb`) passed real ext4 creation and
+  recovery checks, subprocess lock lifetime checks, actor/RLS tests, an upgrade
+  of a populated database from schema 0102 to 0103, and legacy lease/recovery
+  regressions. Existing backing bytes and immutable UUID/capacity reservations
+  remain protected.
+- Deployment persistence (`9c5dc4b6`, `3087ddbe`) passed 10 real PostgreSQL
+  admission, inspection, and removal admission cases plus focused strict checks.
+  This checkpoint records authorized intent and progress.
+- Exact consumer volume grants (`71ad46b1`, migration 0105) passed real
+  PostgreSQL authorization and populated upgrade checks. Grants pin the
+  revision, export, slot, volume, mode and contract hash; mount checks retain
+  live issuer authority and permanent revocation. Runtime enforcement and
+  physical revocation require the remaining orchestrator integration.
+- The execution ledger (`5ef6901f`, migration 0106) passed 15 real PostgreSQL
+  execution cases and 10 admission regressions, including a populated upgrade.
+  Durable claims, CAS generations, immutable results and worker-only outcome
+  receipts support cleanup by a current manager after original actor/source
+  access loss. Fixture receipts prove ledger semantics; real provider adapters
+  still need to prove creation ownership, readiness, destruction and detach.
+- The [local SQLite example](../../../../examples/local-sqlite/README.md)
+  (`401c64fb`) includes a pinned-builder application, bounded recipe inputs and
+  a distinct external-volume reuse recipe. Fourteen actual Python tests and one
+  Rust parser/resolver integration test passed, with focused strict checks.
+  Parser release fixtures are not publication or deployed VM evidence.
+- Typed instance lifecycle (`55063387`, migration 0107) passed actual
+  PostgreSQL import/removal, actor/RLS, concurrent grant/closure, and populated
+  schema-0106 upgrade checks, preserving legacy hashes, leases and mailbox
+  fences. Initial import atomically records exact bindings and grants;
+  permanent removal closes admission and revokes grants. Named dispatch stays
+  unsupported, and removal admission does not prove physical cleanup.
+- Canonical run cleanup contracts (`eff9758b`) passed 19 domain tests
+  (16 new cleanup cases), 13 existing orchestrator integration tests, focused
+  strict Clippy/docs, formatting and architecture checks. Targets bind the
+  exact provider/host/VM and complete lease/fence set, including an explicit
+  empty set. These are additive core contracts; worker persistence, verified
+  destruction and atomic whole-set lease release remain to be integrated.
+- Authoritative planning (`bc542fe5`) reloads published releases and pinned
+  images, checks live permissions and exact bindings, and derives stable
+  project-scoped deployment IDs. Twelve real PostgreSQL planning cases and ten
+  admission regressions passed. Planning itself performs no provider effects.
+- Opt-in canonical run cleanup (`61490201`) closes acquisition, confirms the
+  exact scoped VM, records a complete-set receipt, and releases every matching
+  lease atomically before completion callbacks. Twenty-nine orchestrator tests
+  and twenty domain tests passed with strict checks. Its PostgreSQL adapter is
+  tested on an unpublished migration chain; application composition and plural
+  execution remain pending.
+- Owned backing provisioning (`a85f3da5`) records the exact root namespace,
+  inode birth and formatting intent, pins filesystem descriptors, and rechecks
+  the original actor's authority before formatting. Fifty-four filesystem
+  tests passed. Three combined real PostgreSQL/local-provider tests also passed
+  with strict Clippy, including readonly recovery after a missing final record
+  and actor permission loss, and refusal of contradictory or foreign backing.
+  Migrations 0108–0111 remain unpublished. These checks establish the provider
+  boundary; they do not run an installed SQLite application.
+- Provisioning and cleanup coordination (`d6ad7fe6`) serializes each run's VM
+  operations and excludes a second supervisor for an owned provider root.
+  Cleanup waits for in-flight provisioning or Start before confirming absence.
+  Thirty-six orchestrator integration tests, two guard tests, seven VM-trait
+  tests and 97 libkrun library tests passed with strict checks.
+- Owned-VM recovery (`7e16ffe4`) passed actual KVM provision, start, destruction,
+  supervisor exclusion, process death and same-namespace cleanup. Both worker
+  PIDs and VM cgroups disappeared; foreign roots remained untouched. The check
+  found an event-forwarder reference cycle, fixed with a weak reference and a
+  regression that failed before the fix. All 98 VM library tests passed.
+- Atomic core Run admission (`78782b71`) requires the actual provider ownership
+  and planned VM identity to commit with the command before preparation.
+  Historical queued runs are not adopted. Two unit and 39 integration tests,
+  actual private-schema-108 creation and cleanup checks, and three separate
+  public-schema-107 regressions passed with strict checks. The coupled
+  PostgreSQL adapter and migration remain unpublished.
+- Partial-birth custody (`e196cc1e`) holds pinned host descriptors and the actual
+  volume flock while observing an unfinished owned backing. It distinguishes
+  retained partial bytes from a Ready filesystem and refuses contradictory
+  ownership. Twenty-four domain, four trait and 65 filesystem tests passed.
+  Creation now rechecks authority inside the physical lock before journal or
+  allocation writes (`c9f05268`); all 66 filesystem tests passed. Ten actual
+  worker PostgreSQL cases and three combined PostgreSQL/filesystem cases also
+  passed on the unpublished migration chain. The worker fixtures do not prove
+  atomic actor retirement. The subsequent coordinator checkpoint below verifies
+  that boundary against the coupled private implementation.
+- Complete volume-set execution (`ec818f40`) validates all 0–32 persisted
+  selections and fences and monitors live authority through provisioning,
+  guest acknowledgement and cleanup. Two unit and 58 integration tests passed
+  with strict checks. Controlled core ports are not application integration.
+- Concrete partial retention (`b56af0a9`) keeps the actual nonclone Local guard
+  through worker recording and the authorized actor transaction, including
+  caller cancellation. Twelve real PostgreSQL/filesystem cases and two mapping
+  tests passed: committed permanent fencing, current-manager cleanup after
+  creator/source access loss, stale observations, rollback and undrained
+  consumer refusal. Only core ports and the app coordinator are checkpointed;
+  coupled PostgreSQL source and migration 0112 remain unpublished.
+- Explicit guest initialization (`79ddbd8c`, protocol 11) distinguishes proven
+  built-in state from named application volumes. A fresh KVM check passed across
+  three managed VMs at guest UID/GID 10001: new WAL state, existing database
+  schema/journal/bytes preservation, named application persistence, and effective
+  read-only enforcement with unchanged backing bytes. All three worker PIDs,
+  VM directories and cgroups disappeared after destruction. Focused strict
+  checks passed; this probe does not publish or install the packaged recipe.
+- Readonly owner recovery (`2b137c80`) reopens an existing root without filesystem
+  writes or repair; all 75 Local filesystem tests passed. Authoritative owner
+  history (`2e003d4f`) defines worker discovery across all immutable purpose rows,
+  including retired resources. Seven actual PostgreSQL cases and one retired
+  root PostgreSQL/Local case passed. Its PostgreSQL adapter remains unpublished;
+  absent history never authorizes implicit initialization.
+- Frozen VM workload construction (`a7a135db`) checks exact persisted run,
+  release, revision and project pins, the full catalog and volume provenance.
+  Eight pure cases, one actual public-schema-107 loader regression and five
+  policy regressions passed with strict checks. It builds the base workload;
+  live launch authority and canonical application activation remain separate.
+- Explicit fresh execution profiles (`f9f5ae7a`) distinguish legacy scalar
+  runs from owned canonical runs without an option to adopt historical records.
+  Fifteen private-schema PostgreSQL foundation cases, eleven producer cases and
+  thirty-one public-schema-107 regressions passed with strict checks. Only the
+  core contract is committed; adapters, migrations and scalar lifecycle
+  qualification remain unpublished.
+- Live runtime checks (`0666ac51`) separate pre-issuance checks from inspection
+  against an already stored session ceiling. Thirteen private-schema PostgreSQL
+  cases, one public-schema-107 regression and five pure/API cases passed with
+  strict checks. This verifies current source authority and immutable session
+  bounds; it does not issue credentials, authorize mounts or enable recipe runs.
+  The PostgreSQL implementation remains unpublished.
+
+Before publishing migrations 0108–0112, explicit execution profiles must preserve
+fresh legacy orchestration and require canonical ownership and cleanup for recipe
+runs. Unresolved historical rows stay held. Schema presence must not automatically
+enable owned execution. The private profile foundation passed actual SQL tests;
+scalar release, Run lifecycle and application compatibility remain to be verified.
+
+The current unpublished migration chain now extends through 0139. Ordinary
+PostgreSQL fresh installation, populated 0107→0139 upgrade, and same-database
+replay pass, including catalog/dependency preservation and the three-role
+startup contract. Two PostgreSQL/local-filesystem tests also pass for completed
+retention, independently authorized reopening, transactional rollback/completion,
+and live authorization withdrawal while preserving backing bytes and inodes.
+These checks do not launch an installed recipe.
+
+The current forward migrations 0140/0141 pass actual fresh-install,
+populated-upgrade, role-permission and replay checks, including their finite
+19-routine startup/catalog contract. They cover ordinary queued Invocation
+cancellation and worker access to secret runtime metadata. An actual ordinary
+application test exposed missing worker permissions during secret cleanup;
+that regression still needs a passing run against the forward head.
+
+The first actual forward installation exposed a PL/pgSQL `CASE` parsing error
+in 0140. The reviewed parentheses fix passes migration parsing. The next fresh
+installation reaches startup but links a cached adapter compiled for 0139,
+while the current adapter source requires 0141. Its exact dependency fingerprint,
+library and tracked inputs identify the stale artifact. A targeted adapter
+rebuild corrects that linkage. The real fresh-0141 installation, startup and
+same-database replay now pass. The populated 0107→0141 upgrade, independent
+fresh reference, complete catalog/dependency comparisons and replay also pass.
+Both actual secret-metadata permission cases pass, including startup denial
+when the worker lacks UPDATE. A later 42-routine recovery successor is authored
+but remains unqualified; these results cover the current 19-routine version.
+
+The earlier published VM foundation passes Rust 1.88 Clippy, documentation,
+scoped formatting, and all 176 library tests. A real KVM configured-owner test
+also passes bootstrap, start, destruction, worker termination, and readonly
+reopen. The corrected local smoke fixture preserves OCI-root ownership separately
+from workload UID/GID 10001. Its real guest passes SQLite persistence, secret
+access, DNS/TCP/UDP, forwarded HTTP, and the complete lifecycle conformance
+suite. The concurrent destroy-before-start waiter race is fixed and covered
+by two real-subprocess regressions. The complete default smoke check passes;
+its named-volume opt-in remains unset and the guest-initialization case is
+ignored, so those two cases provide no new native evidence.
+
+The current protocol-3 containment and resource observation implementation
+passes 192 library tests and focused Rust 1.88 checks against the main worktree.
+Its real crash-before-placement test passes, and a
+separate real owned-VM lifetime test passes provision/start/destroy, clone-owner
+retention, scoped reopen, substitution denials, and cleanup after supervisor
+death. That full lifetime test also passes against the combined observation
+implementation and its rebuilt worker. It initially failed because its
+guest-root fixture was private to the host user; a fresh traversable guest root
+passed with the workload
+UID/GID and product source unchanged. Failed originals remain preserved.
+These native checks prove their scoped lifecycle assertions, not application
+recovery or the installed SQLite workflow. The check for leftover resources
+before runtime admission passes 192 library tests with focused Rust 1.88 checks;
+three native cases remain explicitly ignored in that library run. A separate
+genuine kernel observation/reopen test passes, including refusal of a residual
+record and child cgroup. It spawns no guest and proves a configured-root
+observation rather than global process absence or application readiness.
+
+The routed mailbox executor is published in `d0f3220e`; all eight unit tests and
+focused Rust 1.88 checks pass. Managed application routing remains unconnected.
+Managed production preparation and a daemon-owned supervisor are being
+integrated. Readiness remains denied until recovery and resource checks pass.
+The isolated run-orchestrator now passes all 167 tests, strict Rust 1.88 Clippy,
+documentation and formatting checks. These controlled tests cover queued
+cancellation replay, competing deliveries, complete recovery inventory,
+truthful supervisor stop/restart causes and preserving cleanup fences. The
+application's focused Clippy, documentation and formatting checks also pass;
+its library reports 230 passed and 15 ignored. All eleven supervisor and nine
+preparation cases execute, but URL-gated cases with absent URLs and ignored
+integration cases do not prove PostgreSQL, NATS or native application behavior.
+The combined isolated App, Run PostgreSQL, control-plane PostgreSQL and runtime
+authority PostgreSQL library checks now report 279 passed, zero failed and
+16 ignored, with strict Clippy, documentation and scoped formatting passing.
+Missing-URL early returns are excluded from integration evidence. These checks
+execute the ordinary-session precision repair and generic expired-observation
+helpers; a real producer/storage round trip remains required. Mixed
+cancellation/removal SQL and the current finite 0140/0141 migration checks pass
+their scoped database gate; complete application integration remains pending.
+The scoped expired credential interfaces pass all 17 authorization tests and
+focused Rust checks. The Git PostgreSQL, local encrypted-store and application
+cleanup successors are reviewed and applied to the validation checkout.
+After correcting compiler and lint errors, the seven-package Rust 1.88 locked
+Clippy, scoped formatting, library tests and documentation checks pass. The
+suite reports 338 passes and 16 ignored cases; 21 missing-URL early returns are
+excluded from integration evidence. All 40 new cleanup, reader and durable
+Drain cases execute, including local encrypted-store and inode checks. Actual
+credential production, PostgreSQL qualification and the complete cleanup
+workflow still require integration checks.
+
+An audit of the authenticated project UI confirms that existing release
+publication and Run controls do not expose recipe deployment operations. A
+project-scoped deployment inspection query and page have reviewed source;
+cross-language generation, compilation and authenticated runtime checks remain.
+Recipe engine production assembly, install/resume/invoke/remove commands and
+managed readiness still require implementation and actual authenticated checks.
+
+The owning instance Drain completion adapter passes scoped Rust 1.88 Clippy,
+formatting, library tests and documentation checks. All eleven new custody and
+retry cases execute. The two-package suite reports 265 passes and 15 ignored;
+21 missing-URL returns are excluded from integration evidence. It preserves
+custody through interrupted requests and records genuine reconciliation for
+fresh requests; actual PostgreSQL/VM execution and supervisor wiring remain.
+Resuming before closure publication under a newly authorized manager also
+needs a protected native publication path; the comparison types and
+default-deny port pass scoped Rust checks and all eight new controlled cases,
+but that database path is unfinished. The terminal Detach/Delete contracts
+also pass scoped checks and all seven new controlled cases. Neither set of
+comparison types authorizes database or physical effects by itself.
+The next recovery changes distinguish the original Drain actor from the
+manager who publishes its closure and a later manager who continues cleanup.
+Their comparison types pass scoped Rust checks and all six new controlled
+cases. The four-package library run reports 353 passes and 15 ignored;
+22 missing-URL returns are excluded from database evidence. The cancellation
+and migration test binaries compile. The current 42-routine schema now passes
+the actual PostgreSQL fresh-install, startup-role and same-database replay test.
+The populated107→141 upgrade also passes against an independent fresh reference,
+including row/history preservation, exact journal, complete catalog/dependency
+comparisons, startup roles and final replay. The first real cancellation run
+exposed a fixture using the application pool where production uses the owner
+pool to consume control requests. That fixture is corrected; malformed delivery
+rejection, control completion and replay now pass. The next failure showed that
+a queued Invocation has no runtime session but cleanup always tried to revoke
+one. The production repair accepts absence only after the existing configured
+database classifier positively verifies queued cancellation and zero execution
+history; consumed or unknown history still fails. Focused Rust checks and three
+new controls pass. The real cancellation now passes authority cleanup, then
+fails in secret cleanup with a redacted persistence error. A read-only database
+probe identified the cause: the consumed-session verifier rejects the queued
+run, which has no consumed session. An additive verifier now requires the actual
+queued cancellation, prepared cleanup target, saved empty secret bindings, and
+complete absence of secret history. Its reviewed source is integrated in the
+validation checkout, with scoped formatting, strict Clippy, and 44 focused
+removal/resume tests passing. The actual fresh-0142 installation, three-role
+startup validation, and same-database replay now pass. The real cancellation
+rerun also passes, including the additive secret verifier's positive case and
+ten denial checks. That test creates actual local ext4 backing but launches no
+guest VM. The first queued-removal case fails when committing the closure
+transaction, with SQLSTATE `42501` mapped to `AuthorizationDenied`. Focused
+diagnostics confirm that the preceding qualification and write calls succeed.
+The deferred ordinary-cancellation guard rejects the application-owned closure
+update because it requires the worker role before distinguishing cancellation
+origins. The reviewed correction positively qualifies the manager's actual
+closure, current permissions, cancellation message, and timestamp-only run
+update while preserving the worker cancellation path. The corrected source passes
+scoped formatting, strict Clippy, relinking, and actual fresh-0142 installation,
+three-role startup qualification and same-database replay. The first rerun exposed
+an ambiguous `child.instance_id` reference at COMMIT inside
+`prepared_resume_inventory142`; its relation aliases collided with PL/pgSQL row
+variables. The identifier correction now passes those same static/fresh checks.
+The first queued-removal rerun then exposed a negative fixture setup error:
+changing only a configuration hash violated an existing table CHECK (`23514`).
+The corrected contradictory fixture preserves that CHECK and reaches the actual
+actor denial. Both the completed-ordinary-plus-pending-queued recovery case and
+the empty-instance/orphan case now pass, including complete rollback, history and
+backing preservation. The mixed ordinary-control case exposed a further closure
+COMMIT failure: its inventory helper required already processed ordinary
+cancellation history. The corrected manager closure checks the complete original
+queued inventory independently while preserving strict worker cancellation checks.
+Scoped formatting, strict Clippy, both integration-target builds, actual fresh-0142
+startup/replay, and all three queued-removal cases now pass. The mixed case executes
+its typed replay, late-update and identity denials. An additional pending/unknown
+Control negative has not been executed. Temporary diagnostic changes have been
+removed from production source. Populated-0142 upgrade remains unrun, and these
+fixtures launch no guest VM.
+The forward migration permits a truthful `recovery_required` receipt while
+preserving historical receipts and claims. Its fresh-schema checks pass;
+complete native recovery scenarios remain to be verified.
+The reviewed migration also covers recovery after a closure has been published:
+a newly authorized manager can qualify the original active Drain history without
+acting as the previous manager. The adapters pass scoped Rust checks; complete
+native publication and recovery checks remain pending.
+Existing closure and safety observations alone do not complete a recipe
+resource. The local SQLite package specifies instance deletion and volume
+retention. Its required order is instance Drain, Detach and Delete, followed by
+volume retention and final deployment removal. Reviewed migration 0143 adds
+the protected transition to Removed and the historical readers needed after
+deletion. Its schema/startup checks and core comparison models have reviewed
+source. The deletion-history adapters, initial closure/version preparation
+bridge, instance terminal coordinator and original owned-volume reader are now
+combined in the working tree. Scoped strict Clippy, formatting, documentation
+and all 86 selected controls pass. The first actual fresh-0143 migration exposed
+an ungrouped CASE expression in a PL/pgSQL condition. The reviewed syntax repair
+preserves its predicates. Two startup ACL expectations also omitted application
+grants already present in historical migrations; the corrected expectations
+preserve the installed grants and function bodies. Actual fresh-0143 installation,
+startup qualification and same-database replay now pass. The populated 0107→0143
+upgrade initially failed a stale type inventory count: 62 actual types versus 60
+expected. The new terminal table contributes the intended row and array types.
+After correcting that finite expectation, the complete populated 0107→0143
+upgrade now passes: independent fresh reference, full type/catalog/dependency
+and finite routine comparisons, preserved rows and history, startup roles,
+journal checks and same-database replay. No physical VM workflow is established
+by this migration test.
+The completed-removal receipt reader, retention custody owner and deployment
+removal coordinator are now combined in the working tree. Scoped strict checks,
+formatting, documentation and all 24 new controlled ownership/comparison cases
+pass. Actual PostgreSQL/native custody handover and the complete physical
+removal workflow remain unverified. The combined managed startup, command
+routing and original VM provisioning-attempt changes now pass scoped strict
+Clippy, formatting, tests and documentation. All 17 new controlled cases pass;
+ignored tests and missing-database early returns are excluded from integration
+evidence. These checks exercise emulated workers and controlled ownership, rather
+than a complete physical VM or running service.
+The shutdown barrier requires actual task joins, including commands that finish
+during shutdown. Ordinary Build now retains its original requests, preparation,
+Git children, workspace descriptors and VM attempts through caller cancellation.
+Cleanup starts before waiting for stalled execution, and genuine task joins and
+positive original cleanup precede settlement. The two affected libraries pass
+scoped strict Clippy, formatting, docs and all 30 tests, including 13 new ownership
+controls. These tests exercise actual local subprocess/task/descriptor behavior
+and fake VMs; they do not prove production shutdown or prior-process absence.
+That checkpoint's repository architecture check reported 39 diagnostics outside
+the 36-file change. Ordinary OCI/Gateway ownership, complete shutdown and native
+lifecycle acceptance remain unfinished. Retaining a closed instance does not
+satisfy the package's deletion policy.
+
+Ordinary OCI now retains each exact request, preparation task, formatter parent,
+filesystem descriptor and builder/verifier VM attempt through caller cancellation.
+Cleanup starts for all original VM tokens and the formatter before resource waits;
+retries retain original handles and error history. Scoped strict Clippy, recursive
+formatting, docs and all ten new ownership controls pass, with none failed or
+ignored. These controls use actual subprocesses/descriptors and controlled VM
+tokens; the 13 other library cases were filtered and native VM/formatter checks
+remain unrun. A joined formatter parent alone does not establish helper absence,
+so an unqualified formatter keeps scratch held. Enforced formatter qualification,
+whole OCI/Gateway production cleanup and full shutdown remain unfinished.
+
+The architecture scanner now derives inherited test context from parsed Rust
+module registrations and bounds inline exemptions to exact `cfg(test)` item or
+variant spans. Production markers following a test item remain checked; raw
+strings, comments and malformed sources cannot manufacture an exemption. The
+public139 test registration uses equivalent separate test/feature attributes.
+Scoped strict Clippy, formatting and docs pass. Fifty-five focused controls ran,
+including all 19 new scanner controls; the final three variant controls ran after
+the additive variant correction. The actual repository check remains red with
+28 diagnostics: 11 file lengths, two DDL placements and 15 static SQL calls.
+The existing directory exclusions remain unchanged. This qualification covers
+the scanner and does not establish runtime, database or complete recipe acceptance.
+
+The 11 files exceeding the architecture length limit are now split into private
+modules across VM ownership, recipe preparation, Runtime Git row decoding and
+App scenarios. Scoped strict Clippy, formatting and docs pass for the 28 affected
+files; 36 existing controlled tests pass. All 165 original function bodies are
+preserved, with three borrowed assertion helpers recomposed for comparison.
+Original test names, attributes, SQL and owning-resource lifetimes remain intact.
+The validation checkout's actual architecture check reports 22 SQL/DDL diagnostics,
+including five in its unpublished two-front Secret144 repair; none concern file
+length or these 28 files. Native VM and the affected App database scenarios remain
+unrun for this split; full repository quality and recipe acceptance remain open.
+
+The three hosted Capability Audit PostgreSQL failures were caused by a fixture
+inserting an unclassified Run directly as running. The fixture now inserts a
+queued `historical_unproven` identity without claiming VM startup or ownership.
+All three existing audit tests pass on actual PostgreSQL 17.10, with their
+redaction, inspection authorization, outsider denial, immutable evidence and
+concurrent pagination assertions preserved. All 143 normal migrations and their
+checksums were verified. Scoped strict Clippy, formatting and docs pass. This
+repairs the fixture mismatch; hosted CI and complete recipe acceptance remain
+unverified.
+
+Published checkpoint `9dc2392d` replaces workstation SQL references with
+byte-identical committed fixtures and accepts PostgreSQL 17 patch releases while
+preserving role, context and schema checks. All nine affected fixture packages
+pass scoped strict checks. Three actual PostgreSQL 17.9-Alpine cases pass with
+workstation SQL hidden: startup/role qualification, ext4 Ready custody, and
+original recipe install/import/activation/replay. They launch no guest VM.
+Hosted run `38404246227` for the later managed-lifecycle checkpoint passes
+Cooking but fails Clippy in two example fixture context lifetimes and fails the
+browser Secret-create/ImportAgent journey. The two lifetime fixes and narrowly
+scoped migration-snapshot SQL exceptions are now reconciled with the qualified
+source. The earlier Rust test failure required replacing an obsolete lease-index
+expectation with the complete migration 0108 named-slot index contract. That
+correction now passes the actual authorization/RLS perimeter test on a fresh
+database with all 143 migrations. Browser persistence errors still lack a causal
+SQL diagnosis; the plaintext evidence scanner remains enabled. No complete
+hosted CI pass is established.
+
+Authenticated deployment inspection has generated Rust/Elixir query contracts
+and a panel on the existing project page. Scoped Rust strict, formatting,
+documentation and five focused controls pass. Normal Phoenix compilation,
+ten focused tests, formatting and all 19 web architecture rules pass. Inspection
+state follows the standard page layout; project/watch/session revocation clears
+the projection and invalidates late responses. Actual authenticated database/RPC
+and browser behavior remain to be verified. Install, resume, remove and invoke
+controls and the complete SQLite workflow remain unfinished.
+
+The next browser checkpoint clears the write-only secret form after submission,
+while the command task retains the submitted value. Seven focused Phoenix tests,
+four JavaScript controls, compilation, formatting and all 19 web architecture
+rules pass. Safe error diagnostics for Secret creation and ImportAgent also pass
+scoped Rust strict/fmt/docs and six metadata/error-preservation controls. They
+report only static operation/step, validated SQLSTATE and known catalog names;
+raw database messages and values remain excluded. These diagnostics do not repair
+persistence. An actual browser probe against `3500fef7` passes the existing UI
+release-publication prerequisite, imports and attaches an instance, then fails
+Secret creation. The dedicated PostgreSQL log reports permission denial on
+`INSERT INTO secret_versions`; numeric SQLSTATE is not yet observed. The runner
+filtered out the safe adapter diagnostics. Its logging filter now includes only
+the two specific adapter error targets; shell syntax passes and an actual rerun
+remains required. Hosted run `38417742007` passes Cooking but fails Rust tests
+and the browser journey. No complete hosted CI pass or installed SQLite acceptance
+is established.
+
+The install/resume transport and recipe-aware shutdown checkpoint adds project
+RPC contracts and retains each admitted request, original job and outcome.
+Shutdown closes intake before waiting, joins late startup/Build registrations,
+and keeps the closing state recoverable when an observer is canceled. Rust 1.88
+scoped strict Clippy, formatting, documentation and all 38 focused cases pass
+against the branch's actual dependencies: 12 service, 11 recipe, and 15 RPC cases,
+none failed or ignored. A separate run against the main checkout resolves the
+unpublished Secret dependencies present in the earlier validation checkout.
+These results are not a full workspace check or actual authenticated database,
+browser, VM or complete shutdown behavior. Ordinary OCI/Gateway cleanup remains
+explicitly unqualified, and Remove/Invoke integration remains unfinished.
+
+The private Secret 0144 checkpoint passes four scoped package checks and an
+actual fresh installation/startup/catalog/roles/replay case. Its first user
+command still fails while recording completion: inbox table grants exist, but
+forced RLS has no policies. A private effect-witness producer and checked
+completion/read/audit integration remain unfinished. The complete Secret
+lifecycle and populated 0107→0144 upgrade have not passed. Published `c8edd006`
+CI passes Cooking, formatting and Clippy but fails a Build scenario and the
+browser journey. The Build fixture lacks the new provisioning-attempt method;
+the fixture correction and imported-finalization repair now pass the unchanged
+PostgreSQL scenario against the feature branch. Imported artifacts resume from
+the saved claim and complete manifest without acquiring a local workspace or
+provisioning another VM. A successful retry clears only its protected finalization
+hold; unrelated cleanup failures and their original evidence remain retained.
+
+This Build checkpoint passes Rust 1.88 locked strict Clippy, formatting and docs
+for Build Orchestrator and Build PostgreSQL, all 21 Build library controls and
+three fixture controls, with none failed or ignored. The unchanged PostgreSQL
+immutable-draft/recovery scenario passes once, including its original artifact,
+replay, failure and authorization-denial assertions. All 143 installed migration
+checksums match the branch. The scenario uses an owner database pool and a
+controlled provider. Guest execution, three-pool RLS qualification, SQLite data
+and full shutdown remain separate acceptance requirements.
+
+Hosted run `38457048753` for `6ca5c816` completes with Cooking, workspace formatting
+and Clippy passing, and Rust/browser failures. Rust fails at the stale Build
+fixture's initial provisioning step; browser publication also fails because its
+fixture provider lacks the required attempt method. The browser fixture
+correction now passes all three focused controls, Rust 1.88 locked App strict
+Clippy, formatting and docs, and the unchanged existing release-publication
+browser case. That one case runs actual PostgreSQL/NATS/Git/Phoenix and Chromium,
+with the memory fixture provider. Its original timings and assertions remain;
+stream and retained-evidence scanners pass. The complete Secret/recipe journey,
+native guest, SQLite and full shutdown checks remain unfinished.
+
+The subsequent hosted run `38467277765` for `f573ce8d` passes Cooking and reaches
+Rust tests, then fails `pushed_config_publishes_command_and_starts_vm` because its
+run never reaches running. The published Build recovery scenario no longer blocks
+that test progression. The browser still uses its old provider on that head;
+the locally qualified correction is the next publication checkpoint.
+
+Secret completion/read/audit SQL and its finite catalog additions are privately
+reviewed after preserving the existing audit SELECT policy and standalone Grant
+expiry behavior. Rust adapter wiring and native qualification remain unfinished.
+
+Provider orchestration and ownership seals, plural runtime attachment and cleanup,
+physical revocation, authenticated project web UI commands, real SQLite
+publication/install/inspect/remove and retained-data recovery, and the full
+repository quality gate remain unfinished. The existing authenticated web UI is
+the first entry point; there is no normal authenticated Heph CLI yet. Backup
+metadata fields do not implement backup: volume backup and restore remain
+unimplemented and required by the broader checklist below.
+
+Project membership and deployment history grant no resource authority. The
+initial volume profile rejects sharing, including read-only sharing, until its
+consistency contract is defined. This status covers steps toward the first
+usable local delivery; the broader service and networking checklist remains open.
 
 ## Outcome
 
-Provide bounded private volumes, SQLite databases, and S3-compatible object
-buckets as distinct first-class Hephaestus resources, with declared
-requirements, exact capability bindings, auditable use, lifecycle controls,
-and provider-neutral implementations.
+Let users install, inspect, and remove versioned resource recipes that compose
+Heph infrastructure into useful application services. Bundle SQLite,
+PostgreSQL, and S3 conveniences in the distribution, with UI and defaults,
+using reusable infrastructure contracts and replaceable standard providers.
+This TODO specifies intended work; it does not claim these recipes exist.
 
-Private volumes provide bounded filesystem storage only through an explicit
-volume binding and controlled attachment. SQLite provides durable structured
-application state with database-specific operations and lifecycle. S3-compatible
-objects provide blobs, immutable content bundles, uploads, attachments, and
-static web assets. These are separate product primitives, not generic host
-filesystem access or ambient cloud credentials.
+Core contracts cover instances, bounded private volumes, service endpoints,
+secrets, resource requirements, authorization, and exact bindings. Standard
+providers implement those contracts. The distribution supplies convenience
+recipes. Adding a recipe does not automatically introduce a core resource kind
+or require a universal storage trait. Decide parser and execution placement
+across core, standard providers, and applications before implementation.
 
-```text
-release requirements → exact private-volume, SQLite-database, or
-                       object-bucket/prefix bindings
-                    → immutable workload revision
-                    → short-lived runtime authority
-                    → controlled volume attachment or typed SQLite/S3 operation
-```
+## Recipe contract
+
+A recipe is a bounded declaration of a static resource graph. Its minimum
+contract includes:
+
+- Immutable recipe identity and version, plus explicit compatibility with a
+  versioned recipe contract and infrastructure APIs.
+- Typed, validated inputs with bounded defaults, and uniquely named resources
+  using known resource kinds and legal operation combinations.
+- Explicit dependencies, resource bindings, and bindings to declared release
+  slots. Required slots resolve exactly once; optional slots may be unbound.
+- Declared outputs conveying exact resource references or controlled resolved
+  configuration. Outputs grant no ambient authority.
+- Per-resource removal policies distinguishing retain from delete. Retaining
+  durable data is the default; deletion requires explicit policy and authority.
+
+References are bounded literals, typed inputs, and named resource references.
+Reject loops, recursion, general expressions, and conditional workflows. Pin
+software releases immutably. Initialization and application migrations execute
+inside packaged workloads with authority over their own data. A recipe cannot
+execute host hooks or migrate Heph's internal database.
+
+Install, inspect, and remove are the initial lifecycle. Upgrade compatibility,
+data migration, and rollback need a separate deferred contract. Reinstall or
+upgrade must never silently replace an existing deployment or migrate its data.
+
+## Conceptual compositions
+
+These graphs illustrate bindings, not a proposed serialization schema.
+
+| Convenience | Resource graph and consumer authority |
+| --- | --- |
+| SQLite | Application release → named private-volume slot → bounded volume mounted at a controlled guest path. SQLite is embedded application software. Read-only/read-write attachment authorizes file bytes; it does not enforce per-query or per-table policy. |
+| PostgreSQL | Pinned server release → instance + volume + secret credentials + private TCP endpoint. The consumer independently needs an authorized network connection and database credentials. Database permissions are enforced by the server. |
+| S3 | Authorized service endpoint + bucket/prefix scope + explicit operations + scoped credentials or broker. The distribution may provision a released server or bind a configured external provider. |
+
+SQLite needs no new SQL provider or database resource kind by default. Exclusive
+writable volume attachment protects an attachment, not a blanket SQLite
+single-connection rule; application software owns SQLite concurrency and
+durability. Backups require an application-consistent snapshot or application
+quiescence/SQLite-aware preparation where needed, without adding SQL operations
+to core's volume API.
+
+S3 provisioning and security may require an explicit typed provider/resource
+contract. Record that decision from actual requirements before implementing
+it; recipes cannot invent dynamic plugin resource types. Specify the supported
+S3 operations, bucket/prefix normalization, consistency/versioning, multipart
+behavior, byte/key/page limits, and credential mechanism at that boundary.
 
 ## Locked decisions
 
 | Area | Decision |
 | --- | --- |
-| Product model | Private volumes, SQLite databases, and object buckets are distinct first-class Hephaestus resource kinds, comparable to repositories. Each kind has a provider-neutral contract and a type-specific provider boundary; do not force volume, SQL, and object operations into one universal provider interface. Provider choices are implementation details, not the user-facing contract. |
-| Resource ownership | Every private volume, SQLite database, and object bucket has exactly one owning project. Legacy instance-state volumes inherit the project of their owning instance during migration. A resource binding requires explicit authority for that exact resource and operation; project membership alone grants no use or lifecycle authority. Cross-project binding is denied unless a separately authorized sharing contract is added. |
-| Typed resource slots | A release may declare zero or more uniquely named slots for each resource kind. Each immutable instance revision binds every required slot to exactly one authorized same-project resource and may leave an optional slot unbound; undeclared slots and multiple assignments to one slot are rejected. Slot declarations and bindings are part of the immutable revision. There is no implicit instance-wide volume fallback. |
-| Private volumes | A private volume is an explicitly declared, capacity-bounded storage resource. Volume-slot attachment and guest mount paths are explicit and bounded. |
-| Volume access and lifecycle | The declared access mode distinguishes read-only from read-write use. A volume has at most one writable attachment at a time. A new writable attachment is denied until the previous writer is proven detached or fenced by the runtime/provider; lease expiry alone is not proof. If detach or fencing cannot be confirmed, retain the lease/recovery state and fail closed. Volumes have explicit provision, inspect, attach/detach, backup, restore, retention, and delete lifecycle records. |
-| Volume providers | Extend the existing instance-state `VolumeStore` and related metadata contracts; this is not a new contract from zero. Public resource, release, authorization-snapshot, and runtime-facing contracts expose stable typed IDs and bounded claims, never `host_id`, `host_path`, filesystem paths, provider credentials, or provider-specific configuration. A provider adapter may retain local paths and opaque provider handles internally. Preserve a local provider as the initial implementation. |
-| SQLite ownership | A SQLite database belongs to one project and has explicit lifecycle, backup, restore, migration, and retention records. It is not an arbitrary host path. |
-| SQLite provider and access | SQLite has a database-specific provider contract and exact database binding with narrowly scoped operations. Its storage may use a private volume internally, but the database identity, authorization, migrations, backup, and lifecycle remain distinct from that volume. Workloads never receive a general host filesystem capability. The provider API and read-only access mechanism are implementation decisions recorded before implementation. |
-| SQLite concurrency | A writable SQLite binding has one authoritative writer lane at a time. The platform must use a fenced lease or equivalent serialization before granting writable access, and must prove prior writer detach/fencing before granting a new writer. Do not assume read-only concurrency or snapshot semantics until they are specified. |
-| Object model | An object bucket has stable identity. Capabilities bind an exact bucket, optional normalized prefix, and explicit `get`, `put`, `list`, `delete`, and publish/read-manifest operations. Bucket or project membership grants no ambient object authority. |
-| Object provider and protocol | Object storage has its own provider contract. The first provider implements a documented, bounded S3-compatible operation subset behind short-lived scoped credentials or a broker. Raw provider credentials and unrestricted bucket access are forbidden. Select the credential mechanism, consistency/versioning contract, multipart behavior, and numeric limits before implementation. |
-| Content publication | Static sites and other public content are published as immutable object manifests. A separate edge/CDN provider may serve a published manifest; publication does not make arbitrary bucket objects public. |
-| Gateway use | A synchronous HTTP gateway may use an explicitly bound SQLite database or object bucket. SQLite writes must obey the database writer lane; object operations remain capability checked. |
-| Durable objects | Durable-object-style keyed actors are a later composition of released HTTP handlers, key routing, serialized execution, and per-key SQLite state. This task provides prerequisites but does not implement that runtime. |
+| Ownership | Each resource has one stable owning project. Legacy state volumes inherit their instance's project. Project membership alone grants no use or lifecycle authority. |
+| Authorization | Authorize the caller for every lifecycle action and each exact resource/operation. Grant consumers only their exact bindings. Same-project binding is required; sharing needs a separate explicit contract. |
+| Release slots | Zero through multiple uniquely named slots declare bounded requirements and read-only/read-write modes. Immutable revisions bind required slots exactly once; reject undeclared and duplicate assignments. No implicit instance-wide volume fallback. |
+| Existing volume contracts | Extend `VolumeStore`, `VolumeMetadataRepository`, and `LocalVolumeStore`. The PostgreSQL metadata adapter is not a storage provider. Preserve the local provider initially. |
+| Attachment safety | At most one writable attachment per volume. Prove the old writer detached or was fenced before granting another; lease expiry alone is insufficient. Uncertainty retains lease/recovery state and fails closed. |
+| Configuration boundary | Stable typed resource IDs, bounded claims, controlled guest mount paths, and service endpoint URLs may appear in resolved workload configuration. Host IDs/paths, raw provider admin credentials, and general host filesystem authority remain internal. |
+| Authority ceilings | Recipe declarations and deployment snapshots bound authority but do not confer it. Recheck live authorization on resume and before new effects; historical records never grant indefinite rights. |
+| External resources | Record resources created and owned by the deployment separately from explicitly external/adopted resources. Recipe removal never deletes external/adopted resources. |
+| Extensions | Third-party recipes use the same validator and permissions. Extensions/apps own their data migrations and consume versioned APIs; they cannot define arbitrary resource kinds or bypass provider boundaries. |
+| Runtime revocation | Specify bounded revocation for mounts, established network flows, and credential expiry at each provider. Do not assume per-operation authorization checks on already mounted files. |
 
-## Dependencies
+## Execution and durable recovery
 
-- [`mvp-01-agent-principals-capabilities-and-runtime-authority.md`](../../../done/mvp-01-agent-principals-capabilities-and-runtime-authority.md)
-- [`mvp-02-durable-agent-mailboxes-and-stateful-dispatch.md`](../../../done/mvp-02-durable-agent-mailboxes-and-stateful-dispatch.md)
-- [`mvp-03-event-ingress-and-caddy-routing.md`](../../../done/mvp-03-event-ingress-and-caddy-routing.md)
-- [`define-own-the-loop-agent-platform.md`](../../distribution/define-own-the-loop-agent-platform.md)
-- Coordinate package placement and architecture metadata with the completed [workspace topology migration](https://github.com/wimpheling/hephaestus/pull/57). Its 85 original packages plus five facades form the 90-package workspace baseline; account for new packages from this task separately.
+Validate the dependency graph separately from authorization: reject cycles,
+duplicate names, missing/unknown references, incompatible bindings, and illegal
+operation combinations before effects. Never infer access from graph reachability.
 
-## Non-goals
+Persist a durable deployment record with recipe identity/version, validated
+configuration, secret references without plaintext secrets, immutable resolved
+graph, resource IDs, release-slot bindings, authority ceilings, progress, and
+ownership/removal provenance. Provider handles remain internal. Historical
+records support audit and recovery without becoming reusable grants.
 
-This task does not expose arbitrary host files, unbounded filesystem access,
-NFS or POSIX network shares, general SQL access to platform PostgreSQL,
-multi-writer SQLite files, arbitrary S3 provider credentials, a public bucket by
-default, CDN configuration, distributed database replication, or
-durable-object/actor scheduling.
+An explicit deployment/request identity makes install retries idempotent:
+resume the same deployment without duplicate resources or consumer grants.
+Multiple providers cannot promise an atomic install. Persist partial progress,
+reconcile ambiguous provider outcomes, and expose dependency status and failures
+through inspect. When the provider cannot prove whether creation succeeded,
+retain recovery state and require reconciliation before retrying that creation.
+Cancellation and process crashes leave recoverable records.
 
-Private volumes are explicit, bounded resources with exact capability bindings;
-they do not provide a generic host-filesystem abstraction. An object bucket is
-not a filesystem volume or repository, and none of these resources substitutes
-for capability bindings.
+Removal drains consumers, detaches mounts, and proves fencing where needed
+before deletion. It cleans up deployment credentials and connections, respects
+retain/delete policy, and resumes safely after failure. Retained resources stay
+discoverable with stable ownership and provenance for authorized recovery or
+reuse; they must not become orphaned records or hidden data.
+
+## Dependencies and sequencing
+
+- [Agent principals and runtime authority](../../../done/mvp-01-agent-principals-capabilities-and-runtime-authority.md).
+- [Durable mailboxes and stateful dispatch](../../../done/mvp-02-durable-agent-mailboxes-and-stateful-dispatch.md).
+- [Event ingress and routing](../../../done/mvp-03-event-ingress-and-caddy-routing.md).
+- [Distribution platform](../../distribution/define-own-the-loop-agent-platform.md).
+- [Grant-controlled private VM networking](../grant-controlled-private-vm-networking.md)
+  is required for PostgreSQL and self-hosted S3 service recipes. The local
+  volume/SQLite phase can ship first with its own acceptance evidence.
+- Coordinate package placement and architecture metadata with the completed
+  [workspace topology migration](https://github.com/wimpheling/hephaestus/pull/57).
+
+## Scope and follow-ups
+
+This task delivers reusable volume infrastructure and bounded recipe lifecycle,
+then service compositions as their dependencies become available. General host
+filesystem access, network filesystem shares, distributed database replication,
+and unrestricted cloud credentials are outside its contract.
+
+Immutable content manifests, public publication and CDN delivery, durable
+actors, and a managed SQL query API with database/table permissions remain
+explicit follow-ups. They are not implemented by mounting SQLite files or
+installing a service recipe. Gateway consumers use declared mounts/endpoints
+and exact grants under the same infrastructure contracts.
 
 ## Implementation checklist
 
-- [ ] **1. Define typed resource contracts and release requirements**
-  - [ ] Add validated private-volume, volume-slot, SQLite database, object
-    bucket, object prefix, manifest, backup, and provider identifiers with
-    deterministic normalized forms.
-  - [ ] Extend release configuration with zero-or-more named private-volume
-    slots and typed SQLite/object capability slots; reject host paths, raw S3
-    URLs, provider credentials, and tenant resource IDs in release source.
-  - [ ] Define the SQLite operation vocabulary, including inspect, authorized
-    data access, backup, restore, and migrate; define legal operation
-    compatibility and deny unsupported combinations. Decide whether data access
-    uses a database protocol, a controlled mount, or another provider API, and
-    specify read-only consistency/concurrency semantics before choosing one.
-  - [ ] Define object `get`, `put`, `list`, `delete`, manifest publish, and
-    published-manifest read operations, including exact prefix normalization,
-    object size limits, content metadata, and conditional-write semantics.
-  - [ ] Add parsing, normalization, serialization, duplicate-rejection, and
-    illegal-operation tests.
+- [ ] **1. Decide boundaries and define the recipe contract**
+  - [ ] Record engine/parser placement, API/contract versions, supported kinds,
+    immutable recipe/release identity, input validation, and output semantics.
+  - [ ] Define bounded references, graph validation, resource requirements,
+    release-slot bindings, and retain/delete policy; reject unsupported syntax.
+  - [ ] Validate guest mount paths and endpoint URLs as controlled configuration;
+    reject host paths and provider admin credentials in public contracts.
+  - [ ] Specify create/bind/use/inspect/remove authorization independently,
+    including exact consumer grants and explicitly external resource bindings.
 
-- [ ] **2. Generalize private-volume lifecycle and providers**
-  - [ ] Define a provider-neutral private-volume lifecycle for provision,
-    inspect, attach/detach, backup, restore, retention, and deletion, including
-    capacity limits, lifecycle state, opaque provider handles, and audit
-    provenance.
-  - [ ] Define a type-specific volume-provider boundary for bounded private
-    volumes. Reconcile it with the existing `VolumeStore`,
-    `VolumeMetadataRepository`, and `LocalVolumeStore`; do not mistake the
-    PostgreSQL metadata adapter for a storage provider.
-  - [ ] Replace the implicit zero-or-one per-instance state-volume assumption
-    with zero-or-more declared slots and exact revision bindings, including
-    optional slots and explicit read-only/read-write attachment modes.
-  - [ ] Require an authoritative fenced writer lease for each writable volume
-    attachment. Before granting another writer, prove that the old VM/runtime
-    detached or was fenced; lease expiry alone is insufficient. If the provider
-    cannot prove this, retain recovery state and deny the new attachment. Decide
-    read-only concurrency and attachment cleanup semantics before selecting the
-    provider API.
-  - [ ] Preserve a local raw-file provider as the initial implementation while
-    keeping host paths and provider credentials invisible to callers and
-    workloads.
-  - [ ] Inventory and migrate every legacy reference, including
-    `agent_instances.state_volume_id`, `agent_instance_state_volumes`, and
-    `agent_instance_volume_leases`; `mailbox_delivery_attempts` volume/lease/
-    fencing evidence and its foreign-key, check, and trigger constraints; the
-    gateway capability resource-project lookup for `state_volume`;
-    `release-domain`'s optional `AgentInstance.state_volume_id`; and related
-    operator/admin projections, forced-RLS policies, durable event triggers,
-    authorization mappings, and SQL test fixtures. Preserve volume identity,
-    data, active leases, ownership, audit/event provenance, and rollback or
-    recovery behavior for ambiguous/incomplete rows; stateless instances retain
-    zero bindings.
-  - [ ] Add real-PostgreSQL and local-provider tests for multi-slot binding,
-    exact mount scope, read-only and writable leases, fencing, backup, restore,
-    retention, deletion, migration, and failure recovery.
+- [ ] **2. Generalize private volumes without losing existing state**
+  - [ ] Extend existing volume contracts for bounded provision, inspect,
+    attach/detach, backup, restore, retention, and delete lifecycle records,
+    including capacity, stable IDs, internal handles, and audit provenance.
+  - [ ] Replace implicit zero-or-one state volume with zero-or-more named
+    release slots, exact immutable revision bindings, and explicit RO/RW modes.
+  - [ ] Specify read-only sharing/snapshot consistency and cleanup. Enforce
+    exclusive writable attachments with proven prior detach/fencing; preserve
+    recovery state when the provider cannot prove safety.
+  - [ ] Inventory and migrate `agent_instances.state_volume_id`,
+    `agent_instance_state_volumes`, and `agent_instance_volume_leases`;
+    `mailbox_delivery_attempts` volume/lease/fencing evidence and its foreign-key,
+    check, and trigger constraints; gateway resource-project lookup for
+    `state_volume`; and `release-domain`'s optional `AgentInstance.state_volume_id`.
+  - [ ] Migrate operator/admin projections, forced RLS, durable event triggers,
+    authorization mappings, and SQL fixtures. Preserve bytes, identity, owner,
+    active leases/fencing, event provenance, and recovery for ambiguous rows;
+    stateless instances retain zero bindings.
+  - [ ] Verify local-provider behavior and real-PostgreSQL metadata migration,
+    including multi-slot scope, backup/restore, fencing, and retained data.
 
-- [ ] **3. Persist and authorize exact resources**
-  - [ ] Add authoritative PostgreSQL records for project-owned SQLite databases,
-    object buckets, prefixes, manifests, and their lifecycle state, tombstones,
-    provider handles, and audit provenance; persist explicit volume slots and
-    bindings under the volume lifecycle defined above.
-  - [ ] Apply forced RLS and explicit inspect, create, configure, bind, backup,
-    restore, publish, and delete permissions.
-  - [ ] Enforce project ownership and independent authority to create,
-    configure, attach, back up, restore, and delete each private volume, and to
-    grant each database or bucket operation to a workload revision. Resolve
-    every binding to one exact resource, reject required unbound slots, reject
-    undeclared bindings, and deny cross-project bindings unless a specific
-    authorized sharing contract exists.
-  - [ ] Add OpenFGA/Mélange relations and real-PostgreSQL tests for tenant
-    isolation, revocation, lifecycle CAS, concurrent changes, and historical
-    provenance.
+- [ ] **3. Persist and reconcile deployments**
+  - [ ] Add authoritative deployment/progress records and exact resource/slot
+    bindings, secret references, ownership provenance, policy, and tombstones.
+    Keep provider handles internal and plaintext secrets out of deployment records.
+  - [ ] Enforce forced RLS and exact authorization, retaining historical
+    evidence while rechecking live authority on resumed/new effects.
+  - [ ] Implement idempotent install with explicit identity, durable progress,
+    ambiguous-result reconciliation, and inspectable dependencies/failures.
+  - [ ] Recover cancellation/crashes and partial multi-provider failures without
+    duplicate resources, widened grants, or unsupported atomicity claims.
+  - [ ] Implement resumable remove with drain/detach/fencing, credential and
+    connection cleanup, safe retain/delete, and external resource protection.
 
-- [ ] **4. Implement SQLite lifecycle and writer safety**
-  - [ ] Define provision, pause, backup, restore, migrate, delete, and
-    recovery transitions, including backup consistency and restore provenance.
-  - [ ] Use an authoritative fenced writer lease or equivalent serialized lane
-    before writable access. Prove prior writer detach/fencing before granting a
-    new writer; lease expiry alone is insufficient, and uncertainty must deny
-    access while retaining recovery state.
-  - [ ] Define WAL mode, checkpoint, fsync, crash, corruption, database-size,
-    and migration failure behavior. Never claim multi-writer safety.
-  - [ ] Provide an initial SQLite provider that exposes a database only after
-    authorization and writer-lane acquisition. It may use the private-volume
-    provider internally; keep volume paths invisible to workloads and callers.
-  - [ ] Add real-SQLite and real-PostgreSQL failure-injection tests for
-    concurrent writers, worker crash, lease expiry, checkpoint failure, backup,
-    restore, and stale mount denial.
+- [ ] **4. Bundle and exercise the local SQLite composition**
+  - [ ] Package a pinned application release using a declared volume slot;
+    expose controlled guest configuration and exact attachment authority.
+  - [ ] Run initialization/migrations in the workload over its own data. Specify
+    SQLite/WAL/crash behavior and consistent backup preparation in the package.
+  - [ ] Exercise install/inspect/remove, RO/RW mounts, multiple application
+    connections where supported, backup/restore, and retained-data recovery.
 
-- [ ] **5. Implement S3-compatible object access**
-  - [ ] Define an `ObjectStoreProvider` boundary and implement one S3-compatible
-    provider with bucket/prefix scoping, bounded operation requests, and
-    provider error normalization.
-  - [ ] Issue short-lived scoped credentials or broker each operation; never
-    expose unrestricted provider credentials to workloads or queues.
-  - [ ] Enforce object key, prefix, byte, content-type, checksum, list-page,
-    multipart-upload, and conditional-write limits before provider calls.
-  - [ ] Record immutable object-operation audit records without logging object
-    bodies or credential material.
-  - [ ] Add provider conformance, scope-escape, overwrite race, idempotency,
-    credential-expiry, and failure-recovery tests.
+- [ ] **5. Add service recipes after networking is available**
+  - [ ] Compose PostgreSQL from a pinned server instance, volume, secrets, and
+    private TCP endpoint; require independent consumer connection and database
+    credentials. Keep server data migrations inside its packaged workload.
+  - [ ] Record whether S3 needs a typed provisioning/security contract, then
+    support a hosted released server and/or a configured external provider.
+  - [ ] Scope S3 to endpoint, bucket/prefix, and supported operations using
+    short-lived credentials or a broker; implement documented limits and errors.
+  - [ ] Verify credential delivery/expiry, prefix confinement, connection
+    revocation, partial provisioning recovery, and external-provider removal.
 
-- [ ] **6. Publish immutable content bundles**
-  - [ ] Define an immutable manifest containing normalized object keys, content
-    hashes, metadata, entry point, and source bucket/prefix provenance.
-  - [ ] Require an explicit publish operation to make a manifest eligible for
-    static-site or other edge delivery; publishing must not broaden bucket
-    access or expose unlisted objects.
-  - [ ] Define a future content-edge/CDN provider contract, cache identity, and
-    invalidation semantics without implementing CDN configuration in this task.
-  - [ ] Add tests proving manifest immutability, hash verification, rollback,
-    and no public access before publication.
-
-- [ ] **7. Integrate runtime authority and gateway use**
-  - [ ] Include exact SQLite/object bindings, operation ceilings, leases, and
-    provider scope in immutable authorization snapshots and runtime sessions;
-    include exact private-volume slot bindings and attachment leases.
-  - [ ] Give a gateway only the selected database/object operations; deny
-    ambient repository, private-volume, mailbox, object-bucket, and Caddy
-    authority.
-  - [ ] Define how synchronous gateway invocation acquires and releases a
-    SQLite writer lane, including timeout and client-cancellation behavior.
-  - [ ] Add end-to-end scenarios for a gateway reading/writing authorized
-    SQLite state and serving or publishing an authorized immutable object
-    manifest.
-
-- [ ] **8. Verify and document**
-  - [ ] Document the distinct volume, SQLite, and object resource models,
-    provider boundaries, authority and mount limits, writer-lane and fencing
-    contracts, migration from implicit state volumes, S3-compatible protocol,
-    content-publication semantics, backup/recovery, and deliberate
-    durable-object/CDN deferrals.
+- [ ] **6. Integrate distribution UI and complete verification**
+  - [ ] Bundle versioned recipes/defaults and expose authorized install,
+    inspect/status, retained resources, failures, and removal policy in the UI.
+  - [ ] Document provider boundaries, application migration ownership, bounded
+    revocation, legacy migration, recovery, and deferred upgrade/SQL/CDN/actor work.
   - [ ] Run `cargo fmt --all -- --check`.
   - [ ] Run `cargo clippy --workspace --all-targets --all-features`.
   - [ ] Run `cargo test --workspace --all-features`.
   - [ ] Run `cargo doc --workspace --all-features --no-deps`.
-  - [ ] Run `cargo dev check architecture` and resolve new package, SQLx, RLS,
-    and dependency-boundary diagnostics without broad exceptions.
-  - [ ] Run real-PostgreSQL, real-SQLite, and S3-provider integration and
-    failure-injection scenarios.
-  - [ ] Run `git diff --check` and `cargo dev quality` for handoff.
+  - [ ] Run `cargo dev check architecture` and resolve diagnostics under existing
+    SQLx, RLS, transport, committed-outbox, and sensitive-field boundaries.
+  - [ ] Run focused real-provider integration/failure checks, `git diff --check`,
+    and repository handoff gate `cargo dev quality` with strict rules enabled.
 
-## Decisions before implementation
+## Open implementation decisions
 
-- [ ] Decide whether read-only volume use is a shared mount, snapshot, or brokered
-  operation, and define its consistency and revocation behavior. Keep the
-  required distinction between declared read-only and read-write authority, but
-  do not prescribe a provider API before this decision.
-- [ ] Decide whether one resource may satisfy more than one slot in the same
-  revision. If allowed, prove that the combined access does not widen the
-  authority granted by either slot.
-- [ ] Decide whether SQLite access is exposed through a database protocol,
-  controlled mount, or another narrow API; specify read-only consistency,
-  cancellation, migration ownership, and writer-lane timeout behavior.
-- [ ] Select the supported S3 operation subset, consistency/versioning contract,
-  multipart rules, credential mechanism, and concrete key/byte/page limits.
-- [ ] Agree with the topology task on names, paths, layer/context metadata, and
-  which new packages are core contracts/PostgreSQL adapters versus replaceable
-  standard providers. Do not change that task's current package-count baseline
-  in this task.
+- [ ] Place recipe parsing, orchestration, persistence, and distribution bundles
+  within the architecture; choose packages and metadata before implementation.
+- [ ] Decide whether one resource may satisfy multiple slots; if allowed, prove
+  combined use stays within each grant and attachment constraints.
+- [ ] Select read-only volume consistency, backup preparation, and provider
+  mechanisms that bound mount revocation and prove writer detach/fencing.
+- [ ] Specify endpoint/established-flow revocation and workload secret delivery,
+  rotation, expiry, and cleanup without exposing provider admin credentials.
+- [ ] Select S3 contract necessity, supported operations and numeric limits,
+  external-provider binding, scoped credential/broker mechanism, and recovery.
+- [ ] Define idempotency identity lifetime and ambiguous provider reconciliation,
+  including retry after revocation and authorized reuse of retained resources.
 
 ## Acceptance criteria
 
-- [ ] Releases can declare zero through multiple named slots. A revision resolves
-  each required slot to one authorized same-project resource, permits an
-  optional slot to remain unbound, and rejects missing, multiply assigned,
-  undeclared, or cross-project bindings unless explicit sharing authority
-  applies.
-- [ ] Public contracts, release configuration, runtime sessions, and
-  authorization snapshots expose no host path, host identity, provider
-  credential, or provider-specific configuration; provider adapters can retain
-  the local details they require.
-- [ ] No second writable volume or SQLite attachment is granted until tests
-  prove that the old writer detached or was fenced. Expiry without that proof
-  keeps recovery state and denies access.
-- [ ] Migration preserves legacy volume bytes, identity, ownership, active lease
-  fencing, mailbox execution evidence, authorization lookup behavior, RLS, and
-  event provenance; real-PostgreSQL fixtures cover each inventoried reference
-  and recovery from ambiguous legacy rows.
-- [ ] Cross-project access and each lifecycle/binding permission are checked
-  against the exact resource and actor; revocation prevents new operations and
-  preserves immutable historical provenance.
-- [ ] SQLite failure scenarios prove the selected durability, backup/restore,
-  migration, and writer-lane semantics. Object-provider fixtures prove exact
-  bucket/prefix confinement, operation limits, credential expiry, immutable
-  manifest publication, and no public access before publication.
-- [ ] `cargo dev check architecture` and `cargo dev quality` pass with the
-  repository's existing strict lint and architecture rules enabled.
+- [ ] Recipe validation rejects cycles, duplicate/missing/unknown references,
+  unsupported syntax/kinds, incompatible operations, and invalid slot bindings
+  before effects. Immutable recipe/release pins and API compatibility are checked.
+- [ ] Zero-to-multiple slots bind exact same-project resources with explicit
+  authority. Required/optional slots, caller lifecycle rights, and consumer
+  mount/network/credential rights are independently tested; membership is insufficient.
+- [ ] Public configuration allows controlled guest paths/endpoints and contains
+  no host paths, host identity, raw provider admin credentials, or plaintext
+  durable secrets. Third-party recipes cannot exceed the same validator/grants.
+- [ ] A second writable attachment requires proven old-writer detach/fencing.
+  Expiry alone denies access and preserves recovery evidence; SQLite tests do
+  not impose a blanket single-connection restriction or claim SQL-level policy.
+- [ ] Legacy migration fixtures cover every inventoried reference and preserve
+  bytes, identity, ownership, active fencing, mailbox evidence, RLS, authorization
+  lookup, and event provenance, including recovery from ambiguous rows.
+- [ ] Retrying install after failure/cancellation/crash resumes one deployment
+  without duplicates. Partial provider outcomes are visible and reconcilable;
+  revoked callers cannot use historical snapshots to continue new effects.
+- [ ] Removal safely drains/detaches/fences, cleans credentials/connections,
+  retains discoverable data by default, and never deletes external/adopted
+  resources. Failed removal resumes safely under current authorization.
+- [ ] Provider evidence establishes consistent backup/restore, bounded mount and
+  network revocation, S3 bucket/prefix/operation scope, and credential expiry.
+  Consumers cannot obtain database access from network authority alone.
+- [ ] Install never blindly upgrades/reinstalls an existing deployment. Extension
+  migrations affect only owned application data; follow-ups remain explicit.
+- [ ] Architecture checks and `cargo dev quality` pass for implemented phases
+  with strict Rust/Clippy/rustdoc rules enabled; phase status records dependencies.
 
 ## Completion evidence
 
-Record schema and provider versions, legacy-volume migration evidence, exact
-slot and mount-scope fixtures, volume lease/fencing/backup/restore/retention/
-deletion evidence, capability and RLS fixtures, SQLite writer-lease/crash and
-backup/restore evidence, object-scope and credential-expiry evidence,
-immutable-manifest publication evidence, end-to-end gateway fixtures, test
-counts, and deliberate follow-up tasks for CDN delivery and durable objects.
+Record implemented phases, contract/schema/provider and pinned recipe/release
+versions, boundary decisions, legacy migration fixtures, exact slot/authority
+tests, fencing and bounded revocation evidence, backup/restore and retained-data
+recovery, idempotent retry/crash/cancellation and partial-failure scenarios,
+external-resource protection, scoped S3 credentials, UI lifecycle evidence, and
+quality-gate results. Link deferred upgrade/migration, managed SQL permissions,
+content publication/CDN, and durable-actor tasks without claiming completion.

@@ -1,9 +1,10 @@
 use super::{
-    RuntimeGitAuthorityError, RuntimeGitCredential, RuntimeGitCredentialRepository,
-    RuntimeGitHandoffStore, StoredRuntimeGitCredential,
+    ExpiredRuntimeGitHandoff, RuntimeGitAuthorityError, RuntimeGitCredential,
+    RuntimeGitCredentialRepository, RuntimeGitHandoffStore, StoredRuntimeGitCredential,
 };
 use capability_domain::{RuntimeCredentialGeneration, RuntimeSessionId};
 use time::OffsetDateTime;
+use uuid::Uuid;
 
 /// Coordinates durable verifier issuance with temporary host handoff.
 pub struct RuntimeGitCredentialIssuer<R, H> {
@@ -88,6 +89,43 @@ where
         generation: RuntimeCredentialGeneration,
     ) -> Result<(), RuntimeGitAuthorityError> {
         self.handoff.destroy(session_id, generation)
+    }
+
+    /// Observes this exact expired original through the retained repository only.
+    ///
+    /// The caller must qualify both generic and Git observations before either
+    /// deletion. This does not issue authority, delete files or prove guest stop.
+    ///
+    /// # Errors
+    /// Returns the original adapter error or a mismatched comparison result.
+    pub async fn observe_expired_run_handoff(
+        &self,
+        run: Uuid,
+        session: RuntimeSessionId,
+        generation: RuntimeCredentialGeneration,
+    ) -> Result<ExpiredRuntimeGitHandoff, RuntimeGitAuthorityError> {
+        let original = self
+            .repository
+            .observe_expired_run_handoff(run, session, generation)
+            .await?;
+        if !original.matches_request(run, session, generation) {
+            return Err(RuntimeGitAuthorityError::IdentityMismatch);
+        }
+        Ok(original)
+    }
+
+    /// Delegates exact expired deletion to the original retained host store.
+    ///
+    /// Both generic and Git projections must already have been qualified and
+    /// compared by the owning caller. No combined observe-and-delete fallback exists.
+    ///
+    /// # Errors
+    /// Returns the original store error, including unsupported or partial cleanup.
+    pub fn destroy_expired_handoff(
+        &self,
+        original: &ExpiredRuntimeGitHandoff,
+    ) -> Result<(), RuntimeGitAuthorityError> {
+        self.handoff.destroy_expired(original)
     }
 
     /// Purges expired host-only bearer envelopes.

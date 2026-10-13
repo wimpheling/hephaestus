@@ -303,7 +303,7 @@ export HEPHAESTUS_RUNTIME_MAX_VCPUS="2"
 export HEPHAESTUS_RUNTIME_MAX_MEMORY_MIB="1024"
 export HEPHAESTUS_RUNTIME_ALLOW_BROKER_ONLY="true"
 export HEPHAESTUS_RUNTIME_ALLOW_EGRESS="false"
-export RUST_LOG="hephaestus_app=debug,git_http=debug,forge_service=debug,run_orchestrator=debug,review_service=debug"
+export RUST_LOG="hephaestus_app=debug,git_http=debug,forge_service=debug,run_orchestrator=debug,review_service=debug,secret_postgres=error,release_postgres=error"
 
 "${repo_root}/target/debug/hephaestusd" >"${fixture_root}/daemon.log" 2>&1 &
 daemon_pid="$!"

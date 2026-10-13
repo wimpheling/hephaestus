@@ -6,6 +6,8 @@ use super::*;
     clippy::too_many_arguments,
     clippy::too_many_lines
 )]
+// Each daemon must remain live across its phase, then is consumed by shutdown or the next phase.
+#[allow(clippy::significant_drop_tightening)]
 pub async fn run_standard_flow(input: StandardFlowInput) {
     let StandardFlowInput {
         pool,

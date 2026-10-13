@@ -16,7 +16,9 @@ use crate::{
     connect_control, exit_parts, gateway_handler_loop, git_bridge, handle_host_messages,
     join_log_thread, mount_state_volume, mount_virtiofs, persist_runtime_authority,
     platform_oci_operation, provision_guest_open_files, pump_logs, read_frame, send_guest_error,
-    service, unmount, wait_command, write_frame, write_message,
+    service,
+    volume_mounts::{mount_named_volumes, validate_boot_volumes},
+    wait_command, write_frame, write_message,
 };
 
 // The bootstrap sequence is intentionally kept in one ordered protocol flow.
@@ -34,6 +36,7 @@ pub fn run() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         mut command,
         mounts,
         state_volume,
+        volumes,
         runtime_authority,
         gateway_handler,
         private_http_service,
@@ -89,6 +92,10 @@ pub fn run() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         return Err(error.into());
     }
 
+    validate_boot_volumes(&volumes, state_volume.as_ref(), &mounts).inspect_err(|error| {
+        send_guest_error(&mut control, "volume-contract", error);
+    })?;
+
     // Persist the authority before mounting the immutable runtime control tree
     // at `/run/hephaestus`. A read-only nested virtiofs mount can otherwise
     // make its parent unsuitable for creating the sibling authority directory
@@ -116,13 +123,15 @@ pub fn run() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
             return Err(error.into());
         }
     }
-    let mounted_state = match state_volume.as_ref().map(mount_state_volume).transpose() {
-        Ok(path) => path,
-        Err(error) => {
-            send_guest_error(&mut control, "state-volume", &error);
-            return Err(error.into());
-        }
-    };
+    let mut mounted_volumes = mount_named_volumes(&volumes).inspect_err(|error| {
+        send_guest_error(&mut control, "named-volume", error);
+    })?;
+    if let Some(legacy) = state_volume.as_ref() {
+        let path = mount_state_volume(legacy).inspect_err(|error| {
+            send_guest_error(&mut control, "state-volume", error);
+        })?;
+        mounted_volumes.push(path)?;
+    }
     if let Some(delay) = command.env.get("HEPH_TEST_READY_DELAY_MS") {
         let milliseconds = delay.parse::<u64>().map_err(|error| {
             io::Error::new(
@@ -201,9 +210,7 @@ pub fn run() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
             },
         )?;
         gateway_handler_loop(control, &writer, &command)?;
-        if let Some(path) = mounted_state {
-            unmount(&path)?;
-        }
+        mounted_volumes.unmount_all()?;
         return Ok(());
     }
 
@@ -301,9 +308,7 @@ pub fn run() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         supervisor.join_all();
     }
     let (code, signal) = exit_parts(status);
-    if let Some(path) = mounted_state {
-        unmount(&path)?;
-    }
+    mounted_volumes.unmount_all()?;
     if code == Some(0) && signal.is_none() {
         write_message(
             &writer,

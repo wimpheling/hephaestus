@@ -50,7 +50,7 @@ pub(in crate::provider::tests) fn service_instance_with_wall_clock(
 
 pub(in crate::provider::tests) fn instance_with_options(
     temp: &TempDir,
-    worker: Arc<MockWorker>,
+    worker: Arc<dyn WorkerBackend>,
     wall_clock_timeout: Duration,
     service: Option<(Duration, Arc<ServiceBroker>, PathBuf)>,
 ) -> Arc<LibkrunInstance> {
@@ -66,10 +66,11 @@ pub(in crate::provider::tests) fn instance_with_options(
     config.readiness_timeout = Duration::from_millis(20);
     config.limits.wall_clock_timeout = wall_clock_timeout;
     let config = Arc::new(config);
-    let provider_ids = Arc::new(ProviderInner {
+    let provider_ids = Arc::new(ProviderLifetime {
         config: Arc::clone(&config),
         ids: Mutex::new(HashSet::from([VmId("test".to_owned())])),
         worker_spawner: Arc::new(ProcessWorkerSpawner),
+        owner: std::sync::OnceLock::new(),
     });
     let (events, _) = broadcast::channel(32);
     let (terminal, _) = watch::channel(None::<Terminal>);
@@ -81,14 +82,22 @@ pub(in crate::provider::tests) fn instance_with_options(
         .map(|(_, _, _)| Arc::new(Semaphore::new(1)));
     let resources = service.map(|(_, broker, runtime_dir)| OwnedResources {
         runtime_dir,
+        runtime_child: None,
+        birth_record: None,
         cgroup: Cgroup::existing(&config, "test"),
+        cleanup_roots: None,
         service_broker: Some(broker),
     });
-    let instance = Arc::new(LibkrunInstance {
+    let instance = Arc::new_cyclic(|this| LibkrunInstance {
+        this: this.clone(),
         id: VmId("test".to_owned()),
         config,
         worker,
         state: Mutex::new(Lifecycle::Provisioned),
+        operation: Mutex::new(()),
+        destroy_requested: watch::channel(false).0,
+        stop_requested: watch::channel(false).0,
+        cleanup_complete: AtomicBool::new(false),
         terminal,
         terminal_guard: Mutex::new(()),
         ready,
@@ -96,6 +105,8 @@ pub(in crate::provider::tests) fn instance_with_options(
         events,
         resources: Mutex::new(resources),
         provider_ids,
+        registry: std::sync::Weak::new(),
+        birth: 0,
         private_http_enabled: true,
         private_service_timeout,
         private_service_dispatch,
@@ -109,6 +120,7 @@ pub(in crate::provider::tests) fn instance_with_options(
 
 pub(in crate::provider::tests) fn spec(id: &str, root: PathBuf) -> VmSpec {
     VmSpec {
+        guest_volumes: Vec::new(),
         id: VmId(id.to_owned()),
         root: RootFilesystem::Directory { host_path: root },
         disks: Vec::new(),

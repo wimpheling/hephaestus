@@ -25,6 +25,7 @@ impl VmSpecFactory for StateSpecFactory {
             );
         }
         Ok(VmSpec {
+            guest_volumes: Vec::new(),
             id: VmId(run.id.to_string()),
             root: RootFilesystem::Directory {
                 host_path: self.rootfs.clone(),

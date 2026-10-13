@@ -37,6 +37,7 @@ defmodule HephaestusWebWeb.OrganizationNewSecretLive do
     {:noreply,
      socket
      |> assign(:page_state, submitting)
+     |> clear_plaintext()
      |> start_async(:command, fn ->
        OrganizationNewSecretState.execute_sensitive(state, identity, :create, attributes)
      end)}
@@ -51,6 +52,7 @@ defmodule HephaestusWebWeb.OrganizationNewSecretLive do
   def handle_async(:command, {:ok, {:command_succeeded, message}}, socket) do
     {:noreply,
      socket
+     |> clear_plaintext()
      |> put_flash(:info, message)
      |> push_navigate(
        to: ~p"/organizations/#{socket.assigns.page_state.data.organization_id}/secrets"
@@ -58,11 +60,14 @@ defmodule HephaestusWebWeb.OrganizationNewSecretLive do
   end
 
   def handle_async(:command, {:ok, {:failed, _reason, message}}, socket) do
-    {:noreply, put_flash(socket, :error, message)}
+    {:noreply, socket |> clear_plaintext() |> put_flash(:error, message)}
   end
 
   def handle_async(:command, {:exit, _reason}, socket) do
-    {:noreply, put_flash(socket, :error, "Command service is temporarily unavailable.")}
+    {:noreply,
+     socket
+     |> clear_plaintext()
+     |> put_flash(:error, "Command service is temporarily unavailable.")}
   end
 
   @impl true
@@ -82,10 +87,14 @@ defmodule HephaestusWebWeb.OrganizationNewSecretLive do
         organization={@presentation.organization}
         form={@presentation.form}
         create_secret_event="create-secret"
+        write_only_hook="OrganizationSecretWriteOnly"
       />
     </Layouts.app>
     """
   end
+
+  # The submit parameters already belong to the command task; the event carries no value.
+  defp clear_plaintext(socket), do: push_event(socket, "organization-secret-clear", %{})
 
   defp reduce_load(socket, event) do
     {state, _effects} = OrganizationNewSecretState.reduce(socket.assigns.page_state, event)
@@ -93,6 +102,7 @@ defmodule HephaestusWebWeb.OrganizationNewSecretLive do
 
     if state.status == :access_revoked do
       socket
+      |> clear_plaintext()
       |> put_flash(:error, "That organization is not visible.")
       |> push_navigate(to: ~p"/organizations")
     else

@@ -17,14 +17,27 @@ defmodule HephaestusWebWeb.ProjectState do
   ]
 
   defstruct status: :initial,
-            data: %{project_id: nil, project: nil, repositories: []},
+            data: %{
+              project_id: nil,
+              project: nil,
+              repositories: [],
+              recipe_inspection: %{
+                status: :idle,
+                deployment_id: "",
+                deployment: nil,
+                error: nil,
+                generation: 0
+              }
+            },
             form: nil,
             error: nil,
             cursor: nil,
             stream_generation: 0
 
-  def new(%{project_id: project_id}),
-    do: %__MODULE__{data: %{project_id: project_id, project: nil, repositories: []}}
+  def new(%{project_id: project_id}) do
+    state = %__MODULE__{}
+    %{state | data: %{state.data | project_id: project_id}}
+  end
 
   def statuses, do: @statuses
   def stream_mode, do: @stream_mode
@@ -47,8 +60,16 @@ defmodule HephaestusWebWeb.ProjectState do
     )
   end
 
-  def reduce(state, {:watch, response}),
-    do: ProductEventReducer.reduce(state, response, [:project_changed, :repository_changed])
+  def reduce(state, {:watch, response}) do
+    {next, effects} =
+      ProductEventReducer.reduce(state, response, [:project_changed, :repository_changed])
+
+    if next.status == :access_revoked do
+      {revoke_inspection(next, state.data.recipe_inspection), effects}
+    else
+      {next, effects}
+    end
+  end
 
   def reduce(state, :watch_ended), do: ProductEventReducer.reconnect(state)
 
@@ -71,10 +92,10 @@ defmodule HephaestusWebWeb.ProjectState do
 
   def reduce(state, {:loaded, _stale_generation, _project, _repositories}), do: {state, []}
 
-  def reduce(state, {:access_revoked, _reason}),
-    do:
-      {%{state | status: :access_revoked, error: "Project access was revoked."},
-       [{:navigate, :organizations}]}
+  def reduce(state, {:access_revoked, _reason}) do
+    revoked = %{state | status: :access_revoked, error: "Project access was revoked."}
+    {revoke_inspection(revoked, state.data.recipe_inspection), [{:navigate, :organizations}]}
+  end
 
   def reduce(state, {:error, message}) when is_binary(message),
     do: {%{state | status: :error, error: message}, []}
@@ -82,11 +103,82 @@ defmodule HephaestusWebWeb.ProjectState do
   def reduce(state, :reconnecting), do: {%{state | status: :reconnecting}, []}
   def reduce(state, :stale), do: {%{state | status: :stale}, [:load]}
 
+  def reduce(state, {:inspect_recipe, deployment_id}) when is_binary(deployment_id) do
+    generation = state.data.recipe_inspection.generation + 1
+
+    inspection = %{
+      status: :loading,
+      deployment_id: deployment_id,
+      deployment: nil,
+      error: nil,
+      generation: generation
+    }
+
+    if byte_size(deployment_id) == 36 do
+      {put_in(state.data.recipe_inspection, inspection),
+       [{:inspect_recipe, generation, deployment_id}]}
+    else
+      invalid = %{inspection | status: :invalid, error: "Enter the exact deployment UUID."}
+      {put_in(state.data.recipe_inspection, invalid), []}
+    end
+  end
+
+  def reduce(state, {:recipe_inspected, generation, result})
+      when state.status != :access_revoked and
+             generation == state.data.recipe_inspection.generation do
+    inspection = state.data.recipe_inspection
+
+    inspection =
+      case result do
+        {:ok, deployment} ->
+          %{inspection | status: :ready, deployment: deployment, error: nil}
+
+        {:error, %Error{kind: kind}} when kind in [:permission_denied, :unauthenticated] ->
+          %{
+            inspection
+            | status: :denied,
+              deployment: nil,
+              error: "Your current session cannot inspect this deployment.",
+              generation: inspection.generation + 1
+          }
+
+        {:error, %Error{kind: :invalid}} ->
+          %{
+            inspection
+            | status: :invalid,
+              deployment: nil,
+              error: "Enter the exact deployment UUID."
+          }
+
+        {:error, %Error{kind: :precondition}} ->
+          %{
+            inspection
+            | status: :error,
+              deployment: nil,
+              error: "The saved deployment could not be validated."
+          }
+
+        {:error, _reason} ->
+          %{
+            inspection
+            | status: :unavailable,
+              deployment: nil,
+              error:
+                "Deployment inspection is unavailable. No absence or completion is confirmed."
+          }
+      end
+
+    {put_in(state.data.recipe_inspection, inspection), []}
+  end
+
+  def reduce(state, {:recipe_inspected, _generation, _result}), do: {state, []}
+
   def present(state) do
     Map.merge(state.data, %{
       status: presentation_status(state),
       item_count: length(state.data.repositories),
-      error: state.error
+      error: state.error,
+      recipe_inspection: state.data.recipe_inspection
     })
   end
 
@@ -106,6 +198,23 @@ defmodule HephaestusWebWeb.ProjectState do
       {:error, _reason} ->
         {:error, "The project data is temporarily unavailable."}
     end
+  end
+
+  def execute_recipe(state, {:inspect_recipe, generation, deployment_id}, identity, options \\ []) do
+    {:recipe_inspected, generation,
+     Client.get_recipe_deployment(identity, state.data.project_id, deployment_id, options)}
+  end
+
+  defp revoke_inspection(state, inspection) do
+    denied = %{
+      inspection
+      | status: :denied,
+        deployment: nil,
+        error: "Project access was revoked.",
+        generation: inspection.generation + 1
+    }
+
+    %{state | data: Map.put(state.data, :recipe_inspection, denied)}
   end
 
   defp presentation_status(%{status: :ready}), do: :ready

@@ -38,6 +38,6 @@ pub(super) fn validate_private_directory(path: &Path) -> Result<(), BuildExecuti
     Ok(())
 }
 
-pub(super) fn filesystem(_error: std::io::Error) -> BuildExecutionError {
-    BuildExecutionError::Filesystem
+pub(super) fn filesystem(error: std::io::Error) -> BuildExecutionError {
+    BuildExecutionError::FilesystemSource(std::sync::Arc::new(error))
 }

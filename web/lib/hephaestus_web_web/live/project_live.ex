@@ -84,6 +84,27 @@ defmodule HephaestusWebWeb.ProjectLive do
   def handle_info(_message, socket), do: {:noreply, socket}
 
   @impl true
+  def handle_event(
+        "inspect-recipe-deployment",
+        %{"recipe" => %{"deployment_id" => deployment_id}},
+        socket
+      ) do
+    {state, effects} =
+      ProjectState.reduce(socket.assigns.page_state, {:inspect_recipe, deployment_id})
+
+    identity = socket.assigns.current_identity
+    socket = sync_state(socket, state)
+
+    socket =
+      Enum.reduce(effects, socket, fn {:inspect_recipe, generation, _id} = effect, socket ->
+        start_async(socket, {:recipe_inspection, generation}, fn ->
+          ProjectState.execute_recipe(state, effect, identity)
+        end)
+      end)
+
+    {:noreply, socket}
+  end
+
   def handle_event("launch-installed-ui", %{"id" => installation_id}, socket),
     do: {:noreply, InstalledUiNavigation.launch(socket, installation_id)}
 
@@ -95,6 +116,22 @@ defmodule HephaestusWebWeb.ProjectLive do
 
   def handle_event("close-installed-ui", _params, socket),
     do: {:noreply, InstalledUiNavigation.close(socket)}
+
+  @impl true
+  def handle_async({:recipe_inspection, _generation}, {:ok, event}, socket) do
+    {state, []} = ProjectState.reduce(socket.assigns.page_state, event)
+    {:noreply, sync_state(socket, state)}
+  end
+
+  def handle_async({:recipe_inspection, generation}, {:exit, _reason}, socket) do
+    {state, []} =
+      ProjectState.reduce(
+        socket.assigns.page_state,
+        {:recipe_inspected, generation, {:error, :unavailable}}
+      )
+
+    {:noreply, sync_state(socket, state)}
+  end
 
   @impl true
   def terminate(_reason, socket),
@@ -125,6 +162,10 @@ defmodule HephaestusWebWeb.ProjectLive do
         item_count={@presentation.item_count}
         repositories={@streams.repositories}
         installed_ui={@installed_ui}
+        recipe_inspection={@presentation.recipe_inspection}
+        recipe_form={
+          to_form(%{"deployment_id" => @presentation.recipe_inspection.deployment_id}, as: :recipe)
+        }
         organization_index_destination={~p"/organizations"}
         organization_destination={organization_destination(@presentation.project)}
         repository_destination={fn id -> ~p"/repositories/#{id}" end}

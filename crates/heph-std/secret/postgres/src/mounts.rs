@@ -7,22 +7,49 @@ use heph_secret::{
 use run_domain::Run;
 use runtime_types::RunId;
 use std::collections::BTreeSet;
+
+mod invocation_empty;
+
 /// PostgreSQL-backed ephemeral mount metadata.
 #[derive(Clone)]
 pub struct PostgresSecretMountMetadata {
     pool: PgPool,
+    invocation_configuration: Option<release_service::InstanceExecutionConfiguration>,
 }
 
 impl PostgresSecretMountMetadata {
     /// Creates an adapter using the caller's secret persistence pool.
     #[must_use]
     pub const fn new(pool: PgPool) -> Self {
-        Self { pool }
+        Self {
+            pool,
+            invocation_configuration: None,
+        }
+    }
+
+    /// Selects the exact trusted configuration for saved-empty Invocation checks.
+    ///
+    /// Requires the qualified schema and a worker pool. This configuration is
+    /// metadata; it provides no caller identity, secret dispatch or physical IO.
+    #[must_use]
+    pub fn with_qualified_invocation_configuration(
+        mut self,
+        configuration: release_service::InstanceExecutionConfiguration,
+    ) -> Self {
+        self.invocation_configuration = Some(configuration);
+        self
     }
 }
 
 #[async_trait]
 impl SecretMountMetadata for PostgresSecretMountMetadata {
+    async fn verify_qualified_invocation_empty_bindings(
+        &self,
+        run: &Run,
+    ) -> Result<(), run_orchestrator::RunSecretError> {
+        self.verify_invocation_empty(run).await
+    }
+
     async fn dispatch_input(
         &self,
         run: &Run,
@@ -123,6 +150,9 @@ impl SecretMountMetadata for PostgresSecretMountMetadata {
         &self,
         run_id: RunId,
     ) -> Result<Option<Uuid>, run_orchestrator::RunSecretError> {
+        if self.invocation_cleanup_empty(run_id).await? {
+            return Ok(None);
+        }
         sqlx::query_scalar(
             "SELECT opaque_directory FROM secret_runtime_mounts
              WHERE run_id = $1 AND state = 'materialized'",
@@ -199,6 +229,46 @@ where
         .ok_or_else(|| redacted("secret filesystem provider is unavailable"))?;
     SecretMountManager::initialize(
         PostgresSecretMountMetadata::new(pool),
+        dispatch,
+        runtime,
+        provider,
+        config,
+    )
+}
+
+/// Constructs a `PostgreSQL` run secret manager with saved-empty Invocation checks.
+///
+/// The configuration must come from the trusted composition owner using checked
+/// [`release_service::InstanceExecutionConfiguration`] construction and validated
+/// managed providers. It records composition data; it proves no provider or root
+/// ownership, current caller authority, or absence of runtime history.
+///
+/// Requires the qualified schema and a worker pool. Invocation preparation and
+/// reauthorization still require the existing stored saved-empty/configuration
+/// and phase verifier before execution IO. This initializer enables no secret
+/// dispatch, decryption or credential issuance for Invocation.
+///
+/// # Errors
+///
+/// Returns a redacted initialization error when the filesystem provider is
+/// unavailable or the ephemeral root is unsafe.
+pub fn initialize_qualified_invocation_manager<D, R>(
+    pool: PgPool,
+    dispatch: SecretService<D>,
+    runtime: SecretRuntimeService<R>,
+    config: EphemeralSecretConfig,
+    invocation_configuration: release_service::InstanceExecutionConfiguration,
+) -> Result<PgSecretMountManager<D, R>, run_orchestrator::RunSecretError>
+where
+    D: secret_store::KeyProvider + Send + Sync,
+    R: secret_store::KeyProvider + Send + Sync,
+{
+    let provider = runtime
+        .mount_provider()
+        .ok_or_else(|| redacted("secret filesystem provider is unavailable"))?;
+    SecretMountManager::initialize(
+        PostgresSecretMountMetadata::new(pool)
+            .with_qualified_invocation_configuration(invocation_configuration),
         dispatch,
         runtime,
         provider,

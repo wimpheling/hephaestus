@@ -28,6 +28,8 @@ pub struct VmSpec {
     pub root: RootFilesystem,
     /// Additional block devices exposed to the guest.
     pub disks: Vec<VmDisk>,
+    /// Named guest attachments resolved from exact authorized release slots.
+    pub guest_volumes: Vec<crate::VmGuestVolume>,
     /// Host directories exposed inside the guest.
     pub mounts: Vec<VmMount>,
     /// Compute resources assigned to the guest.

@@ -18,6 +18,8 @@ mod release;
 mod repository;
 mod repository_browser;
 mod request;
+#[cfg(test)]
+pub(super) use request::{RequestBudget, run_with_budget};
 mod run;
 mod secret;
 

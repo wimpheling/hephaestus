@@ -54,6 +54,17 @@ jobs:
         run: cargo clippy --workspace --all-targets --all-features
       - name: Tests
         run: cargo test --workspace --all-features -- --test-threads=1
+      - name: Prepare bounded RPC integration executables
+        timeout-minutes: 15
+        env:
+          CARGO_INCREMENTAL: "0"
+          CARGO_BUILD_JOBS: "2"
+        # Match the launchers' features and build settings before their runtime
+        # deadlines; the workspace all-features build has a different cache key.
+        run: |
+          cargo +1.88.0 test --package hephaestus-app --features test-fixtures \
+            --test browser_session_lifecycle --test ui_installation_rpc \
+            --test artifact_deadline_cancellation --no-run
       - name: Browser-session RPC lifecycle integration
         timeout-minutes: 5
         run: scripts/test-browser-session-lifecycle.sh

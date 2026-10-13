@@ -2,7 +2,10 @@ use runtime_types::{AgentInstanceId, LeaseId, RunId, VolumeId};
 use sqlx::FromRow;
 use time::OffsetDateTime;
 use uuid::Uuid;
-use volume_trait::{Volume, VolumeError, VolumeKind, VolumeLease, VolumeState};
+use volume_trait::{
+    Volume, VolumeError, VolumeInspection, VolumeKind, VolumeLease, VolumeProvisioningState,
+    VolumeState,
+};
 
 #[derive(Debug, FromRow)]
 /// Database row for a persisted volume.
@@ -10,7 +13,13 @@ pub struct VolumeRow {
     /// Volume identifier.
     pub id: Uuid,
     /// Owning agent instance identifier.
-    pub instance_id: Uuid,
+    pub instance_id: Option<Uuid>,
+    /// Stable project that owns this resource.
+    pub project_id: Uuid,
+    /// Durable provisioning progress.
+    pub provisioning_state: String,
+    /// Independent provisioning fence.
+    pub provisioning_generation: i64,
     /// Owning host identifier.
     pub host_id: Option<String>,
     /// Host filesystem path.
@@ -41,8 +50,13 @@ impl TryFrom<VolumeRow> for Volume {
     fn try_from(row: VolumeRow) -> Result<Self, Self::Error> {
         Ok(Self {
             id: VolumeId::from_uuid(row.id),
-            instance_id: AgentInstanceId::from_uuid(row.instance_id),
-            kind: VolumeKind::InstanceState,
+            project_id: row.project_id,
+            instance_id: row.instance_id.map(AgentInstanceId::from_uuid),
+            kind: if row.instance_id.is_some() {
+                VolumeKind::InstanceState
+            } else {
+                VolumeKind::Private
+            },
             host_id: row
                 .host_id
                 .ok_or(VolumeError::InvalidState("volume has no host owner"))?,
@@ -55,12 +69,41 @@ impl TryFrom<VolumeRow> for Volume {
                 .filesystem_uuid
                 .ok_or(VolumeError::InvalidState("volume has no filesystem UUID"))?,
             state: parse_state(&row.state)?,
+            provisioning_state: parse_provisioning_state(&row.provisioning_state)?,
+            provisioning_generation: row.provisioning_generation,
             key_reference: row.key_reference,
             encryption_version: row.encryption_version,
             backup_revision: row.backup_revision,
             checksum: row.checksum,
             last_successful_backup_at: row.last_successful_backup_at,
         })
+    }
+}
+
+impl TryFrom<VolumeRow> for VolumeInspection {
+    type Error = VolumeError;
+
+    fn try_from(row: VolumeRow) -> Result<Self, Self::Error> {
+        Ok(Self {
+            id: VolumeId::from_uuid(row.id),
+            project_id: row.project_id,
+            legacy_origin_instance_id: row.instance_id.map(AgentInstanceId::from_uuid),
+            capacity_bytes: u64::try_from(row.capacity_bytes).map_err(super::errors::metadata)?,
+            filesystem_uuid: row.filesystem_uuid,
+            provisioning_state: parse_provisioning_state(&row.provisioning_state)?,
+            lifecycle_state: parse_state(&row.state)?,
+        })
+    }
+}
+
+fn parse_provisioning_state(value: &str) -> Result<VolumeProvisioningState, VolumeError> {
+    match value {
+        "reserved" => Ok(VolumeProvisioningState::Reserved),
+        "creating" => Ok(VolumeProvisioningState::Creating),
+        "formatting" => Ok(VolumeProvisioningState::Formatting),
+        "ready" => Ok(VolumeProvisioningState::Ready),
+        "uncertain" => Ok(VolumeProvisioningState::Uncertain),
+        _ => Err(VolumeError::InvalidState("unknown provisioning state")),
     }
 }
 

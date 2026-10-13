@@ -31,6 +31,13 @@ fn locates_ext4_device_by_filesystem_uuid() {
         find_ext4_device_in(expected, &blocks, &devices).unwrap(),
         devices.join("vdb")
     );
+    fs::copy(devices.join("vdb"), devices.join("vda")).unwrap();
+    assert_eq!(
+        find_ext4_device_in(expected, &blocks, &devices)
+            .unwrap_err()
+            .kind(),
+        std::io::ErrorKind::InvalidData
+    );
 }
 
 #[test]

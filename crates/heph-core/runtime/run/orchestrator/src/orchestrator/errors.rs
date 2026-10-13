@@ -56,6 +56,18 @@ pub(super) fn stored_event(event: VmEvent) -> StoredVmEvent {
 #[derive(Debug, thiserror::Error)]
 #[non_exhaustive]
 pub enum OrchestratorError {
+    /// This execution kind has no supported admission path.
+    #[error("Invocation is unsupported until qualified admission")]
+    InvocationUnsupported,
+    /// A primary failure remains unresolved because canonical cleanup failed.
+    #[error("cleanup remains incomplete after {failure}: {cleanup}")]
+    CleanupIncomplete {
+        /// Original operation or guest failure, retained alongside cleanup failure.
+        failure: String,
+        /// Cleanup failure; every durable fence remains held.
+        #[source]
+        cleanup: Box<OrchestratorError>,
+    },
     /// A duplicate delivery observed work that still owns or may own runtime
     /// resources and must be retried after reconciliation.
     #[error("run {0} is still in progress")]

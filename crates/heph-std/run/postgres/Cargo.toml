@@ -8,20 +8,33 @@ rust-version.workspace = true
 [dependencies]
 async-trait.workspace = true
 authz-postgres = { path = "../../authorization/authz-postgres" }
+release-service = { path = "../../../heph-core/forge/release/service" }
 run-domain = { path = "../../../heph-core/runtime/run/domain" }
 run-orchestrator = { path = "../../../heph-core/runtime/run/orchestrator" }
 runtime-types = { path = "../../../heph-core/platform/runtime-types" }
 serde_json.workspace = true
 sha2.workspace = true
 sqlx.workspace = true
+thiserror.workspace = true
 time.workspace = true
 uuid.workspace = true
 vm-trait.workspace = true
 
 [dev-dependencies]
+capability-domain = { path = "../../../heph-core/auth/authorization/capability-domain" }
+recipe-domain = { path = "../../../heph-core/platform/recipe/domain" }
+authz-domain = { path = "../../../heph-core/auth/authorization/authz-domain" }
+forge-domain = { path = "../../../heph-core/forge/domain" }
+forge-postgres = { path = "../../forge/postgres" }
+forge-storage = { path = "../../forge/storage" }
+recipe-application = { path = "../../../heph-core/platform/recipe/application" }
+recipe-postgres = { path = "../../platform/recipe/postgres" }
+volume-domain = { path = "../../../heph-core/runtime/volume/domain" }
+volume-local = { path = "../../runtime/volume/local" }
+tempfile = "3"
 authz-postgres = { path = "../../authorization/authz-postgres" }
+identity-domain = { path = "../../../heph-core/auth/identity/domain" }
 release-domain = { path = "../../../heph-core/forge/release/domain" }
-release-service = { path = "../../../heph-core/forge/release/service" }
 release-postgres = { path = "../../forge/release/postgres" }
 serial_test = "3"
 tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }

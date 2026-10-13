@@ -30,6 +30,7 @@ pub fn builder_vm_spec(
     let dockerfile = guest_child_path(&request.checkout_root, &request.dockerfile, false)?;
     let context = guest_child_path(&request.checkout_root, &request.context, true)?;
     Ok(VmSpec {
+        guest_volumes: Vec::new(),
         id: VmId(format!("oci-builder-{}", request.job_id)),
         root: builder_root.clone(),
         disks: vec![VmDisk {
@@ -100,6 +101,7 @@ pub fn verifier_vm_spec(
     resources: &VmResources,
 ) -> VmSpec {
     VmSpec {
+        guest_volumes: Vec::new(),
         id: VmId(format!("oci-verifier-{}", request.job_id)),
         root: verifier_root.clone(),
         disks: Vec::new(),

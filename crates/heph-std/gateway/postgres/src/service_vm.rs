@@ -30,6 +30,7 @@ pub fn service_vm_spec(
         return Err(GatewayEdgeError::HandlerUnavailable);
     }
     Ok(VmSpec {
+        guest_volumes: Vec::new(),
         id: VmId(format!("gateway-service-{}", identity.instance_id)),
         root,
         disks: Vec::new(),

@@ -4,10 +4,12 @@ use crate::{
 };
 use std::{
     ffi::OsString,
-    fs, io,
+    fs::{self, File},
+    io,
     net::{IpAddr, SocketAddr, TcpListener},
     path::{Path, PathBuf},
     process::{Child, Command, Stdio},
+    sync::Arc,
     thread,
     time::Instant,
 };
@@ -17,6 +19,8 @@ pub struct PasstProcess {
     socket_path: PathBuf,
     pid_path: PathBuf,
     pub ingress: Vec<PreparedForward>,
+    // Drop uses parent-local paths before this original descriptor is closed.
+    _runtime_directory: Option<Arc<File>>,
 }
 
 impl PasstProcess {
@@ -24,6 +28,7 @@ impl PasstProcess {
         config: &WorkerConfiguration,
         network: &PreparedNetwork,
         runtime_dir: &Path,
+        runtime_directory: Option<Arc<File>>,
     ) -> Result<Option<Self>, WorkerNetworkError> {
         let PreparedNetwork::UserMode { ingress } = network else {
             return Ok(None);
@@ -32,18 +37,27 @@ impl PasstProcess {
         let (reservations, resolved) = reserve_ports(ingress)?;
         let socket_path = runtime_dir.join("passt.sock");
         let pid_path = runtime_dir.join("passt.pid");
-        let log_path = runtime_dir.join("passt.log");
 
         let mut command = Command::new(&config.passt_binary);
+        let child_runtime = if let Some(directory) = runtime_directory.as_ref() {
+            command.stdin(Stdio::from(
+                directory.try_clone().map_err(WorkerNetworkError::Spawn)?,
+            ));
+            // Verified upstream foreground startup preserves FD0. Socket/log/
+            // pid are opened before passt removes filesystem access.
+            PathBuf::from("/proc/self/fd/0/.")
+        } else {
+            command.stdin(Stdio::null());
+            runtime_dir.to_path_buf()
+        };
         command.args(passt_arguments(
             config,
-            &socket_path,
-            &pid_path,
-            &log_path,
+            &child_runtime.join("passt.sock"),
+            &child_runtime.join("passt.pid"),
+            &child_runtime.join("passt.log"),
             &resolved,
         ));
         command
-            .stdin(Stdio::null())
             .stdout(Stdio::null())
             // Preserve startup diagnostics when passt exits before its
             // socket/log can be inspected.
@@ -79,6 +93,7 @@ impl PasstProcess {
             socket_path,
             pid_path,
             ingress: resolved,
+            _runtime_directory: runtime_directory,
         }))
     }
 

@@ -9,6 +9,9 @@ use time::OffsetDateTime;
 use volume_local::{LocalVolumeConfig, LocalVolumeStore};
 use volume_postgres::PostgresVolumeMetadataRepository;
 
+#[path = "volume_postgres_local/readiness.rs"]
+mod readiness;
+
 #[tokio::test]
 async fn creates_formats_leases_rejects_and_recovers() {
     let Ok(database_url) = env::var("HEPHAESTUS_POSTGRES_TEST_URL") else {
@@ -21,8 +24,9 @@ async fn creates_formats_leases_rejects_and_recovers() {
         .expect("connect to Postgres integration database");
     let temp = TempDir::new().expect("temporary volume root");
     let root = temp.path().canonicalize().expect("canonical volume root");
+    let metadata = Arc::new(PostgresVolumeMetadataRepository::new(pool.clone()));
     let store = LocalVolumeStore::new(
-        Arc::new(PostgresVolumeMetadataRepository::new(pool.clone())),
+        metadata.clone(),
         LocalVolumeConfig {
             volume_root: root,
             transient_runtime_roots: Vec::new(),
@@ -70,6 +74,8 @@ async fn creates_formats_leases_rejects_and_recovers() {
         .mark_attached(&attachment.lease)
         .await
         .expect("confirm attachment");
+    readiness::assert_attached_lease_unchanged(&store, &metadata, first.id, first_run, &attached)
+        .await;
     store
         .release_after_detach(&attached)
         .await

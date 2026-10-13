@@ -37,6 +37,7 @@ impl GatewayServiceLaunchResolver for NoopLaunchResolver {
             identity: request.identity,
             service,
             spec: VmSpec {
+                guest_volumes: Vec::new(),
                 id: VmId(format!("gateway-service-{}", request.identity.instance_id)),
                 root: RootFilesystem::Directory {
                     host_path: PathBuf::from("/tmp"),

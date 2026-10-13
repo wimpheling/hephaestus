@@ -101,6 +101,8 @@ const fn retention_supports_migration(version: i64) -> bool {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 #[serial]
+// The live application is consumed by shutdown before the pool-closure assertion.
+#[allow(clippy::significant_drop_tightening)]
 async fn application_retention_runs_without_gateway_edge_and_closes_worker_pool() {
     if std::env::var("REAL_APP_SERVICE_LOG_MAINTENANCE").as_deref() != Ok("1") {
         eprintln!(
@@ -127,11 +129,11 @@ async fn application_retention_runs_without_gateway_edge_and_closes_worker_pool(
     let project = seed_aged_cleaned_log(&seed_pool).await;
     seed_pool.close().await;
 
-    let app = HephaestusApp::build(app_config(
+    let app = Box::pin(HephaestusApp::build(app_config(
         isolated.target_url.clone(),
         nats_url.clone(),
         root.path(),
-    ))
+    )))
     .await
     .expect("build application with gateway edge disabled")
     .start()

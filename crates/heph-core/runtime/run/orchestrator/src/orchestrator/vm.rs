@@ -12,4 +12,19 @@ pub trait VmSpecFactory: Send + Sync + 'static {
     ///
     /// Returns an error when run configuration cannot produce a valid spec.
     async fn build(&self, run: &Run) -> Result<VmSpec, VmError>;
+
+    /// Builds an exact released spec for the complete selected set, including empty.
+    ///
+    /// The orchestrator installs controlled disks and guest metadata itself.
+    /// Factories must explicitly support this profile; there is no scalar or
+    /// first-slot fallback. The selection is evidence, not authorization.
+    async fn build_with_volumes(
+        &self,
+        _run: &Run,
+        _selections: &volume_domain::RunVolumeSelections,
+    ) -> Result<VmSpec, VmError> {
+        Err(VmError::InvalidState(
+            "complete-set VM specification is unsupported",
+        ))
+    }
 }

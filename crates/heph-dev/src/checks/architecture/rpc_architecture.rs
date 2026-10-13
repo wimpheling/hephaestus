@@ -8,6 +8,10 @@ mod deadline;
 mod module_graph;
 use std::{collections::BTreeMap, ffi::OsStr, fs, path::Path};
 
+pub(super) fn is_test_only_source(root: &Path, path: &Path) -> bool {
+    module_graph::is_test_only_source(root, path)
+}
+
 const RULES: [&str; 8] = [
     "RPC-CONNECT-ONLY-IN-TRANSPORT",
     "RPC-METHOD-IN-SEPARATE-FILE",

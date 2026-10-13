@@ -49,6 +49,7 @@ path = "src/bin/heph-integration-check.rs"
 required-features = ["integration-guest"]
 
 [dev-dependencies]
+tracing-subscriber = "0.3"
 async-trait.workspace = true
 gateway-domain = { path = "../../../../heph-core/platform/gateway/domain" }
 gateway-edge = { path = "../../../gateway/edge" }

@@ -19,7 +19,7 @@ pub const SERVICE_GATEWAY_HANDLER: &str =
     "#!/bin/sh\nexec /usr/libexec/hephaestus/integration-check --serve-service\n";
 
 pub async fn restart_application(config: AppConfig) -> hephaestus_app::RunningHephaestus {
-    HephaestusApp::build(config)
+    Box::pin(HephaestusApp::build(config))
         .await
         .expect("rebuild production application after restart")
         .start()

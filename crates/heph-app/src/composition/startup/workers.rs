@@ -1,24 +1,47 @@
+#[path = "workers/gateway.rs"]
+mod gateway;
+#[path = "workers/listeners.rs"]
+mod listeners;
 use super::super::{
     AppError, Arc, CancellationToken, ForgeNatsOutboxPublisher, GatewayServiceBootRecovery,
     HephaestusApp, MailboxCommandHandler, MailboxDispatchStore, MailboxOutboxPublisher,
     NatsCommandHandler, NatsControlHandler, NatsMailboxCommandHandler, OutboxWorker,
-    ReleaseOutboxPublisher, ReviewOutboxPublisher, Router, RunningHephaestus, SocketAddr, any,
-    build_loop, clone_service_supervisor_context, command_loop, component, event_adapter,
+    ReleaseOutboxPublisher, ReviewOutboxPublisher, RunningHephaestus, SocketAddr, build_loop,
+    clone_service_supervisor_context, command_loop, component, event_adapter,
     gateway_reconciliation_loop_with_context, mailbox_command_loop, mailbox_recovery_loop,
-    oci_builder_loop, private_gateway_dispatch, registry_reconciliation_loop,
-    secret_revocation_loop, spawn_runtime_git_listener, update_admission_reconciliation_loop,
+    oci_builder_loop, registry_reconciliation_loop, secret_revocation_loop,
+    update_admission_reconciliation_loop,
 };
 use super::readiness::{self, StartupTasks};
 use super::resources::StartupResources;
 use tokio::sync::oneshot;
 
-// Keep worker startup and its readiness channels together so cancellation and
-// task ownership remain auditable at the startup boundary.
-#[allow(clippy::too_many_lines)]
 pub(super) async fn launch(
-    mut app: HephaestusApp,
+    app: HephaestusApp,
     resources: StartupResources,
 ) -> Result<RunningHephaestus, AppError> {
+    let parts = launch_parts(&app, resources, None).await?;
+    Ok(super::running(
+        app,
+        parts.http_addr,
+        parts.cancellation,
+        parts.tasks,
+    ))
+}
+
+pub struct StartedServices {
+    pub http_addr: SocketAddr,
+    pub cancellation: CancellationToken,
+    pub tasks: Vec<tokio::task::JoinHandle<Result<(), String>>>,
+}
+
+// Keep the existing ordered worker/readiness sequence together.
+#[allow(clippy::too_many_lines)]
+pub(super) async fn launch_parts(
+    app: &HephaestusApp,
+    resources: StartupResources,
+    managed: Option<Arc<crate::managed_backend::Services>>,
+) -> Result<StartedServices, AppError> {
     let StartupResources {
         build_consumer,
         consumer,
@@ -38,7 +61,10 @@ pub(super) async fn launch(
         ..
     } = resources;
     let cancellation = CancellationToken::new();
-    let mut tasks = Vec::with_capacity(10);
+    if let Some(services) = &managed {
+        services.token(&cancellation)?;
+    }
+    let mut tasks = crate::managed_backend::OwnedTasks::new(managed.as_deref());
     let service_log_maintenance = Arc::clone(&app.service_log_maintenance);
     let service_log_cancel = cancellation.clone();
     tasks.push(tokio::spawn(async move {
@@ -65,122 +91,26 @@ pub(super) async fn launch(
         .await;
         Ok(())
     }));
-    if let Some(gateway) = app.gateway_edge.take() {
-        let gateway_reconcile_cancel = cancellation.clone();
-        let gateway_authority = gateway.authority.clone();
-        let gateway_recovery_authority = gateway.recovery_authority.clone();
-        let service_supervisor_context =
-            clone_service_supervisor_context(&gateway.service_supervisor_context);
-        let service_boot_recovery = GatewayServiceBootRecovery::new(gateway.service_boot_context)
-            .map_err(component("gateway service boot recovery"))?;
-        let service_claim_resolution = Arc::clone(&gateway.service_claim_resolution);
-        let service_expired_claim_recovery = Arc::clone(&gateway.service_expired_claim_recovery);
-        let service_log_writer = gateway.service_log_writer;
-        let service_targets = Arc::clone(&gateway.service_supervisor_context.targets);
-        let gateway_provider = Arc::clone(&gateway.provider);
-        tasks.push(tokio::spawn(async move {
-            gateway_reconciliation_loop_with_context(
-                gateway_authority,
-                gateway_recovery_authority,
-                service_supervisor_context,
-                service_boot_recovery,
-                Some(service_claim_resolution),
-                Some(service_expired_claim_recovery),
-                Some(service_log_writer),
-                service_targets,
-                gateway_provider,
-                gateway_reconcile_cancel,
-            )
-            .await;
-            Ok(())
-        }));
-    }
-    let (broker_ready_tx, broker_ready_rx) = oneshot::channel();
-    let broker_cancel = cancellation.clone();
-    tasks.push(tokio::spawn(async move {
-        if broker_ready_tx.send(()).is_err() {
-            return Ok(());
-        }
-        let result = broker
-            .serve(broker_cancel.clone())
-            .await
-            .map_err(|error| error.to_string());
-        if result.is_err() {
-            broker_cancel.cancel();
-        }
-        result
-    }));
-    let gateway_ready_rx = if let Some((listener, state)) = gateway_listener {
-        let (gateway_ready_tx, gateway_ready_rx) = oneshot::channel();
-        let gateway_cancel = cancellation.clone();
-        tasks.push(tokio::spawn(async move {
-            if gateway_ready_tx.send(()).is_err() {
-                return Ok(());
-            }
-            let result = axum::serve(
-                listener,
-                Router::new()
-                    .fallback(any(private_gateway_dispatch))
-                    .with_state(state)
-                    .into_make_service_with_connect_info::<SocketAddr>(),
-            )
-            .with_graceful_shutdown(gateway_cancel.clone().cancelled_owned())
-            .await
-            .map_err(|error| error.to_string());
-            if !gateway_cancel.is_cancelled() {
-                gateway_cancel.cancel();
-            }
-            result
-        }));
-        Some(gateway_ready_rx)
-    } else {
-        None
-    };
-    let ui_ready_rx = if let Some((listener, router)) = ui_listener {
-        let (ui_ready_tx, ui_ready_rx) = oneshot::channel();
-        let ui_cancel = cancellation.clone();
-        tasks.push(tokio::spawn(async move {
-            if ui_ready_tx.send(()).is_err() {
-                return Ok(());
-            }
-            let result = axum::serve(
-                listener,
-                router.into_make_service_with_connect_info::<SocketAddr>(),
-            )
-            .with_graceful_shutdown(ui_cancel.clone().cancelled_owned())
-            .await
-            .map_err(|error| error.to_string());
-            if !ui_cancel.is_cancelled() {
-                ui_cancel.cancel();
-            }
-            result
-        }));
-        Some(ui_ready_rx)
-    } else {
-        None
-    };
-    let runtime_git_ready_rx =
-        runtime_git_listener
-            .zip(runtime_git_router)
-            .map(|(listener, router)| {
-                spawn_runtime_git_listener(listener, router, &cancellation, &mut tasks)
-            });
-    let (http_ready_tx, http_ready_rx) = oneshot::channel();
-    let http_cancel = cancellation.clone();
-    tasks.push(tokio::spawn(async move {
-        if http_ready_tx.send(()).is_err() {
-            return Ok(());
-        }
-        let graceful = http_cancel.clone();
-        let result = axum::serve(listener, router)
-            .with_graceful_shutdown(graceful.cancelled_owned())
-            .await
-            .map_err(|error| error.to_string());
-        if !http_cancel.is_cancelled() {
-            http_cancel.cancel();
-        }
-        result
-    }));
+    gateway::spawn(app, &cancellation, &mut tasks)?;
+    let listeners::Ready {
+        broker: broker_ready_rx,
+        gateway: gateway_ready_rx,
+        ui: ui_ready_rx,
+        runtime_git: runtime_git_ready_rx,
+        http: http_ready_rx,
+    } = listeners::spawn(
+        listeners::Inputs {
+            broker,
+            gateway_listener,
+            ui_listener,
+            runtime_git_listener,
+            runtime_git_router,
+            listener,
+            router,
+        },
+        &cancellation,
+        &mut tasks,
+    );
     let (publisher_ready_tx, publisher_ready_rx) = oneshot::channel();
     let publisher_cancel = cancellation.clone();
     let outbox = OutboxWorker {
@@ -229,7 +159,7 @@ pub(super) async fn launch(
     let (secret_reconcile_ready_tx, secret_reconcile_ready_rx) = oneshot::channel();
     let secret_reconcile_cancel = cancellation.clone();
     let secret_reconcile_pool = app.pool.clone();
-    let secret_reconcile_orchestrator = Arc::clone(&app.orchestrator);
+    let secret_reconcile_orchestrator = routed_executor(app)?;
     let secret_reconcile_interval = app.outbox_poll_interval;
     tasks.push(tokio::spawn(async move {
         let result = secret_revocation_loop(
@@ -247,9 +177,9 @@ pub(super) async fn launch(
     }));
     let (mailbox_consumer_ready_tx, mailbox_consumer_ready_rx) = oneshot::channel();
     let mailbox_consumer_cancel = cancellation.clone();
-    let mailbox_handler = NatsMailboxCommandHandler::new(MailboxCommandHandler::new(
+    let mailbox_handler = NatsMailboxCommandHandler::new(MailboxCommandHandler::new_routed(
         app.mailbox_repository.clone(),
-        Arc::clone(&app.orchestrator),
+        routed_executor(app)?,
     ));
     let mailbox_concurrency = app.worker_concurrency;
     tasks.push(tokio::spawn(async move {
@@ -309,7 +239,7 @@ pub(super) async fn launch(
 
     let (consumer_ready_tx, consumer_ready_rx) = oneshot::channel();
     let consumer_cancel = cancellation.clone();
-    let handler = NatsCommandHandler::new(Arc::clone(&app.orchestrator));
+    let handler = NatsCommandHandler::new_routed(routed_executor(app)?);
     let control_handler = NatsControlHandler::new(app.review_control.clone());
     let concurrency = app.worker_concurrency;
     tasks.push(tokio::spawn(async move {
@@ -346,5 +276,18 @@ pub(super) async fn launch(
     };
     let (cancellation, tasks) = readiness::wait(app.startup_timeout, startup_tasks).await?;
 
-    Ok(super::running(app, http_addr, cancellation, tasks))
+    Ok(StartedServices {
+        http_addr,
+        cancellation,
+        tasks,
+    })
+}
+
+fn routed_executor(
+    app: &HephaestusApp,
+) -> Result<Arc<dyn run_orchestrator::RunCommandExecutor>, AppError> {
+    match &app.managed_backend {
+        Some(lease) => Ok(lease.executor()?),
+        None => Ok(Arc::clone(&app.orchestrator) as Arc<dyn run_orchestrator::RunCommandExecutor>),
+    }
 }

@@ -3,6 +3,7 @@ use runtime_types::{ReleaseAgentId, ReleaseId};
 use serde::{Deserialize, Serialize};
 use time::OffsetDateTime;
 use uuid::Uuid;
+use volume_domain::{VolumeContractError, VolumeSlotDeclaration};
 
 use super::{
     AgentFamilyId, AgentKey, ArtifactPath, BuildRequestId, ContentHash, ParameterDeclaration,
@@ -127,12 +128,32 @@ pub struct ReleaseAgent {
     pub image_reference: String,
     /// Whether one persistent volume is required per consuming instance.
     pub requires_state: bool,
+    /// Authored immutable named-volume declarations, without consumer grants.
+    ///
+    /// Historical releases leave this empty and expose their legacy state
+    /// declaration only through [`Self::effective_volume_slots`].
+    pub volume_slots: Vec<VolumeSlotDeclaration>,
     /// Normalized release-owned policy ceiling.
     pub policy_ceiling: RuntimePolicy,
     /// Typed parameter declarations.
     pub parameters: Vec<ParameterDeclaration>,
     /// Optional update hook.
     pub update_hook: Option<UpdateHook>,
+}
+
+impl ReleaseAgent {
+    /// Returns the validated named-volume catalog, including legacy state.
+    ///
+    /// This view never changes release identity, stored hashes, or live grants.
+    ///
+    /// # Errors
+    ///
+    /// Rejects duplicate names, overlapping mounts, and excessive slot counts.
+    pub fn effective_volume_slots(
+        &self,
+    ) -> Result<Vec<VolumeSlotDeclaration>, VolumeContractError> {
+        volume_domain::effective_volume_slots(&self.volume_slots, self.requires_state)
+    }
 }
 
 /// Bounded compute and network policy.

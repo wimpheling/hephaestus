@@ -30,9 +30,9 @@ The independent direct packages are `agent-config`, `rpc-proto`, `capability-dom
 ## Lifecycle
 
 `HephaestusApp::build` validates static configuration, checks that PostgreSQL
-has exactly migration version 100 applied and the Mélange dispatcher, resolves
-storage and VM
-dependencies, and connects PostgreSQL and NATS. It does not bind listeners or
+has exactly the application binary's expected migration version applied and the
+Mélange dispatcher, resolves storage and VM dependencies, and connects PostgreSQL
+and NATS. It does not bind listeners or
 spawn background tasks.
 
 `HephaestusApp::start` first reconciles abandoned isolated builds, run

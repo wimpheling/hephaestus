@@ -138,3 +138,17 @@ scope = "crates/heph-app/tests/golden/database.rs#IsolatedGoldenDatabase::cleanu
 rationale = "Test-only DROP DATABASE cannot bind a PostgreSQL identifier; this disposable golden fixture stores the validated UUID-derived database name and quotes it."
 owner = "persistent-services-runtime"
 tracking_task = "tasks/done/persistent-gateway-service-runtime-and-development-workflow.md"
+
+[[exceptions]]
+rule_id = "DB-STATIC-SQL"
+scope = "crates/heph-app/tests/public137_migrations/catalog.rs#sequence_states"
+rationale = "Test-only actual sequence-state capture must read last_value and is_called from each catalog-verified public sequence relation; PostgreSQL cannot value-bind a FROM identifier. Only quoted schema/name identifiers from the actual pg_class/pg_namespace/pg_sequence join, verified against unique nonzero sequence metadata OIDs and the complete inventory, enter the fixed sealed SQL template."
+owner = "resource-recipes implementation"
+tracking_task = "tasks/todo/structural/generic_capacity_trait/first-class-sqlite-and-s3-object-primitives.md"
+
+[[exceptions]]
+rule_id = "DB-STATIC-SQL"
+scope = "crates/heph-app/tests/public137_migrations/snapshots.rs#rows"
+rationale = "Test-only complete preservation snapshots must read each finite declaration relation verified against the actual public catalog and project the sealed actual Public107 column set. PostgreSQL cannot value-bind FROM/SELECT identifiers. Only quoted verified table names and quoted original column identifiers enter the fixed SQL template; row values are never interpolated and exact JSONB/text capture and C-collation multiset ordering are preserved."
+owner = "resource-recipes implementation"
+tracking_task = "tasks/todo/structural/generic_capacity_trait/first-class-sqlite-and-s3-object-primitives.md"

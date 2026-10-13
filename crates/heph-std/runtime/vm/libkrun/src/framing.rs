@@ -133,6 +133,7 @@ mod tests {
                     read_only: false,
                 }],
                 state_volume: None,
+                volumes: Vec::new(),
                 runtime_authority: Some(Box::new(RuntimeAuthorityMessage {
                     session_id: uuid::Uuid::nil(),
                     generation: 1,
@@ -178,6 +179,7 @@ mod tests {
             },
             mounts: Vec::new(),
             state_volume: None,
+            volumes: Vec::new(),
             runtime_authority: None,
             gateway_handler: false,
             private_http_service: Some(PrivateHttpServiceMessage {

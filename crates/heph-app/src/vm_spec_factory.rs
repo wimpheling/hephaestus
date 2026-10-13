@@ -3,11 +3,29 @@ use super::{
     RuntimePolicy, Uuid, VmError, VmMount, VmResources, VmSpec,
 };
 use async_trait::async_trait;
-use control_plane_postgres::load_vm_launch_contract;
+use control_plane_postgres::{load_vm_launch_contract, run::VmLaunchContract};
+use volume_domain::RunVolumeSelections;
+
+#[path = "vm_spec_factory/invocation.rs"]
+mod invocation;
+
+#[cfg(test)]
+#[path = "vm_spec_factory/loader_postgres.rs"]
+mod loader_postgres;
+#[path = "vm_spec_factory/volumes.rs"]
+mod volumes;
 use heph_run::VmSpecFactory;
+/// Projects ordinary Run VM specifications from immutable release data.
+///
+/// Qualified Invocation projection requires explicit opt-in through
+/// [`Self::with_qualified_invocation`]. These construction fields do not prove
+/// provider or root ownership, or caller authority.
 pub struct PgAgentVmSpecFactory {
+    /// Database pool used to load persisted immutable Run launch contracts.
     pub pool: PgPool,
+    /// Materialized root filesystems indexed by the stored OCI image reference.
     pub root_images: BTreeMap<String, RootFilesystem>,
+    /// Current platform policy used to validate immutable resource selections.
     pub runtime_policy: RuntimePolicy,
 }
 
@@ -51,14 +69,59 @@ pub enum StoredNetworkAccess {
 
 #[async_trait]
 impl VmSpecFactory for PgAgentVmSpecFactory {
-    // Loading and validating the entire immutable launch contract in one
-    // place keeps the no-substitution boundary directly auditable.
-    #[allow(clippy::too_many_lines)]
     async fn build(&self, run: &Run) -> Result<VmSpec, VmError> {
-        let stored = load_vm_launch_contract(&self.pool, run.id.as_uuid())
+        let stored = self.load_contract(run).await?;
+        self.build_stored(run, stored)
+    }
+
+    async fn build_with_volumes(
+        &self,
+        run: &Run,
+        selections: &RunVolumeSelections,
+    ) -> Result<VmSpec, VmError> {
+        let stored = self.load_contract(run).await?;
+        volumes::validate(run, &stored, selections)?;
+        self.build_stored(run, stored)
+    }
+}
+
+impl PgAgentVmSpecFactory {
+    /// Wraps the ordinary factory with explicit qualified Invocation projection.
+    ///
+    /// These ports are trusted composition data, not provider/root ownership or
+    /// caller authority. Startup must supply the same configured immutable Run
+    /// repository, qualified119 catalogue and canonical volume-store Arcs used
+    /// by execution. Per-Run persisted equality, live catalogue and whole-set
+    /// checks precede projection. Core B1/B2 and provider checks remain mandatory.
+    /// Existing Core release-cwd and qualified no-Git Local guards must also be
+    /// composed; this wrapper alone cannot start an Invocation guest.
+    #[must_use]
+    pub fn with_qualified_invocation(
+        self,
+        runs: std::sync::Arc<dyn heph_run::RunRepository>,
+        catalog: std::sync::Arc<dyn run_orchestrator::RunRuntimeCatalog>,
+        volumes: std::sync::Arc<dyn volume_trait::RunVolumeStore>,
+    ) -> impl VmSpecFactory {
+        invocation::QualifiedInvocationFactory::new(self, runs, catalog, volumes)
+    }
+
+    async fn load_contract(&self, run: &Run) -> Result<VmLaunchContract, VmError> {
+        if run.kind == RunKind::Invocation {
+            return Err(invalid_spec(
+                "run.kind",
+                "Invocation VM construction is unsupported",
+            ));
+        }
+        load_vm_launch_contract(&self.pool, run.id.as_uuid())
             .await
             .map_err(vm_factory_error)?
-            .ok_or_else(|| invalid_spec("run", "exact reusable run provenance is missing"))?;
+            .ok_or_else(|| invalid_spec("run", "exact reusable run provenance is missing"))
+    }
+
+    // Keep the immutable workload construction shared with the scalar profile;
+    // controlled disks and initialization purposes belong to the orchestrator.
+    #[allow(clippy::too_many_lines)]
+    fn build_stored(&self, run: &Run, stored: VmLaunchContract) -> Result<VmSpec, VmError> {
         if stored.release_state != "published" {
             return Err(invalid_spec(
                 "release",
@@ -105,6 +168,12 @@ impl VmSpecFactory for PgAgentVmSpecFactory {
                 },
                 None,
             ),
+            RunKind::Invocation => {
+                return Err(invalid_spec(
+                    "run.kind",
+                    "Invocation VM construction is unsupported",
+                ));
+            }
             RunKind::Update => {
                 let hook: StoredUpdateHook = serde_json::from_value(
                     stored
@@ -151,6 +220,7 @@ impl VmSpecFactory for PgAgentVmSpecFactory {
         }
         let env = guest_environment(run.kind, stored.agent_update_id)?;
         Ok(VmSpec {
+            guest_volumes: Vec::new(),
             id: heph_runtime::VmId(run.id.to_string()),
             root,
             disks: Vec::new(),
@@ -176,6 +246,10 @@ pub fn guest_environment(
     update_id: Option<Uuid>,
 ) -> Result<BTreeMap<String, String>, VmError> {
     match (kind, update_id) {
+        (RunKind::Invocation, _) => Err(invalid_spec(
+            "run.kind",
+            "Invocation environment is unsupported",
+        )),
         (RunKind::Normal, _) => Ok(BTreeMap::new()),
         (RunKind::Update, Some(update_id)) => Ok(BTreeMap::from([(
             String::from("HEPHAESTUS_UPDATE_ID"),

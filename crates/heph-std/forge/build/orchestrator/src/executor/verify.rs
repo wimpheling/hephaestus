@@ -1,7 +1,6 @@
 use super::{
-    BuildExecutionError, BuildExecutor, BuildRequestId, StopMode, VmId, artifact_manifest,
-    cleanup_workspace, collect_execution, prepare_workspace, release_inputs, seal_output,
-    validate_declared_outputs,
+    BuildExecutionError, BuildExecutor, BuildRequestId, VmId, artifact_manifest, cleanup_workspace,
+    release_inputs, seal_output, validate_declared_outputs,
 };
 
 impl BuildExecutor {
@@ -11,22 +10,23 @@ impl BuildExecutor {
     /// # Errors
     ///
     /// Returns a durable repository, VM, artifact, or verification failure.
-    #[allow(clippy::too_many_lines)]
     pub async fn verify(
         &self,
         build_request_id: BuildRequestId,
     ) -> Result<(), BuildExecutionError> {
+        super::owner::verify(self.clone(), build_request_id).await
+    }
+
+    pub(super) async fn verify_owned(
+        &self,
+        build_request_id: BuildRequestId,
+        node: &std::sync::Arc<super::owner::Node>,
+    ) -> Result<(), BuildExecutionError> {
+        node.check_open()?;
         self.ensure_image_available(build_request_id).await?;
+        node.check_open()?;
         let claimed = self.repository.claim_verification(build_request_id).await?;
-        let workspace = self.active_path(build_request_id);
-        let materializer = self.config.clone();
-        let input = claimed.input.clone();
-        let prepared = tokio::task::spawn_blocking(move || {
-            prepare_workspace(&materializer, &input, &workspace)
-        })
-        .await
-        .map_err(|_| BuildExecutionError::WorkerJoin)?;
-        let workspace = match prepared {
+        let workspace = match self.materialize(&claimed, node).await {
             Ok(workspace) => workspace,
             Err(error) => {
                 self.repository
@@ -35,52 +35,8 @@ impl BuildExecutor {
                 return Err(error);
             }
         };
-        let spec = match self.vm_spec(&claimed, &workspace) {
-            Ok(spec) => spec,
-            Err(error) => {
-                self.repository
-                    .fail_verification(build_request_id, "invalid_build_contract")
-                    .await?;
-                cleanup_workspace(&workspace.root)?;
-                return Err(error);
-            }
-        };
-        let Ok(instance) = self.provider.provision(spec).await else {
-            self.repository
-                .fail_verification(build_request_id, "vm_provision")
-                .await?;
-            cleanup_workspace(&workspace.root)?;
-            return Err(BuildExecutionError::Vm);
-        };
-        let mut events = instance.subscribe_events();
-        if instance.start().await.is_err() {
-            drop(instance.destroy().await);
-            self.repository
-                .fail_verification(build_request_id, "vm_start")
-                .await?;
-            cleanup_workspace(&workspace.root)?;
-            return Err(BuildExecutionError::Vm);
-        }
-        let (exit, _logs, _metrics, timed_out) =
-            collect_execution(&instance, &mut events, self.config.timeout).await;
-        if timed_out {
-            drop(instance.stop(StopMode::Force).await);
-        }
-        if instance.destroy().await.is_err() {
-            self.repository
-                .fail_verification(build_request_id, "vm_destroy")
-                .await?;
-            cleanup_workspace(&workspace.root)?;
-            return Err(BuildExecutionError::VmCleanup);
-        }
-        let exit = exit.ok_or(BuildExecutionError::Vm)?;
-        if timed_out || exit.code != Some(0) || exit.signal.is_some() {
-            self.repository
-                .fail_verification(build_request_id, "guest_failed")
-                .await?;
-            cleanup_workspace(&workspace.root)?;
-            return Err(BuildExecutionError::GuestFailed);
-        }
+        self.build_guest(&claimed, &workspace, node, true).await?;
+        node.original_workspace()?.recheck()?;
         seal_output(&workspace.output)?;
         let imported = self
             .artifacts
@@ -91,7 +47,7 @@ impl BuildExecutor {
             .repository
             .complete_verification(build_request_id, &artifact_manifest(&artifacts))
             .await?;
-        cleanup_workspace(&workspace.root)?;
+        node.remove_workspace()?;
         if matches {
             Ok(())
         } else {
