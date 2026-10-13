@@ -279,6 +279,7 @@ pub async fn build(
     })
 }
 
-#[cfg(all(test, feature = "test-fixtures"))]
+#[cfg(test)]
+#[cfg(feature = "test-fixtures")]
 #[path = "construction/public139.rs"]
 mod public139;

@@ -372,10 +372,22 @@ positive original cleanup precede settlement. The two affected libraries pass
 scoped strict Clippy, formatting, docs and all 30 tests, including 13 new ownership
 controls. These tests exercise actual local subprocess/task/descriptor behavior
 and fake VMs; they do not prove production shutdown or prior-process absence.
-The repository architecture check remains red with 39 diagnostics outside this
-36-file change. Ordinary OCI/Gateway ownership, complete shutdown and native
+That checkpoint's repository architecture check reported 39 diagnostics outside
+the 36-file change. Ordinary OCI/Gateway ownership, complete shutdown and native
 lifecycle acceptance remain unfinished. Retaining a closed instance does not
 satisfy the package's deletion policy.
+
+The architecture scanner now derives inherited test context from parsed Rust
+module registrations and bounds inline exemptions to exact `cfg(test)` item or
+variant spans. Production markers following a test item remain checked; raw
+strings, comments and malformed sources cannot manufacture an exemption. The
+public139 test registration uses equivalent separate test/feature attributes.
+Scoped strict Clippy, formatting and docs pass. Fifty-five focused controls ran,
+including all 19 new scanner controls; the final three variant controls ran after
+the additive variant correction. The actual repository check remains red with
+28 diagnostics: 11 file lengths, two DDL placements and 15 static SQL calls.
+The existing directory exclusions remain unchanged. This qualification covers
+the scanner and does not establish runtime, database or complete recipe acceptance.
 
 Published checkpoint `9dc2392d` replaces workstation SQL references with
 byte-identical committed fixtures and accepts PostgreSQL 17 patch releases while

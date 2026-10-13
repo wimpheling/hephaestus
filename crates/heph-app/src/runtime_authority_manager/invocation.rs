@@ -192,7 +192,7 @@ impl PgRunAuthorityManager {
         // intentionally reject it. Exact metadata revocation precedes historical
         // find, which permits its now-revoked graph without live execution rights.
         // Keep the nonExpired revocation path unchanged. Only its exact Expired
-        // sentinel can attempt fully qualified expired observation; a missing or
+        // variant can attempt fully qualified expired observation; a missing or
         // withdrawn Pending graph is never inferred to be an expired original.
         let session = RuntimeSessionId::from_uuid(run.as_uuid());
         match self

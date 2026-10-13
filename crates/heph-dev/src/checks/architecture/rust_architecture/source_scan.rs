@@ -11,6 +11,13 @@ use super::{
 };
 use std::{ffi::OsStr, fs, path::Path};
 
+#[path = "source_scan/sentinel_scope.rs"]
+mod sentinel_scope;
+
+#[cfg(test)]
+#[path = "source_scan/sentinel_scope_tests.rs"]
+mod sentinel_scope_tests;
+
 pub(super) fn scan_repository_sentinels(root: &Path, diagnostics: &mut Vec<Diagnostic>) {
     scan_sentinel_directory(root, root, diagnostics);
 }
@@ -31,7 +38,13 @@ fn scan_sentinel_directory(root: &Path, directory: &Path, diagnostics: &mut Vec<
             let Ok(source) = fs::read_to_string(&path) else {
                 continue;
             };
-            scan_sentinel_source(relative, &source, diagnostics);
+            let inherited_test = path.extension() == Some(OsStr::new("rs"))
+                && super::super::rpc_architecture::is_test_only_source(root, &path);
+            if inherited_test {
+                scan_sentinel_source_with_context(relative, &source, diagnostics, true);
+            } else {
+                scan_sentinel_source(relative, &source, diagnostics);
+            }
         }
     }
 }
@@ -62,15 +75,33 @@ fn is_scannable_source(path: &Path) -> bool {
 }
 
 pub(super) fn scan_sentinel_source(path: &Path, source: &str, diagnostics: &mut Vec<Diagnostic>) {
+    scan_sentinel_source_with_context(path, source, diagnostics, false);
+}
+
+fn scan_sentinel_source_with_context(
+    path: &Path,
+    source: &str,
+    diagnostics: &mut Vec<Diagnostic>,
+    inherited_test: bool,
+) {
     if path.to_string_lossy().contains("integration-check") {
         return;
     }
-    let mut test_module = false;
+    let rust_source = path.extension() == Some(OsStr::new("rs"));
+    let scopes = rust_source.then(|| sentinel_scope::Scopes::parse(source));
+    if inherited_test && scopes.as_ref().is_some_and(sentinel_scope::Scopes::parsed) {
+        return;
+    }
     for (line_number, line) in source.lines().enumerate() {
-        if line.contains("#[cfg(test)]") {
-            test_module = true;
-        }
-        if !test_module && line.to_ascii_lowercase().contains("sentinel") {
+        let production_marker =
+            line.to_ascii_lowercase()
+                .match_indices("sentinel")
+                .any(|(column, marker)| {
+                    !scopes.as_ref().is_some_and(|scopes| {
+                        scopes.contains(line_number + 1, column, marker.len())
+                    })
+                });
+        if production_marker {
             diagnostics.push(Diagnostic::new(
                 "SEC-SENTINEL-NO-PLAINTEXT",
                 format!(
