@@ -389,6 +389,16 @@ the additive variant correction. The actual repository check remains red with
 The existing directory exclusions remain unchanged. This qualification covers
 the scanner and does not establish runtime, database or complete recipe acceptance.
 
+The three hosted Capability Audit PostgreSQL failures were caused by a fixture
+inserting an unclassified Run directly as running. The fixture now inserts a
+queued `historical_unproven` identity without claiming VM startup or ownership.
+All three existing audit tests pass on actual PostgreSQL 17.10, with their
+redaction, inspection authorization, outsider denial, immutable evidence and
+concurrent pagination assertions preserved. All 143 normal migrations and their
+checksums were verified. Scoped strict Clippy, formatting and docs pass. This
+repairs the fixture mismatch; hosted CI and complete recipe acceptance remain
+unverified.
+
 Published checkpoint `9dc2392d` replaces workstation SQL references with
 byte-identical committed fixtures and accepts PostgreSQL 17 patch releases while
 preserving role, context and schema checks. All nine affected fixture packages

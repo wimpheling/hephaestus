@@ -232,11 +232,12 @@ pub async fn seed(pool: &PgPool) -> Fixture {
     .execute(pool)
     .await
     .expect("audit binding");
+    // This queued, unproven audit identity establishes no VM startup or owned execution history.
     sqlx::query(
         "INSERT INTO runs
          (id, instance_id, instance_revision_id, release_id, release_agent_id,
           run_kind, command_id, state, requires_state, created_at, updated_at)
-         VALUES ($1, $2, $3, $4, $5, 'update', $6, 'running', false, now(), now())",
+         VALUES ($1, $2, $3, $4, $5, 'update', $6, 'queued', false, now(), now())",
     )
     .bind(run_id)
     .bind(instance_id)
