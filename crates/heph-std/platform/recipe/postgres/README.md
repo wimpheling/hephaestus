@@ -128,7 +128,11 @@ retains the original fence. The configured `terminal_history` reader correlates
 instance deletion with its original creation, closure, worker verification and
 protected tombstone. These database observations support the owning cleanup
 coordinator; actual VM cleanup must complete before it can report removal.
-Completed deployment-removal inspection is still awaiting integration.
+`load_completed_remove` lets a currently authorized manager recover the final
+removal receipt after a restart or lost reply. It checks the whole saved
+deployment, all owned resource permissions and the original completion history
+before returning the receipt. This avoids starting another removal command for
+an already removed deployment.
 
 The private successor appends after the frozen preparation, retention and readonly
 instance safety/closure prerequisites. It adds one immutable admission table and

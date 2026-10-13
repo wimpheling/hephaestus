@@ -354,11 +354,30 @@ upgrade now passes: independent fresh reference, full type/catalog/dependency
 and finite routine comparisons, preserved rows and history, startup roles,
 journal checks and same-database replay. No physical VM workflow is established
 by this migration test.
-The completed-removal receipt reader and retention custody owner have
-reviewed source but await combined qualification. Deployment removal orchestration
-and actual managed startup, command routing, recovery and shutdown remain in
-progress. Retaining a closed instance does not satisfy the package's deletion
-policy.
+The completed-removal receipt reader, retention custody owner and deployment
+removal coordinator are now combined in the working tree. Scoped strict checks,
+formatting, documentation and all 24 new controlled ownership/comparison cases
+pass. Actual PostgreSQL/native custody handover and the complete physical
+removal workflow remain unverified. The combined managed startup, command
+routing and original VM provisioning-attempt changes now pass scoped strict
+Clippy, formatting, tests and documentation. All 17 new controlled cases pass;
+ignored tests and missing-database early returns are excluded from integration
+evidence. These checks exercise emulated workers and controlled ownership, rather
+than a complete physical VM or running service.
+The shutdown barrier requires actual task joins, including commands that finish
+during shutdown. Ordinary Build cleanup ownership is being implemented; full
+shutdown and native lifecycle acceptance remain unfinished. Retaining a closed
+instance does not satisfy the package's deletion policy.
+
+Published checkpoint `9dc2392d` replaces workstation SQL references with
+byte-identical committed fixtures and accepts PostgreSQL 17 patch releases while
+preserving role, context and schema checks. All nine affected fixture packages
+pass scoped strict checks. Three actual PostgreSQL 17.9-Alpine cases pass with
+workstation SQL hidden: startup/role qualification, ext4 Ready custody, and
+original recipe install/import/activation/replay. They launch no guest VM.
+Hosted run `38401292260` passes Cooking but fails Rust and browser checks;
+the remaining failures are being investigated. The published checkpoint has
+not passed CI.
 
 Provider orchestration and ownership seals, plural runtime attachment and cleanup,
 physical revocation, authenticated project web UI commands, real SQLite

@@ -32,6 +32,24 @@ impl PostgresDeploymentRepository {
         remove_original::load(self, identity, current, intent, resource).await
     }
 
+    /// Reads the uniquely committed Ready-retention fact under CURRENT Remove rights.
+    ///
+    /// The full original/retained graph is qualified in the SAME app RRRO snapshot
+    /// before reading its linked fact ID. This is comparison data, not physical proof.
+    ///
+    /// # Errors
+    /// Denies unsupported configuration, denied current rights, missing/changed
+    /// originals, non-Retained progress or contradictory fact/transition links.
+    pub async fn load_owned_volume_retained_fact_id(
+        &self,
+        identity: &AuthenticatedIdentity,
+        current: recipe_application::CommandIdentity,
+        intent: &recipe_application::DeploymentIntent,
+        resource: &capability_domain::CapabilitySlotKey,
+    ) -> Result<uuid::Uuid, DeploymentError> {
+        remove_original::retained_fact(self, identity, current, intent, resource).await
+    }
+
     /// Commits original owned-volume provider preparation before registration IO.
     ///
     /// # Errors

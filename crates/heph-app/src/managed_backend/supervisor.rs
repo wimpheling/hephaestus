@@ -2,7 +2,7 @@
 #[path = "supervisor/jobs.rs"]
 mod jobs;
 #[path = "supervisor/registry.rs"]
-mod registry;
+pub(super) mod registry;
 #[path = "supervisor/status.rs"]
 mod status;
 #[cfg(test)]
@@ -44,17 +44,37 @@ impl Control {
 pub struct NodeLease {
     control: Arc<Control>,
     status: watch::Receiver<ManagedSupervisorStatus>,
+    registry: std::sync::Weak<registry::Registry>,
 }
 impl NodeLease {
-    /// Managed startup remains pending until separate lifecycle qualification.
+    /// Observes actual listener readiness backed by the original service node.
     /// # Errors
-    /// Always returns the current pending assembly/recovery reason.
+    /// Rejects recovery-pending, closed, held or lost original service custody.
     pub fn require_ready(&self) -> Result<(), AppError> {
-        super::custody::pending_readiness(self.status.borrow().assembled)
+        self.registry()?.require_ready()
     }
     /// Monotonically requests service-owned closing without claiming stop.
     pub fn close(&self) {
-        self.control.close();
+        if let Some(registry) = self.registry.upgrade() {
+            registry.close();
+        } else {
+            self.control.close();
+        }
+    }
+    pub(super) fn registry(&self) -> Result<Arc<registry::Registry>, AppError> {
+        self.registry
+            .upgrade()
+            .ok_or_else(|| AppError::Readiness("managed original service is unavailable".into()))
+    }
+    pub(super) fn status_receiver(&self) -> watch::Receiver<ManagedSupervisorStatus> {
+        self.status.clone()
+    }
+    pub(super) fn fork(&self) -> Self {
+        Self {
+            control: Arc::clone(&self.control),
+            status: self.status.clone(),
+            registry: self.registry.clone(),
+        }
     }
 }
 impl Drop for NodeLease {
@@ -78,7 +98,7 @@ impl PreparationTicket {
 }
 
 #[derive(Clone, Debug)]
-struct ManagedServiceFailure {
+pub(super) struct ManagedServiceFailure {
     cause: Arc<dyn Error + Send + Sync>,
     reason: ManagedHeldReason,
 }
@@ -136,6 +156,8 @@ impl ManagedBackendSupervisor {
                 ManagedSupervisorPhase::Preparing
                     | ManagedSupervisorPhase::Constructing
                     | ManagedSupervisorPhase::PendingRecovery
+                    | ManagedSupervisorPhase::Recovered
+                    | ManagedSupervisorPhase::Ready
             )
         {
             status.phase = ManagedSupervisorPhase::Closing;
@@ -188,7 +210,11 @@ impl ManagedBackendSupervisor {
         let mut status = self.status.clone();
         loop {
             if self.registry.cleanup_finished(before) {
-                return Err(self.registry.failure()); // Reconciliation is not wired yet.
+                return if self.status().phase == ManagedSupervisorPhase::Stopped {
+                    Ok(())
+                } else {
+                    Err(self.registry.failure())
+                };
             }
             status.changed().await.map_err(super::custody::failure)?;
         }
@@ -200,7 +226,7 @@ impl ManagedBackendSupervisor {
     /// # Errors
     /// Returns timeout or actual retained failures; missing reconciliation stays Held.
     pub async fn shutdown(&mut self, timeout: Duration) -> Result<(), AppError> {
-        self.registry.control.close();
+        self.registry.close();
         tokio::time::timeout(timeout, self.join_stopped())
             .await
             .map_err(|_| {
@@ -242,7 +268,7 @@ impl ManagedBackendSupervisor {
 }
 impl Drop for ManagedBackendSupervisor {
     fn drop(&mut self) {
-        self.registry.control.close();
+        self.registry.close();
         // JoinHandle Drop detaches, never aborts. The named loop retains registry
         // and jobs while its runtime lives; Drop itself proves nothing stopped.
     }
@@ -277,7 +303,7 @@ async fn run(
                     preparation.spawn(Box::pin(jobs::prepare(Arc::clone(&registry), request)));
                 } else {
                     connected = false;
-                    registry.control.close();
+                    registry.close();
                 }
             },
             outcome = preparation.join_next(), if !preparation.is_empty() => {
@@ -287,6 +313,7 @@ async fn run(
                 if let Some(Err(cause)) = outcome { registry.job_failed(cause, false); }
             }
             _ = heartbeat.tick() => {
+                registry.check_services();
                 tracing::info!(closing = registry.control.is_closing(), "managed supervisor retains original service custody");
             }
         }

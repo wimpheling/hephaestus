@@ -23,9 +23,11 @@ pub(super) struct ManagedBackendNode {
     _guards: Arc<RunOperationGuards>,
     pub(super) configuration: InstanceExecutionConfiguration,
     _pools: ManagedInvocationPools,
-    executor: OnceLock<ManagedRunCommandExecutor>,
+    executor: OnceLock<Arc<ManagedRunCommandExecutor>>,
+    pub(super) services: Arc<super::services::Services>,
 }
 
+#[cfg(test)]
 pub(super) fn pending_readiness(assembled: bool) -> Result<(), AppError> {
     Err(AppError::Readiness(
         if assembled {
@@ -93,6 +95,7 @@ pub(super) fn node(inputs: &ManagedRunCommandInputs) -> Arc<ManagedBackendNode> 
             application: shared.pools.application.clone(),
         },
         executor: OnceLock::new(),
+        services: Arc::new(super::services::Services::default()),
     })
 }
 
@@ -101,10 +104,46 @@ pub(super) async fn construct(
     inputs: ManagedRunCommandInputs,
 ) -> Result<(), AppError> {
     // Registry custody is installed before this first actual controller await.
-    let executor = Box::pin(ManagedRunCommandExecutor::new(inputs)).await?;
+    let executor = Arc::new(Box::pin(ManagedRunCommandExecutor::new(inputs)).await?);
     node.executor
-        .set(executor)
-        .map_err(|_| AppError::Task("managed executor already assembled".into()))
+        .set(Arc::clone(&executor))
+        .map_err(|_| AppError::Task("managed executor already assembled".into()))?;
+    // Store the SAME executor before owned recovery's first await. Successful
+    // recovery still leaves public listener readiness at PendingRecovery.
+    executor
+        .reconcile_lifecycle(run_orchestrator::SupervisorReconciliationCause::Restart)
+        .await
+        .map_err(failure)
+}
+
+pub(super) fn executor(
+    node: &ManagedBackendNode,
+) -> Result<Arc<ManagedRunCommandExecutor>, AppError> {
+    node.executor
+        .get()
+        .cloned()
+        .ok_or_else(|| AppError::Readiness("managed original executor is not assembled".into()))
+}
+
+pub(super) fn close_intake(node: &ManagedBackendNode) -> Result<(), AppError> {
+    if let Some(executor) = node.executor.get() {
+        executor.close_intake().map_err(failure)?;
+    }
+    node.services.request_close();
+    Ok(())
+}
+
+/// An assembled node owns qualified Stop; None is explicitly unassembled.
+pub(super) async fn stop_runs(node: &ManagedBackendNode) -> Result<Option<()>, AppError> {
+    let Some(executor) = node.executor.get() else {
+        return Ok(None);
+    };
+    executor.close_intake().map_err(failure)?;
+    executor
+        .reconcile_lifecycle(run_orchestrator::SupervisorReconciliationCause::Stop)
+        .await
+        .map_err(failure)?;
+    Ok(Some(()))
 }
 
 pub(super) fn failure(error: impl Error + Send + Sync + 'static) -> AppError {

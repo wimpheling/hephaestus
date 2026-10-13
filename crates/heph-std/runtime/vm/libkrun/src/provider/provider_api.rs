@@ -1,3 +1,10 @@
+#[cfg(test)]
+pub(super) use attempt::prepare_close_on_capture;
+#[path = "attempt.rs"]
+mod attempt;
+#[path = "provision.rs"]
+mod provision;
+
 #[path = "managed_configuration.rs"]
 mod managed_configuration;
 
@@ -8,7 +15,7 @@ pub use managed_owner::ProspectiveOwnedVmBootstrap;
 use super::common::{
     Arc, Cgroup, HashMap, HashSet, LibkrunConfig, Mutex, PROVIDER_NAME, PendingLaunch,
     ProcessWorkerSpawner, ProviderInner, ProviderLifetime, VmError, VmId, VmInstance, VmProvider,
-    VmSpec, WorkerSpawner, async_trait, oneshot, prepare_spec, validate_config, validate_id,
+    VmSpec, WorkerSpawner, async_trait, oneshot, validate_config, validate_id,
 };
 use super::helpers::{cleanup_runtime, unavailable_error};
 
@@ -266,92 +273,15 @@ impl VmProvider for LibkrunProvider {
         Ok(())
     }
 
+    fn prepare_provision_attempt(
+        &self,
+        spec: VmSpec,
+    ) -> Result<Arc<dyn vm_trait::VmProvisionAttempt>, VmError> {
+        Ok(attempt::prepare(self.clone(), spec))
+    }
+
     async fn provision(&self, spec: VmSpec) -> Result<Arc<dyn VmInstance>, VmError> {
-        if self.inner.owner.get().is_none() {
-            super::ownership::reject_unowned(&self.inner.config)?;
-        }
-        let owner_guard = self
-            .inner
-            .owner
-            .get()
-            .map(|owner| owner.validate(&self.inner.config))
-            .transpose()?;
-        let prepared = prepare_spec(&self.inner.config, &spec)?;
-        if self
-            .inner
-            .failed_cleanup
-            .lock()
-            .await
-            .contains_key(&spec.id)
-        {
-            return Err(VmError::AlreadyExists(spec.id));
-        }
-        let (entry, retries) =
-            PendingLaunch::new(spec.id.clone(), &self.inner.config, owner_guard.as_ref())?;
-        let (result, receiver) = oneshot::channel();
-        {
-            let mut ids = self.inner.ids.lock().await;
-            let mut pending = self
-                .inner
-                .pending_launches
-                .lock()
-                .unwrap_or_else(std::sync::PoisonError::into_inner);
-            if pending.contains_key(&entry.id) {
-                return Err(VmError::AlreadyExists(entry.id.clone()));
-            }
-            self.inner
-                .registry
-                .admit(&self.inner.lifetime, &mut ids, Arc::clone(&entry))?;
-            pending.insert(entry.id.clone(), Arc::clone(&entry));
-            // Reservation, discoverable custody and owning-task installation
-            // have no await gap. Caller cancellation drops only its receiver.
-            tokio::spawn(super::launch::run_launch(
-                Arc::clone(&self.inner),
-                Arc::clone(&entry),
-                prepared,
-                owner_guard,
-                result,
-                retries,
-            ));
-            drop(pending);
-            drop(ids);
-        }
-        let super::launch::LaunchHandoff { instance, accepted } = receiver
-            .await
-            .map_err(|_| unavailable_error("worker launch", "launch result channel closed"))??;
-        // Cancellation while acquiring this lock still drops the acknowledgement,
-        // leaving the owner task responsible for the same actual instance.
-        let ids = self.inner.ids.lock().await;
-        let mut pending = self
-            .inner
-            .pending_launches
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
-        if !pending
-            .get(&entry.id)
-            .is_some_and(|current| Arc::ptr_eq(current, &entry))
-        {
-            return Err(VmError::InvalidState("launch handoff entry changed"));
-        }
-        if entry.drain_requested() {
-            return Err(unavailable_error(
-                "worker launch",
-                "generation drain requested",
-            ));
-        }
-        // Acknowledge before retiring only this entry; preserve the ID reservation.
-        // No await separates acknowledgement, retirement and returning the instance.
-        accepted
-            .send(())
-            .map_err(|()| unavailable_error("worker launch", "launch handoff channel closed"))?;
-        pending.remove(&entry.id);
-        entry
-            .state
-            .send_replace(super::launch::LaunchState::HandedOff);
-        drop(entry);
-        drop(pending);
-        drop(ids);
-        Ok(instance)
+        provision::run(self, spec, None).await
     }
 
     async fn cleanup_orphan(&self, id: &VmId) -> Result<(), VmError> {

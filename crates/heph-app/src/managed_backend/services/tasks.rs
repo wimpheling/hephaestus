@@ -1,0 +1,118 @@
+//! Immediate transfer of actual handles; error/drop never aborts admitted work.
+use crate::AppError;
+use std::{
+    error::Error,
+    fmt,
+    ops::{Deref, DerefMut},
+    sync::{Arc, Mutex},
+};
+use tokio::task::JoinHandle;
+
+#[derive(Default)]
+pub(super) struct TaskCustody {
+    handles: Mutex<Vec<JoinHandle<Result<(), String>>>>,
+}
+impl TaskCustody {
+    pub(super) fn retain(&self, handles: &mut Vec<JoinHandle<Result<(), String>>>) {
+        // Poisoning preserves the actual handles instead of replacing the registry.
+        self.handles
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .append(handles);
+    }
+    pub(super) fn healthy(&self) -> bool {
+        self.handles.lock().is_ok_and(|handles| {
+            !handles.is_empty() && handles.iter().all(|handle| !handle.is_finished())
+        })
+    }
+    pub(super) async fn join(&self) -> Result<(), AppError> {
+        // Original startup has settled before this transfer; no late spawner.
+        let handles = std::mem::take(
+            &mut *self
+                .handles
+                .lock()
+                .map_err(|_| AppError::Task("managed service handle registry poisoned".into()))?,
+        );
+        let mut failures = Vec::new();
+        for handle in handles {
+            match handle.await {
+                Ok(Ok(())) => {}
+                Ok(Err(cause)) => failures.push(AppError::Task(cause)),
+                Err(cause) => failures.push(crate::managed_backend::custody::failure(cause)),
+            }
+        }
+        if failures.is_empty() {
+            Ok(())
+        } else {
+            Err(crate::managed_backend::custody::failure(
+                ServiceJoinFailures(failures),
+            ))
+        }
+    }
+}
+
+pub struct OwnedTasks {
+    plain: Vec<JoinHandle<Result<(), String>>>,
+    custody: Option<Arc<TaskCustody>>,
+}
+impl OwnedTasks {
+    pub fn new(services: Option<&super::Services>) -> Self {
+        Self {
+            plain: Vec::new(),
+            custody: services.map(|services| Arc::clone(&services.tasks)),
+        }
+    }
+    pub fn push(&mut self, task: JoinHandle<Result<(), String>>) {
+        self.plain.push(task);
+        self.capture();
+    }
+    pub fn capture(&mut self) {
+        if let Some(custody) = &self.custody {
+            custody.retain(&mut self.plain);
+        }
+    }
+    pub const fn is_managed(&self) -> bool {
+        self.custody.is_some()
+    }
+    pub fn into_plain(mut self) -> Vec<JoinHandle<Result<(), String>>> {
+        self.capture();
+        std::mem::take(&mut self.plain)
+    }
+}
+impl Deref for OwnedTasks {
+    type Target = Vec<JoinHandle<Result<(), String>>>;
+    fn deref(&self) -> &Self::Target {
+        &self.plain
+    }
+}
+impl DerefMut for OwnedTasks {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.plain
+    }
+}
+impl Drop for OwnedTasks {
+    fn drop(&mut self) {
+        self.capture();
+    }
+}
+
+#[derive(Debug)]
+struct ServiceJoinFailures(Vec<AppError>);
+impl fmt::Display for ServiceJoinFailures {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(
+            f,
+            "original service joins retained {} failures",
+            self.0.len()
+        )?;
+        for cause in &self.0 {
+            write!(f, "; {cause}")?;
+        }
+        Ok(())
+    }
+}
+impl Error for ServiceJoinFailures {
+    fn source(&self) -> Option<&(dyn Error + 'static)> {
+        self.0.first().map(|cause| cause as &(dyn Error + 'static))
+    }
+}

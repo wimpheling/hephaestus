@@ -3,7 +3,7 @@ use tokio::sync::oneshot;
 
 pub(super) struct StartupTasks {
     pub(super) cancellation: CancellationToken,
-    pub(super) tasks: Vec<JoinHandle<Result<(), String>>>,
+    pub(super) tasks: crate::managed_backend::OwnedTasks,
     pub(super) broker_ready_rx: oneshot::Receiver<()>,
     pub(super) update_reconcile_ready_rx: oneshot::Receiver<()>,
     pub(super) http_ready_rx: oneshot::Receiver<()>,
@@ -87,22 +87,30 @@ pub(super) async fn wait(
         Ok(Ok(())) => {}
         Ok(Err(error)) => {
             cancellation.cancel();
-            reap_failed_start(tasks).await;
+            failed_tasks(tasks).await;
             return Err(error);
         }
         Err(error) => {
             cancellation.cancel();
-            reap_failed_start(tasks).await;
+            failed_tasks(tasks).await;
             return Err(AppError::Readiness(format!(
                 "startup readiness timed out: {error}"
             )));
         }
     }
     if cancellation.is_cancelled() {
-        reap_failed_start(tasks).await;
+        failed_tasks(tasks).await;
         return Err(AppError::Readiness(String::from(
             "a supervised task exited during startup",
         )));
     }
-    Ok((cancellation, tasks))
+    Ok((cancellation, tasks.into_plain()))
+}
+
+async fn failed_tasks(tasks: crate::managed_backend::OwnedTasks) {
+    if tasks.is_managed() {
+        drop(tasks);
+    } else {
+        reap_failed_start(tasks.into_plain()).await;
+    }
 }

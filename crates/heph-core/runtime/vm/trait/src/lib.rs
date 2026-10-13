@@ -36,7 +36,7 @@ pub use spec::{
     RUNTIME_AUTHORITY_CREDENTIAL_BYTES, RUNTIME_GIT_CREDENTIAL_BYTES, RootFilesystem,
     RuntimeAuthorityBootstrap, RuntimeGitBridge, VmDisk, VmId, VmMount, VmResources, VmSpec,
 };
-pub use traits::{VmInstance, VmProvider};
+pub use traits::{VmInstance, VmProvider, VmProvisionAttempt};
 
 #[cfg(test)]
 #[path = "vm_trait/tests.rs"]

@@ -113,8 +113,24 @@ pub(super) async fn drain(
         }
         registry.attempt();
         match physical_stop(&node).await {
-            Ok(()) => {
-                registry.record(AppError::Readiness("managed physical stop observed; qualified per-Run stop reconciliation remains unavailable".into()), ManagedHeldReason::ReconciliationUnavailable);
+            Ok(true) => match node.services.close_owned().await {
+                Ok(()) => {
+                    registry.stopped();
+                    return;
+                }
+                Err(cause) => {
+                    registry.record(cause, ManagedHeldReason::OrdinaryServicesCleanupUnavailable);
+                    break;
+                }
+            },
+            Ok(false) => {
+                registry.record(
+                    AppError::Readiness(
+                        "unassembled original physical stop cannot qualify Run reconciliation"
+                            .into(),
+                    ),
+                    ManagedHeldReason::ReconciliationUnavailable,
+                );
                 break;
             }
             Err(cause) => {
@@ -130,7 +146,13 @@ pub(super) async fn drain(
     registry.drained();
 }
 
-async fn physical_stop(node: &custody::ManagedBackendNode) -> Result<(), AppError> {
+async fn physical_stop(node: &custody::ManagedBackendNode) -> Result<bool, AppError> {
+    // Assembled lifecycle owns close/drain/qualified reconciliation itself.
+    // Retain the physical-only acquisition fallback for unassembled nodes.
+    if custody::stop_runs(node).await?.is_some() {
+        return Ok(true);
+    }
+
     let scope = node.configuration.provider_scope();
     let mut failures = Vec::new();
     if let Err(cause) = node
@@ -156,7 +178,7 @@ async fn physical_stop(node: &custody::ManagedBackendNode) -> Result<(), AppErro
         failures.push(custody::failure(cause));
     }
     if failures.is_empty() {
-        Ok(())
+        Ok(false)
     } else {
         Err(custody::failure(CleanupFailures(failures)))
     }

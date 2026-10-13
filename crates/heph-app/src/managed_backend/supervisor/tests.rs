@@ -18,6 +18,7 @@ fn lease() -> (NodeLease, Arc<Control>) {
         NodeLease {
             control: Arc::clone(&control),
             status,
+            registry: std::sync::Weak::new(),
         },
         control,
     )

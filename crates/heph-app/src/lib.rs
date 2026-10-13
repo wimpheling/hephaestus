@@ -158,10 +158,7 @@ pub mod test_hooks {
 }
 
 use async_trait::async_trait;
-use axum::{
-    Router,
-    routing::{any, get},
-};
+use axum::routing::get;
 use build_orchestrator::{BuildExecutionError, BuildExecutor, BuildExecutorConfig};
 use build_postgres::PgBuildRepository;
 use builder_catalog_domain::OciImageReference;

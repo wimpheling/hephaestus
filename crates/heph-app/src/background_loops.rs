@@ -176,7 +176,7 @@ impl OutboxWorker {
 
 pub async fn secret_revocation_loop(
     pool: PgPool,
-    orchestrator: Arc<RunOrchestrator>,
+    orchestrator: Arc<dyn run_orchestrator::RunCommandExecutor>,
     poll_interval: Duration,
     cancellation: CancellationToken,
     ready: oneshot::Sender<()>,
@@ -248,6 +248,19 @@ trait RevokedRawRunCanceller: Sync {
 
 #[async_trait]
 impl RevokedRawRunCanceller for RunOrchestrator {
+    async fn cancel_revoked_raw_run(&self, run_id: RunId) -> Result<bool, String> {
+        self.cancel_run(&CancelRun {
+            command_id: CommandId::new(),
+            run_id,
+            reason: String::from("raw secret authority was revoked"),
+        })
+        .await
+        .map_err(|error| error.to_string())
+    }
+}
+
+#[async_trait]
+impl RevokedRawRunCanceller for dyn run_orchestrator::RunCommandExecutor {
     async fn cancel_revoked_raw_run(&self, run_id: RunId) -> Result<bool, String> {
         self.cancel_run(&CancelRun {
             command_id: CommandId::new(),

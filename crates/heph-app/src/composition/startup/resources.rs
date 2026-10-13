@@ -47,10 +47,12 @@ pub(super) async fn prepare(app: &HephaestusApp) -> Result<StartupResources, App
         .recover_after_restart()
         .await
         .map_err(component("build recovery"))?;
-    app.orchestrator
-        .recover_after_restart()
-        .await
-        .map_err(component("run recovery"))?;
+    if app.managed_backend.is_none() {
+        app.orchestrator
+            .recover_after_restart()
+            .await
+            .map_err(component("run recovery"))?;
+    }
     ensure_forge_jetstream_topology(&app.jetstream)
         .await
         .map_err(component("forge JetStream topology"))?;

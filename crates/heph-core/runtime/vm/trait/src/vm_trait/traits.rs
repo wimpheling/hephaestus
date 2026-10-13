@@ -54,6 +54,24 @@ pub trait VmProvider: Send + Sync + 'static {
         })
     }
 
+    /// Prepares one opaque, original per-call provisioning/cleanup owner.
+    ///
+    /// Save this token before polling effects. Preparation performs no provision
+    /// IO; cleanup can close an unused token without claiming host-wide absence.
+    /// No default delegates to provisioning or name-based orphan cleanup.
+    ///
+    /// # Errors
+    /// Returns Unsupported unless this provider positively retains attempt custody.
+    fn prepare_provision_attempt(
+        &self,
+        _spec: VmSpec,
+    ) -> Result<Arc<dyn VmProvisionAttempt>, VmError> {
+        Err(VmError::Unsupported {
+            feature: "original VM provision attempt custody".into(),
+            provider: self.name().into(),
+        })
+    }
+
     /// Allocates a stopped VM from `spec`.
     ///
     /// A failed provisioning attempt must detach all caller-owned resources
@@ -80,6 +98,34 @@ pub trait VmProvider: Send + Sync + 'static {
     /// Returns an error when complete cleanup and disk detachment cannot be
     /// confirmed.
     async fn cleanup_orphan(&self, id: &VmId) -> Result<(), VmError>;
+}
+
+/// Opaque custody of one original provision call, never an orphan ID lookup.
+///
+/// Hold the token through caller cancellation and every uncertain result. It
+/// serializes provision/cleanup, retains original errors and exact backend handles,
+/// and never cleans a successor reusing the ID. Dropping it proves no cleanup;
+/// process/runtime loss is not covered by this live-attempt contract.
+#[async_trait]
+pub trait VmProvisionAttempt: Send + Sync + 'static {
+    /// Provisions or returns the SAME original instance; never retries a new birth.
+    ///
+    /// Waiter abandonment does not cancel an admitted native owner. A closed or
+    /// cleaned attempt denies provision; failure keeps original custody for cleanup.
+    ///
+    /// # Errors
+    /// Returns the original provisioning error or a closed/unknown outcome error.
+    async fn provision(&self) -> Result<Arc<dyn VmInstance>, VmError>;
+
+    /// Monotonically closes this token and confirms its original resources detached.
+    ///
+    /// An unused token closes with no effects. Pending/failed launch cleanup uses
+    /// its exact retained birth; returned instances use their original destroy.
+    /// This is neither prior-process recovery nor a global absence receipt.
+    ///
+    /// # Errors
+    /// Incomplete/unknown cleanup retains original custody for explicit token retry.
+    async fn cleanup(&self) -> Result<(), VmError>;
 }
 
 /// A provisioned VM with an explicit lifecycle.

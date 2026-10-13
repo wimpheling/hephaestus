@@ -9,6 +9,8 @@ mod errors;
 mod execution;
 mod external;
 mod inspection;
+mod removal;
+pub use removal::{PreparedRecipeRemovalCoordinator, RecipeRemovalError, RecipeRemovalPending};
 mod validation;
 
 pub use errors::RecipeApplicationError;

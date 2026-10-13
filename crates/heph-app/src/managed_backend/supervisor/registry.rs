@@ -1,4 +1,6 @@
 //! One original node slot, retaining real errors independently of result waiters.
+#[path = "registry/readiness.rs"]
+mod readiness;
 use super::status::{ManagedHeldReason as Held, ManagedSupervisorPhase as Phase};
 use super::{Control, ManagedServiceFailure, ManagedSupervisorStatus, NodeLease};
 use crate::{AppError, managed_backend::custody::ManagedBackendNode};
@@ -8,7 +10,7 @@ use std::{
 };
 use tokio::sync::watch;
 
-pub(super) struct Registry {
+pub struct Registry {
     state: Mutex<State>,
     pub(super) control: Arc<Control>,
     changed: watch::Sender<ManagedSupervisorStatus>,
@@ -34,6 +36,11 @@ pub(super) enum Action {
 }
 
 impl Registry {
+    #[cfg(test)]
+    pub fn test_empty() -> Arc<Self> {
+        Self::new().0
+    }
+
     pub(super) fn new() -> (Arc<Self>, watch::Receiver<ManagedSupervisorStatus>) {
         let (changed, receiver) = watch::channel(ManagedSupervisorStatus::default());
         (
@@ -69,7 +76,7 @@ impl Registry {
         self.control.changed.notify_one();
     }
     pub(super) fn register(
-        &self,
+        self: &Arc<Self>,
         inputs: Arc<super::jobs::PreparationInputs>,
         status: watch::Receiver<ManagedSupervisorStatus>,
     ) -> Result<NodeLease, AppError> {
@@ -88,6 +95,7 @@ impl Registry {
         Ok(NodeLease {
             control: Arc::clone(&self.control),
             status,
+            registry: Arc::downgrade(self),
         })
     }
     pub(super) fn install(&self, node: Arc<ManagedBackendNode>) {
@@ -111,7 +119,7 @@ impl Registry {
             state.status.phase = if self.control.is_closing() {
                 Phase::Closing
             } else {
-                Phase::PendingRecovery
+                Phase::Recovered
             };
         }
         self.publish(&state);
@@ -135,7 +143,7 @@ impl Registry {
         drop(state);
         failure
     }
-    pub(super) fn record(
+    pub fn record(
         &self,
         error: impl Error + Send + Sync + 'static,
         reason: Held,
@@ -170,6 +178,12 @@ impl Registry {
         let Some(node) = state.node.clone() else {
             return Action::Wait;
         };
+        if !state.preparation_done {
+            return Action::Wait;
+        }
+        if state.status.phase == Phase::Stopped && jobs_empty {
+            return Action::Stop;
+        }
         let Some(attempts) = state.cleanup.claim(cleanup_empty) else {
             return Action::Wait;
         };
@@ -195,7 +209,15 @@ impl Registry {
         let mut state = self.state();
         if state.poisoned
             || state.node.is_none()
-            || state.status.held_reason != Some(Held::PhysicalCleanup)
+            || !matches!(
+                state.status.held_reason,
+                Some(
+                    Held::PhysicalCleanup
+                        | Held::Services
+                        | Held::ReconciliationUnavailable
+                        | Held::OrdinaryServicesCleanupUnavailable
+                )
+            )
         {
             return Err(AppError::Readiness("held managed boundary has no supported idle same-owner retry; acquisition is never replayed".into()));
         }
@@ -207,7 +229,7 @@ impl Registry {
         self.publish(&state);
         Ok(state.status.cleanup_attempts)
     }
-    pub(super) fn failure(&self) -> AppError {
+    pub fn failure(&self) -> AppError {
         self.state().failures.last().map_or_else(
             || AppError::Readiness("managed service remains held or in flight".into()),
             |failure| crate::managed_backend::custody::failure(failure.clone()),
@@ -242,8 +264,13 @@ impl Registry {
 }
 
 impl State {
-    const fn refresh_activity(&mut self) {
-        self.status.in_flight = (self.registered && !self.preparation_done) || self.cleanup.active;
+    fn refresh_activity(&mut self) {
+        self.status.in_flight = (self.registered && !self.preparation_done)
+            || self.cleanup.active
+            || self
+                .node
+                .as_ref()
+                .is_some_and(|node| node.services.working());
     }
 }
 
@@ -255,17 +282,17 @@ pub(super) struct CleanupSchedule {
     retry_requested: bool,
 }
 impl CleanupSchedule {
-    pub(super) const fn finish(&mut self) {
+    pub const fn finish(&mut self) {
         self.active = false;
     }
-    pub(super) const fn request_retry(&mut self) -> bool {
+    pub const fn request_retry(&mut self) -> bool {
         if !self.attempted || self.active || self.retry_requested {
             return false;
         }
         self.retry_requested = true;
         true
     }
-    pub(super) const fn claim(&mut self, cleanup_empty: bool) -> Option<usize> {
+    pub const fn claim(&mut self, cleanup_empty: bool) -> Option<usize> {
         if self.active || !cleanup_empty {
             return None;
         }

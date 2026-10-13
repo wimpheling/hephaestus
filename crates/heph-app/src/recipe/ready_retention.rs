@@ -4,14 +4,19 @@
 //! reconstruction. Outstanding consumer cleanup stays with its actual scoped
 //! runtime owner; unsupported or unproved histories remain held.
 mod completion;
+mod handover;
+pub(crate) use handover::Comparison as ReadyRetentionHandover;
+mod owner;
+mod retained;
 mod validation;
+mod work;
 
 use heph_runtime::VmProvider;
 use identity_domain::AuthenticatedIdentity;
 use recipe_application::{
     DeploymentError, OwnedReadyRetentionRepository, ResourceProgress, RetainOwnedReady,
 };
-use std::sync::Arc;
+use std::sync::{Arc, OnceLock};
 use volume_local::LocalVolumeStore;
 use volume_trait::{OwnedProvisioningClaim, VolumeError, VolumeReadyRetentionRepository};
 
@@ -39,6 +44,22 @@ pub enum ReadyRetentionError {
         /// Positive committed progress; never reported as a rolled-back Remove.
         progress: ResourceProgress,
     },
+    /// Original error remains retained by the coordinator with any acquired guard.
+    #[error("Ready retention remains held: {0}")]
+    Held(#[source] Arc<ReadyRetentionError>),
+}
+
+/// Nonsecret inspection of one registered retention operation; no IO authority.
+#[derive(Debug, Clone)]
+pub struct ReadyRetentionPending {
+    /// Original volume whose intake is serialized.
+    pub volume_id: uuid::Uuid,
+    /// Exact originally submitted retention operation.
+    pub operation_id: recipe_application::DeploymentAttemptId,
+    /// A completed pass returned an error and awaits explicit current retry.
+    pub held: bool,
+    /// The service still retains its actual non-clone physical guard.
+    pub physical_custody: bool,
 }
 /// One-volume owning coordinator; actual provider and journal family stay retained.
 pub struct ReadyRetentionCoordinator {
@@ -46,6 +67,7 @@ pub struct ReadyRetentionCoordinator {
     worker: Arc<dyn VolumeReadyRetentionRepository>,
     local: Arc<LocalVolumeStore>,
     provider: Arc<dyn VmProvider>,
+    pending: OnceLock<Arc<owner::Registry>>,
 }
 impl ReadyRetentionCoordinator {
     /// Injects actual trusted provider clone, Local store and separated role ports.
@@ -64,59 +86,69 @@ impl ReadyRetentionCoordinator {
             worker,
             local,
             provider,
+            pending: OnceLock::new(),
         }
     }
     /// Retains one positive Ready birth under a current manager's real Remove.
     ///
-    /// Commits closure first, then requires global scoped quiescence before fsck.
-    /// Completed birth replay performs no physical IO, release or generation reset.
-    /// Actual non-clone custody moves into protected completion before any record
-    /// or actor commit wait; caller cancellation cannot drop it during those waits.
+    /// Registers owned work before the first await. Caller cancellation drops
+    /// only its reply waiter; unresolved worker/actor errors keep acquired custody
+    /// and the exact original proof reachable through this retained coordinator.
     ///
     /// # Errors
-    /// Lost management, foreign scope/birth, unsupported history, held consumers,
-    /// dirty/replaced backing or ambiguous completion remains held and CLOSED.
+    /// Lost management, contradictory history, changed backing or uncertain
+    /// completion is held. No automatic rights-loss retry or new probe follows.
     pub async fn retain(
         &self,
         identity: &AuthenticatedIdentity,
         request: &RetainOwnedReady,
         claim: &OwnedProvisioningClaim,
     ) -> Result<ResourceProgress, ReadyRetentionError> {
-        Box::pin(self.retain_inner(identity, request, claim)).await
+        Box::pin(owner::submit(self, identity, request, claim, false, None)).await
     }
-    async fn retain_inner(
+
+    /// Retries only an already registered exact request/claim under CURRENT auth.
+    ///
+    /// Reuses the same acquired guard and observation; never formats/reprobes or
+    /// borrows the saved actor identity. Different-command handover is separate.
+    ///
+    /// # Errors
+    /// Missing owner, changed request/claim/scope or current authorization failure
+    /// denies the retry and preserves the original held operation.
+    pub async fn retry(
         &self,
         identity: &AuthenticatedIdentity,
         request: &RetainOwnedReady,
         claim: &OwnedProvisioningClaim,
     ) -> Result<ResourceProgress, ReadyRetentionError> {
-        let scope = validation::scope(self.provider.as_ref())?;
-        let plan = self
-            .actor
-            .begin_owned_ready_retention(identity, request)
-            .await?;
-        validation::plan(&plan, claim, &request.target, &scope)?;
-        if let Some(progress) = plan.completed {
-            return Ok(progress);
-        }
-        let context = self
-            .worker
-            .ready_retention_context(claim, plan.closure_id)
-            .await?;
-        validation::context(&plan, claim, &context, &scope)?;
-        let custody = self
-            .local
-            .observe_owned_ready_retention(self.worker.as_ref(), &context)
-            .await?;
-        let actor = self.actor.clone();
-        let worker = self.worker.clone();
-        let provider = self.provider.clone();
-        let identity = identity.clone();
-        let request = request.clone();
-        tokio::spawn(async move {
-            completion::commit(actor, worker, provider, identity, request, custody).await
-        })
+        Box::pin(owner::submit(self, identity, request, claim, true, None)).await
+    }
+
+    // Only concrete App removal assembly supplies Source8-qualified comparison
+    // data. This is not a public proof/custody/permission injection boundary.
+    pub(crate) async fn handover(
+        &self,
+        identity: &AuthenticatedIdentity,
+        request: &RetainOwnedReady,
+        claim: &OwnedProvisioningClaim,
+        comparison: ReadyRetentionHandover,
+    ) -> Result<ResourceProgress, ReadyRetentionError> {
+        Box::pin(owner::submit(
+            self,
+            identity,
+            request,
+            claim,
+            false,
+            Some(comparison),
+        ))
         .await
-        .map_err(|_| ReadyRetentionError::CompletionUnknown)?
+    }
+
+    /// Returns registered-operation status without exposing a guard or provider.
+    #[must_use]
+    pub fn pending_retention(&self) -> Vec<ReadyRetentionPending> {
+        self.pending
+            .get()
+            .map_or_else(Vec::new, |registry| owner::inspect(registry))
     }
 }

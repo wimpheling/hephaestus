@@ -1,4 +1,4 @@
-use super::{RuntimeGitBridge, VmInstance, VmProvider};
+use super::{RuntimeGitBridge, VmInstance, VmProvider, VmProvisionAttempt};
 use uuid::Uuid;
 
 const fn assert_runtime_trait<T: ?Sized + Send + Sync + 'static>() {}
@@ -7,6 +7,7 @@ const fn assert_runtime_trait<T: ?Sized + Send + Sync + 'static>() {}
 const fn provider_traits_are_object_safe() {
     assert_runtime_trait::<dyn VmProvider>();
     assert_runtime_trait::<dyn VmInstance>();
+    assert_runtime_trait::<dyn VmProvisionAttempt>();
 }
 
 #[test]
@@ -54,3 +55,6 @@ async fn unsupported_scope_never_delegates_to_unscoped_absence() {
         Err(crate::VmError::Unsupported { .. })
     ));
 }
+
+#[path = "attempt_tests.rs"]
+mod attempt_tests;

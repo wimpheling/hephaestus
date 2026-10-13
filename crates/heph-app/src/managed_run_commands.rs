@@ -2,6 +2,9 @@
 
 mod execute;
 mod inputs;
+mod intake;
+mod lifecycle;
+mod ownership;
 mod routing;
 
 use crate::{AppError, ManagedInvocationController, ManagedLegacyController};
@@ -19,13 +22,16 @@ use std::sync::Arc;
 /// comparison data, never actor authority, admission or a physical-stop proof.
 ///
 /// Implements [`run_orchestrator::RunCommandExecutor`] without starting workers.
-/// This handle performs no recovery, shared-root sweep, daemon shutdown, backend
-/// adoption or stopped-gate reopening. The caller retains backend custody through
-/// constructor errors/cancellation. Drop proves neither stopped nor cleaned.
+/// Clones share actual controllers, reader and owning-operation intake. Private
+/// lifecycle reconciliation performs no global sweep, backend adoption or gate
+/// reopening. Constructor success is not listener readiness; the service retains
+/// this original tuple through held errors. Drop proves neither stopped nor cleaned.
+#[derive(Clone)]
 pub struct ManagedRunCommandExecutor {
     invocation: Arc<ManagedInvocationController>,
     legacy: Arc<ManagedLegacyController>,
-    reader: PgQualifiedInvocationRoutingReader,
+    reader: Arc<PgQualifiedInvocationRoutingReader>,
+    operations: Arc<intake::Operations>,
     ordinary_policy: ManagedOrdinaryAdmissionPolicy,
 }
 
@@ -44,19 +50,46 @@ impl ManagedRunCommandExecutor {
     /// the caller must retain the original backend for subsequent lifecycle work.
     pub async fn new(inputs: ManagedRunCommandInputs) -> Result<Self, AppError> {
         let legacy_inputs = inputs.legacy_inputs();
-        let reader = PgQualifiedInvocationRoutingReader::new(
+        let reader = Arc::new(PgQualifiedInvocationRoutingReader::new(
             inputs.shared.pools.worker.clone(),
             inputs.shared.configuration.clone(),
-        );
+        ));
         let ordinary_policy = inputs.ordinary_policy;
         let legacy = Arc::new(ManagedLegacyController::new(legacy_inputs).await?);
         let invocation = Arc::new(ManagedInvocationController::new(inputs.shared).await?);
+        let operations = Arc::new(intake::Operations::new(
+            Arc::clone(&invocation),
+            Arc::clone(&legacy),
+        ));
         Ok(Self {
             invocation,
             legacy,
             reader,
+            operations,
             ordinary_policy,
         })
+    }
+    /// Derives only the actual owning Invocation handle for private App composition.
+    pub(super) fn original_invocation(&self) -> Arc<ManagedInvocationController> {
+        Arc::clone(&self.invocation)
+    }
+
+    /// Seals only this original executor's Start intake; cleanup remains callable.
+    pub(super) fn close_intake(&self) -> Result<(), OrchestratorError> {
+        self.operations.close()
+    }
+
+    /// Owns qualified recovery/stop through waiter cancellation; no public Ready.
+    pub(super) async fn reconcile_lifecycle(
+        &self,
+        cause: run_orchestrator::SupervisorReconciliationCause,
+    ) -> Result<(), OrchestratorError> {
+        let owner = self.clone();
+        let request = intake::Request::Reconcile(cause);
+        let receiver = ownership::spawn(&self.operations, request, async move {
+            lifecycle::run(&owner, &owner.operations, cause).await
+        })?;
+        ownership::receive(receiver).await
     }
 }
 

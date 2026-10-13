@@ -8,6 +8,22 @@ use time::OffsetDateTime;
 use super::{OrchestratorError, RunOrchestrator, SupervisorReconciliationCause};
 
 impl RunOrchestrator {
+    /// Compares every configured Invocation original and lease association.
+    ///
+    /// Positive open/no-IO queued and exact completed rows are qualified before
+    /// omission. Returned actionable IDs are comparison data, never physical
+    /// absence, admission, readiness or a cleanup-count certificate. Owning
+    /// reconciliation independently requalifies under its original guards.
+    ///
+    /// # Errors
+    /// Rejects unsupported composition, unknown/foreign originals, contradictory
+    /// associations or incomplete target/receipt history, including empty scopes.
+    pub async fn qualified_invocation_recovery_inventory(
+        &self,
+    ) -> Result<BTreeSet<RunId>, OrchestratorError> {
+        self.invocation_recovery_inventory(None).await
+    }
+
     pub(super) async fn stale_cleanup_runs(&self) -> Result<BTreeSet<RunId>, OrchestratorError> {
         if self.invocation_scope.is_some() {
             return self

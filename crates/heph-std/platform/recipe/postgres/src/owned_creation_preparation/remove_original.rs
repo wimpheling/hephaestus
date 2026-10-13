@@ -1,6 +1,8 @@
 //! Current-manager comparison of an actual completed original Volume birth.
 mod birth;
 mod current;
+mod fact_identity;
+pub(super) use fact_identity::load as retained_fact;
 mod ledger;
 mod selected;
 

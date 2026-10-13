@@ -27,7 +27,7 @@ use std::sync::Arc;
 /// the caller's responsibility, including constructor errors and cancellation.
 pub struct ManagedLegacyController {
     // Retain the actual typed provider, owners, guards, pools and trusted inputs.
-    _retained: ManagedLegacyInputs,
+    retained: ManagedLegacyInputs,
     _producers: producers::Producers,
     scope: LegacyVmPlacementScope,
     runs: Arc<PgRunRepository>,
@@ -58,7 +58,7 @@ impl ManagedLegacyController {
         validation::validate(&inputs)?;
         let composition = assemble::build(&inputs).await?;
         Ok(Self {
-            _retained: inputs,
+            retained: inputs,
             _producers: composition.producers,
             scope: composition.scope,
             runs: composition.runs,
@@ -101,5 +101,13 @@ impl ManagedLegacyController {
     /// Propagates worker-role, scope, malformed evidence or database failures.
     pub async fn placement_inventory(&self) -> Result<LegacyVmPlacementInventory, RepositoryError> {
         self.runs.legacy_vm_placement_inventory(&self.scope).await
+    }
+    /// Same private original handle; no replacement composition or owner access.
+    pub(super) fn managed_orchestrator(&self) -> &RunOrchestrator {
+        &self.orchestrator
+    }
+
+    pub(super) fn validate_owners(&self) -> Result<(), AppError> {
+        validation::validate(&self.retained)
     }
 }

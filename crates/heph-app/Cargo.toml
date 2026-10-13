@@ -121,6 +121,7 @@ tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 uuid.workspace = true
 vm-fake = { path = "../heph-std/runtime/vm/fake" }
 vm-libkrun = { path = "../heph-std/runtime/vm/libkrun" }
+vm-trait.workspace = true
 volume-local = { path = "../heph-std/runtime/volume/local" }
 volume-postgres = { path = "../heph-std/runtime/volume/postgres" }
 volume-trait = { path = "../heph-core/runtime/volume/trait" }
@@ -129,8 +130,6 @@ workspace-local = { path = "../heph-std/runtime/workspace/local" }
 workspace-postgres = { path = "../heph-std/runtime/workspace/postgres" }
 
 [dev-dependencies]
-# Genuine Invocation fixtures use the native provider identity types.
-vm-trait.workspace = true
 forge-domain = { path = "../heph-core/forge/domain" }
 base64.workspace = true
 h2 = "0.4.15"

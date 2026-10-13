@@ -12,11 +12,15 @@ pub enum ManagedSupervisorPhase {
     Constructing,
     /// Assembly completed; recovery and readiness remain unwired.
     PendingRecovery,
+    /// Qualified original-family recovery passed; listeners have not become Ready.
+    Recovered,
+    /// Actual listener/consumer signals passed while intake remains open.
+    Ready,
     /// Intake is sealed; a supported physical cleanup pass is running.
     Closing,
     /// Original custody remains, with explicit failure or incomplete evidence.
     Held,
-    /// No acquired originals or jobs remain; the service can join.
+    /// No originals were acquired, or their supported cleanup and service settlement passed.
     Stopped,
 }
 
@@ -32,6 +36,10 @@ pub enum ManagedHeldReason {
     PhysicalCleanup,
     /// Physical stop does not establish qualified per-Run reconciliation.
     ReconciliationUnavailable,
+    /// Running-service joining or retained transport settlement is incomplete.
+    Services,
+    /// Separate ordinary Build/OCI/Gateway cleanup has no qualified proof port yet.
+    OrdinaryServicesCleanupUnavailable,
     /// A service-owned task ended unexpectedly.
     TaskFailure,
 }

@@ -1,3 +1,5 @@
+mod removed_completion;
+
 use crate::{
     PostgresDeploymentRepository, execution_transitions, receipts, repository_error,
     rows::ReceiptRow,
@@ -21,6 +23,25 @@ pub async fn exists(
 }
 
 impl PostgresDeploymentRepository {
+    /// Loads the actual completed Remove receipt and its saved final before-CAS.
+    ///
+    /// Current active management of the project and every materialized owned
+    /// resource is independently required. Recorded original actor fields are
+    /// comparison data, never borrowed credentials or physical cleanup proof.
+    /// An unfinished authorized deployment returns `None`; contradictory terminal
+    /// history denies. This repository must retain its checked removal configuration.
+    ///
+    /// # Errors
+    /// Denies missing configuration, authority loss, changed intent, incomplete
+    /// policy/history, substituted completion pins or failed transaction rollback.
+    pub async fn load_completed_remove(
+        &self,
+        identity: &AuthenticatedIdentity,
+        intent: &recipe_application::DeploymentIntent,
+    ) -> Result<Option<(CommandReceipt, u64)>, DeploymentError> {
+        removed_completion::load(self, identity, intent).await
+    }
+
     /// Commits a distinct terminal receipt after every resource satisfies the policy.
     ///
     /// # Errors
