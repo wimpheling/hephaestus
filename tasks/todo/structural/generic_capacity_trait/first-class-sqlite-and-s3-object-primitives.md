@@ -377,6 +377,17 @@ the 36-file change. Ordinary OCI/Gateway ownership, complete shutdown and native
 lifecycle acceptance remain unfinished. Retaining a closed instance does not
 satisfy the package's deletion policy.
 
+Ordinary OCI now retains each exact request, preparation task, formatter parent,
+filesystem descriptor and builder/verifier VM attempt through caller cancellation.
+Cleanup starts for all original VM tokens and the formatter before resource waits;
+retries retain original handles and error history. Scoped strict Clippy, recursive
+formatting, docs and all ten new ownership controls pass, with none failed or
+ignored. These controls use actual subprocesses/descriptors and controlled VM
+tokens; the 13 other library cases were filtered and native VM/formatter checks
+remain unrun. A joined formatter parent alone does not establish helper absence,
+so an unqualified formatter keeps scratch held. Enforced formatter qualification,
+whole OCI/Gateway production cleanup and full shutdown remain unfinished.
+
 The architecture scanner now derives inherited test context from parsed Rust
 module registrations and bounds inline exemptions to exact `cfg(test)` item or
 variant spans. Production markers following a test item remain checked; raw
