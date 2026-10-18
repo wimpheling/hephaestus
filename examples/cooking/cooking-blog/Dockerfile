@@ -8,4 +8,4 @@
 FROM heph-base AS runtime
 COPY vendor/hugo-0.165.0-rebuilt /usr/local/bin/hugo
 COPY vendor/hugo-0.165.0-LICENSE /usr/local/share/licenses/hugo/LICENSE
-RUN printf '%s\n' '9eff60e74ba1387eddbfceb9e48028743d046f06f08eb837eea1daeec88c014c  /usr/local/bin/hugo' | sha256sum --check - && chmod 0555 /usr/local/bin/hugo
+RUN printf '%s\n' '9eff60e74ba1387eddbfceb9e48028743d046f06f08eb837eea1daeec88c014c  /usr/local/bin/hugo' | sha256sum --check - && chmod 0555 /usr/local/bin/hugo && test -d /opt/python/lib/python3.13/test && rm -rf -- /opt/python/lib/python3.13/test
